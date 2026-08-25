@@ -54,6 +54,7 @@ BACKGROUND = ("worker-download", "worker-import", "worker-operations", "schedule
 PG_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 DATABASE_PAYLOADS = frozenset({"database.dump", "database.sql"})
+MAX_ARCHIVE_SIZE = 64 * 1024 * 1024 * 1024
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
@@ -72,6 +73,12 @@ def sha256_file(path: Path) -> str:
         while block := source.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def manifest_size(value: Any, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_ARCHIVE_SIZE:
+        raise RestoreHostError(f"validated manifest {label} size is invalid")
+    return value
 
 
 def atomic_json(path: Path, value: dict[str, Any], *, immutable: bool = False) -> None:
@@ -113,6 +120,18 @@ def explicit_root(value: str, name: str) -> Path:
     if not path.is_absolute():
         raise RestoreHostError(f"{name} must be an absolute path")
     resolved = path.resolve(strict=False)
+    if resolved == Path("/") or len(resolved.parts) < 3:
+        raise RestoreHostError(f"{name} is too broad")
+    return resolved
+
+
+def explicit_leaf(value: str, name: str) -> Path:
+    """Resolve parents for containment checks while preserving the final leaf."""
+
+    path = Path(value)
+    if not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise RestoreHostError(f"{name} must be an absolute leaf path")
+    resolved = path.parent.resolve(strict=False) / path.name
     if resolved == Path("/") or len(resolved.parts) < 3:
         raise RestoreHostError(f"{name} is too broad")
     return resolved
@@ -277,7 +296,7 @@ class RestoreRunner:
         self.archive = self.session
         self.manifest: dict[str, Any] = {}
         self.journal: dict[str, Any] = {
-            "version": 1,
+            "version": 2,
             "request_id": self.request_id,
             "project": str(self.project),
             "postgres_user": self.postgres_user,
@@ -289,6 +308,7 @@ class RestoreRunner:
             "database_switched": False,
             "redis_snapshot": False,
             "file_swaps": [],
+            "rollback_components": {},
             "created_at": self.started_at,
         }
         self._write_rollback_point()
@@ -306,6 +326,11 @@ class RestoreRunner:
         entries = manifest.get("entries")
         if not isinstance(entries, dict) or not entries:
             raise RestoreHostError("validated manifest entries are missing")
+        for entry_name, entry in entries.items():
+            if not isinstance(entry, dict):
+                raise RestoreHostError("validated manifest entry is invalid")
+            manifest_size(entry.get("size"), f"entry {entry_name}")
+        manifest_size(manifest.get("total_uncompressed_bytes"), "total")
         declared = [name for name in entries if name in DATABASE_PAYLOADS]
         actual = [
             name
@@ -328,13 +353,13 @@ class RestoreRunner:
             raise RestoreHostError(
                 "validated database payload manifest entry is invalid"
             )
-        expected_size = expected.get("size")
+        expected_size = manifest_size(
+            expected.get("size"),
+            f"entry {name}",
+        )
         expected_hash = str(expected.get("sha256") or "")
         if (
-            not isinstance(expected_size, int)
-            or isinstance(expected_size, bool)
-            or expected_size < 0
-            or not SHA256.fullmatch(expected_hash)
+            not SHA256.fullmatch(expected_hash)
             or target_stat.st_size != expected_size
             or sha256_file(target) != expected_hash
         ):
@@ -584,7 +609,7 @@ class RestoreRunner:
                 raise RestoreHostError("validated payload entry is missing or unsafe")
             if not isinstance(expected, dict):
                 raise RestoreHostError("validated manifest entry is invalid")
-            size = int(expected.get("size", -1))
+            size = manifest_size(expected.get("size"), f"entry {name}")
             digest = str(expected.get("sha256") or "")
             if (
                 size < 0
@@ -594,7 +619,10 @@ class RestoreRunner:
             ):
                 raise RestoreHostError("validated payload hash or size changed")
             total += size
-        if total != int(manifest.get("total_uncompressed_bytes", -1)):
+        if total != manifest_size(
+            manifest.get("total_uncompressed_bytes"),
+            "total",
+        ):
             raise RestoreHostError("validated manifest total changed")
         self.manifest = manifest
         self.database_payload_name = database_payload_name
@@ -638,8 +666,8 @@ class RestoreRunner:
             "library": "HOST_LIBRARY",
         }
         return {
-            name: explicit_root(
-                str(Path(os.environ.get(env_names[name], str(default))).resolve()),
+            name: explicit_leaf(
+                os.environ.get(env_names[name], str(default)),
                 env_names[name],
             )
             for name, default in defaults.items()
@@ -704,12 +732,18 @@ class RestoreRunner:
                 relative.parent.parts,
                 relative.name,
             )
-            expected_size = int(expected.get("size", -1))
+            expected_size = manifest_size(
+                expected.get("size"),
+                f"entry {name}",
+            )
             expected_hash = str(expected.get("sha256") or "")
             if size != expected_size or not hmac.compare_digest(digest, expected_hash):
                 raise RestoreHostError("validated payload changed after writer stop")
             total += size
-        if total != int(self.manifest.get("total_uncompressed_bytes", -1)):
+        if total != manifest_size(
+            self.manifest.get("total_uncompressed_bytes"),
+            "total",
+        ):
             raise RestoreHostError("validated manifest total changed after writer stop")
 
         for directory, names, filenames in os.walk(frozen_payload, topdown=False):
@@ -1205,6 +1239,28 @@ class RestoreRunner:
             receipt["rollback_components"] = rollback_components
         atomic_json(self.receipt_path, receipt, immutable=True)
 
+    def _transition_rollback_component(
+        self,
+        name: str,
+        status: str,
+        *,
+        error: str | None = None,
+        identity: dict[str, Any] | None = None,
+    ) -> None:
+        components = self.journal.setdefault("rollback_components", {})
+        current = components.get(name)
+        record = dict(current) if isinstance(current, dict) else {}
+        record["status"] = status
+        record["updated_at"] = now()
+        if identity is not None:
+            record["identity"] = dict(identity)
+        if error is None:
+            record.pop("error", None)
+        else:
+            record["error"] = error
+        components[name] = record
+        self._save_journal()
+
     def rollback(self) -> dict[str, dict[str, str]]:
         outcomes: dict[str, dict[str, str]] = {}
 
@@ -1212,12 +1268,12 @@ class RestoreRunner:
             try:
                 action()
             except Exception as exc:  # noqa: BLE001 - independent recovery components
-                outcomes[name] = {
-                    "status": "failed",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
+                error = f"{type(exc).__name__}: {exc}"
+                outcomes[name] = {"status": "failed", "error": error}
+                self._transition_rollback_component(name, "failed", error=error)
             else:
                 outcomes[name] = {"status": "complete"}
+                self._transition_rollback_component(name, "complete")
 
         attempt(
             "stop_writers",
@@ -1228,10 +1284,12 @@ class RestoreRunner:
             attempt("database", self._rollback_database)
         else:
             outcomes["database"] = {"status": "not_required"}
+            self._transition_rollback_component("database", "not_required")
         if self.journal.get("redis_snapshot"):
             attempt("redis", self._rollback_redis)
         else:
             outcomes["redis"] = {"status": "not_required"}
+            self._transition_rollback_component("redis", "not_required")
         # Always reach a diagnostic foreground-only state, even when every
         # preceding recovery component failed independently.
         attempt(
@@ -1247,40 +1305,123 @@ class RestoreRunner:
         self.compose("stop", "-t", "30", "redis")
         self.compose("cp", f"{redis_data}/.", "redis:/data")
 
-    def _rollback_database(self) -> None:
+    def _probe_rollback_database_names(self) -> set[str]:
         identity_query = (
             "SELECT datname FROM pg_database "
             f"WHERE datname IN ('{self.live_database}','{self.rollback_database}');"
         )
+        identity_result = self.compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "--username",
+            self.postgres_user,
+            "--dbname",
+            "postgres",
+            "-At",
+            "--set=offline_restore_phase=rollback-identities",
+            "-c",
+            identity_query,
+        )
+        identities = set(
+            (identity_result.stdout or b"").decode("utf-8").splitlines()
+        )
+        allowed = {self.live_database, self.rollback_database}
+        if not identities or not identities.issubset(allowed):
+            raise RestoreHostError("PostgreSQL database identity output is invalid")
+        return identities
 
-        def probe() -> set[str]:
-            identity_result = self.compose(
-                "exec",
-                "-T",
-                "postgres",
-                "psql",
-                "--username",
-                self.postgres_user,
-                "--dbname",
-                "postgres",
-                "-At",
-                "--set=offline_restore_phase=rollback-identities",
-                "-c",
-                identity_query,
-            )
-            identities = set(
-                (identity_result.stdout or b"").decode("utf-8").splitlines()
-            )
-            allowed = {self.live_database, self.rollback_database}
-            if not identities or not identities.issubset(allowed):
-                raise RestoreHostError("PostgreSQL database identity output is invalid")
-            return identities
-
+    def _available_rollback_database_names(self) -> set[str]:
         try:
-            identities = probe()
+            return self._probe_rollback_database_names()
         except Exception:  # noqa: BLE001 - retry after ensuring PostgreSQL is available
             self.compose("up", "-d", "--wait", "--wait-timeout", "180", "postgres")
-            identities = probe()
+            return self._probe_rollback_database_names()
+
+    def _probe_rollback_database_oid(self, database: str) -> int:
+        result = self.compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "--username",
+            self.postgres_user,
+            "--dbname",
+            "postgres",
+            "-At",
+            "--set=offline_restore_phase=rollback-identity-oid",
+            "-c",
+            f"SELECT oid FROM pg_database WHERE datname = '{database}';",
+        )
+        rendered = (result.stdout or b"").decode("utf-8").strip()
+        if not rendered.isascii() or not rendered.isdigit() or int(rendered) <= 0:
+            raise RestoreHostError("PostgreSQL database OID output is invalid")
+        return int(rendered)
+
+    def _verify_completed_database_rollback(self, identity: Any) -> None:
+        if (
+            not isinstance(identity, dict)
+            or identity.get("live_database") != self.live_database
+            or not isinstance(identity.get("database_oid"), int)
+            or isinstance(identity.get("database_oid"), bool)
+            or int(identity["database_oid"]) <= 0
+        ):
+            raise RestoreHostError("Completed database rollback identity is invalid")
+        identities = self._available_rollback_database_names()
+        if identities != {self.live_database}:
+            raise RestoreHostError("Completed database rollback names are inconsistent")
+        if self._probe_rollback_database_oid(self.live_database) != identity["database_oid"]:
+            raise RestoreHostError("Completed database rollback identity changed")
+
+    def _rollback_database(self) -> None:
+        components = self.journal.get("rollback_components")
+        component = components.get("database") if isinstance(components, dict) else None
+        identity = component.get("identity") if isinstance(component, dict) else None
+        if isinstance(component, dict) and component.get("status") == "complete":
+            self._verify_completed_database_rollback(identity)
+            return
+
+        identities = self._available_rollback_database_names()
+        if isinstance(identity, dict):
+            expected_oid = identity.get("database_oid")
+            if (
+                identity.get("live_database") != self.live_database
+                or not isinstance(expected_oid, int)
+                or isinstance(expected_oid, bool)
+                or expected_oid <= 0
+            ):
+                raise RestoreHostError("Pending database rollback identity is invalid")
+            if self.rollback_database not in identities:
+                self._verify_completed_database_rollback(identity)
+                self._transition_rollback_component(
+                    "database", "complete", identity=identity
+                )
+                return
+            if self._probe_rollback_database_oid(self.rollback_database) != expected_oid:
+                raise RestoreHostError("Pending database rollback identity changed")
+        else:
+            if (
+                self.journal.get("database_switched")
+                and self.rollback_database not in identities
+            ):
+                raise RestoreHostError(
+                    "Post-switch rollback database identity is unproven"
+                )
+            source_database = (
+                self.rollback_database
+                if self.rollback_database in identities
+                else self.live_database
+            )
+            identity = {
+                "live_database": self.live_database,
+                "restored_from": source_database,
+                "database_oid": self._probe_rollback_database_oid(source_database),
+            }
+            self._transition_rollback_component(
+                "database", "in_progress", identity=identity
+            )
+
         if (
             self.journal.get("database_switched")
             and self.rollback_database not in identities
@@ -1289,6 +1430,10 @@ class RestoreRunner:
         if self.rollback_database not in identities:
             # A failed atomic switch leaves only the original live database.
             # Never rename that sole healthy database away during recovery.
+            self._verify_completed_database_rollback(identity)
+            self._transition_rollback_component(
+                "database", "complete", identity=identity
+            )
             return
         terminate = f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('{self.live_database}','{self.rollback_database}') AND pid <> pg_backend_pid();"
         self.compose(
@@ -1326,8 +1471,13 @@ class RestoreRunner:
             "-c",
             rollback_sql,
         )
+        self._verify_completed_database_rollback(identity)
+        self._transition_rollback_component(
+            "database", "complete", identity=identity
+        )
 
     def _rollback_files(self) -> None:
+        self._validate_file_swap_journal()
         errors: list[str] = []
         for swap in reversed(list(self.journal.get("file_swaps") or [])):
             try:
@@ -1343,6 +1493,62 @@ class RestoreRunner:
                 "One or more filesystem swaps could not be rolled back: "
                 + "; ".join(errors)
             )
+
+    @staticmethod
+    def _validated_rollback_identity(
+        value: Any,
+        *,
+        label: str,
+        expected_mode: int | None = None,
+    ) -> dict[str, int]:
+        if not isinstance(value, dict):
+            raise RestoreHostError(f"Rollback {label} identity is missing")
+        identity: dict[str, int] = {}
+        for field in ("device", "inode", "mode"):
+            member = value.get(field)
+            if type(member) is not int or member < 0:
+                raise RestoreHostError(f"Rollback {label} identity is invalid")
+            identity[field] = member
+        if expected_mode is not None and identity["mode"] != expected_mode:
+            raise RestoreHostError(f"Rollback {label} identity type is invalid")
+        if expected_mode is None and identity["mode"] not in {
+            stat.S_IFREG,
+            stat.S_IFDIR,
+            stat.S_IFLNK,
+        }:
+            raise RestoreHostError(f"Rollback {label} identity type is invalid")
+        return identity
+
+    def _validate_file_swap_journal(self) -> None:
+        swaps = self.journal.get("file_swaps")
+        if not isinstance(swaps, list):
+            raise RestoreHostError("Rollback filesystem swap journal is invalid")
+        for swap in swaps:
+            if not isinstance(swap, dict):
+                raise RestoreHostError("Rollback filesystem swap journal is invalid")
+            kind = swap.get("kind")
+            if kind == "directory":
+                candidate_mode = stat.S_IFDIR
+            elif kind == "file":
+                candidate_mode = stat.S_IFREG
+            else:
+                raise RestoreHostError("Rollback filesystem swap kind is invalid")
+            self._validated_rollback_identity(
+                swap.get("candidate_identity"),
+                label="candidate",
+                expected_mode=candidate_mode,
+            )
+            existed = swap.get("existed")
+            if type(existed) is not bool:
+                raise RestoreHostError("Rollback original identity state is invalid")
+            original = swap.get("original_identity")
+            if existed:
+                self._validated_rollback_identity(
+                    original,
+                    label="original",
+                )
+            elif original is not None:
+                raise RestoreHostError("Rollback original identity is inconsistent")
 
     def _transition_file_rollback(
         self,
@@ -1376,21 +1582,13 @@ class RestoreRunner:
         actual: dict[str, int] | None,
         expected: Any,
         *,
-        kind: str,
         name: str,
     ) -> None:
         if actual is None:
             raise RestoreHostError(f"Rollback mutation source is missing: {name}")
-        if kind == "directory":
-            expected_mode = stat.S_IFDIR
-        elif kind == "file":
-            expected_mode = stat.S_IFREG
-        else:
-            raise RestoreHostError("Unknown rollback cleanup kind")
-        if actual.get("mode") != expected_mode:
-            raise RestoreHostError(f"Rollback mutation source has wrong type: {name}")
         if not isinstance(expected, dict) or any(
-            int(expected.get(field, -1)) != actual[field]
+            type(expected.get(field)) is not int
+            or expected[field] != actual.get(field)
             for field in ("device", "inode", "mode")
         ):
             raise RestoreHostError(f"Rollback mutation source changed: {name}")
@@ -1435,8 +1633,7 @@ class RestoreRunner:
                 )
             self._require_rollback_identity(
                 identity,
-                expected_identity if isinstance(expected_identity, dict) else identity,
-                kind=str(swap["kind"]),
+                expected_identity,
                 name=source,
             )
             self._begin_rollback_intent(
@@ -1456,7 +1653,6 @@ class RestoreRunner:
             self._require_rollback_identity(
                 source_identity,
                 expected,
-                kind=str(swap["kind"]),
                 name=source,
             )
             if destination_identity is not None:
@@ -1480,7 +1676,6 @@ class RestoreRunner:
             self._require_rollback_identity(
                 destination_identity,
                 expected,
-                kind=str(swap["kind"]),
                 name=destination,
             )
             if state == f"{prefix}_intent":
@@ -1523,8 +1718,7 @@ class RestoreRunner:
                 return
             self._require_rollback_identity(
                 identity,
-                expected_identity if isinstance(expected_identity, dict) else identity,
-                kind=str(swap["kind"]),
+                expected_identity,
                 name=name,
             )
             self._begin_rollback_intent(
@@ -1542,7 +1736,6 @@ class RestoreRunner:
             self._require_rollback_identity(
                 identity,
                 intent.get("identity"),
-                kind=str(swap["kind"]),
                 name=name,
             )
             self._remove_explicit_at(parent_fd, name, str(swap["kind"]))
@@ -1644,7 +1837,6 @@ class RestoreRunner:
             or new != Path(swap.get("new", new))
         ):
             raise RestoreHostError("Rollback file journal paths are inconsistent")
-        kind = str(swap["kind"])
         with safe_directory_fd(root, relative.parent.parts) as (_, parent_fd):
             failed_name = f".{target.name}.restore-failed-{self.request_id}"
             self._resume_file_rollback_intent(
@@ -1711,7 +1903,6 @@ class RestoreRunner:
                         self._require_rollback_identity(
                             self._entry_identity(parent_fd, target.name),
                             original_identity,
-                            kind=kind,
                             name=target.name,
                         )
                 # With no old path, the only deterministic live value is the
@@ -1795,6 +1986,8 @@ def load_rollback_runner(rollback_dir: Path) -> RestoreRunner:
     ):
         raise RestoreHostError("Rollback point is invalid")
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    if type(journal.get("version")) is not int or journal["version"] not in {1, 2}:
+        raise RestoreHostError("Rollback journal schema version is unsupported")
     receipts = explicit_root(
         os.environ.get("RESTORE_RECEIPTS_ROOT", ""), "RESTORE_RECEIPTS_ROOT"
     )

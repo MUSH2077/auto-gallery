@@ -528,6 +528,12 @@ def _allowed_file(path: PurePosixPath, contents: set[str]) -> bool:
     return False
 
 
+def _manifest_size(value: Any, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_ARCHIVE_SIZE:
+        raise RestoreValidationError(f"Archive manifest {label} size is invalid")
+    return value
+
+
 def _validated_manifest(archive: tarfile.TarFile, members: list[tarfile.TarInfo]):
     manifest_members = [member for member in members if member.name == "manifest.json"]
     if len(manifest_members) != 1 or not manifest_members[0].isreg():
@@ -554,9 +560,7 @@ def _validated_manifest(archive: tarfile.TarFile, members: list[tarfile.TarInfo]
     entries = manifest.get("entries")
     if not isinstance(entries, dict) or not entries:
         raise RestoreValidationError("Archive manifest entries are missing")
-    declared_total = manifest.get("total_uncompressed_bytes")
-    if not isinstance(declared_total, int) or declared_total < 0:
-        raise RestoreValidationError("Archive manifest total size is invalid")
+    _manifest_size(manifest.get("total_uncompressed_bytes"), "total")
     return manifest, set(contents), entries
 
 
@@ -662,11 +666,15 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                     declared = entries.get(name)
                     if not isinstance(declared, dict):
                         raise RestoreValidationError("Archive manifest entry is invalid")
+                    declared_size = _manifest_size(
+                        declared.get("size"),
+                        f"entry {name}",
+                    )
                     source = archive.extractfile(member)
                     if source is None:
                         raise RestoreValidationError("Archive file cannot be read")
                     actual_size, actual_hash = _hash_stream(source)
-                    if int(declared.get("size", -1)) != member.size or actual_size != member.size:
+                    if declared_size != member.size or actual_size != member.size:
                         raise RestoreValidationError(f"Archive file size does not match manifest: {name}")
                     declared_hash = str(declared.get("sha256") or "")
                     if not _SHA256_RE.fullmatch(declared_hash) or not hmac.compare_digest(declared_hash, actual_hash):
@@ -678,7 +686,7 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                     raise RestoreValidationError(
                         "Archive must contain exactly one recognized database payload"
                     )
-                if int(manifest["total_uncompressed_bytes"]) != verified_total:
+                if manifest["total_uncompressed_bytes"] != verified_total:
                     raise RestoreValidationError("Archive manifest total uncompressed size does not match files")
                 if _free_bytes(root) < assembled_size + verified_total + 1024 * 1024:
                     raise RestoreValidationError("Insufficient free space for verified restore extraction")

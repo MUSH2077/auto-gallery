@@ -22,14 +22,26 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_DEFAULT_MANIFEST_TOTAL = object()
+
+
 def _archive_bytes(
     files: dict[str, bytes],
     *,
     manifest_entries: dict[str, dict[str, object]] | None = None,
+    manifest_total: object = _DEFAULT_MANIFEST_TOTAL,
     contents: list[str] | None = None,
     extra_members: list[tarfile.TarInfo] | None = None,
 ) -> bytes:
-    entries = manifest_entries or {name: {"size": len(data), "sha256": _sha256(data)} for name, data in files.items()}
+    entries = manifest_entries or {
+        name: {"size": len(data), "sha256": _sha256(data)}
+        for name, data in files.items()
+    }
+    total = (
+        sum(entry["size"] for entry in entries.values())
+        if manifest_total is _DEFAULT_MANIFEST_TOTAL
+        else manifest_total
+    )
     manifest = json.dumps(
         {
             "version": "0.3.0",
@@ -37,7 +49,7 @@ def _archive_bytes(
             "contents": contents or ["database"],
             "component_sizes": {"database": len(files.get("database.sql", b""))},
             "entries": entries,
-            "total_uncompressed_bytes": sum(int(entry["size"]) for entry in entries.values()),
+            "total_uncompressed_bytes": total,
         },
         separators=(",", ":"),
     ).encode()
@@ -447,6 +459,52 @@ def test_database_payload_hash_mismatch_archive_never_becomes_ready(tmp_path):
 
     with pytest.raises(RestoreValidationError, match="hash"):
         _validate_staged_archive(tmp_path, created, 26)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+@pytest.mark.parametrize("field", ["entry", "total"])
+@pytest.mark.parametrize(
+    "representation",
+    ["bool", "string", "float", "null", "negative", "out-of-range"],
+)
+def test_manifest_sizes_require_bounded_json_integers_before_readiness(
+    tmp_path,
+    field,
+    representation,
+):
+    """Actual archives never gain readiness through JSON number coercion."""
+    from app.services.offline_restore import (
+        MAX_ARCHIVE_SIZE,
+        RestoreValidationError,
+    )
+
+    data = b"x"
+    valid_size = len(data)
+    malformed = {
+        "bool": True,
+        "string": str(valid_size),
+        "float": float(valid_size),
+        "null": None,
+        "negative": -1,
+        "out-of-range": MAX_ARCHIVE_SIZE + 1,
+    }[representation]
+    entry_size = malformed if field == "entry" else valid_size
+    total = malformed if field == "total" else valid_size
+    archive = _archive_bytes(
+        {"database.dump": data},
+        manifest_entries={
+            "database.dump": {
+                "size": entry_size,
+                "sha256": _sha256(data),
+            }
+        },
+        manifest_total=total,
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="size"):
+        _validate_staged_archive(tmp_path, created, 30)
+
     assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
 
 

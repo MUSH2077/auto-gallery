@@ -44,6 +44,13 @@ with log.open("a", encoding="utf-8") as output:
 if os.environ.get("FAKE_COMPOSE_SLEEP") and "stop" in args:
     time.sleep(float(os.environ["FAKE_COMPOSE_SLEEP"]))
 joined = " ".join(args)
+database_state = os.environ.get("FAKE_DATABASE_STATE")
+if (
+    database_state
+    and "ALTER DATABASE ag_rollback_" in joined
+    and "RENAME TO autogallery" in joined
+):
+    pathlib.Path(database_state).touch()
 mutate_on = os.environ.get("FAKE_MUTATE_PATH_ON")
 if mutate_on and mutate_on in joined:
     pathlib.Path(os.environ["FAKE_MUTATE_PATH"]).write_bytes(
@@ -59,7 +66,12 @@ if sabotage_on and sabotage_on in joined:
 if "POSTGRES_USER" in joined and "POSTGRES_DB" in joined and "pg_dump" not in joined:
     sys.stdout.write(os.environ.get("FAKE_POSTGRES_IDENTITY", "autogallery\\nautogallery\\n"))
 elif "--set=offline_restore_phase=rollback-identities" in args:
-    sys.stdout.write(os.environ.get("FAKE_DATABASE_IDENTITIES", ""))
+    if database_state and pathlib.Path(database_state).exists():
+        sys.stdout.write("autogallery\\n")
+    else:
+        sys.stdout.write(os.environ.get("FAKE_DATABASE_IDENTITIES", ""))
+elif "--set=offline_restore_phase=rollback-identity-oid" in args:
+    sys.stdout.write(os.environ.get("FAKE_DATABASE_OID", "4242\\n"))
 elif any("pg_dump" in arg for arg in args):
     sys.stdout.buffer.write(b"disposable-postgres-snapshot")
 failure = os.environ.get("FAKE_COMPOSE_FAIL_CONTAINS")
@@ -158,6 +170,7 @@ def _fixture(tmp_path: Path):
         "HOST_LIBRARY": str(library),
         "POSTGRES_DB": "autogallery",
         "FAKE_DATABASE_IDENTITIES": "autogallery\nag_rollback_000000000000\n",
+        "FAKE_DATABASE_STATE": str(tmp_path / "database-rollback-complete"),
     }
     script = Path(__file__).parents[2] / "scripts/offline-restore.py"
     return {
@@ -383,6 +396,49 @@ def test_database_payload_preflight_rejects_before_writer_stop(tmp_path, case):
 
     assert result.returncode == 2
     assert "database payload" in result.stderr
+    assert _commands(fixture) == []
+    assert not (
+        fixture["receipts"] / "rollbacks" / fixture["request_id"]
+    ).exists()
+
+
+@pytest.mark.parametrize("field", ["entry", "total"])
+@pytest.mark.parametrize(
+    "representation",
+    ["bool", "string", "float", "null", "negative", "out-of-range"],
+)
+def test_host_manifest_size_preflight_has_exact_api_parity(
+    tmp_path,
+    field,
+    representation,
+):
+    """The host rejects every non-bounded JSON integer before Compose runs."""
+    fixture = _fixture(tmp_path)
+    request = json.loads(fixture["request"].read_text(encoding="utf-8"))
+    if field == "entry":
+        valid_size = request["manifest"]["entries"]["database.dump"]["size"]
+    else:
+        valid_size = request["manifest"]["total_uncompressed_bytes"]
+    malformed = {
+        "bool": True,
+        "string": str(valid_size),
+        "float": float(valid_size),
+        "null": None,
+        "negative": -1,
+        "out-of-range": 64 * 1024 * 1024 * 1024 + 1,
+    }[representation]
+    if field == "entry":
+        request["manifest"]["entries"]["database.dump"]["size"] = malformed
+    else:
+        request["manifest"]["total_uncompressed_bytes"] = malformed
+    fixture["request"].chmod(0o600)
+    fixture["request"].write_text(json.dumps(request), encoding="utf-8")
+    fixture["request"].chmod(0o444)
+
+    result = _run(fixture)
+
+    assert result.returncode == 2
+    assert "size" in result.stderr.lower()
     assert _commands(fixture) == []
     assert not (
         fixture["receipts"] / "rollbacks" / fixture["request_id"]
@@ -873,6 +929,48 @@ def _replace_rollback_slot_with_sentinel(path: Path, kind: str) -> bytes:
     return sentinel
 
 
+def _rollback_slot_snapshot(path: Path):
+    if not os.path.lexists(path):
+        return None
+    entry = path.lstat()
+    identity = (entry.st_dev, entry.st_ino, stat.S_IFMT(entry.st_mode))
+    if path.is_symlink():
+        return identity, ("symlink", os.readlink(path))
+    if path.is_file():
+        return identity, ("file", path.read_bytes())
+    children = []
+    for child in sorted(path.rglob("*")):
+        child_stat = child.lstat()
+        child_identity = (
+            child.relative_to(path).as_posix(),
+            child_stat.st_dev,
+            child_stat.st_ino,
+            stat.S_IFMT(child_stat.st_mode),
+        )
+        if child.is_symlink():
+            children.append((*child_identity, "symlink", os.readlink(child)))
+        elif child.is_file():
+            children.append((*child_identity, "file", child.read_bytes()))
+        else:
+            children.append((*child_identity, "directory", None))
+    return identity, ("directory", tuple(children))
+
+
+def _remove_swap_identities(fixture, component: str, *, legacy_gap: bool = False) -> None:
+    journal_path = _rollback_path(fixture).parent / "journal.json"
+    journal = json.loads(journal_path.read_text())
+    journal["version"] = 1
+    swap = next(
+        item for item in journal["file_swaps"] if item["component"] == component
+    )
+    swap.pop("original_identity", None)
+    swap.pop("candidate_identity", None)
+    if legacy_gap:
+        swap.pop("rollback_intent", None)
+        swap.pop("rollback_state", None)
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("kind", "component"),
     [("directory", "app-config"), ("file", "library-metadata")],
@@ -938,6 +1036,134 @@ def test_rollback_refuses_replaced_candidate_at_every_mutable_slot(
         assert (tampered / "sentinel").read_bytes() == sentinel
     else:
         assert tampered.read_bytes() == sentinel
+    _assert_foreground_only_restart(fixture)
+
+
+@pytest.mark.parametrize(
+    ("kind", "component"),
+    [("directory", "app-config"), ("file", "library-metadata")],
+)
+@pytest.mark.parametrize("slot", ["target", "new", "old", "failed"])
+def test_identityless_legacy_journal_never_mutates_any_deterministic_slot(
+    tmp_path,
+    kind,
+    component,
+    slot,
+):
+    """A basename alone never authorizes a legacy rollback mutation."""
+    fixture = _fixture(tmp_path)
+    target, _expected = _swap_target(fixture, kind)
+    old = target.with_name(f".{target.name}.restore-old-{fixture['request_id']}")
+    new = target.with_name(f".{target.name}.restore-new-{fixture['request_id']}")
+    failed = target.with_name(
+        f".{target.name}.restore-failed-{fixture['request_id']}"
+    )
+
+    if slot in {"new", "old"}:
+        env = {
+            **fixture["env"],
+            "RESTORE_FAULT_BOUNDARY": f"{kind}:{component}:old-journal",
+            "RESTORE_FAULT_ACTION": "kill",
+        }
+        forward = subprocess.run(
+            [sys.executable, str(fixture["script"]), "--request", str(fixture["request"])],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert forward.returncode < 0, forward.stderr
+        tampered = new if slot == "new" else old
+        _remove_swap_identities(fixture, component)
+    else:
+        applied = _run(fixture)
+        assert applied.returncode == 0, applied.stderr
+        if slot == "failed":
+            interrupted = _run_rollback(
+                fixture,
+                boundary=f"{kind}:{component}:old-to-live-fsynced-journal",
+            )
+            assert interrupted.returncode == 1, interrupted.stderr
+            tampered = failed
+            _remove_swap_identities(fixture, component, legacy_gap=True)
+        else:
+            tampered = target
+            _remove_swap_identities(fixture, component)
+
+    sentinel = _replace_rollback_slot_with_sentinel(tampered, kind)
+    paths = (target, new, old, failed)
+    before = {path: _rollback_slot_snapshot(path) for path in paths}
+
+    result = _run_rollback(fixture)
+
+    assert result.returncode == 1
+    assert "identity" in result.stderr.lower()
+    assert {path: _rollback_slot_snapshot(path) for path in paths} == before
+    if kind == "directory":
+        assert (tampered / "sentinel").read_bytes() == sentinel
+    else:
+        assert tampered.read_bytes() == sentinel
+
+
+@pytest.mark.parametrize(
+    ("kind", "component"),
+    [("directory", "app-config"), ("file", "library-metadata")],
+)
+def test_rollback_restores_original_symlink_without_following_it_after_crash(
+    tmp_path,
+    kind,
+    component,
+):
+    """The original leaf kind, including a symlink, controls restoration."""
+    fixture = _fixture(tmp_path)
+    target, _expected = _swap_target(fixture, kind)
+    outside = tmp_path / f"outside-{kind}"
+    if kind == "directory":
+        shutil.rmtree(target)
+        outside.mkdir()
+        (outside / "sentinel").write_bytes(b"outside-directory")
+    else:
+        target.unlink()
+        outside.write_bytes(b"outside-file")
+    target.symlink_to(outside, target_is_directory=kind == "directory")
+    original_identity = (
+        target.lstat().st_dev,
+        target.lstat().st_ino,
+        stat.S_IFMT(target.lstat().st_mode),
+    )
+    outside_before = _rollback_slot_snapshot(outside)
+    link_text = os.readlink(target)
+
+    applied = _run(fixture)
+    assert applied.returncode == 0, applied.stderr
+    assert not target.is_symlink()
+    old = target.with_name(f".{target.name}.restore-old-{fixture['request_id']}")
+    assert old.is_symlink()
+    assert os.readlink(old) == link_text
+
+    interrupted = _run_rollback(
+        fixture,
+        boundary=f"{kind}:{component}:old-to-live-renamed",
+        action="kill",
+    )
+    assert interrupted.returncode < 0, interrupted.stderr
+    assert target.is_symlink()
+    assert os.readlink(target) == link_text
+    assert _rollback_slot_snapshot(outside) == outside_before
+
+    resumed = _run_rollback(fixture)
+
+    assert resumed.returncode == 0, resumed.stderr
+    assert target.is_symlink()
+    restored = target.lstat()
+    assert (
+        restored.st_dev,
+        restored.st_ino,
+        stat.S_IFMT(restored.st_mode),
+    ) == original_identity
+    assert os.readlink(target) == link_text
+    assert _rollback_slot_snapshot(outside) == outside_before
     _assert_foreground_only_restart(fixture)
 
 
@@ -1128,10 +1354,12 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(tmp_path):
         shim = tmp_path / "real-compose-shim.py"
         shim.write_text(
             """#!/usr/bin/env python3
-import os, subprocess, sys
+import json, os, pathlib, subprocess, sys
 args = sys.argv[1:]
 pg = os.environ["REAL_PG_CONTAINER"]
 redis = os.environ["REAL_REDIS_CONTAINER"]
+with pathlib.Path(os.environ["REAL_COMPOSE_LOG"]).open("a", encoding="utf-8") as output:
+    output.write(json.dumps(args) + "\\n")
 if args[:3] == ["exec", "-T", "postgres"]:
     raise SystemExit(subprocess.run(["docker", "exec", "-i", pg, *args[3:]]).returncode)
 if args[:3] == ["exec", "-T", "redis"]:
@@ -1162,6 +1390,7 @@ raise SystemExit(0)
                 "RESTORE_COMPOSE_COMMAND": str(shim),
                 "REAL_PG_CONTAINER": pg_container,
                 "REAL_REDIS_CONTAINER": redis_container,
+                "REAL_COMPOSE_LOG": str(fixture["log"]),
                 # These are deliberately wrong: discovery must use the service.
                 "POSTGRES_USER": "wrong_host_user",
                 "POSTGRES_DB": "wrong_host_database",
@@ -1186,6 +1415,14 @@ raise SystemExit(0)
         rollback = (
             fixture["receipts"] / "rollbacks" / fixture["request_id"] / "rollback.sh"
         )
+        fixture["env"].update(
+            {
+                "RESTORE_ROLLBACK_FAULT_BOUNDARY": (
+                    "directory:app-config:live-to-failed-intent-journal"
+                ),
+                "RESTORE_ROLLBACK_FAULT_ACTION": "fail",
+            }
+        )
         rollback_result = subprocess.run(
             [str(rollback)],
             env=fixture["env"],
@@ -1194,7 +1431,7 @@ raise SystemExit(0)
             timeout=45,
             check=False,
         )
-        assert rollback_result.returncode == 0, rollback_result.stderr
+        assert rollback_result.returncode == 1, rollback_result.stderr
         restored_db = command(
             "docker", "exec", pg_container, "psql",
             "--username", pg_user, "--dbname", live_database,
@@ -1202,11 +1439,34 @@ raise SystemExit(0)
             "SELECT value FROM restore_marker;",
         ).stdout.decode().strip()
         assert restored_db == "old"
+        journal = json.loads((rollback.parent / "journal.json").read_text())
+        database_state = journal["rollback_components"]["database"]
+        assert database_state["status"] == "complete"
+        assert database_state["identity"]["live_database"] == live_database
+        assert isinstance(database_state["identity"]["database_oid"], int)
         restored_redis = command(
             "docker", "exec", redis_container,
             "redis-cli", "--raw", "GET", "restore:marker",
         ).stdout.decode().strip()
         assert restored_redis == "old"
+
+        fixture["env"].pop("RESTORE_ROLLBACK_FAULT_BOUNDARY")
+        fixture["env"].pop("RESTORE_ROLLBACK_FAULT_ACTION")
+        command_count = len(_commands(fixture))
+        resumed = subprocess.run(
+            [str(rollback)],
+            env=fixture["env"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        assert resumed.returncode == 0, resumed.stderr
+        resumed_commands = _commands(fixture)[command_count:]
+        assert not any("ALTER DATABASE" in " ".join(item) for item in resumed_commands)
+        assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+        assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+        _assert_foreground_only_restart(fixture)
     finally:
         for container, prefix in (
             (pg_container, "ag_finalfix_host_pg_"),
