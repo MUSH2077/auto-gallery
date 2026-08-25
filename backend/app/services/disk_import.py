@@ -40,6 +40,7 @@ from app.services.settings import source_key_for_extractor
 logger = logging.getLogger(__name__)
 
 DISK_IMPORT_WORK_BATCH_SIZE = 25
+LEGACY_DIRECTORY_METADATA_SAMPLE_LIMIT = 3
 
 
 async def _wait_for_batch_capacity(
@@ -104,6 +105,89 @@ def _recoverable_download_owner():
         StorageArtifact.download_job_id.is_(None),
         DownloadJob.status.in_(RECOVERABLE_DOWNLOAD_OWNER_STATUSES),
     )
+
+
+def _safe_metadata_path(root: Path, relative_path: str) -> Path | None:
+    """Resolve a ledger path without allowing it to escape the download root."""
+
+    canonical_root = root.resolve()
+    candidate = (canonical_root / relative_path).resolve()
+    if not candidate.is_relative_to(canonical_root):
+        return None
+    return candidate
+
+
+async def _legacy_repository_dirs_from_pending_metadata(
+    db: AsyncSession,
+    *,
+    root: Path,
+    source: str,
+    source_creator_ids: set[str],
+) -> set[str]:
+    """Resolve old username-based gallery-dl directories from bounded ledger samples.
+
+    Historical gallery-dl layouts used an account name for ``creator_dir``
+    while repositories store the durable platform UID.  We inspect at most a
+    few *pending ledger paths* per directory, never recurse through the source
+    tree, and only accept metadata whose provider parser returns an exact UID.
+    """
+
+    if not source_creator_ids:
+        return set()
+    now = datetime.now(timezone.utc)
+    sample_number = func.row_number().over(
+        partition_by=StorageArtifact.creator_dir,
+        order_by=(StorageArtifact.created_at, StorageArtifact.id),
+    ).label("sample_number")
+    ranked = (
+        select(
+            StorageArtifact.creator_dir.label("creator_dir"),
+            StorageArtifact.file_path.label("file_path"),
+            sample_number,
+        )
+        .outerjoin(DownloadJob, DownloadJob.id == StorageArtifact.download_job_id)
+        .where(
+            StorageArtifact.source == source,
+            _pending_download_metadata(now),
+            _recoverable_download_owner(),
+        )
+        .subquery()
+    )
+    samples = (
+        await db.execute(
+            select(ranked.c.creator_dir, ranked.c.file_path)
+            .where(
+                ranked.c.sample_number <= LEGACY_DIRECTORY_METADATA_SAMPLE_LIMIT,
+            )
+            .order_by(ranked.c.creator_dir, ranked.c.sample_number)
+        )
+    ).all()
+
+    matches: set[str] = set()
+    rejected: set[str] = set()
+    for creator_dir, relative_path in samples:
+        if creator_dir in matches or creator_dir in rejected:
+            continue
+        metadata_path = _safe_metadata_path(root, relative_path)
+        if metadata_path is None:
+            rejected.add(creator_dir)
+            continue
+        try:
+            with metadata_path.open(encoding="utf-8") as metadata_file:
+                identity = extract_metadata_identity(
+                    source,
+                    json.load(metadata_file),
+                    creator_dir,
+                )
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+            # A later bounded sample from the same directory may still be
+            # usable, so malformed or missing files do not reject the scope.
+            continue
+        if identity.source_creator_id in source_creator_ids:
+            matches.add(creator_dir)
+        else:
+            rejected.add(creator_dir)
+    return matches
 
 
 async def _next_pending_scope(
@@ -702,11 +786,26 @@ async def reconcile_downloads_to_db(
         # Reusing it prevents a global source scan from draining a sibling
         # repository with a lookalike directory.
         from app.services.repository_artifact_reconciliation import _repository_creator_dirs
+        from app.services.repository_identity import resolve_repository_source_creator_ids
 
         repository_dirs = await _repository_creator_dirs(
             db,
             repository,
             subscription.creator_id,
+        )
+        repository_dirs.update(
+            await _legacy_repository_dirs_from_pending_metadata(
+                db,
+                root=root,
+                source=repository_source,
+                source_creator_ids=set(
+                    await resolve_repository_source_creator_ids(
+                        db,
+                        repository,
+                        subscription.creator_id,
+                    )
+                ),
+            )
         )
         if not repository_dirs:
             raise ValueError("repository has no resolvable creator directory")

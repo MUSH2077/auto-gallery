@@ -290,6 +290,99 @@ async def test_disk_import_repository_scope_uses_exact_creator_directory_and_pro
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_repository_drain_resolves_legacy_username_directory_from_pending_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    """A UID repository adopts its old gallery-dl username directory only."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.services.disk_import import reconcile_downloads_to_db
+
+    download_root = tmp_path / "downloads"
+    selected_dir = download_root / "pixiv" / "legacy_account" / "38362603"
+    sibling_dir = download_root / "pixiv" / "other_account" / "38362604"
+    selected_dir.mkdir(parents=True)
+    sibling_dir.mkdir(parents=True)
+    selected_json = selected_dir / "metadata.json"
+    selected_json.write_text(json.dumps(_pixiv_metadata()), encoding="utf-8")
+    sibling_json = sibling_dir / "metadata.json"
+    sibling_json.write_text(
+        json.dumps(_pixiv_metadata(work_id=38362604, creator_id=999999)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "download_root", str(download_root))
+
+    enqueued: list[set[str]] = []
+
+    async def fake_enqueue(_download_job_id, import_error=None, new_json_paths=None):
+        enqueued.append(set(new_json_paths or []))
+        return "legacy-scoped-import"
+
+    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+
+    try:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+            creator = Creator(name="selected")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Selected")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="1980643",
+                source_url="https://www.pixiv.net/users/1980643",
+            )
+            db.add(repository)
+            await db.flush()
+            db.add_all([
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/legacy_account/38362603/metadata.json",
+                    source="pixiv",
+                    creator_dir="legacy_account",
+                    source_work_id="38362603",
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    state="new",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/other_account/38362604/metadata.json",
+                    source="pixiv",
+                    creator_dir="other_account",
+                    source_work_id="38362604",
+                    file_name="metadata.json",
+                    artifact_type="metadata_json",
+                    state="new",
+                ),
+            ])
+            await db.commit()
+
+            result = await reconcile_downloads_to_db(
+                db,
+                {"source": "pixiv", "repository_id": str(repository.id)},
+            )
+
+            assert result["scanned"] == 1
+            assert result["imported"] == 1
+            assert result["failed"] == 0
+            assert enqueued == [{str(selected_json)}]
+    finally:
+        async with async_session() as db:
+            await _clear_pipeline_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_ordinary_repository_drain_never_walks_sibling_directories(tmp_path, monkeypatch):
     """A scoped ledger drain must not discover any sibling creator on disk."""
     from pathlib import Path
