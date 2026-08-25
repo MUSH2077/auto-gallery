@@ -45,12 +45,6 @@ if os.environ.get("FAKE_COMPOSE_SLEEP") and "stop" in args:
     time.sleep(float(os.environ["FAKE_COMPOSE_SLEEP"]))
 joined = " ".join(args)
 database_state = os.environ.get("FAKE_DATABASE_STATE")
-if (
-    database_state
-    and "ALTER DATABASE ag_rollback_" in joined
-    and "RENAME TO autogallery" in joined
-):
-    pathlib.Path(database_state).touch()
 mutate_on = os.environ.get("FAKE_MUTATE_PATH_ON")
 if mutate_on and mutate_on in joined:
     pathlib.Path(os.environ["FAKE_MUTATE_PATH"]).write_bytes(
@@ -63,20 +57,48 @@ if sabotage_on and sabotage_on in joined:
         shutil.rmtree(sabotage)
     else:
         sabotage.unlink(missing_ok=True)
+state_path = pathlib.Path(database_state) if database_state else None
+state = state_path.read_text() if state_path and state_path.exists() else "initial"
+failure = os.environ.get("FAKE_COMPOSE_FAIL_CONTAINS")
+if failure and failure in joined:
+    sys.exit(1)
+if "--set=offline_restore_phase=database-identities" in args and state_path:
+    count_path = state_path.with_suffix(".identity-count")
+    count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+    count_path.write_text(str(count))
+    fail_after = int(os.environ.get("FAKE_FAIL_DATABASE_IDENTITIES_AFTER", "0"))
+    if fail_after and count > fail_after:
+        sys.exit(1)
+if "CREATE DATABASE ag_restore_" in joined:
+    state = "temp"
+elif "ALTER DATABASE ag_restore_" in joined and "RENAME TO" in joined:
+    state = "switched"
+elif "ALTER DATABASE ag_rollback_" in joined and "RENAME TO" in joined:
+    state = "rolled-back"
+if state_path is not None:
+    state_path.write_text(state)
 if "POSTGRES_USER" in joined and "POSTGRES_DB" in joined and "pg_dump" not in joined:
     sys.stdout.write(os.environ.get("FAKE_POSTGRES_IDENTITY", "autogallery\\nautogallery\\n"))
-elif "--set=offline_restore_phase=rollback-identities" in args:
-    if database_state and pathlib.Path(database_state).exists():
-        sys.stdout.write("autogallery\\n")
-    else:
-        sys.stdout.write(os.environ.get("FAKE_DATABASE_IDENTITIES", ""))
-elif "--set=offline_restore_phase=rollback-identity-oid" in args:
-    sys.stdout.write(os.environ.get("FAKE_DATABASE_OID", "4242\\n"))
+elif "--set=offline_restore_phase=database-identities" in args:
+    live = os.environ.get(
+        "FAKE_POSTGRES_IDENTITY",
+        "autogallery\\nautogallery\\n",
+    ).splitlines()[1]
+    temp = "ag_restore_000000000000"
+    rollback = "ag_rollback_000000000000"
+    failed = "ag_failed_000000000000"
+    old_oid = os.environ.get("FAKE_DATABASE_OID", "4242")
+    temp_oid = os.environ.get("FAKE_TEMP_DATABASE_OID", "4343")
+    inventories = {
+        "initial": [(live, old_oid)],
+        "temp": [(live, old_oid), (temp, temp_oid)],
+        "switched": [(live, temp_oid), (rollback, old_oid)],
+        "rolled-back": [(live, old_oid), (failed, temp_oid)],
+    }
+    for name, oid in inventories[state]:
+        sys.stdout.write(f"{name}|{oid}\\n")
 elif any("pg_dump" in arg for arg in args):
     sys.stdout.buffer.write(b"disposable-postgres-snapshot")
-failure = os.environ.get("FAKE_COMPOSE_FAIL_CONTAINS")
-if failure and failure in " ".join(args):
-    sys.exit(1)
 sys.exit(0)
 """,
         encoding="utf-8",
@@ -169,7 +191,6 @@ def _fixture(tmp_path: Path):
         "HOST_DOWNLOADS": str(downloads),
         "HOST_LIBRARY": str(library),
         "POSTGRES_DB": "autogallery",
-        "FAKE_DATABASE_IDENTITIES": "autogallery\nag_rollback_000000000000\n",
         "FAKE_DATABASE_STATE": str(tmp_path / "database-rollback-complete"),
     }
     script = Path(__file__).parents[2] / "scripts/offline-restore.py"
@@ -234,8 +255,8 @@ def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path)
     assert any("FLUSHDB" in command for command in flattened)
     assert any("up" in command and "scheduler" in command for command in flattened)
     database_create = next(command for command in flattened if "CREATE DATABASE" in command)
-    database_drop = next(command for command in flattened if "DROP DATABASE" in command)
-    assert database_create != database_drop
+    assert "ag_restore_000000000000" in database_create
+    assert not any("DROP DATABASE" in command for command in flattened)
 
     rollback = Path(receipt["rollback_command"])
     assert rollback.is_file()
@@ -453,7 +474,6 @@ def test_failed_atomic_database_switch_does_not_rename_the_untouched_live_databa
     fixture["env"].update(
         {
             "FAKE_COMPOSE_FAIL_CONTAINS": ("ALTER DATABASE autogallery RENAME TO ag_rollback_000000000000"),
-            "FAKE_DATABASE_IDENTITIES": "autogallery\n",
         }
     )
 
@@ -520,7 +540,7 @@ def test_file_rollback_failure_still_attempts_database_redis_and_foreground(tmp_
 def test_unproven_post_switch_database_identity_marks_recovery_failed(tmp_path):
     """A failed identity probe after switching can never count as DB recovery."""
     fixture = _fixture(tmp_path)
-    fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = "rollback-identities"
+    fixture["env"]["FAKE_FAIL_DATABASE_IDENTITIES_AFTER"] = "4"
 
     result = _run(fixture, fail_phase="clear_redis")
 
@@ -531,8 +551,12 @@ def test_unproven_post_switch_database_identity_marks_recovery_failed(tmp_path):
     assert receipt["rollback_components"]["database"]["status"] == "failed"
     assert receipt["rollback_components"]["foreground"]["status"] == "complete"
     commands = _commands(fixture)
-    probes = [command for command in commands if "--set=offline_restore_phase=rollback-identities" in command]
-    assert len(probes) == 2
+    probes = [
+        command
+        for command in commands
+        if "--set=offline_restore_phase=database-identities" in command
+    ]
+    assert len(probes) == 6
     assert any("up" in command and "postgres" in command for command in commands)
     assert not any("up" in command and "scheduler" in command for command in commands)
 
@@ -574,6 +598,73 @@ def test_snapshot_does_not_follow_live_symlinks_outside_explicit_targets(tmp_pat
     assert rollback_link.readlink() == outside
 
 
+@pytest.mark.parametrize("outside_kind", ["directory", "file"])
+def test_top_level_config_symlink_snapshot_never_reads_outside_target(
+    tmp_path,
+    outside_kind,
+):
+    """A config-root symlink is snapshot as a link object, never traversed."""
+    fixture = _fixture(tmp_path)
+    outside = tmp_path / f"outside-config-{outside_kind}"
+    secret = b"outside-only-unreadable-content"
+    if outside_kind == "directory":
+        outside.mkdir()
+        unreadable = outside / "outside-only.txt"
+        unreadable.write_bytes(secret)
+    else:
+        outside.write_bytes(secret)
+        unreadable = outside
+    outside_stat = outside.lstat()
+    unreadable.chmod(0)
+    shutil.rmtree(fixture["live_app"])
+    fixture["live_app"].symlink_to(
+        outside,
+        target_is_directory=outside_kind == "directory",
+    )
+    link_text = os.readlink(fixture["live_app"])
+
+    try:
+        applied = _run(fixture)
+        assert applied.returncode == 0, applied.stderr
+        snapshot = (
+            fixture["receipts"]
+            / "rollbacks"
+            / fixture["request_id"]
+            / "app-config"
+        )
+        assert snapshot.is_symlink()
+        assert os.readlink(snapshot) == link_text
+        captured_names = {
+            (Path(root) / name).relative_to(snapshot.parent).as_posix()
+            for root, _directories, files in os.walk(
+                snapshot.parent,
+                followlinks=False,
+            )
+            for name in files
+        }
+        assert "app-config/outside-only.txt" not in captured_names
+
+        interrupted = _run_rollback(
+            fixture,
+            boundary="directory:app-config:old-to-live-renamed",
+            action="kill",
+        )
+        assert interrupted.returncode < 0, interrupted.stderr
+        resumed = _run_rollback(fixture)
+        assert resumed.returncode == 0, resumed.stderr
+        assert fixture["live_app"].is_symlink()
+        assert os.readlink(fixture["live_app"]) == link_text
+    finally:
+        unreadable.chmod(0o600)
+
+    assert outside.lstat().st_dev == outside_stat.st_dev
+    assert outside.lstat().st_ino == outside_stat.st_ino
+    if outside_kind == "directory":
+        assert (outside / "outside-only.txt").read_bytes() == secret
+    else:
+        assert outside.read_bytes() == secret
+
+
 def test_nested_live_parent_symlink_cannot_redirect_a_restore_write(tmp_path):
     """A relative payload parent must not traverse a live symlink outside its root."""
     fixture = _fixture(tmp_path)
@@ -612,9 +703,6 @@ def test_postgres_identity_comes_from_compose_and_every_command_is_explicit(tmp_
             "POSTGRES_USER": "wrong_host_user",
             "POSTGRES_DB": "wrong_host_database",
             "FAKE_POSTGRES_IDENTITY": "compose_restore_user\ncompose_restore_db\n",
-            "FAKE_DATABASE_IDENTITIES": (
-                "compose_restore_db\nag_rollback_000000000000\n"
-            ),
         }
     )
 
@@ -1167,6 +1255,77 @@ def test_rollback_restores_original_symlink_without_following_it_after_crash(
     _assert_foreground_only_restart(fixture)
 
 
+@pytest.mark.parametrize("original_kind", ["directory", "file", "symlink"])
+@pytest.mark.parametrize("replacement", ["missing", "different-kind", "new-inode"])
+def test_completed_files_component_reentry_proves_original_target_identity(
+    tmp_path,
+    original_kind,
+    replacement,
+):
+    """A rolled-back marker cannot certify a replaced original target."""
+    fixture = _fixture(tmp_path)
+    if original_kind == "directory":
+        target = fixture["live_app"]
+        component = "app-config"
+    else:
+        target, _expected = _swap_target(fixture, "file")
+        component = "library-metadata"
+    if original_kind == "symlink":
+        outside = tmp_path / "completed-original-symlink-target"
+        outside.write_bytes(b"original-outside")
+        target.unlink()
+        target.symlink_to(outside)
+
+    applied = _run(fixture)
+    assert applied.returncode == 0, applied.stderr
+    redis_snapshot = (
+        fixture["receipts"]
+        / "rollbacks"
+        / fixture["request_id"]
+        / "redis-data"
+    )
+    fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = f"{redis_snapshot}/."
+    first = _run_rollback(fixture)
+    assert first.returncode == 1, first.stderr
+    journal = json.loads((_rollback_path(fixture).parent / "journal.json").read_text())
+    swap = next(item for item in journal["file_swaps"] if item["component"] == component)
+    assert swap["rollback_state"] == "rolled_back"
+    fixture["env"].pop("FAKE_COMPOSE_FAIL_CONTAINS")
+
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    elif os.path.lexists(target):
+        target.unlink()
+    if replacement == "different-kind":
+        if original_kind == "directory":
+            target.write_bytes(b"wrong-kind")
+        else:
+            target.mkdir()
+            (target / "sentinel").write_bytes(b"wrong-kind")
+    elif replacement == "new-inode":
+        if original_kind == "directory":
+            target.mkdir()
+            (target / "sentinel").write_bytes(b"replacement-directory")
+        elif original_kind == "file":
+            target.write_bytes(b"replacement-file")
+        else:
+            replacement_target = tmp_path / "replacement-symlink-target"
+            replacement_target.write_bytes(b"replacement-outside")
+            target.symlink_to(replacement_target)
+
+    old = target.with_name(f".{target.name}.restore-old-{fixture['request_id']}")
+    new = target.with_name(f".{target.name}.restore-new-{fixture['request_id']}")
+    failed = target.with_name(f".{target.name}.restore-failed-{fixture['request_id']}")
+    paths = (target, old, new, failed)
+    before = {path: _rollback_slot_snapshot(path) for path in paths}
+
+    result = _run_rollback(fixture)
+
+    assert result.returncode == 1
+    assert "files failed" in result.stderr.lower()
+    assert {path: _rollback_slot_snapshot(path) for path in paths} == before
+
+
 @pytest.mark.parametrize("action", ["fail", "kill"])
 @pytest.mark.parametrize("boundary", SWAP_BOUNDARIES)
 def test_every_filesystem_swap_boundary_has_deterministic_recovery(
@@ -1244,7 +1403,14 @@ def test_file_rollback_aggregates_swap_errors_and_continues_earlier_records(tmp_
 
 
 @pytest.mark.integration
-def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(tmp_path):
+@pytest.mark.parametrize(
+    "scenario",
+    ["occupied-rollback", "failed-forward-switch", "rollback-retry"],
+)
+def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
+    tmp_path,
+    scenario,
+):
     """Exercise host switch/rollback against isolated non-default real services."""
 
     if os.environ.get("RUN_REAL_OFFLINE_RESTORE_INTEGRATION") != "1":
@@ -1282,6 +1448,11 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(tmp_path):
     try:
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
+            initialized = subprocess.run(
+                ["docker", "logs", pg_container],
+                capture_output=True,
+                text=True,
+            )
             ready = subprocess.run(
                 [
                     "docker", "exec", pg_container, "pg_isready",
@@ -1289,7 +1460,11 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(tmp_path):
                 ],
                 capture_output=True,
             )
-            if ready.returncode == 0:
+            if (
+                "PostgreSQL init process complete; ready for start up."
+                in initialized.stdout
+                and ready.returncode == 0
+            ):
                 break
             time.sleep(0.25)
         else:
@@ -1360,6 +1535,24 @@ pg = os.environ["REAL_PG_CONTAINER"]
 redis = os.environ["REAL_REDIS_CONTAINER"]
 with pathlib.Path(os.environ["REAL_COMPOSE_LOG"]).open("a", encoding="utf-8") as output:
     output.write(json.dumps(args) + "\\n")
+if (
+    args[:3] == ["exec", "-T", "postgres"]
+    and os.environ.get("REAL_FAIL_FORWARD_SWITCH") == "after-first-rename"
+    and any(
+        f"ALTER DATABASE {os.environ['REAL_LIVE_DATABASE']} RENAME TO {os.environ['REAL_ROLLBACK_DATABASE']}"
+        in arg
+        for arg in args
+    )
+):
+    partial = subprocess.run(
+        [
+            "docker", "exec", "-i", pg, "psql",
+            "--username", os.environ["REAL_POSTGRES_USER"],
+            "--dbname", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+            f"ALTER DATABASE {os.environ['REAL_LIVE_DATABASE']} RENAME TO {os.environ['REAL_ROLLBACK_DATABASE']};",
+        ]
+    )
+    raise SystemExit(partial.returncode or 1)
 if args[:3] == ["exec", "-T", "postgres"]:
     raise SystemExit(subprocess.run(["docker", "exec", "-i", pg, *args[3:]]).returncode)
 if args[:3] == ["exec", "-T", "redis"]:
@@ -1391,14 +1584,109 @@ raise SystemExit(0)
                 "REAL_PG_CONTAINER": pg_container,
                 "REAL_REDIS_CONTAINER": redis_container,
                 "REAL_COMPOSE_LOG": str(fixture["log"]),
+                "REAL_POSTGRES_USER": pg_user,
+                "REAL_LIVE_DATABASE": live_database,
+                "REAL_ROLLBACK_DATABASE": "ag_rollback_000000000000",
                 # These are deliberately wrong: discovery must use the service.
                 "POSTGRES_USER": "wrong_host_user",
                 "POSTGRES_DB": "wrong_host_database",
             }
         )
 
+        def database_oid(database: str) -> int | None:
+            rendered = command(
+                "docker", "exec", pg_container, "psql",
+                "--username", pg_user, "--dbname", "postgres",
+                "--tuples-only", "--no-align", "--command",
+                f"SELECT oid FROM pg_database WHERE datname = '{database}';",
+            ).stdout.decode().strip()
+            return int(rendered) if rendered else None
+
+        def database_marker(database: str) -> str:
+            return command(
+                "docker", "exec", pg_container, "psql",
+                "--username", pg_user, "--dbname", database,
+                "--tuples-only", "--no-align", "--command",
+                "SELECT value FROM restore_marker;",
+            ).stdout.decode().strip()
+
+        original_live_oid = database_oid(live_database)
+        desired_restore_oid = database_oid("desired_restore")
+        assert original_live_oid is not None
+        assert desired_restore_oid is not None
+
+        if scenario == "occupied-rollback":
+            rollback_database = fixture["env"]["REAL_ROLLBACK_DATABASE"]
+            command(
+                "docker", "exec", pg_container, "createdb",
+                "--username", pg_user, rollback_database,
+            )
+            command(
+                "docker", "exec", pg_container, "psql",
+                "--username", pg_user, "--dbname", rollback_database,
+                "--set", "ON_ERROR_STOP=1", "--command",
+                (
+                    "CREATE TABLE restore_marker(value text NOT NULL);"
+                    "INSERT INTO restore_marker VALUES ('unrelated');"
+                ),
+            )
+            unrelated_oid = database_oid(rollback_database)
+            assert unrelated_oid is not None
+
+            result = _run(fixture)
+
+            assert result.returncode == 1, result.stderr
+            assert database_oid(live_database) == original_live_oid
+            assert database_marker(live_database) == "old"
+            assert database_oid(rollback_database) == unrelated_oid
+            assert database_marker(rollback_database) == "unrelated"
+            assert database_oid("ag_restore_000000000000") is None
+            assert database_oid("ag_failed_000000000000") is None
+            assert not any(
+                "ALTER DATABASE" in " ".join(item)
+                for item in _commands(fixture)
+            )
+            return
+
+        if scenario == "failed-forward-switch":
+            fixture["env"]["REAL_FAIL_FORWARD_SWITCH"] = "after-first-rename"
+
+            result = _run(fixture)
+
+            assert result.returncode == 1, result.stderr
+            assert database_oid(live_database) == original_live_oid
+            assert database_marker(live_database) == "old"
+            assert database_oid("desired_restore") == desired_restore_oid
+            assert database_marker("desired_restore") == "new"
+            assert database_oid("ag_rollback_000000000000") is None
+            journal = json.loads(
+                (
+                    fixture["receipts"]
+                    / "rollbacks"
+                    / fixture["request_id"]
+                    / "journal.json"
+                ).read_text()
+            )
+            intent = journal["database_switch_intent"]
+            assert intent["original_live_oid"] == original_live_oid
+            assert intent["original_live_name"] == live_database
+            assert intent["rollback_name_absent"] is True
+            return
+
         result = _run(fixture)
         assert result.returncode == 0, result.stderr
+        journal = json.loads(
+            (
+                fixture["receipts"]
+                / "rollbacks"
+                / fixture["request_id"]
+                / "journal.json"
+            ).read_text()
+        )
+        intent = journal["database_switch_intent"]
+        assert intent["original_live_oid"] == original_live_oid
+        assert intent["original_live_name"] == live_database
+        assert intent["rollback_name_absent"] is True
         current = command(
             "docker", "exec", pg_container, "psql",
             "--username", pg_user, "--dbname", live_database,
@@ -1443,7 +1731,7 @@ raise SystemExit(0)
         database_state = journal["rollback_components"]["database"]
         assert database_state["status"] == "complete"
         assert database_state["identity"]["live_database"] == live_database
-        assert isinstance(database_state["identity"]["database_oid"], int)
+        assert database_state["identity"]["database_oid"] == original_live_oid
         restored_redis = command(
             "docker", "exec", redis_container,
             "redis-cli", "--raw", "GET", "restore:marker",

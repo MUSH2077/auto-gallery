@@ -841,14 +841,31 @@ class RestoreRunner:
         for component in ("app-config", "gallerydl-config"):
             source = self._live_paths()[component]
             destination = self.rollback_dir / component
-            if source.exists():
-                shutil.copytree(source, destination, symlinks=True)
+            self._snapshot_config_root(source, destination)
         self._snapshot_payload_files(
             "download-archives", self._live_paths()["downloads"]
         )
         self._snapshot_payload_files("library-metadata", self._live_paths()["library"])
         self.journal["snapshot_complete"] = True
         self._save_journal()
+
+    @staticmethod
+    def _snapshot_config_root(source: Path, destination: Path) -> None:
+        try:
+            source_stat = source.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(source_stat.st_mode):
+            destination.symlink_to(os.readlink(source))
+            directory_fd = os.open(destination.parent, os.O_RDONLY | DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            return
+        if not stat.S_ISDIR(source_stat.st_mode):
+            raise RestoreHostError("Live configuration root has an unsafe type")
+        shutil.copytree(source, destination, symlinks=True)
 
     def _snapshot_payload_files(self, component: str, live_root: Path) -> None:
         source_root = self.payload / component
@@ -897,20 +914,34 @@ class RestoreRunner:
 
     def temp_database_restore(self) -> None:
         self.enter("temp_database")
-        self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "--username",
-            self.postgres_user,
-            "--dbname",
-            "postgres",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-c",
-            f"DROP DATABASE IF EXISTS {self.temp_database};",
-        )
+        identities = self._available_database_identities()
+        original_live_oid = identities.get(self.live_database)
+        if original_live_oid is None:
+            raise RestoreHostError("Original live database identity is missing")
+        occupied = {
+            name: identities[name]
+            for name in (
+                self.temp_database,
+                self.rollback_database,
+                self.failed_database,
+            )
+            if name in identities
+        }
+        if occupied:
+            raise RestoreHostError(
+                "Deterministic restore database name is already occupied"
+            )
+        self.journal["database_preflight"] = {
+            "original_live_name": self.live_database,
+            "original_live_oid": original_live_oid,
+            "absent_names": [
+                self.temp_database,
+                self.rollback_database,
+                self.failed_database,
+            ],
+            "verified_at": now(),
+        }
+        self._save_journal()
         self.compose(
             "exec",
             "-T",
@@ -925,6 +956,19 @@ class RestoreRunner:
             "-c",
             f"CREATE DATABASE {self.temp_database};",
         )
+        created_identities = self._available_database_identities()
+        if (
+            created_identities.get(self.live_database) != original_live_oid
+            or self.temp_database not in created_identities
+            or self.rollback_database in created_identities
+            or self.failed_database in created_identities
+        ):
+            raise RestoreHostError("Temporary restore database identity is inconsistent")
+        self.journal["database_preflight"]["temp_database_oid"] = (
+            created_identities[self.temp_database]
+        )
+        self.journal["database_preflight"]["temp_created_at"] = now()
+        self._save_journal()
         custom = self.payload / "database.dump"
         plain = self.payload / "database.sql"
         if custom.is_file():
@@ -995,6 +1039,40 @@ class RestoreRunner:
 
     def switch_database(self) -> None:
         self.enter("switch_database")
+        preflight = self.journal.get("database_preflight")
+        if not isinstance(preflight, dict):
+            raise RestoreHostError("Database switch preflight identity is missing")
+        original_live_oid = preflight.get("original_live_oid")
+        temp_database_oid = preflight.get("temp_database_oid")
+        if (
+            preflight.get("original_live_name") != self.live_database
+            or type(original_live_oid) is not int
+            or original_live_oid <= 0
+            or type(temp_database_oid) is not int
+            or temp_database_oid <= 0
+        ):
+            raise RestoreHostError("Database switch preflight identity is invalid")
+        identities = self._available_database_identities()
+        if (
+            identities.get(self.live_database) != original_live_oid
+            or identities.get(self.temp_database) != temp_database_oid
+            or self.rollback_database in identities
+            or self.failed_database in identities
+        ):
+            raise RestoreHostError(
+                "Database switch identities changed after preflight"
+            )
+        self.journal["database_switch_intent"] = {
+            "original_live_name": self.live_database,
+            "original_live_oid": original_live_oid,
+            "temp_database_name": self.temp_database,
+            "temp_database_oid": temp_database_oid,
+            "rollback_database_name": self.rollback_database,
+            "rollback_name_absent": True,
+            "failed_database_name": self.failed_database,
+            "failed_name_absent": True,
+            "prepared_at": now(),
+        }
         self.journal["switch_attempted"] = True
         self._save_journal()
         sql = (
@@ -1016,6 +1094,14 @@ class RestoreRunner:
             "-c",
             sql,
         )
+        switched = self._available_database_identities()
+        if (
+            switched.get(self.live_database) != temp_database_oid
+            or switched.get(self.rollback_database) != original_live_oid
+            or self.temp_database in switched
+            or self.failed_database in switched
+        ):
+            raise RestoreHostError("Database switch result identities are inconsistent")
         self.journal["database_switched"] = True
         self._save_journal()
 
@@ -1305,10 +1391,17 @@ class RestoreRunner:
         self.compose("stop", "-t", "30", "redis")
         self.compose("cp", f"{redis_data}/.", "redis:/data")
 
-    def _probe_rollback_database_names(self) -> set[str]:
+    def _probe_database_identities(self) -> dict[str, int]:
+        database_names = (
+            self.live_database,
+            self.temp_database,
+            self.rollback_database,
+            self.failed_database,
+        )
+        rendered_names = ",".join(f"'{name}'" for name in database_names)
         identity_query = (
-            "SELECT datname FROM pg_database "
-            f"WHERE datname IN ('{self.live_database}','{self.rollback_database}');"
+            "SELECT datname || '|' || oid::text FROM pg_database "
+            f"WHERE datname IN ({rendered_names}) ORDER BY datname;"
         )
         identity_result = self.compose(
             "exec",
@@ -1320,121 +1413,127 @@ class RestoreRunner:
             "--dbname",
             "postgres",
             "-At",
-            "--set=offline_restore_phase=rollback-identities",
+            "--set=offline_restore_phase=database-identities",
             "-c",
             identity_query,
         )
-        identities = set(
-            (identity_result.stdout or b"").decode("utf-8").splitlines()
-        )
-        allowed = {self.live_database, self.rollback_database}
-        if not identities or not identities.issubset(allowed):
-            raise RestoreHostError("PostgreSQL database identity output is invalid")
+        identities: dict[str, int] = {}
+        allowed = set(database_names)
+        for line in (identity_result.stdout or b"").decode("utf-8").splitlines():
+            name, separator, oid_text = line.partition("|")
+            if (
+                separator != "|"
+                or name not in allowed
+                or name in identities
+                or not oid_text.isascii()
+                or not oid_text.isdigit()
+                or int(oid_text) <= 0
+            ):
+                raise RestoreHostError("PostgreSQL database identity output is invalid")
+            identities[name] = int(oid_text)
         return identities
 
-    def _available_rollback_database_names(self) -> set[str]:
+    def _available_database_identities(self) -> dict[str, int]:
         try:
-            return self._probe_rollback_database_names()
+            return self._probe_database_identities()
         except Exception:  # noqa: BLE001 - retry after ensuring PostgreSQL is available
             self.compose("up", "-d", "--wait", "--wait-timeout", "180", "postgres")
-            return self._probe_rollback_database_names()
+            return self._probe_database_identities()
 
-    def _probe_rollback_database_oid(self, database: str) -> int:
-        result = self.compose(
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "--username",
-            self.postgres_user,
-            "--dbname",
-            "postgres",
-            "-At",
-            "--set=offline_restore_phase=rollback-identity-oid",
-            "-c",
-            f"SELECT oid FROM pg_database WHERE datname = '{database}';",
-        )
-        rendered = (result.stdout or b"").decode("utf-8").strip()
-        if not rendered.isascii() or not rendered.isdigit() or int(rendered) <= 0:
-            raise RestoreHostError("PostgreSQL database OID output is invalid")
-        return int(rendered)
+    def _validated_database_switch_intent(self) -> tuple[int, int]:
+        intent = self.journal.get("database_switch_intent")
+        if (
+            not isinstance(intent, dict)
+            or intent.get("original_live_name") != self.live_database
+            or intent.get("temp_database_name") != self.temp_database
+            or intent.get("rollback_database_name") != self.rollback_database
+            or intent.get("failed_database_name") != self.failed_database
+            or intent.get("rollback_name_absent") is not True
+            or intent.get("failed_name_absent") is not True
+        ):
+            raise RestoreHostError("Database switch identity intent is invalid")
+        original_live_oid = intent.get("original_live_oid")
+        temp_database_oid = intent.get("temp_database_oid")
+        if (
+            type(original_live_oid) is not int
+            or original_live_oid <= 0
+            or type(temp_database_oid) is not int
+            or temp_database_oid <= 0
+            or original_live_oid == temp_database_oid
+        ):
+            raise RestoreHostError("Database switch OID intent is invalid")
+        return original_live_oid, temp_database_oid
 
     def _verify_completed_database_rollback(self, identity: Any) -> None:
+        original_live_oid, temp_database_oid = (
+            self._validated_database_switch_intent()
+        )
         if (
             not isinstance(identity, dict)
             or identity.get("live_database") != self.live_database
-            or not isinstance(identity.get("database_oid"), int)
-            or isinstance(identity.get("database_oid"), bool)
-            or int(identity["database_oid"]) <= 0
+            or identity.get("database_oid") != original_live_oid
         ):
             raise RestoreHostError("Completed database rollback identity is invalid")
-        identities = self._available_rollback_database_names()
-        if identities != {self.live_database}:
+        identities = self._available_database_identities()
+        if (
+            identities.get(self.live_database) != original_live_oid
+            or self.rollback_database in identities
+        ):
             raise RestoreHostError("Completed database rollback names are inconsistent")
-        if self._probe_rollback_database_oid(self.live_database) != identity["database_oid"]:
-            raise RestoreHostError("Completed database rollback identity changed")
+        temp_oid = identities.get(self.temp_database)
+        failed_oid = identities.get(self.failed_database)
+        if (
+            (temp_oid is not None and temp_oid != temp_database_oid)
+            or (failed_oid is not None and failed_oid != temp_database_oid)
+            or (temp_oid is not None and failed_oid is not None)
+        ):
+            raise RestoreHostError("Completed database rollback residue is inconsistent")
 
     def _rollback_database(self) -> None:
+        original_live_oid, temp_database_oid = (
+            self._validated_database_switch_intent()
+        )
         components = self.journal.get("rollback_components")
         component = components.get("database") if isinstance(components, dict) else None
-        identity = component.get("identity") if isinstance(component, dict) else None
+        identity = {
+            "live_database": self.live_database,
+            "restored_from": self.rollback_database,
+            "database_oid": original_live_oid,
+        }
+        recorded_identity = (
+            component.get("identity") if isinstance(component, dict) else None
+        )
+        if recorded_identity is not None and recorded_identity != identity:
+            raise RestoreHostError("Database rollback component identity changed")
         if isinstance(component, dict) and component.get("status") == "complete":
             self._verify_completed_database_rollback(identity)
             return
+        self._transition_rollback_component(
+            "database", "in_progress", identity=identity
+        )
 
-        identities = self._available_rollback_database_names()
-        if isinstance(identity, dict):
-            expected_oid = identity.get("database_oid")
-            if (
-                identity.get("live_database") != self.live_database
-                or not isinstance(expected_oid, int)
-                or isinstance(expected_oid, bool)
-                or expected_oid <= 0
-            ):
-                raise RestoreHostError("Pending database rollback identity is invalid")
-            if self.rollback_database not in identities:
-                self._verify_completed_database_rollback(identity)
-                self._transition_rollback_component(
-                    "database", "complete", identity=identity
-                )
-                return
-            if self._probe_rollback_database_oid(self.rollback_database) != expected_oid:
-                raise RestoreHostError("Pending database rollback identity changed")
-        else:
-            if (
-                self.journal.get("database_switched")
-                and self.rollback_database not in identities
-            ):
-                raise RestoreHostError(
-                    "Post-switch rollback database identity is unproven"
-                )
-            source_database = (
-                self.rollback_database
-                if self.rollback_database in identities
-                else self.live_database
-            )
-            identity = {
-                "live_database": self.live_database,
-                "restored_from": source_database,
-                "database_oid": self._probe_rollback_database_oid(source_database),
-            }
-            self._transition_rollback_component(
-                "database", "in_progress", identity=identity
-            )
-
+        identities = self._available_database_identities()
         if (
-            self.journal.get("database_switched")
+            identities.get(self.live_database) == original_live_oid
             and self.rollback_database not in identities
         ):
-            raise RestoreHostError("Post-switch rollback database identity is unproven")
-        if self.rollback_database not in identities:
-            # A failed atomic switch leaves only the original live database.
-            # Never rename that sole healthy database away during recovery.
             self._verify_completed_database_rollback(identity)
             self._transition_rollback_component(
                 "database", "complete", identity=identity
             )
             return
+        if identities.get(self.rollback_database) != original_live_oid:
+            raise RestoreHostError("Persisted rollback database identity is missing")
+        live_oid = identities.get(self.live_database)
+        temp_oid = identities.get(self.temp_database)
+        failed_oid = identities.get(self.failed_database)
+        if (
+            (live_oid is not None and live_oid != temp_database_oid)
+            or (temp_oid is not None and temp_oid != temp_database_oid)
+            or (failed_oid is not None and failed_oid != temp_database_oid)
+            or sum(value is not None for value in (live_oid, temp_oid, failed_oid)) > 1
+        ):
+            raise RestoreHostError("Database rollback candidate identity is inconsistent")
         terminate = f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('{self.live_database}','{self.rollback_database}') AND pid <> pg_backend_pid();"
         self.compose(
             "exec",
@@ -1450,7 +1549,7 @@ class RestoreRunner:
             "-c",
             terminate,
         )
-        if self.live_database in identities:
+        if live_oid is not None:
             rollback_sql = (
                 f"ALTER DATABASE {self.live_database} RENAME TO {self.failed_database}; "
                 f"ALTER DATABASE {self.rollback_database} RENAME TO {self.live_database};"
@@ -1862,6 +1961,12 @@ class RestoreRunner:
                 ):
                     raise RestoreHostError(
                         "Rolled-back filesystem paths changed after completion"
+                    )
+                if expected_target:
+                    self._require_rollback_identity(
+                        self._entry_identity(parent_fd, target.name),
+                        swap.get("original_identity"),
+                        name=target.name,
                     )
                 return
 
