@@ -1320,6 +1320,112 @@ async def test_registered_dedup_worker_uses_postgresql_scope_without_redis_lock(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_registered_dedup_failed_result_is_one_retryable_terminal_transition(
+    monkeypatch,
+):
+    """A semantic dedup failure must never be overwritten by outer completion."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations, asset_dedup
+    from app.models import TaskEvent, TaskRun
+    from app.services import operations
+
+    scan_id = uuid4()
+    failure_result = {
+        "scan_id": str(scan_id),
+        "status": "failed",
+        "assets_scanned": 7,
+        "candidates_evaluated": 3,
+        "cases_created": 1,
+        "assets_grouped": 0,
+        "bytes_reclaimable": 0,
+        "resource_state": "yielded",
+        "resource_reason": "scan_slice_failed",
+        "successor_delay_seconds": 0.0,
+        "generation": 0,
+    }
+
+    async def failed_handler(task_id: str, attempt: int, options: dict) -> dict:
+        assert attempt == 1
+        assert options == {"scan_id": str(scan_id)}
+        assert UUID(task_id) == task_uuid
+        return dict(failure_result)
+
+    monkeypatch.setattr(
+        asset_dedup,
+        "run_registered_asset_dedup_scan",
+        failed_handler,
+    )
+    task_uuid = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                title="Asset dedup scan",
+                entity="assets",
+                options={"scan_id": str(scan_id)},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_uuid = prepared.task.id
+            await db.commit()
+
+        returned = await asyncio.to_thread(
+            admin_operations.run_registered_admin_operation,
+            str(task_uuid),
+            1,
+        )
+        assert returned == failure_result
+
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_uuid)
+            events = list(
+                (
+                    await verify_db.execute(
+                        select(TaskEvent)
+                        .where(TaskEvent.task_run_id == task_uuid)
+                        .order_by(TaskEvent.id)
+                    )
+                ).scalars()
+            )
+            assert task.status == "failed"
+            assert task.reason_code == "operation_semantic_failure"
+            assert task.result_data == failure_result
+            assert task.error_log == "asset dedup scan failed"
+            assert [
+                (event.from_status, event.to_status)
+                for event in events
+                if event.to_status == "failed"
+            ] == [("running", "failed")]
+            assert all(event.to_status != "complete" for event in events)
+
+        retry = await operations.prepare_admin_operation_retry(task_uuid)
+        assert retry.attempt == 2
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_uuid)
+            failed_events = list(
+                (
+                    await verify_db.execute(
+                        select(TaskEvent).where(
+                            TaskEvent.task_run_id == task_uuid,
+                            TaskEvent.to_status == "failed",
+                        )
+                    )
+                ).scalars()
+            )
+            assert task.status == "enqueued"
+            assert task.attempts == 2
+            assert len(failed_events) == 1
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_retry_handoff_is_committed_before_successor_publication():
     """A bounded worker handoff survives loss before any Redis publication."""
     from app.database import async_session, engine

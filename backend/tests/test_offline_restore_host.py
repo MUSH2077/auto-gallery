@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -340,6 +341,54 @@ def test_host_rejects_payload_files_added_after_validation(tmp_path):
     assert not (fixture["live_app"] / "injected.json").exists()
 
 
+@pytest.mark.parametrize(
+    "case",
+    ["missing", "ambiguous", "unrecognized", "wrong-type", "hash-mismatch"],
+)
+def test_database_payload_preflight_rejects_before_writer_stop(tmp_path, case):
+    """The host must prove one real dump before issuing any Compose command."""
+    fixture = _fixture(tmp_path)
+    request = json.loads(fixture["request"].read_text(encoding="utf-8"))
+    payload = fixture["request"].parent / "payload"
+    dump = payload / "database.dump"
+    entries = request["manifest"]["entries"]
+    original = entries["database.dump"]
+    if case == "missing":
+        dump.unlink()
+        entries.pop("database.dump")
+        request["manifest"]["total_uncompressed_bytes"] -= original["size"]
+    elif case == "ambiguous":
+        sql = b"select 2;"
+        (payload / "database.sql").write_bytes(sql)
+        entries["database.sql"] = {
+            "size": len(sql),
+            "sha256": hashlib.sha256(sql).hexdigest(),
+        }
+        request["manifest"]["total_uncompressed_bytes"] += len(sql)
+    elif case == "unrecognized":
+        dump.rename(payload / "database.backup")
+        entries["database.backup"] = entries.pop("database.dump")
+    elif case == "wrong-type":
+        dump.unlink()
+        dump.mkdir()
+    elif case == "hash-mismatch":
+        dump.write_bytes(b"select 2;")
+    else:  # pragma: no cover - the literal parameter list is exhaustive
+        raise AssertionError(case)
+    fixture["request"].chmod(0o600)
+    fixture["request"].write_text(json.dumps(request), encoding="utf-8")
+    fixture["request"].chmod(0o444)
+
+    result = _run(fixture)
+
+    assert result.returncode == 2
+    assert "database payload" in result.stderr
+    assert _commands(fixture) == []
+    assert not (
+        fixture["receipts"] / "rollbacks" / fixture["request_id"]
+    ).exists()
+
+
 def test_failed_atomic_database_switch_does_not_rename_the_untouched_live_database(
     tmp_path,
 ):
@@ -549,6 +598,347 @@ SWAP_BOUNDARIES = [
         "committed-journal",
     )
 ]
+
+ROLLBACK_COMMITTED_BOUNDARIES = [
+    f"{kind}:{component}:{boundary}"
+    for kind, component in (
+        ("directory", "app-config"),
+        ("file", "library-metadata"),
+    )
+    for boundary in (
+        "live-to-failed-intent-journal",
+        "live-to-failed-renamed",
+        "live-to-failed-renamed-journal",
+        "live-to-failed-fsynced",
+        "live-to-failed-fsynced-journal",
+        "old-to-live-intent-journal",
+        "old-to-live-renamed",
+        "old-to-live-renamed-journal",
+        "old-to-live-fsynced",
+        "old-to-live-fsynced-journal",
+        "failed-cleanup-intent-journal",
+        "failed-cleaned",
+        "failed-cleaned-journal",
+        "failed-cleanup-fsynced",
+        "failed-cleanup-fsynced-journal",
+        "rolled-back-journal",
+    )
+]
+
+ROLLBACK_NEW_CLEANUP_BOUNDARIES = [
+    f"{kind}:{component}:{boundary}"
+    for kind, component in (
+        ("directory", "app-config"),
+        ("file", "library-metadata"),
+    )
+    for boundary in (
+        "new-cleanup-intent-journal",
+        "new-cleaned",
+        "new-cleaned-journal",
+        "new-cleanup-fsynced",
+        "new-cleanup-fsynced-journal",
+    )
+]
+
+ROLLBACK_CREATED_TARGET_BOUNDARIES = [
+    f"{kind}:{component}:{boundary}"
+    for kind, component in (
+        ("directory", "app-config"),
+        ("file", "library-metadata"),
+    )
+    for boundary in (
+        "target-cleanup-intent-journal",
+        "target-cleaned",
+        "target-cleaned-journal",
+        "target-cleanup-fsynced",
+        "target-cleanup-fsynced-journal",
+    )
+]
+
+
+def _rollback_path(fixture) -> Path:
+    return (
+        fixture["receipts"]
+        / "rollbacks"
+        / fixture["request_id"]
+        / "rollback.sh"
+    )
+
+
+def _run_rollback(fixture, *, boundary: str | None = None, action: str = "fail"):
+    env = dict(fixture["env"])
+    if boundary is not None:
+        env["RESTORE_ROLLBACK_FAULT_BOUNDARY"] = boundary
+        env["RESTORE_ROLLBACK_FAULT_ACTION"] = action
+    return subprocess.run(
+        [str(_rollback_path(fixture))],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+
+def _swap_target(fixture, kind: str) -> tuple[Path, bytes]:
+    if kind == "directory":
+        return fixture["live_app"], b"old-app"
+    target = fixture["library"] / "creator" / "metadata.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b'{"name":"old"}')
+    return target, b'{"name":"old"}'
+
+
+def _assert_original_restored(target: Path, kind: str, expected: bytes) -> None:
+    if kind == "directory":
+        assert (target / "value.txt").read_bytes() == expected
+    else:
+        assert target.read_bytes() == expected
+
+
+def _assert_foreground_only_restart(fixture) -> None:
+    starts = [
+        command
+        for command in _commands(fixture)
+        if "up" in command and "backend" in command
+    ]
+    assert starts
+    assert "admin-web" in starts[-1]
+    assert "scheduler" not in starts[-1]
+    assert not any(part.startswith("worker-") for part in starts[-1])
+
+
+@pytest.mark.parametrize("action", ["fail", "kill"])
+@pytest.mark.parametrize("boundary", ROLLBACK_COMMITTED_BOUNDARIES)
+def test_rollback_resumes_at_every_committed_swap_boundary(
+    tmp_path,
+    boundary,
+    action,
+):
+    """Every durable rollback boundary must converge on a second invocation."""
+    fixture = _fixture(tmp_path)
+    kind, component, _boundary_name = boundary.split(":", 2)
+    target, expected = _swap_target(fixture, kind)
+    applied = _run(fixture)
+    assert applied.returncode == 0, applied.stderr
+
+    interrupted = _run_rollback(fixture, boundary=boundary, action=action)
+    if action == "fail":
+        assert interrupted.returncode == 1, interrupted.stderr
+    else:
+        assert interrupted.returncode < 0, interrupted.stderr
+
+    resumed = _run_rollback(fixture)
+    assert resumed.returncode == 0, resumed.stderr
+    _assert_original_restored(target, kind, expected)
+    for marker in ("old", "new", "failed"):
+        residual = target.with_name(
+            f".{target.name}.restore-{marker}-{fixture['request_id']}"
+        )
+        assert not os.path.lexists(residual)
+    journal = json.loads((_rollback_path(fixture).parent / "journal.json").read_text())
+    swap = next(item for item in journal["file_swaps"] if item["component"] == component)
+    assert swap["state"] == "rolled_back"
+    assert swap["rollback_state"] == "rolled_back"
+    _assert_foreground_only_restart(fixture)
+
+
+@pytest.mark.parametrize("action", ["fail", "kill"])
+@pytest.mark.parametrize("boundary", ROLLBACK_NEW_CLEANUP_BOUNDARIES)
+def test_rollback_resumes_at_every_partial_new_cleanup_boundary(
+    tmp_path,
+    boundary,
+    action,
+):
+    """A forward crash with old+new paths must survive rollback cleanup crashes."""
+    fixture = _fixture(tmp_path)
+    kind, component, _boundary_name = boundary.split(":", 2)
+    target, expected = _swap_target(fixture, kind)
+    forward_boundary = f"{kind}:{component}:old-journal"
+    env = {
+        **fixture["env"],
+        "RESTORE_FAULT_BOUNDARY": forward_boundary,
+        "RESTORE_FAULT_ACTION": "kill",
+    }
+    forward = subprocess.run(
+        [sys.executable, str(fixture["script"]), "--request", str(fixture["request"])],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert forward.returncode < 0, forward.stderr
+
+    interrupted = _run_rollback(fixture, boundary=boundary, action=action)
+    if action == "fail":
+        assert interrupted.returncode == 1, interrupted.stderr
+    else:
+        assert interrupted.returncode < 0, interrupted.stderr
+    resumed = _run_rollback(fixture)
+    assert resumed.returncode == 0, resumed.stderr
+    _assert_original_restored(target, kind, expected)
+    _assert_foreground_only_restart(fixture)
+
+
+@pytest.mark.parametrize("action", ["fail", "kill"])
+@pytest.mark.parametrize("boundary", ROLLBACK_CREATED_TARGET_BOUNDARIES)
+def test_rollback_resumes_at_every_created_target_cleanup_boundary(
+    tmp_path,
+    boundary,
+    action,
+):
+    """A restore-created file or directory remains removably crash-resumable."""
+    fixture = _fixture(tmp_path)
+    kind, _component, _boundary_name = boundary.split(":", 2)
+    if kind == "directory":
+        target = fixture["live_app"]
+        (target / "value.txt").unlink()
+        target.rmdir()
+    else:
+        target = fixture["library"] / "creator" / "metadata.json"
+    assert not target.exists()
+    applied = _run(fixture)
+    assert applied.returncode == 0, applied.stderr
+    assert target.exists()
+
+    interrupted = _run_rollback(fixture, boundary=boundary, action=action)
+    if action == "fail":
+        assert interrupted.returncode == 1, interrupted.stderr
+    else:
+        assert interrupted.returncode < 0, interrupted.stderr
+    resumed = _run_rollback(fixture)
+    assert resumed.returncode == 0, resumed.stderr
+    assert not target.exists()
+    _assert_foreground_only_restart(fixture)
+
+
+@pytest.mark.parametrize(
+    ("kind", "component"),
+    [("directory", "app-config"), ("file", "library-metadata")],
+)
+def test_rollback_refuses_unrelated_failed_path_and_continues_other_swaps(
+    tmp_path,
+    kind,
+    component,
+):
+    """Rollback must neither overwrite an occupied failed path nor stop peers."""
+    fixture = _fixture(tmp_path)
+    target, expected = _swap_target(fixture, kind)
+    applied = _run(fixture)
+    assert applied.returncode == 0, applied.stderr
+    old = target.with_name(f".{target.name}.restore-old-{fixture['request_id']}")
+    failed = target.with_name(f".{target.name}.restore-failed-{fixture['request_id']}")
+    sentinel = b"unrelated-path"
+    if kind == "directory":
+        failed.mkdir()
+        (failed / "sentinel").write_bytes(sentinel)
+    else:
+        failed.write_bytes(sentinel)
+
+    result = _run_rollback(fixture)
+
+    assert result.returncode == 1
+    relative = (
+        target.name
+        if kind == "directory"
+        else target.relative_to(fixture["library"]).as_posix()
+    )
+    assert f"{component}:{relative}" in result.stderr
+    assert "already exists" in result.stderr
+    assert old.exists()
+    if kind == "directory":
+        assert (failed / "sentinel").read_bytes() == sentinel
+        assert (target / "value.txt").read_bytes() != expected
+        assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+    else:
+        assert failed.read_bytes() == sentinel
+        assert target.read_bytes() != expected
+        assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+    _assert_foreground_only_restart(fixture)
+
+
+def _replace_rollback_slot_with_sentinel(path: Path, kind: str) -> bytes:
+    sentinel = b"unrelated-replacement"
+    assert os.path.lexists(path)
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    if kind == "directory":
+        path.mkdir()
+        (path / "sentinel").write_bytes(sentinel)
+    else:
+        path.write_bytes(sentinel)
+    return sentinel
+
+
+@pytest.mark.parametrize(
+    ("kind", "component"),
+    [("directory", "app-config"), ("file", "library-metadata")],
+)
+@pytest.mark.parametrize("slot", ["target", "new", "failed", "created-target"])
+def test_rollback_refuses_replaced_candidate_at_every_mutable_slot(
+    tmp_path,
+    kind,
+    component,
+    slot,
+):
+    """A deterministic rollback name never authorizes deletion of a new inode."""
+    fixture = _fixture(tmp_path)
+    target, _expected = _swap_target(fixture, kind)
+
+    if slot == "created-target":
+        if kind == "directory":
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        applied = _run(fixture)
+        assert applied.returncode == 0, applied.stderr
+        tampered = target
+    elif slot == "new":
+        boundary = f"{kind}:{component}:old-journal"
+        env = {
+            **fixture["env"],
+            "RESTORE_FAULT_BOUNDARY": boundary,
+            "RESTORE_FAULT_ACTION": "kill",
+        }
+        interrupted = subprocess.run(
+            [sys.executable, str(fixture["script"]), "--request", str(fixture["request"])],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert interrupted.returncode < 0, interrupted.stderr
+        tampered = target.with_name(
+            f".{target.name}.restore-new-{fixture['request_id']}"
+        )
+    else:
+        applied = _run(fixture)
+        assert applied.returncode == 0, applied.stderr
+        if slot == "failed":
+            boundary = f"{kind}:{component}:old-to-live-fsynced-journal"
+            interrupted = _run_rollback(fixture, boundary=boundary)
+            assert interrupted.returncode == 1, interrupted.stderr
+            tampered = target.with_name(
+                f".{target.name}.restore-failed-{fixture['request_id']}"
+            )
+        else:
+            tampered = target
+
+    sentinel = _replace_rollback_slot_with_sentinel(tampered, kind)
+
+    result = _run_rollback(fixture)
+
+    assert result.returncode == 1
+    assert "mutation source changed" in result.stderr
+    if kind == "directory":
+        assert (tampered / "sentinel").read_bytes() == sentinel
+    else:
+        assert tampered.read_bytes() == sentinel
+    _assert_foreground_only_restart(fixture)
 
 
 @pytest.mark.parametrize("action", ["fail", "kill"])

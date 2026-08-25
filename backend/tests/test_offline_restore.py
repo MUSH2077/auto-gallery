@@ -333,6 +333,135 @@ def test_validation_enforces_allowed_paths_manifest_hashes_and_sizes(tmp_path, a
         )
 
 
+def _stage_archive_bytes(tmp_path: Path, archive: bytes):
+    created = _new_session(tmp_path, archive, chunk_size=len(archive))
+    _upload_all(tmp_path, created, archive, chunk_size=len(archive))
+    return created
+
+
+def _validate_staged_archive(tmp_path: Path, created: dict, task_suffix: int):
+    from app.services.offline_restore import validate_upload
+
+    return validate_upload(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        task_id=f"00000000-0000-0000-0000-{task_suffix:012d}",
+    )
+
+
+def test_database_payload_honest_archive_becomes_ready(tmp_path):
+    """One verified canonical dump is the payload authorized for host restore."""
+    archive = _archive_bytes({"database.dump": b"custom-dump"})
+
+    created = _stage_archive_bytes(tmp_path, archive)
+    result = _validate_staged_archive(tmp_path, created, 21)
+
+    assert result["state"] == "ready"
+    session = tmp_path / created["upload_id"]
+    assert (session / "payload/database.dump").read_bytes() == b"custom-dump"
+    assert (session / "ready-request.json").is_file()
+
+
+def test_database_payload_missing_archive_never_becomes_ready(tmp_path):
+    """A database component label cannot substitute for an actual dump."""
+    from app.services.offline_restore import RestoreValidationError
+
+    archive = _archive_bytes(
+        {"app-config/config.json": b"{}"},
+        contents=["database", "app-config"],
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="database payload"):
+        _validate_staged_archive(tmp_path, created, 22)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+def test_database_payload_ambiguous_archive_never_becomes_ready(tmp_path):
+    """Two supported dump names are ambiguous even when both hashes are honest."""
+    from app.services.offline_restore import RestoreValidationError
+
+    archive = _archive_bytes(
+        {
+            "database.dump": b"custom-dump",
+            "database.sql": b"select 1;",
+        }
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="database payload"):
+        _validate_staged_archive(tmp_path, created, 23)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+def test_database_payload_duplicate_archive_member_never_becomes_ready(tmp_path):
+    """A repeated canonical dump member cannot hide behind one manifest entry."""
+    from app.services.offline_restore import RestoreValidationError
+
+    duplicate = tarfile.TarInfo("database.dump")
+    duplicate.size = 0
+    duplicate.mode = 0o600
+    archive = _archive_bytes(
+        {"database.dump": b"custom-dump"},
+        extra_members=[duplicate],
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="duplicate"):
+        _validate_staged_archive(tmp_path, created, 24)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+def test_database_payload_wrong_type_archive_never_becomes_ready(tmp_path):
+    """A directory named like a dump is not a database payload."""
+    from app.services.offline_restore import RestoreValidationError
+
+    directory = tarfile.TarInfo("database.dump")
+    directory.type = tarfile.DIRTYPE
+    directory.mode = 0o700
+    archive = _archive_bytes(
+        {},
+        manifest_entries={
+            "database.dump": {"size": 0, "sha256": _sha256(b"")},
+        },
+        extra_members=[directory],
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="database payload|entries"):
+        _validate_staged_archive(tmp_path, created, 25)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+def test_database_payload_hash_mismatch_archive_never_becomes_ready(tmp_path):
+    """The selected dump earns readiness only after its own hash validation."""
+    from app.services.offline_restore import RestoreValidationError
+
+    archive = _archive_bytes(
+        {"database.dump": b"custom-dump"},
+        manifest_entries={
+            "database.dump": {"size": 11, "sha256": "0" * 64},
+        },
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="hash"):
+        _validate_staged_archive(tmp_path, created, 26)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
+def test_database_payload_unrecognized_filename_never_becomes_ready(tmp_path):
+    """A self-consistent but unsupported database filename fails closed."""
+    from app.services.offline_restore import RestoreValidationError
+
+    archive = _archive_bytes({"database.backup": b"custom-dump"})
+    created = _stage_archive_bytes(tmp_path, archive)
+
+    with pytest.raises(RestoreValidationError, match="database payload|allowed"):
+        _validate_staged_archive(tmp_path, created, 27)
+    assert not (tmp_path / created["upload_id"] / "ready-request.json").exists()
+
+
 def test_validation_atomically_publishes_read_only_ready_request(tmp_path):
     """Publishing readiness before verified extraction could authorize bad input."""
     from app.services.offline_restore import seal_upload_for_validation, validate_upload

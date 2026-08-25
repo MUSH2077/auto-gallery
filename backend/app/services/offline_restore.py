@@ -45,6 +45,7 @@ _COMPONENTS = frozenset(
         "library-metadata",
     }
 )
+_DATABASE_PAYLOADS = frozenset({"database.dump", "database.sql"})
 
 
 class RestoreError(RuntimeError):
@@ -653,6 +654,7 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                 if set(entries) != set(actual_files):
                     raise RestoreValidationError("Archive manifest entries do not match archive files")
                 verified_total = 0
+                validated_database_payloads: list[str] = []
                 for name, member in actual_files.items():
                     safe_path = _safe_member_path(name)
                     if not _allowed_file(safe_path, contents):
@@ -669,7 +671,13 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                     declared_hash = str(declared.get("sha256") or "")
                     if not _SHA256_RE.fullmatch(declared_hash) or not hmac.compare_digest(declared_hash, actual_hash):
                         raise RestoreValidationError(f"Archive file hash does not match manifest: {name}")
+                    if name in _DATABASE_PAYLOADS:
+                        validated_database_payloads.append(name)
                     verified_total += actual_size
+                if len(validated_database_payloads) != 1:
+                    raise RestoreValidationError(
+                        "Archive must contain exactly one recognized database payload"
+                    )
                 if int(manifest["total_uncompressed_bytes"]) != verified_total:
                     raise RestoreValidationError("Archive manifest total uncompressed size does not match files")
                 if _free_bytes(root) < assembled_size + verified_total + 1024 * 1024:

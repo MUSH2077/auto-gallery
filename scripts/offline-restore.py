@@ -53,6 +53,7 @@ FOREGROUND = ("postgres", "redis", "meilisearch", "migrate", "backend", "admin-w
 BACKGROUND = ("worker-download", "worker-import", "worker-operations", "scheduler")
 PG_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+DATABASE_PAYLOADS = frozenset({"database.dump", "database.sql"})
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
@@ -240,6 +241,22 @@ class RestoreRunner:
             raise RestoreHostError(
                 "ready request is not in its isolated staging directory"
             )
+        payload_rel = safe_relative(
+            str(self.request.get("payload") or ""), "payload path"
+        )
+        preflight_payload = self.session.joinpath(*payload_rel.parts)
+        if (
+            preflight_payload.parent != self.session
+            or preflight_payload.is_symlink()
+            or not preflight_payload.is_dir()
+        ):
+            raise RestoreHostError(
+                "validated payload is missing or escaped its session"
+            )
+        self.database_payload_name = self._require_database_payload(
+            self.request.get("manifest"),
+            preflight_payload,
+        )
         self.receipt_path = self.receipts / f"{self.request_id}.json"
         self.rollback_dir = self.receipts / "rollbacks" / self.request_id
         self.rollback_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -276,6 +293,55 @@ class RestoreRunner:
         }
         self._write_rollback_point()
         self._save_journal()
+
+    @staticmethod
+    def _require_database_payload(manifest: Any, payload: Path) -> str:
+        if not isinstance(manifest, dict) or manifest.get("version") != "0.3.0":
+            raise RestoreHostError("validated manifest is invalid")
+        contents = manifest.get("contents")
+        if not isinstance(contents, list) or "database" not in contents:
+            raise RestoreHostError(
+                "validated manifest is not restorable without a database component"
+            )
+        entries = manifest.get("entries")
+        if not isinstance(entries, dict) or not entries:
+            raise RestoreHostError("validated manifest entries are missing")
+        declared = [name for name in entries if name in DATABASE_PAYLOADS]
+        actual = [
+            name
+            for name in DATABASE_PAYLOADS
+            if os.path.lexists(payload / name)
+        ]
+        if len(declared) != 1 or actual != declared:
+            raise RestoreHostError(
+                "validated restore must contain exactly one recognized database payload"
+            )
+        name = declared[0]
+        target = payload / name
+        target_stat = target.lstat()
+        if not stat.S_ISREG(target_stat.st_mode):
+            raise RestoreHostError(
+                "validated database payload must be a regular file"
+            )
+        expected = entries[name]
+        if not isinstance(expected, dict):
+            raise RestoreHostError(
+                "validated database payload manifest entry is invalid"
+            )
+        expected_size = expected.get("size")
+        expected_hash = str(expected.get("sha256") or "")
+        if (
+            not isinstance(expected_size, int)
+            or isinstance(expected_size, bool)
+            or expected_size < 0
+            or not SHA256.fullmatch(expected_hash)
+            or target_stat.st_size != expected_size
+            or sha256_file(target) != expected_hash
+        ):
+            raise RestoreHostError(
+                "validated database payload hash or size changed"
+            )
+        return name
 
     def _discover_postgres_identity(self) -> tuple[str, str]:
         """Read the effective service identity, never host libpq variables."""
@@ -366,6 +432,17 @@ class RestoreRunner:
             raise RestoreHostError("Invalid restore fault action")
         raise RestoreHostError(f"Injected failure at {boundary}")
 
+    def _rollback_fault_boundary(self, swap: dict[str, Any], boundary: str) -> None:
+        rendered = f"{swap['kind']}:{swap['component']}:{boundary}"
+        if os.environ.get("RESTORE_ROLLBACK_FAULT_BOUNDARY") != rendered:
+            return
+        action = os.environ.get("RESTORE_ROLLBACK_FAULT_ACTION", "fail")
+        if action == "kill":
+            os.kill(os.getpid(), signal.SIGKILL)
+        if action != "fail":
+            raise RestoreHostError("Invalid rollback fault action")
+        raise RestoreHostError(f"Injected rollback failure at {rendered}")
+
     @staticmethod
     def _fsync_tree(root: Path) -> None:
         """Make a copied directory tree durable before it can become live."""
@@ -396,6 +473,8 @@ class RestoreRunner:
         root: Path,
         relative: str,
         existed: bool,
+        original_identity: dict[str, int] | None,
+        candidate_identity: dict[str, int],
     ) -> dict[str, Any]:
         swap = {
             "kind": kind,
@@ -406,6 +485,8 @@ class RestoreRunner:
             "root": str(root),
             "relative": relative,
             "existed": existed,
+            "original_identity": original_identity,
+            "candidate_identity": candidate_identity,
             "state": "prepared",
         }
         self.journal["file_swaps"].append(swap)
@@ -477,6 +558,10 @@ class RestoreRunner:
         entries = manifest.get("entries")
         if not isinstance(entries, dict) or not entries:
             raise RestoreHostError("validated manifest entries are missing")
+        database_payload_name = self._require_database_payload(
+            manifest,
+            self.payload,
+        )
         actual_files: set[str] = set()
         for target in self.payload.rglob("*"):
             if target.is_symlink():
@@ -512,6 +597,7 @@ class RestoreRunner:
         if total != int(manifest.get("total_uncompressed_bytes", -1)):
             raise RestoreHostError("validated manifest total changed")
         self.manifest = manifest
+        self.database_payload_name = database_payload_name
 
         live_paths = self._live_paths()
         for name, path in live_paths.items():
@@ -934,7 +1020,11 @@ class RestoreRunner:
                     os.chmod(copied_path / name, 0o600)
             self._fsync_tree(new_path)
             os.fsync(parent_fd)
-            existed = _entry_exists(parent_fd, target.name)
+            candidate_identity = self._entry_identity(parent_fd, new_path.name)
+            if candidate_identity is None:
+                raise RestoreHostError("Prepared restore directory disappeared")
+            original_identity = self._entry_identity(parent_fd, target.name)
+            existed = original_identity is not None
             swap = self._prepare_file_swap(
                 kind="directory",
                 component=component,
@@ -944,6 +1034,8 @@ class RestoreRunner:
                 root=target.parent,
                 relative=target.name,
                 existed=existed,
+                original_identity=original_identity,
+                candidate_identity=candidate_identity,
             )
             if existed:
                 os.rename(
@@ -1003,7 +1095,11 @@ class RestoreRunner:
                     new_file.flush()
                     os.fsync(new_file.fileno())
                 os.fsync(parent_fd)
-                existed = _entry_exists(parent_fd, target.name)
+                candidate_identity = self._entry_identity(parent_fd, new_path.name)
+                if candidate_identity is None:
+                    raise RestoreHostError("Prepared restore file disappeared")
+                original_identity = self._entry_identity(parent_fd, target.name)
+                existed = original_identity is not None
                 swap = self._prepare_file_swap(
                     kind="file",
                     component=component,
@@ -1013,6 +1109,8 @@ class RestoreRunner:
                     root=target_root,
                     relative=relative.as_posix(),
                     existed=existed,
+                    original_identity=original_identity,
+                    candidate_identity=candidate_identity,
                 )
                 if existed:
                     os.rename(
@@ -1234,12 +1332,10 @@ class RestoreRunner:
         for swap in reversed(list(self.journal.get("file_swaps") or [])):
             try:
                 self._rollback_file_swap(swap)
-                swap["state"] = "rolled_back"
-                swap["rolled_back_at"] = now()
-                self._save_journal()
             except Exception as exc:  # noqa: BLE001 - reconcile all swaps
                 errors.append(
-                    f"{swap.get('component', 'unknown')}: "
+                    f"{swap.get('component', 'unknown')}:"
+                    f"{swap.get('relative', 'unknown')}: "
                     f"{type(exc).__name__}: {exc}"
                 )
         if errors:
@@ -1247,6 +1343,294 @@ class RestoreRunner:
                 "One or more filesystem swaps could not be rolled back: "
                 + "; ".join(errors)
             )
+
+    def _transition_file_rollback(
+        self,
+        swap: dict[str, Any],
+        state: str,
+        boundary: str,
+    ) -> None:
+        swap["rollback_state"] = state
+        swap["rollback_updated_at"] = now()
+        if state == "rolled_back":
+            swap["state"] = "rolled_back"
+            swap["rolled_back_at"] = swap["rollback_updated_at"]
+            swap.pop("rollback_intent", None)
+        self._save_journal()
+        self._rollback_fault_boundary(swap, boundary)
+
+    @staticmethod
+    def _entry_identity(parent_fd: int, name: str) -> dict[str, int] | None:
+        try:
+            entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        return {
+            "device": int(entry.st_dev),
+            "inode": int(entry.st_ino),
+            "mode": int(stat.S_IFMT(entry.st_mode)),
+        }
+
+    @staticmethod
+    def _require_rollback_identity(
+        actual: dict[str, int] | None,
+        expected: Any,
+        *,
+        kind: str,
+        name: str,
+    ) -> None:
+        if actual is None:
+            raise RestoreHostError(f"Rollback mutation source is missing: {name}")
+        if kind == "directory":
+            expected_mode = stat.S_IFDIR
+        elif kind == "file":
+            expected_mode = stat.S_IFREG
+        else:
+            raise RestoreHostError("Unknown rollback cleanup kind")
+        if actual.get("mode") != expected_mode:
+            raise RestoreHostError(f"Rollback mutation source has wrong type: {name}")
+        if not isinstance(expected, dict) or any(
+            int(expected.get(field, -1)) != actual[field]
+            for field in ("device", "inode", "mode")
+        ):
+            raise RestoreHostError(f"Rollback mutation source changed: {name}")
+
+    def _begin_rollback_intent(
+        self,
+        swap: dict[str, Any],
+        *,
+        action: str,
+        identity: dict[str, int],
+        state: str,
+        boundary: str,
+    ) -> None:
+        swap["rollback_intent"] = {
+            "action": action,
+            "identity": identity,
+        }
+        self._transition_file_rollback(swap, state, boundary)
+
+    def _durable_rollback_rename(
+        self,
+        swap: dict[str, Any],
+        parent_fd: int,
+        *,
+        source: str,
+        destination: str,
+        action: str,
+        expected_identity: Any,
+    ) -> None:
+        prefix = action.replace("-", "_")
+        state = str(swap.get("rollback_state") or "")
+        intent = swap.get("rollback_intent")
+        if not isinstance(intent, dict) or intent.get("action") != action:
+            if _entry_exists(parent_fd, destination):
+                raise RestoreHostError(
+                    f"Rollback destination already exists: {destination}"
+                )
+            identity = self._entry_identity(parent_fd, source)
+            if identity is None:
+                raise RestoreHostError(
+                    f"Rollback mutation source is missing: {source}"
+                )
+            self._require_rollback_identity(
+                identity,
+                expected_identity if isinstance(expected_identity, dict) else identity,
+                kind=str(swap["kind"]),
+                name=source,
+            )
+            self._begin_rollback_intent(
+                swap,
+                action=action,
+                identity=identity,
+                state=f"{prefix}_intent",
+                boundary=f"{action}-intent-journal",
+            )
+            state = f"{prefix}_intent"
+            intent = swap["rollback_intent"]
+
+        expected = intent.get("identity")
+        source_identity = self._entry_identity(parent_fd, source)
+        destination_identity = self._entry_identity(parent_fd, destination)
+        if source_identity is not None:
+            self._require_rollback_identity(
+                source_identity,
+                expected,
+                kind=str(swap["kind"]),
+                name=source,
+            )
+            if destination_identity is not None:
+                raise RestoreHostError(
+                    f"Rollback destination already exists: {destination}"
+                )
+            os.rename(
+                source,
+                destination,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            self._rollback_fault_boundary(swap, f"{action}-renamed")
+            self._transition_file_rollback(
+                swap,
+                f"{prefix}_renamed",
+                f"{action}-renamed-journal",
+            )
+            state = f"{prefix}_renamed"
+        elif destination_identity is not None:
+            self._require_rollback_identity(
+                destination_identity,
+                expected,
+                kind=str(swap["kind"]),
+                name=destination,
+            )
+            if state == f"{prefix}_intent":
+                self._transition_file_rollback(
+                    swap,
+                    f"{prefix}_renamed",
+                    f"{action}-renamed-journal",
+                )
+                state = f"{prefix}_renamed"
+        else:
+            raise RestoreHostError(
+                f"Rollback rename paths are both missing: {source}, {destination}"
+            )
+
+        if state != f"{prefix}_fsynced":
+            os.fsync(parent_fd)
+            self._rollback_fault_boundary(swap, f"{action}-fsynced")
+            self._transition_file_rollback(
+                swap,
+                f"{prefix}_fsynced",
+                f"{action}-fsynced-journal",
+            )
+
+    def _durable_rollback_cleanup(
+        self,
+        swap: dict[str, Any],
+        parent_fd: int,
+        *,
+        name: str,
+        slot: str,
+        expected_identity: Any,
+    ) -> None:
+        action = f"{slot}-cleanup"
+        prefix = action.replace("-", "_")
+        state = str(swap.get("rollback_state") or "")
+        intent = swap.get("rollback_intent")
+        if not isinstance(intent, dict) or intent.get("action") != action:
+            identity = self._entry_identity(parent_fd, name)
+            if identity is None:
+                return
+            self._require_rollback_identity(
+                identity,
+                expected_identity if isinstance(expected_identity, dict) else identity,
+                kind=str(swap["kind"]),
+                name=name,
+            )
+            self._begin_rollback_intent(
+                swap,
+                action=action,
+                identity=identity,
+                state=f"{prefix}_intent",
+                boundary=f"{action}-intent-journal",
+            )
+            state = f"{prefix}_intent"
+            intent = swap["rollback_intent"]
+
+        identity = self._entry_identity(parent_fd, name)
+        if identity is not None:
+            self._require_rollback_identity(
+                identity,
+                intent.get("identity"),
+                kind=str(swap["kind"]),
+                name=name,
+            )
+            self._remove_explicit_at(parent_fd, name, str(swap["kind"]))
+            self._rollback_fault_boundary(swap, f"{slot}-cleaned")
+            self._transition_file_rollback(
+                swap,
+                f"{prefix}_cleaned",
+                f"{slot}-cleaned-journal",
+            )
+            state = f"{prefix}_cleaned"
+        elif state == f"{prefix}_intent":
+            self._transition_file_rollback(
+                swap,
+                f"{prefix}_cleaned",
+                f"{slot}-cleaned-journal",
+            )
+            state = f"{prefix}_cleaned"
+
+        if state != f"{prefix}_fsynced":
+            os.fsync(parent_fd)
+            self._rollback_fault_boundary(swap, f"{action}-fsynced")
+            self._transition_file_rollback(
+                swap,
+                f"{prefix}_fsynced",
+                f"{action}-fsynced-journal",
+            )
+
+    def _resume_file_rollback_intent(
+        self,
+        swap: dict[str, Any],
+        parent_fd: int,
+        *,
+        target_name: str,
+        old_name: str,
+        new_name: str,
+        failed_name: str,
+    ) -> None:
+        state = str(swap.get("rollback_state") or "")
+        if not state or state == "rolled_back":
+            return
+        intent = swap.get("rollback_intent")
+        if not isinstance(intent, dict):
+            raise RestoreHostError("Rollback state has no durable mutation intent")
+        action = str(intent.get("action") or "")
+        if action == "live-to-failed":
+            self._durable_rollback_rename(
+                swap,
+                parent_fd,
+                source=target_name,
+                destination=failed_name,
+                action=action,
+                expected_identity=swap.get("candidate_identity"),
+            )
+        elif action == "old-to-live":
+            self._durable_rollback_rename(
+                swap,
+                parent_fd,
+                source=old_name,
+                destination=target_name,
+                action=action,
+                expected_identity=swap.get("original_identity"),
+            )
+        elif action == "target-cleanup":
+            self._durable_rollback_cleanup(
+                swap,
+                parent_fd,
+                name=target_name,
+                slot="target",
+                expected_identity=swap.get("candidate_identity"),
+            )
+        elif action == "failed-cleanup":
+            self._durable_rollback_cleanup(
+                swap,
+                parent_fd,
+                name=failed_name,
+                slot="failed",
+                expected_identity=swap.get("candidate_identity"),
+            )
+        elif action == "new-cleanup":
+            self._durable_rollback_cleanup(
+                swap,
+                parent_fd,
+                name=new_name,
+                slot="new",
+                expected_identity=swap.get("candidate_identity"),
+            )
+        else:
+            raise RestoreHostError(f"Unknown rollback mutation intent: {action}")
 
     def _rollback_file_swap(self, swap: dict[str, Any]) -> None:
         root = explicit_root(str(Path(swap["root"])), "rollback file root")
@@ -1262,54 +1646,132 @@ class RestoreRunner:
             raise RestoreHostError("Rollback file journal paths are inconsistent")
         kind = str(swap["kind"])
         with safe_directory_fd(root, relative.parent.parts) as (_, parent_fd):
+            failed_name = f".{target.name}.restore-failed-{self.request_id}"
+            self._resume_file_rollback_intent(
+                swap,
+                parent_fd,
+                target_name=target.name,
+                old_name=old.name,
+                new_name=new.name,
+                failed_name=failed_name,
+            )
+
             old_exists = _entry_exists(parent_fd, old.name)
             target_exists = _entry_exists(parent_fd, target.name)
             new_exists = _entry_exists(parent_fd, new.name)
-            failed_name = f".{target.name}.restore-failed-{self.request_id}"
             failed_exists = _entry_exists(parent_fd, failed_name)
+            if swap.get("rollback_state") == "rolled_back":
+                expected_target = bool(swap.get("existed"))
+                if (
+                    target_exists != expected_target
+                    or old_exists
+                    or new_exists
+                    or failed_exists
+                ):
+                    raise RestoreHostError(
+                        "Rolled-back filesystem paths changed after completion"
+                    )
+                return
 
             if bool(swap.get("existed")):
+                if old_exists and target_exists and (new_exists or failed_exists):
+                    occupied = new.name if new_exists else failed_name
+                    raise RestoreHostError(
+                        f"Rollback destination already exists: {occupied}"
+                    )
                 if old_exists:
                     if target_exists:
-                        if failed_exists:
-                            self._remove_explicit_at(parent_fd, failed_name, kind)
-                        os.rename(
-                            target.name,
-                            failed_name,
-                            src_dir_fd=parent_fd,
-                            dst_dir_fd=parent_fd,
+                        self._durable_rollback_rename(
+                            swap,
+                            parent_fd,
+                            source=target.name,
+                            destination=failed_name,
+                            action="live-to-failed",
+                            expected_identity=swap.get("candidate_identity"),
                         )
-                        failed_exists = True
-                    os.rename(
-                        old.name,
-                        target.name,
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
+                    elif not failed_exists:
+                        # The forward process can die after live-to-old while
+                        # the candidate still occupies the deterministic new path.
+                        pass
+                    self._durable_rollback_rename(
+                        swap,
+                        parent_fd,
+                        source=old.name,
+                        destination=target.name,
+                        action="old-to-live",
+                        expected_identity=swap.get("original_identity"),
                     )
-                    os.fsync(parent_fd)
-                    if failed_exists:
-                        self._remove_explicit_at(parent_fd, failed_name, kind)
-                    if new_exists:
-                        self._remove_explicit_at(parent_fd, new.name, kind)
-                elif swap.get("state") in {"prepared", "rolled_back"} and target_exists:
-                    # Either no live rename occurred, or a prior rollback
-                    # restored the target before its final journal write.
-                    if new_exists:
-                        self._remove_explicit_at(parent_fd, new.name, kind)
-                    if failed_exists:
-                        self._remove_explicit_at(parent_fd, failed_name, kind)
-                else:
+                elif not target_exists:
                     raise RestoreHostError(
-                        f"Rollback original is missing: {old.name}"
+                        f"Rollback original and live path are missing: {old.name}"
+                    )
+                else:
+                    original_identity = swap.get("original_identity")
+                    if isinstance(original_identity, dict):
+                        self._require_rollback_identity(
+                            self._entry_identity(parent_fd, target.name),
+                            original_identity,
+                            kind=kind,
+                            name=target.name,
+                        )
+                # With no old path, the only deterministic live value is the
+                # original restored by an earlier rollback invocation. This is
+                # also the legacy-journal reconciliation for the old-to-live gap.
+                if _entry_exists(parent_fd, failed_name):
+                    self._durable_rollback_cleanup(
+                        swap,
+                        parent_fd,
+                        name=failed_name,
+                        slot="failed",
+                        expected_identity=swap.get("candidate_identity"),
+                    )
+                if _entry_exists(parent_fd, new.name):
+                    self._durable_rollback_cleanup(
+                        swap,
+                        parent_fd,
+                        name=new.name,
+                        slot="new",
+                        expected_identity=swap.get("candidate_identity"),
                     )
             else:
+                if old_exists:
+                    raise RestoreHostError(
+                        f"Unexpected rollback original exists: {old.name}"
+                    )
                 if target_exists:
-                    self._remove_explicit_at(parent_fd, target.name, kind)
-                if new_exists:
-                    self._remove_explicit_at(parent_fd, new.name, kind)
-                if failed_exists:
-                    self._remove_explicit_at(parent_fd, failed_name, kind)
-            os.fsync(parent_fd)
+                    if swap.get("state") == "prepared" and new_exists:
+                        raise RestoreHostError(
+                            f"Unrelated live path appeared before apply: {target.name}"
+                        )
+                    self._durable_rollback_cleanup(
+                        swap,
+                        parent_fd,
+                        name=target.name,
+                        slot="target",
+                        expected_identity=swap.get("candidate_identity"),
+                    )
+                if _entry_exists(parent_fd, new.name):
+                    self._durable_rollback_cleanup(
+                        swap,
+                        parent_fd,
+                        name=new.name,
+                        slot="new",
+                        expected_identity=swap.get("candidate_identity"),
+                    )
+                if _entry_exists(parent_fd, failed_name):
+                    self._durable_rollback_cleanup(
+                        swap,
+                        parent_fd,
+                        name=failed_name,
+                        slot="failed",
+                        expected_identity=swap.get("candidate_identity"),
+                    )
+
+            self._transition_file_rollback(
+                swap,
+                "rolled_back",
+                "rolled-back-journal",
+            )
 
     @staticmethod
     def _remove_explicit_at(parent_fd: int, name: str, kind: str) -> None:
@@ -1409,6 +1871,12 @@ def main() -> int:
         if args.rollback_dir:
             runner = load_rollback_runner(args.rollback_dir)
             outcomes = runner.rollback()
+            for component, outcome in outcomes.items():
+                if outcome["status"] == "failed":
+                    print(
+                        f"Rollback {component} failed: {outcome.get('error', 'unknown error')}",
+                        file=sys.stderr,
+                    )
             return (
                 0
                 if all(
@@ -1420,7 +1888,10 @@ def main() -> int:
         try:
             runner = RestoreRunner(args.request)
         except Exception as exc:  # noqa: BLE001 - fail closed on every request parser error
-            print(f"Restore request rejected: {type(exc).__name__}", file=sys.stderr)
+            print(
+                f"Restore request rejected: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
             return 2
         try:
             runner.run()
