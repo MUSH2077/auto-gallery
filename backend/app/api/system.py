@@ -28,6 +28,7 @@ from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.providers import registry
 from app.services.settings import get_scheduler_config
+from app.services.subscription_calendar import effective_calendar_rule
 from app.services.sync_outcome import download_job_outcome
 
 try:
@@ -274,6 +275,7 @@ async def queue_stats():
             "scheduler_mode": scheduler_config.get("schedule_mode", "interval"),
             "scheduler_timezone": scheduler_config.get("timezone", "UTC"),
             "scheduled_times": scheduler_config.get("scheduled_times", ""),
+            "schedule_rule": scheduler_config.get("schedule_rule"),
             "scheduler_scan_interval_minutes": int(scheduler_config.get("scheduler_scan_interval_minutes", 60)),
             "next_sync_scan_at": queue_payload["next_sync_scan_at"],
             "scheduler_loop": queue_payload.get("scheduler_loop"),
@@ -598,6 +600,7 @@ async def scheduler_decisions(
     rows = list((await db.execute(statement)).all())
 
     items = []
+    suppressed_count = 0
     for ss, sub, creator in rows:
         provider_state = _provider_state(ss.source, ss.source_url)
         can_download = bool(provider_state["can_download"])
@@ -614,11 +617,9 @@ async def scheduler_decisions(
         )
         due = bool(decision.get("due"))
         reason = str(decision.get("reason"))
+        suppression_reason = None
 
-        if not scheduler_enabled:
-            due = False
-            reason = "scheduler_disabled"
-        elif not sub.is_active:
+        if not sub.is_active:
             due = False
             reason = "subscription_inactive"
         elif not sub.sync_enabled:
@@ -637,6 +638,12 @@ async def scheduler_decisions(
             due = False
             reason = "url_invalid"
 
+        if not scheduler_enabled:
+            if due:
+                suppressed_count += 1
+            due = False
+            suppression_reason = "scheduler_disabled"
+
         next_due_at = decision.get("next_due_at")
         parsed_next_due_at = None
         if next_due_at:
@@ -652,7 +659,6 @@ async def scheduler_decisions(
             and parsed_next_due_at <= overdue_cutoff
         )
         is_attention = reason in {
-            "scheduler_disabled",
             "auth_unhealthy",
             "url_invalid",
             "provider_not_downloadable",
@@ -674,12 +680,19 @@ async def scheduler_decisions(
             "effective_mode": decision.get("mode") or sub.schedule_mode or config.get("schedule_mode", "interval"),
             "timezone": tz_name,
             "scheduled_times": sub.scheduled_times or config.get("scheduled_times", ""),
+            "schedule_rule": (
+                effective_calendar_rule(sub, config)
+                if (sub.schedule_mode or config.get("schedule_mode"))
+                in {"calendar", "fixed_time"}
+                else None
+            ),
             "sync_interval_hours": sub.sync_interval_hours,
             "last_synced_at": _iso(ss.last_synced_at),
             "last_attempted_at": _iso(ss.last_attempted_at),
             "due": due,
             "decision": "due_now" if due else reason,
             "reason": reason,
+            "suppression_reason": suppression_reason,
             "next_due_at": next_due_at,
             "window_start": decision.get("window_start"),
             "window_end": decision.get("window_end"),
@@ -696,6 +709,7 @@ async def scheduler_decisions(
     return {
         "updated_at": now.isoformat(),
         "scheduler_enabled": scheduler_enabled,
+        "suppressed_count": suppressed_count,
         "timezone": tz_name,
         "view": view,
         "total": len(visible_items),
@@ -732,7 +746,7 @@ async def clear_failed_jobs():
     return {"status": "ok", "message": f"Removed {total} failed jobs from Redis"}
 
 
-@tasks_ops_router.post("/system/reindex-works")
+@tasks_ops_router.post("/system/reindex-works", status_code=202)
 async def reindex_works():
     """Queue a full Meilisearch rebuild on the protected import worker.
 

@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type ClearEntity } from "@/lib/api";
 import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
@@ -14,8 +14,25 @@ import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter } from "next/navigation";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
 type Severity = "error" | "warning" | "info";
+type IntegrityResult = {
+  issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
+  db_stats: Record<string, number>;
+  checked_at: string;
+  message?: string;
+};
+type BackupResult = {
+  status: string;
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  contents: string[];
+  component_sizes: Record<string, number>;
+  message?: string;
+};
 
 function formatSize(mb: number): string {
   if (!Number.isFinite(mb)) return "-";
@@ -68,10 +85,23 @@ export default function DataManagementPage() {
     queryFn: () => api.getStorageBreakdown(),
     placeholderData: (previousData) => previousData,
   });
-  const creatorCount = useQuery({ queryKey: queryKeys.creators.count, queryFn: () => api.countCreators() });
-  const subCount = useQuery({ queryKey: queryKeys.subscriptions.count, queryFn: () => api.countSubscriptions() });
-  const integrity = useQuery({ queryKey: ["integrity-check"], queryFn: () => api.getIntegrityCheck(), enabled: false });
   const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
+  const refreshBackups = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["backups"] });
+  }, [qc]);
+  const integrity = useAdminOperation<IntegrityResult>({
+    operationType: "admin-integrity-scan",
+    scope: "global",
+    startOperation: () => api.startIntegrityCheck(),
+    loadLatest: () => api.getLatestIntegrityCheck(),
+  });
+  const backupOperation = useAdminOperation<BackupResult>({
+    operationType: "admin-backup-create",
+    scope: "global",
+    startOperation: () => api.createBackup(),
+    loadLatest: () => api.getLatestBackup(),
+    onCompleted: refreshBackups,
+  });
 
   // ── Mutations ──
   const cleanupJSON = useMutation({
@@ -123,17 +153,6 @@ export default function DataManagementPage() {
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 
-  const createBackupMut = useMutation({
-    mutationFn: () => api.createBackup(),
-    onSuccess: (d: any) => {
-      setResult({ ok: true, msg: t("backup.created", { filename: d.filename, size: d.size_mb }) });
-      backups.refetch();
-    },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
-  });
-
-  const runIntegrity = () => integrity.refetch();
-
   const dangerActions = [
     { key: "all", title: t("datamgmt.danger_clear_all"), desc: t("datamgmt.danger_clear_all_desc"), color: "red" },
   ] satisfies { key: ClearEntity; title: string; desc: string; color: string }[];
@@ -175,8 +194,11 @@ export default function DataManagementPage() {
   // Computed
   const info = systemInfo.data;
   const breakdown = storageBreakdown.data;
-  const issues = integrity.data?.issues || [];
-  const dbStats = breakdown?.db_stats || integrity.data?.db_stats;
+  const issues = integrity.result?.issues || [];
+  const dbStats = breakdown?.db_stats || info?.db_stats;
+  const integrityDbStats = integrity.result?.db_stats;
+  const overviewError = (systemInfo.isError && !info) || (storageBreakdown.isError && !breakdown);
+  const overviewLoading = !overviewError && (!info || !breakdown);
   const lastBackup = backups.data?.backups?.[0];
   const totalSourceSize = useMemo(() => (
     breakdown?.sources
@@ -270,28 +292,53 @@ export default function DataManagementPage() {
           <h2 id="data-ledger-title" className="text-sm font-semibold text-fg">{t("charts.metric_ledger_title")}</h2>
           <p className="mt-1 text-xs text-muted">{t("charts.metric_ledger_desc")}</p>
         </div>
-        <dl className="grid grid-cols-2 gap-px md:grid-cols-4 2xl:grid-cols-7">
-          {[
-            { label: t("datamgmt.stats_works"), value: dbStats?.works ?? "-" },
-            { label: t("datamgmt.stats_assets"), value: dbStats?.assets ?? "-" },
-            { label: t("datamgmt.stats_creators"), value: creatorCount.data?.count ?? "-" },
-            { label: t("datamgmt.stats_subs"), value: subCount.data?.count ?? "-" },
-            { label: t("datamgmt.stats_tags"), value: dbStats?.tags ?? "-" },
-            { label: t("datamgmt.stats_downloads"), value: info ? formatSize(info.downloads_size_mb) : "-" },
-            { label: t("datamgmt.stats_library"), value: info ? formatSize(info.library_size_mb) : "-" },
-          ].map((metric, index) => (
-            <div
-              key={metric.label}
-              className={`min-h-24 min-w-0 overflow-hidden bg-surface px-4 py-3 ${index === 6 ? "col-span-2 2xl:col-span-1" : ""}`}
+        {overviewError ? (
+          <div role="alert" className="m-4 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
+            <p className="font-medium">{t("datamgmt.data_center_error")}</p>
+            <button
+              type="button"
+              className="btn-ghost mt-3 text-danger"
+              onClick={() => {
+                void systemInfo.refetch();
+                void storageBreakdown.refetch();
+              }}
             >
-              <dt className="flex min-w-0 items-start gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted [overflow-wrap:anywhere]">
-                <span className="shrink-0 font-mono text-accent">{String(index + 1).padStart(2, "0")}</span>
-                {metric.label}
-              </dt>
-              <dd className="mt-3 font-mono text-xl font-semibold tabular-nums text-fg [overflow-wrap:anywhere]">{metric.value}</dd>
-            </div>
-          ))}
-        </dl>
+              {t("common.retry")}
+            </button>
+          </div>
+        ) : overviewLoading ? (
+          <div aria-label={t("datamgmt.data_center_loading")} className="grid grid-cols-2 gap-px bg-border md:grid-cols-4 2xl:grid-cols-7">
+            {Array.from({ length: 7 }).map((_, index) => (
+              <div key={index} className="min-h-24 animate-pulse bg-surface px-4 py-3">
+                <div className="h-3 w-2/3 rounded bg-subtle" />
+                <div className="mt-4 h-6 w-1/2 rounded bg-subtle" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <dl className="grid grid-cols-2 gap-px md:grid-cols-4 2xl:grid-cols-7">
+            {[
+              { label: t("datamgmt.stats_works"), value: dbStats!.works },
+              { label: t("datamgmt.stats_assets"), value: dbStats!.assets },
+              { label: t("datamgmt.stats_creators"), value: dbStats!.creators },
+              { label: t("datamgmt.stats_subs"), value: dbStats!.subscriptions },
+              { label: t("datamgmt.stats_tags"), value: dbStats!.tags },
+              { label: t("datamgmt.stats_downloads"), value: formatSize(info!.downloads_size_mb) },
+              { label: t("datamgmt.stats_library"), value: formatSize(info!.library_size_mb) },
+            ].map((metric, index) => (
+              <div
+                key={metric.label}
+                className={`min-h-24 min-w-0 overflow-hidden bg-surface px-4 py-3 ${index === 6 ? "col-span-2 2xl:col-span-1" : ""}`}
+              >
+                <dt className="flex min-w-0 items-start gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted [overflow-wrap:anywhere]">
+                  <span className="shrink-0 font-mono text-accent">{String(index + 1).padStart(2, "0")}</span>
+                  {metric.label}
+                </dt>
+                <dd className="mt-3 font-mono text-xl font-semibold tabular-nums text-fg [overflow-wrap:anywhere]">{metric.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </section>
 
       <div className="mb-6 grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
@@ -310,7 +357,9 @@ export default function DataManagementPage() {
           description={t("charts.storage_encoding")}
           testId="storage-source-chart"
         >
-          {sourceStorageData.length ? (
+          {overviewLoading ? (
+            <div aria-label={t("datamgmt.data_center_loading")} className="h-48 animate-pulse rounded-md bg-subtle" />
+          ) : sourceStorageData.length ? (
             <TickDonut
               data={sourceStorageData}
               otherLabel={t("charts.other_sources")}
@@ -332,7 +381,9 @@ export default function DataManagementPage() {
           description={t("charts.storage_tree_encoding")}
           testId="creator-storage-chart"
         >
-          {storageGroups.length ? (
+          {overviewLoading ? (
+            <div aria-label={t("datamgmt.data_center_loading")} className="h-48 animate-pulse rounded-md bg-subtle" />
+          ) : storageGroups.length ? (
             <StorageColonnade
               groups={storageGroups}
               formatValue={formatSize}
@@ -371,15 +422,17 @@ export default function DataManagementPage() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-sm">{t("datamgmt.integrity_title")}</h3>
           <button
-            onClick={runIntegrity}
-            disabled={integrity.isFetching}
+            aria-label={t("datamgmt.integrity_run")}
+            onClick={() => integrity.start(undefined)}
+            disabled={!integrity.canStart}
             className="btn-primary px-3 py-1.5 text-xs"
           >
-            {integrity.isFetching ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
+            {integrity.isStarting || integrity.isActive ? t("datamgmt.integrity_running") : t("datamgmt.integrity_run")}
           </button>
         </div>
+        <AdminOperationStatus controller={integrity} />
 
-        {integrity.data ? (
+        {integrity.result ? (
           <>
             {issues.length === 0 ? (
               <div className="text-center py-6 text-success">
@@ -425,11 +478,11 @@ export default function DataManagementPage() {
               </div>
             )}
 
-            {dbStats && (
+            {integrityDbStats && (
               <div className="mt-4 pt-3 border-t">
                 <h4 className="text-xs font-medium text-muted mb-2">{t("datamgmt.integrity_db_stats")}</h4>
                 <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                  {Object.entries(dbStats).map(([tbl, count]) => (
+                  {Object.entries(integrityDbStats).map(([tbl, count]) => (
                     <div key={tbl} className="text-center bg-subtle rounded p-2">
                       <div className="text-sm font-mono font-bold">{count}</div>
                       <div className="text-[10px] text-muted">{tbl}</div>
@@ -439,9 +492,9 @@ export default function DataManagementPage() {
               </div>
             )}
 
-            {integrity.data.checked_at && (
+            {integrity.result.checked_at && (
               <p className="text-xs text-muted mt-3">
-                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.data.checked_at)}
+                {t("datamgmt.integrity_checked_at")}: {fmt.dateTime(integrity.result.checked_at)}
               </p>
             )}
           </>
@@ -520,6 +573,14 @@ export default function DataManagementPage() {
                     className="h-3.5 w-3.5 rounded border-border" />
                   {t("datamgmt.disk_import_reset_ledger")}
                 </label>
+                {breakdown?.pipeline_stats ? (
+                  <div className="mt-2 rounded border border-border bg-subtle px-2 py-1.5 text-xs text-muted">
+                    <span className="font-medium text-fg">{t("datamgmt.import_backlog")}</span>
+                    <span className="ml-2">{t("datamgmt.pending_import_works")}: {breakdown.pipeline_stats.pending_import_works}</span>
+                    <span className="ml-2">{t("datamgmt.orphan_pending_artifacts")}: {breakdown.pipeline_stats.orphan_pending_artifacts}</span>
+                    <span className="ml-2">{t("datamgmt.failed_artifacts")}: {breakdown.pipeline_stats.failed_artifacts}</span>
+                  </div>
+                ) : null}
               </div>
               <button onClick={() => importFromDisk.mutate()} disabled={importFromDisk.isPending}
                 className="btn-primary shrink-0 ml-3 text-xs">
@@ -557,10 +618,14 @@ export default function DataManagementPage() {
                 <div className="text-sm font-medium mt-0.5">{backups.data?.backups?.length ?? 0}</div>
               </div>
             </div>
-            <button onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}
+            <button onClick={() => backupOperation.start(undefined)} disabled={!backupOperation.canStart}
               className="btn-primary w-full">
-              {createBackupMut.isPending ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
+              {backupOperation.isStarting || backupOperation.isActive ? t("datamgmt.backup_creating") : t("datamgmt.backup_create")}
             </button>
+            <AdminOperationStatus controller={backupOperation} />
+            {backupOperation.result?.filename ? (
+              <p className="text-xs text-success">{backupOperation.result.filename}</p>
+            ) : null}
 
             <div className="pt-3 border-t">
               <h4 className="text-xs font-medium text-muted mb-2">{t("datamgmt.db_stats_title")}</h4>

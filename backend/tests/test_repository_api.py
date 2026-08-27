@@ -77,6 +77,7 @@ def _source_context(source_id, sub_id, creator_id):
         sync_enabled=True,
         sync_interval_hours=6,
         schedule_mode="interval",
+        schedule_rule=None,
         scheduled_times=None,
         last_synced_at=_dt(),
     )
@@ -92,6 +93,7 @@ def _source_context(source_id, sub_id, creator_id):
 
 def test_repository_detail_returns_context_jobs_and_recent_works():
     from app.api.repositories import get_repository
+    from app.schemas.repository import RepositoryDetailResponse
 
     source_id = uuid4()
     sub_id = uuid4()
@@ -138,6 +140,10 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
         _Result(first=(ss, sub, creator)),
         _Result(scalars=[]),
         _Result(scalars=[receipt]),
+        # Before work_total exists the detail query consumes this result as
+        # its recent-work rows; after the count query is added, it consumes
+        # the scalar and the following result remains the capped preview.
+        _Result(rows=[(work, work_source, 2, True)], scalar=13),
         _Result(rows=[(work, work_source, 2, True)]),
     ])
 
@@ -152,9 +158,11 @@ def test_repository_detail_returns_context_jobs_and_recent_works():
     assert payload["recent_jobs"][0]["download_job_id"] == str(job_id)
     assert payload["sync_history"] == payload["recent_jobs"]
     assert payload["active_jobs"] == []
+    assert payload["work_total"] == 13
     assert payload["recent_works"][0]["id"] == str(work_id)
     assert payload["recent_works"][0]["asset_count"] == 2
     assert payload["recent_works"][0]["has_video"] is True
+    assert RepositoryDetailResponse.model_validate(payload).work_total == 13
 
 
 def test_repository_detail_returns_404_for_missing_source():
@@ -202,6 +210,7 @@ def test_repository_tags_are_scoped_and_paginated():
     sub_id = uuid4()
     creator_id = uuid4()
     tag_id = uuid4()
+    second_tag_id = uuid4()
     ss, sub, creator = _source_context(source_id, sub_id, creator_id)
     tag = SimpleNamespace(
         id=tag_id,
@@ -209,22 +218,41 @@ def test_repository_tags_are_scoped_and_paginated():
         category="general",
         created_at=_dt(),
     )
+    second_tag = SimpleNamespace(
+        id=second_tag_id,
+        normalized_name="second-fixture",
+        category="character",
+        created_at=_dt(),
+    )
     db = _FakeDB([
         _Result(first=(ss, sub, creator)),
-        _Result(scalar=1),
-        _Result(rows=[(tag, 3)]),
+        _Result(scalar=2),
+        _Result(rows=[(tag, 3), (second_tag, 2)]),
+        _Result(rows=[(tag_id, "pixiv", 3), (second_tag_id, "pixiv", 2)]),
     ])
 
     payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))
 
-    assert payload["total"] == 1
-    assert payload["items"] == [{
-        "id": str(tag_id),
-        "normalized_name": "fixture",
-        "category": "general",
-        "usage_count": 3,
-        "created_at": _dt().isoformat(),
-    }]
+    assert payload["total"] == 2
+    assert payload["items"] == [
+        {
+            "id": str(tag_id),
+            "normalized_name": "fixture",
+            "category": "general",
+            "usage_count": 3,
+            "source_usage": [{"source": "pixiv", "work_count": 3}],
+            "created_at": _dt().isoformat(),
+        },
+        {
+            "id": str(second_tag_id),
+            "normalized_name": "second-fixture",
+            "category": "character",
+            "usage_count": 2,
+            "source_usage": [{"source": "pixiv", "work_count": 2}],
+            "created_at": _dt().isoformat(),
+        },
+    ]
+    assert len(db.statements) == 4
 
 
 def test_repository_tags_fall_back_to_normalized_source_creator_url():
@@ -255,6 +283,7 @@ def test_repository_tags_fall_back_to_normalized_source_creator_url():
         _Result(scalars=[source_creator]),
         _Result(scalar=1),
         _Result(rows=[(tag, 2)]),
+        _Result(rows=[(tag_id, "pixiv", 2)]),
     ])
 
     payload = asyncio.run(get_repository_tags(source_id, offset=0, limit=50, db=db))

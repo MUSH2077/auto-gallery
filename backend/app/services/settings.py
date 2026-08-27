@@ -155,6 +155,9 @@ async def get_download_defaults(db: AsyncSession) -> dict:
             float(defaults.get("import_skip_threshold", DEFAULT_IMPORT_SKIP_THRESHOLD))),
         "download_concurrency": max(1, min(5, int(
             defaults.get("download_concurrency", DEFAULT_DOWNLOAD_CONCURRENCY)))),
+        "auto_resolve_upstream_conflicts": bool(
+            defaults.get("auto_resolve_upstream_conflicts", True)
+        ),
         **defaults,
     }
 

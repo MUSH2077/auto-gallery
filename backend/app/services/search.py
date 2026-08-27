@@ -93,6 +93,7 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.operations import inaccessible_admin_operation_types_for_permissions
 from app.services.source_search_identity import (
     ParsedSourceURL,
     parse_source_identity,
@@ -2028,7 +2029,13 @@ class SearchService:
                 "index_status": "required",
             })
         if "tasks" in targets:
-            groups["tasks"] = await self._search_tasks(parsed, resolved, offset, limit)
+            groups["tasks"] = await self._search_tasks(
+                parsed,
+                resolved,
+                offset,
+                limit,
+                permissions=permission_set,
+            )
         if "scheduler" in targets:
             groups["scheduler"] = await self._search_scheduler(parsed, resolved, offset, limit)
 
@@ -2206,8 +2213,19 @@ class SearchService:
         offset: int,
         limit: int,
         visibility: str = "all",
+        *,
+        permissions: set[str] | frozenset[str],
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
+        excluded_admin_operation_types = (
+            inaccessible_admin_operation_types_for_permissions(permissions)
+        )
+        if excluded_admin_operation_types:
+            conditions.append(or_(
+                TaskRun.kind != "admin",
+                TaskRun.operation_type.is_(None),
+                TaskRun.operation_type.not_in(excluded_admin_operation_types),
+            ))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2272,6 +2290,7 @@ class SearchService:
         visibility: str = "all",
         offset: int = 0,
         limit: int = 50,
+        permissions: set[str] | frozenset[str] | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2281,6 +2300,7 @@ class SearchService:
             offset,
             limit,
             visibility=visibility,
+            permissions=permissions if permissions is not None else frozenset(),
         )
 
     async def search_download_jobs(
@@ -2452,6 +2472,7 @@ class SearchService:
     ) -> dict:
         from app.jobs.subscription_sync import schedule_decision_snapshot
         from app.services.settings import get_scheduler_config
+        from app.services.subscription_calendar import effective_calendar_rule
         from zoneinfo import ZoneInfo
 
         config = await get_scheduler_config(self.db)
@@ -2490,10 +2511,9 @@ class SearchService:
             )
             due = bool(decision.get("due"))
             reason = str(decision.get("reason"))
+            suppression_reason = None
             auth_healthy = repository.auth_healthy is not False
-            if not scheduler_enabled:
-                due, reason = False, "scheduler_disabled"
-            elif not subscription.is_active:
+            if not subscription.is_active:
                 due, reason = False, "subscription_inactive"
             elif not subscription.sync_enabled:
                 due, reason = False, "subscription_sync_disabled"
@@ -2505,6 +2525,9 @@ class SearchService:
                 due, reason = False, "provider_not_downloadable"
             elif not url_valid:
                 due, reason = False, "url_invalid"
+            if not scheduler_enabled:
+                due = False
+                suppression_reason = "scheduler_disabled"
             items.append({
                 "subscription_id": str(subscription.id),
                 "subscription_name": subscription.name,
@@ -2521,12 +2544,19 @@ class SearchService:
                 "effective_mode": decision.get("mode") or subscription.schedule_mode or config.get("schedule_mode", "interval"),
                 "timezone": tz_name,
                 "scheduled_times": subscription.scheduled_times or config.get("scheduled_times", ""),
+                "schedule_rule": (
+                    effective_calendar_rule(subscription, config)
+                    if (subscription.schedule_mode or config.get("schedule_mode"))
+                    in {"calendar", "fixed_time"}
+                    else None
+                ),
                 "sync_interval_hours": subscription.sync_interval_hours,
                 "last_synced_at": _iso(repository.last_synced_at),
                 "last_attempted_at": _iso(repository.last_attempted_at),
                 "due": due,
                 "decision": "due_now" if due else reason,
                 "reason": reason,
+                "suppression_reason": suppression_reason,
                 "next_due_at": decision.get("next_due_at"),
                 "window_start": decision.get("window_start"),
                 "window_end": decision.get("window_end"),
@@ -3267,6 +3297,7 @@ class SearchService:
                 "sync_interval_hours": subscription.sync_interval_hours,
                 "schedule_mode": subscription.schedule_mode,
                 "scheduled_times": subscription.scheduled_times,
+                "schedule_rule": subscription.schedule_rule,
                 "never_synced": latest_sync is None,
                 "has_last_sync": latest_sync is not None,
                 "last_synced_at": _iso(latest_sync),
@@ -3919,6 +3950,7 @@ class SearchService:
                 "sync_interval_hours": subscription.sync_interval_hours,
                 "schedule_mode": subscription.schedule_mode,
                 "scheduled_times": subscription.scheduled_times,
+                "schedule_rule": subscription.schedule_rule,
                 "never_synced": latest_sync is None,
                 "has_last_sync": latest_sync is not None,
                 "last_synced_at": _iso(latest_sync),

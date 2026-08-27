@@ -10,12 +10,13 @@ retried later via reenrich_pending().
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.creator import Creator
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 STATUS_FOUND = "danbooru_found"
 STATUS_NOT_FOUND = "danbooru_not_found"
+CREATOR_REFRESH_PAGE_SIZE = 100
+CREATOR_REFRESH_SAMPLE_LIMIT = 100
+CREATOR_REFRESH_CHECKPOINT = "creator_mapping_refresh"
 
 
 def _identity_from_source_creator(sc: SourceCreator) -> MetadataIdentity:
@@ -241,35 +245,130 @@ async def refresh_all_creator_mappings(
     *,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Refresh a start-of-run snapshot of every creator, one creator at a time."""
+    """Refresh a fixed high-water snapshot in fenced, resumable keyset pages."""
 
-    creator_ids = list((await db.execute(
-        select(Creator.id).order_by(Creator.created_at, Creator.id)
-    )).scalars().all())
-    total = len(creator_ids)
-    items: list[dict[str, Any]] = []
-    counts = {"found": 0, "not_found": 0, "errors": 0, "skipped": 0}
+    from app.services.operations import (
+        AdminOperationAttemptRejected,
+        current_admin_operation_attempt,
+        get_current_admin_operation_checkpoint,
+        set_current_admin_operation_checkpoint,
+    )
+
+    delivery = current_admin_operation_attempt()
+    checkpoint = (
+        await get_current_admin_operation_checkpoint(db, CREATOR_REFRESH_CHECKPOINT)
+        if delivery is not None
+        else None
+    )
+    if checkpoint is None:
+        high_water_row = (
+            await db.execute(
+                select(Creator.created_at, Creator.id)
+                .order_by(Creator.created_at.desc(), Creator.id.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        if high_water_row is None:
+            return {
+                "scanned": 0,
+                "total": 0,
+                "found": 0,
+                "not_found": 0,
+                "errors": 0,
+                "skipped": 0,
+                "aborted": False,
+                "abort_reason": None,
+                "items": [],
+                "details_truncated": False,
+            }
+        high_created_at, high_id = high_water_row
+        total = int(
+            await db.scalar(
+                select(func.count())
+                .select_from(Creator)
+                .where(
+                    tuple_(Creator.created_at, Creator.id)
+                    <= tuple_(high_created_at, high_id)
+                )
+            )
+            or 0
+        )
+        after: tuple[datetime, UUID] | None = None
+        scanned = 0
+        counts = {"found": 0, "not_found": 0, "errors": 0, "skipped": 0}
+        samples: list[dict[str, Any]] = []
+    else:
+        high = checkpoint.get("high_water") or {}
+        high_created_at = datetime.fromisoformat(str(high["created_at"]))
+        high_id = UUID(str(high["id"]))
+        raw_after = checkpoint.get("after")
+        after = (
+            (
+                datetime.fromisoformat(str(raw_after["created_at"])),
+                UUID(str(raw_after["id"])),
+            )
+            if isinstance(raw_after, dict)
+            else None
+        )
+        total = int(checkpoint.get("total") or 0)
+        scanned = int(checkpoint.get("scanned") or 0)
+        counts = {
+            key: int(checkpoint.get(key) or 0)
+            for key in ("found", "not_found", "errors", "skipped")
+        }
+        samples = [
+            dict(item)
+            for item in list(checkpoint.get("items") or [])[
+                :CREATOR_REFRESH_SAMPLE_LIMIT
+            ]
+            if isinstance(item, dict)
+        ]
+
     aborted = False
     abort_reason: str | None = None
 
-    for creator_id in creator_ids:
-        creator = await db.get(Creator, creator_id)
-        if creator is None:
-            counts["skipped"] += 1
-            item = {
-                "creator_id": str(creator_id),
-                "status": "skipped_creator_missing",
-            }
-            items.append(item)
-        else:
+    while True:
+        query = (
+            select(Creator)
+            .where(
+                tuple_(Creator.created_at, Creator.id)
+                <= tuple_(high_created_at, high_id)
+            )
+            .order_by(Creator.created_at, Creator.id)
+            .limit(CREATOR_REFRESH_PAGE_SIZE)
+        )
+        if after is not None:
+            query = query.where(
+                tuple_(Creator.created_at, Creator.id) > tuple_(after[0], after[1])
+            )
+        page = list((await db.execute(query)).scalars())
+        if not page:
+            break
+
+        for creator in page:
             display_name = creator.display_name or creator.name
             try:
-                result = await refresh_creator_mapping(db, creator)
-                status = result["status"]
-                from app.services.creator import CreatorService
+                async with db.begin_nested():
+                    result = await refresh_creator_mapping(db, creator)
+                    from app.services.creator import CreatorService
 
-                await CreatorService(db)._request_creator_projection(creator.id)
-                await db.commit()
+                    await CreatorService(db)._request_creator_projection(creator.id)
+            except AdminOperationAttemptRejected:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Danbooru mapping refresh failed for creator %s",
+                    creator.id,
+                )
+                counts["errors"] += 1
+                item = {
+                    "creator_id": str(creator.id),
+                    "display_name": display_name,
+                    "status": f"error:{type(exc).__name__}",
+                    "error": str(exc)[:500],
+                }
+            else:
+                status = str(result["status"])
                 if status == STATUS_FOUND:
                     counts["found"] += 1
                 elif status == STATUS_NOT_FOUND:
@@ -281,41 +380,71 @@ async def refresh_all_creator_mappings(
                     "display_name": display_name,
                     **result,
                 }
-                items.append(item)
                 if status.startswith("danbooru_error:"):
                     aborted = True
                     abort_reason = status
-            except Exception as exc:
-                await db.rollback()
-                logger.exception(
-                    "Danbooru mapping refresh failed for creator %s",
-                    creator_id,
-                )
-                counts["errors"] += 1
-                items.append({
-                    "creator_id": str(creator_id),
-                    "display_name": display_name,
-                    "status": f"error:{type(exc).__name__}",
-                    "error": str(exc),
-                })
+            scanned += 1
+            after = (creator.created_at, creator.id)
+            if len(samples) < CREATOR_REFRESH_SAMPLE_LIMIT:
+                samples.append(item)
+            if aborted:
+                break
 
+        progress = {
+            "current": scanned,
+            "scanned": scanned,
+            "total": total,
+            **counts,
+        }
+        durable_checkpoint = {
+            "version": 1,
+            "high_water": {
+                "created_at": high_created_at.isoformat(),
+                "id": str(high_id),
+            },
+            "after": (
+                {"created_at": after[0].isoformat(), "id": str(after[1])}
+                if after is not None
+                else None
+            ),
+            "total": total,
+            "scanned": scanned,
+            **counts,
+            "items": samples,
+            "details_truncated": scanned > len(samples),
+        }
+        if delivery is not None:
+            await set_current_admin_operation_checkpoint(
+                db,
+                CREATOR_REFRESH_CHECKPOINT,
+                durable_checkpoint,
+                progress={**progress, "phase": "running"},
+            )
+        await db.commit()
         if progress_cb:
-            progress_cb({
-                "current": len(items),
-                "scanned": len(items),
-                "total": total,
-                **counts,
-            })
+            callback_result = progress_cb(progress)
+            if inspect.isawaitable(callback_result):
+                await callback_result
         if aborted:
             break
 
+    if delivery is not None and not aborted:
+        await set_current_admin_operation_checkpoint(
+            db,
+            CREATOR_REFRESH_CHECKPOINT,
+            None,
+            progress={"phase": "running", "scanned": scanned, "total": total, **counts},
+        )
+        await db.commit()
+
     return {
-        "scanned": len(items),
+        "scanned": scanned,
         "total": total,
         **counts,
         "aborted": aborted,
         "abort_reason": abort_reason,
-        "items": items,
+        "items": samples,
+        "details_truncated": scanned > len(samples),
     }
 
 
@@ -330,6 +459,8 @@ async def reenrich_pending(
     Commits per item so one failure cannot poison the batch; aborts early on
     DanbooruUnavailableError because every later item would fail the same way.
     """
+    from app.services.operations import fence_current_admin_operation_transaction
+
     stmt = (
         select(SourceCreator)
         .where(SourceCreator.raw_metadata["_disk_import"]["needs_enrichment"].as_boolean().is_(True))
@@ -363,6 +494,7 @@ async def reenrich_pending(
             counts["errors"] += 1
         from app.services.creator import CreatorService
         await CreatorService(db)._request_creator_projection(creator.id)
+        await fence_current_admin_operation_transaction(db)
         await db.commit()
 
         items.append({
@@ -373,7 +505,11 @@ async def reenrich_pending(
             **result,
         })
         if progress_cb:
-            progress_cb({"scanned": idx + 1, "total": len(rows), **counts})
+            callback_result = progress_cb(
+                {"scanned": idx + 1, "total": len(rows), **counts}
+            )
+            if inspect.isawaitable(callback_result):
+                await callback_result
         if status.startswith("danbooru_error:"):
             aborted = True
             break

@@ -36,6 +36,172 @@
         "title": "ActivatedSubscriptionSource",
         "type": "object"
       },
+      "AdminOperationAccepted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "status": {
+            "const": "enqueued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "status",
+          "operation_type"
+        ],
+        "title": "AdminOperationAccepted",
+        "type": "object"
+      },
+      "AdminOperationCurrent": {
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "status": {
+            "enum": [
+              "enqueued",
+              "running",
+              "recovering",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "operation_type"
+        ],
+        "title": "AdminOperationCurrent",
+        "type": "object"
+      },
+      "AdminOperationSnapshot": {
+        "properties": {
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "status": {
+            "const": "complete",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "operation_type",
+          "result",
+          "completed_at"
+        ],
+        "title": "AdminOperationSnapshot",
+        "type": "object"
+      },
+      "AdminOperationSnapshotResponse": {
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOperationCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOperationSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AdminOperationSnapshotResponse",
+        "type": "object"
+      },
       "AdminSettingsUpdate": {
         "properties": {
           "dedup": {
@@ -715,6 +881,26 @@
         "title": "AssetDedupScanRequest",
         "type": "object"
       },
+      "BackupScheduleRequest": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "default": 24,
+            "maximum": 8760.0,
+            "minimum": 1.0,
+            "title": "Interval Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "BackupScheduleRequest",
+        "type": "object"
+      },
       "BatchCurateRequest": {
         "properties": {
           "action": {
@@ -845,20 +1031,6 @@
         "title": "BilibiliSourceConfig",
         "type": "object"
       },
-      "Body_post_api_v1_admin_backup_restore": {
-        "properties": {
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_post_api_v1_admin_backup_restore",
-        "type": "object"
-      },
       "Body_post_api_v1_upload": {
         "properties": {
           "creator_id": {
@@ -975,6 +1147,30 @@
           }
         },
         "title": "CompactTasksRequest",
+        "type": "object"
+      },
+      "ConflictDecision": {
+        "properties": {
+          "relative_path": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "winner": {
+            "enum": [
+              "canonical",
+              "staged"
+            ],
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relative_path",
+          "winner"
+        ],
+        "title": "ConflictDecision",
         "type": "object"
       },
       "CreatorCreate": {
@@ -1439,6 +1635,47 @@
         "title": "CreatorRef",
         "type": "object"
       },
+      "CreatorStorageNode": {
+        "properties": {
+          "creator_id": {
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "repositories": {
+            "items": {
+              "$ref": "#/components/schemas/StorageRepositoryNode"
+            },
+            "title": "Repositories",
+            "type": "array"
+          },
+          "repository_count": {
+            "title": "Repository Count",
+            "type": "integer"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "creator_id",
+          "display_name",
+          "size_mb",
+          "work_count",
+          "repository_count",
+          "repositories"
+        ],
+        "title": "CreatorStorageNode",
+        "type": "object"
+      },
       "CreatorUpdate": {
         "properties": {
           "description": {
@@ -1901,6 +2138,28 @@
         "title": "CurationStateRead",
         "type": "object"
       },
+      "DailyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "daily",
+            "default": "daily",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times"
+        ],
+        "title": "DailyScheduleRule",
+        "type": "object"
+      },
       "DanbooruMappingRefreshEnqueueResponse": {
         "properties": {
           "job_id": {
@@ -2129,6 +2388,29 @@
         "title": "DanbooruSourceConfig",
         "type": "object"
       },
+      "DataCenterPipelineStats": {
+        "properties": {
+          "failed_artifacts": {
+            "title": "Failed Artifacts",
+            "type": "integer"
+          },
+          "orphan_pending_artifacts": {
+            "title": "Orphan Pending Artifacts",
+            "type": "integer"
+          },
+          "pending_import_works": {
+            "title": "Pending Import Works",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending_import_works",
+          "orphan_pending_artifacts",
+          "failed_artifacts"
+        ],
+        "title": "DataCenterPipelineStats",
+        "type": "object"
+      },
       "DedupSettings": {
         "properties": {
           "aspect_ratio_tolerance": {
@@ -2337,6 +2619,11 @@
       "DownloadDefaults": {
         "additionalProperties": true,
         "properties": {
+          "auto_resolve_upstream_conflicts": {
+            "default": true,
+            "title": "Auto Resolve Upstream Conflicts",
+            "type": "boolean"
+          },
           "download_concurrency": {
             "default": 3,
             "title": "Download Concurrency",
@@ -3439,6 +3726,18 @@
       },
       "ImportFromDiskRequest": {
         "properties": {
+          "repository_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
           "reset_ledger": {
             "default": false,
             "title": "Reset Ledger",
@@ -3917,6 +4216,43 @@
           "must_change_password"
         ],
         "title": "MeOut",
+        "type": "object"
+      },
+      "MonthlyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "monthly",
+            "default": "monthly",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "month_days": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Month Days",
+            "type": "array"
+          },
+          "overflow": {
+            "const": "last_day",
+            "default": "last_day",
+            "title": "Overflow",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times",
+          "month_days"
+        ],
+        "title": "MonthlyScheduleRule",
         "type": "object"
       },
       "PinterestSourceConfig": {
@@ -4449,6 +4785,146 @@
         "title": "ReconcileTasksRequest",
         "type": "object"
       },
+      "RepositoryCapabilities": {
+        "properties": {
+          "can_download": {
+            "title": "Can Download",
+            "type": "boolean"
+          },
+          "can_import_local": {
+            "title": "Can Import Local",
+            "type": "boolean"
+          },
+          "is_reference_only": {
+            "title": "Is Reference Only",
+            "type": "boolean"
+          },
+          "supports_gallerydl": {
+            "title": "Supports Gallerydl",
+            "type": "boolean"
+          },
+          "supports_tags": {
+            "title": "Supports Tags",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_download",
+          "can_import_local",
+          "supports_gallerydl",
+          "supports_tags",
+          "is_reference_only"
+        ],
+        "title": "RepositoryCapabilities",
+        "type": "object"
+      },
+      "RepositoryCreator": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_favorite": {
+            "title": "Is Favorite",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "is_favorite"
+        ],
+        "title": "RepositoryCreator",
+        "type": "object"
+      },
+      "RepositoryDetailResponse": {
+        "properties": {
+          "active_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Active Jobs",
+            "type": "array"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/RepositoryCreator"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/RepositoryProvider"
+          },
+          "recent_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Recent Jobs",
+            "type": "array"
+          },
+          "recent_works": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentWork"
+            },
+            "title": "Recent Works",
+            "type": "array"
+          },
+          "repository": {
+            "$ref": "#/components/schemas/RepositoryRead"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/RepositorySubscription"
+          },
+          "sync_history": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryRecentJob"
+            },
+            "title": "Sync History",
+            "type": "array"
+          },
+          "work_total": {
+            "title": "Work Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository",
+          "creator",
+          "subscription",
+          "provider",
+          "recent_jobs",
+          "active_jobs",
+          "sync_history",
+          "work_total",
+          "recent_works"
+        ],
+        "title": "RepositoryDetailResponse",
+        "type": "object"
+      },
       "RepositoryGraphEdge": {
         "properties": {
           "from_id": {
@@ -4581,6 +5057,775 @@
         "title": "RepositoryGraphResponse",
         "type": "object"
       },
+      "RepositoryProvider": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/RepositoryCapabilities"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "normalized_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Url"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "url_valid": {
+            "title": "Url Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source",
+          "display_name",
+          "url_valid",
+          "capabilities"
+        ],
+        "title": "RepositoryProvider",
+        "type": "object"
+      },
+      "RepositoryRead": {
+        "properties": {
+          "auth_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Error Reason"
+          },
+          "auth_healthy": {
+            "title": "Auth Healthy",
+            "type": "boolean"
+          },
+          "auth_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Status"
+          },
+          "can_download": {
+            "title": "Can Download",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_enabled": {
+            "title": "Is Enabled",
+            "type": "boolean"
+          },
+          "is_repository": {
+            "title": "Is Repository",
+            "type": "boolean"
+          },
+          "last_attempted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempted At"
+          },
+          "last_auth_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Auth Checked At"
+          },
+          "last_successful_auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Auth"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "latest_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryRecentJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_creator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Creator Id"
+          },
+          "source_display_name": {
+            "title": "Source Display Name",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "subscription_id": {
+            "format": "uuid",
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "supports_gallerydl": {
+            "title": "Supports Gallerydl",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "url_valid": {
+            "title": "Url Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "source",
+          "source_display_name",
+          "is_enabled",
+          "auth_healthy",
+          "can_download",
+          "supports_gallerydl",
+          "url_valid",
+          "is_repository"
+        ],
+        "title": "RepositoryRead",
+        "type": "object"
+      },
+      "RepositoryRecentJob": {
+        "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "download_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Job Id"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_log_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Log Excerpt"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "import_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Job Id"
+          },
+          "media_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Count"
+          },
+          "metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Count"
+          },
+          "original_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Task Id"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositorySyncOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Code"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "record_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Type"
+          },
+          "recovered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered"
+          },
+          "recovered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered At"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "subscription_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Source Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "works_imported": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Works Imported"
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "source",
+          "status",
+          "retry_count"
+        ],
+        "title": "RepositoryRecentJob",
+        "type": "object"
+      },
+      "RepositoryRecentWork": {
+        "properties": {
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "creator_id": {
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "creator_name": {
+            "title": "Creator Name",
+            "type": "string"
+          },
+          "has_video": {
+            "title": "Has Video",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_ai_generated": {
+            "title": "Is Ai Generated",
+            "type": "boolean"
+          },
+          "is_favorite": {
+            "title": "Is Favorite",
+            "type": "boolean"
+          },
+          "is_nsfw": {
+            "title": "Is Nsfw",
+            "type": "boolean"
+          },
+          "posted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted At"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "thumbnail_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Asset Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "asset_count",
+          "has_video",
+          "is_nsfw",
+          "is_ai_generated",
+          "is_favorite",
+          "source",
+          "creator_name",
+          "creator_id"
+        ],
+        "title": "RepositoryRecentWork",
+        "type": "object"
+      },
+      "RepositorySubscription": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
+          },
+          "scheduled_times": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Times"
+          },
+          "sync_enabled": {
+            "title": "Sync Enabled",
+            "type": "boolean"
+          },
+          "sync_interval_hours": {
+            "title": "Sync Interval Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "is_active",
+          "sync_enabled",
+          "sync_interval_hours"
+        ],
+        "title": "RepositorySubscription",
+        "type": "object"
+      },
+      "RepositorySyncOutcome": {
+        "properties": {
+          "code": {
+            "enum": [
+              "new_content",
+              "no_changes",
+              "no_content"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "downloaded_metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downloaded Metadata Count"
+          },
+          "media_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Count"
+          },
+          "metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Count"
+          },
+          "pending_work_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Work Count"
+          },
+          "recovered_metadata_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered Metadata Count"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RepositorySyncOutcome",
+        "type": "object"
+      },
       "ResetPasswordOut": {
         "properties": {
           "password": {
@@ -4592,6 +5837,248 @@
           "password"
         ],
         "title": "ResetPasswordOut",
+        "type": "object"
+      },
+      "ResolveDownloadConflictRequest": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictDecision"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "resolution_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Id"
+          }
+        },
+        "required": [
+          "decisions"
+        ],
+        "title": "ResolveDownloadConflictRequest",
+        "type": "object"
+      },
+      "RestoreChunkResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "idempotent": {
+            "title": "Idempotent",
+            "type": "boolean"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at",
+          "idempotent"
+        ],
+        "title": "RestoreChunkResponse",
+        "type": "object"
+      },
+      "RestoreReceiptResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnostic"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "rollback_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Command"
+          },
+          "rollback_components": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Components"
+          },
+          "rollback_performed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Performed"
+          },
+          "rollback_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rollback Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status",
+          "phase"
+        ],
+        "title": "RestoreReceiptResponse",
         "type": "object"
       },
       "RestoreSubscriptionSlotRequest": {
@@ -4622,6 +6109,224 @@
           "source_ids"
         ],
         "title": "RestoreSubscriptionSlotRequest",
+        "type": "object"
+      },
+      "RestoreUploadCreateRequest": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks"
+        ],
+        "title": "RestoreUploadCreateRequest",
+        "type": "object"
+      },
+      "RestoreUploadCreatedResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "upload_token": {
+            "title": "Upload Token",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at",
+          "upload_token"
+        ],
+        "title": "RestoreUploadCreatedResponse",
+        "type": "object"
+      },
+      "RestoreUploadSessionResponse": {
+        "properties": {
+          "chunk_size": {
+            "title": "Chunk Size",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "next_chunk": {
+            "title": "Next Chunk",
+            "type": "integer"
+          },
+          "received_bytes": {
+            "title": "Received Bytes",
+            "type": "integer"
+          },
+          "received_chunks": {
+            "title": "Received Chunks",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "validation_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Task Id"
+          }
+        },
+        "required": [
+          "upload_id",
+          "filename",
+          "size_bytes",
+          "sha256",
+          "chunk_size",
+          "total_chunks",
+          "received_chunks",
+          "received_bytes",
+          "next_chunk",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RestoreUploadSessionResponse",
         "type": "object"
       },
       "RuleSuggestionRead": {
@@ -4924,6 +6629,243 @@
         "title": "SourceCreatorRead",
         "type": "object"
       },
+      "StorageBreakdownResponse": {
+        "properties": {
+          "creator_tree": {
+            "items": {
+              "$ref": "#/components/schemas/CreatorStorageNode"
+            },
+            "title": "Creator Tree",
+            "type": "array"
+          },
+          "creators": {
+            "items": {
+              "$ref": "#/components/schemas/StorageCreatorEntry"
+            },
+            "title": "Creators",
+            "type": "array"
+          },
+          "db_stats": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Db Stats",
+            "type": "object"
+          },
+          "inventory_source": {
+            "const": "storage_artifacts",
+            "title": "Inventory Source",
+            "type": "string"
+          },
+          "inventory_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Updated At"
+          },
+          "layers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StorageLayer"
+            },
+            "title": "Layers",
+            "type": "object"
+          },
+          "pipeline_stats": {
+            "$ref": "#/components/schemas/DataCenterPipelineStats"
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/StorageSourceStats"
+            },
+            "title": "Sources",
+            "type": "object"
+          },
+          "unlinked_repositories": {
+            "items": {
+              "$ref": "#/components/schemas/StorageRepositoryNode"
+            },
+            "title": "Unlinked Repositories",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources",
+          "creators",
+          "creator_tree",
+          "unlinked_repositories",
+          "db_stats",
+          "inventory_source",
+          "pipeline_stats",
+          "layers"
+        ],
+        "title": "StorageBreakdownResponse",
+        "type": "object"
+      },
+      "StorageCreatorEntry": {
+        "properties": {
+          "creator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator Id"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "source",
+          "size_mb",
+          "work_count"
+        ],
+        "title": "StorageCreatorEntry",
+        "type": "object"
+      },
+      "StorageLayer": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path",
+          "size_mb",
+          "description"
+        ],
+        "title": "StorageLayer",
+        "type": "object"
+      },
+      "StorageRepositoryNode": {
+        "properties": {
+          "directory_name": {
+            "title": "Directory Name",
+            "type": "string"
+          },
+          "disk_source": {
+            "title": "Disk Source",
+            "type": "string"
+          },
+          "logical_size_mb": {
+            "title": "Logical Size Mb",
+            "type": "number"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_display_name": {
+            "title": "Source Display Name",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "source_display_name",
+          "disk_source",
+          "directory_name",
+          "size_mb",
+          "logical_size_mb",
+          "work_count"
+        ],
+        "title": "StorageRepositoryNode",
+        "type": "object"
+      },
+      "StorageSourceStats": {
+        "properties": {
+          "creator_count": {
+            "title": "Creator Count",
+            "type": "integer"
+          },
+          "logical_size_mb": {
+            "title": "Logical Size Mb",
+            "type": "number"
+          },
+          "size_mb": {
+            "title": "Size Mb",
+            "type": "number"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size_mb",
+          "logical_size_mb",
+          "creator_count",
+          "work_count"
+        ],
+        "title": "StorageSourceStats",
+        "type": "object"
+      },
       "SubscriptionCreate": {
         "properties": {
           "creator_id": {
@@ -4953,7 +6895,7 @@
                 "enum": [
                   "inherit",
                   "interval",
-                  "fixed_time",
+                  "calendar",
                   "manual"
                 ],
                 "type": "string"
@@ -4963,6 +6905,35 @@
               }
             ],
             "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -5006,8 +6977,41 @@
           },
           "schedule_mode": {
             "default": "interval",
+            "enum": [
+              "interval",
+              "calendar"
+            ],
             "title": "Schedule Mode",
             "type": "string"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "default": "",
@@ -5304,6 +7308,18 @@
             ],
             "title": "Schedule Mode"
           },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
+          },
           "scheduled_times": {
             "anyOf": [
               {
@@ -5404,6 +7420,18 @@
             "default": 0,
             "title": "Overdue Sources",
             "type": "integer"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -5771,7 +7799,7 @@
                 "enum": [
                   "inherit",
                   "interval",
-                  "fixed_time",
+                  "calendar",
                   "manual"
                 ],
                 "type": "string"
@@ -5781,6 +7809,35 @@
               }
             ],
             "title": "Schedule Mode"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "daily": "#/components/schemas/DailyScheduleRule",
+                    "monthly": "#/components/schemas/MonthlyScheduleRule",
+                    "weekly": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  "propertyName": "frequency"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DailyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WeeklyScheduleRule"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MonthlyScheduleRule"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
           },
           "scheduled_times": {
             "anyOf": [
@@ -5853,6 +7910,101 @@
         "title": "SyncOutcomeRead",
         "type": "object"
       },
+      "SystemInfoResponse": {
+        "properties": {
+          "archives_kb": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Archives Kb",
+            "type": "object"
+          },
+          "db_stats": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Db Stats",
+            "type": "object"
+          },
+          "downloads_free_gb": {
+            "title": "Downloads Free Gb",
+            "type": "number"
+          },
+          "downloads_size_mb": {
+            "title": "Downloads Size Mb",
+            "type": "number"
+          },
+          "downloads_total_gb": {
+            "title": "Downloads Total Gb",
+            "type": "number"
+          },
+          "downloads_used_gb": {
+            "title": "Downloads Used Gb",
+            "type": "number"
+          },
+          "inventory_source": {
+            "const": "storage_artifacts",
+            "title": "Inventory Source",
+            "type": "string"
+          },
+          "inventory_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Updated At"
+          },
+          "library_free_gb": {
+            "title": "Library Free Gb",
+            "type": "number"
+          },
+          "library_size_mb": {
+            "title": "Library Size Mb",
+            "type": "number"
+          },
+          "library_total_gb": {
+            "title": "Library Total Gb",
+            "type": "number"
+          },
+          "library_used_gb": {
+            "title": "Library Used Gb",
+            "type": "number"
+          },
+          "pipeline_stats": {
+            "$ref": "#/components/schemas/DataCenterPipelineStats"
+          },
+          "python": {
+            "title": "Python",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "python",
+          "downloads_size_mb",
+          "library_size_mb",
+          "downloads_total_gb",
+          "downloads_used_gb",
+          "downloads_free_gb",
+          "library_total_gb",
+          "library_used_gb",
+          "library_free_gb",
+          "archives_kb",
+          "db_stats",
+          "inventory_source",
+          "pipeline_stats"
+        ],
+        "title": "SystemInfoResponse",
+        "type": "object"
+      },
       "TagCreate": {
         "properties": {
           "category": {
@@ -5904,6 +8056,14 @@
             "title": "Normalized Name",
             "type": "string"
           },
+          "source_usage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TagSourceUsage"
+            },
+            "title": "Source Usage",
+            "type": "array"
+          },
           "top_creators": {
             "default": [],
             "items": {
@@ -5953,6 +8113,14 @@
             "title": "Normalized Name",
             "type": "string"
           },
+          "source_usage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TagSourceUsage"
+            },
+            "title": "Source Usage",
+            "type": "array"
+          },
           "usage_count": {
             "default": 0,
             "title": "Usage Count",
@@ -5965,6 +8133,24 @@
           "created_at"
         ],
         "title": "TagRead",
+        "type": "object"
+      },
+      "TagSourceUsage": {
+        "properties": {
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "work_count": {
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "work_count"
+        ],
+        "title": "TagSourceUsage",
         "type": "object"
       },
       "TagUpdate": {
@@ -6570,6 +8756,37 @@
           "expires_in"
         ],
         "title": "WebSocketTicketResponse",
+        "type": "object"
+      },
+      "WeeklyScheduleRule": {
+        "properties": {
+          "frequency": {
+            "const": "weekly",
+            "default": "weekly",
+            "title": "Frequency",
+            "type": "string"
+          },
+          "times": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Times",
+            "type": "array"
+          },
+          "weekdays": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Weekdays",
+            "type": "array"
+          }
+        },
+        "required": [
+          "times",
+          "weekdays"
+        ],
+        "title": "WeeklyScheduleRule",
         "type": "object"
       },
       "WeiboSourceConfig": {
@@ -7412,7 +9629,7 @@
     },
     "/api/v1/admin/backup": {
       "post": {
-        "description": "Create a system backup with optional content selection.\n\nBody (optional): {contents: [\"database\", \"gallerydl-config\", ...]}\nDefaults to all components if not specified.\n\nThe whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run\noff the event loop so a backup doesn't freeze the gallery for everyone.",
+        "description": "Start backup creation and return its durable TaskRun immediately.",
         "operationId": "post_api_v1_admin_backup",
         "requestBody": {
           "content": {
@@ -7433,11 +9650,11 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -7490,8 +9707,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/backup/download": {
@@ -7585,15 +9801,15 @@
       }
     },
     "/api/v1/admin/backup/estimate": {
-      "get": {
-        "description": "Return estimated sizes for each backup component.\n\nOffloaded to a thread — _estimate_component_sizes walks lib_root for\nmetadata.json files, a full-tree traversal that must not block the loop.",
-        "operationId": "get_api_v1_admin_backup_estimate",
+      "post": {
+        "description": "Start a backup estimate without traversing storage in this request.",
+        "operationId": "post_api_v1_admin_backup_estimate",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -7646,8 +9862,137 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/estimate/latest": {
+      "get": {
+        "description": "Read the latest successful backup estimate from PostgreSQL.",
+        "operationId": "get_api_v1_admin_backup_estimate_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Backup Estimate",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/latest": {
+      "get": {
+        "description": "Read the latest successful backup-creation result.",
+        "operationId": "get_api_v1_admin_backup_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Backup",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/backup/list": {
@@ -7716,38 +10061,36 @@
         "x-response-schema-status": "generic"
       }
     },
-    "/api/v1/admin/backup/restore": {
-      "post": {
-        "description": "Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.\n\nRequires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.",
-        "operationId": "post_api_v1_admin_backup_restore",
+    "/api/v1/admin/backup/restore/receipts/{request_id}": {
+      "get": {
+        "description": "Read the external immutable host receipt without using TaskRun state.",
+        "operationId": "get_api_v1_admin_backup_restore_receipts_request_id",
         "parameters": [
           {
-            "in": "query",
-            "name": "confirm",
-            "required": false,
+            "in": "path",
+            "name": "request_id",
+            "required": true,
             "schema": {
-              "default": "",
-              "title": "Confirm",
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_post_api_v1_admin_backup_restore"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/RestoreReceiptResponse"
                 }
               }
             },
@@ -7789,7 +10132,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Restore Backup",
+        "summary": "Get Restore Receipt",
         "tags": [
           "admin"
         ],
@@ -7800,21 +10143,462 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads": {
+      "post": {
+        "description": "Create a resumable upload outside every live configuration directory.",
+        "operationId": "post_api_v1_admin_backup_restore_uploads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreUploadCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreUploadCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Create Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}": {
+      "get": {
+        "description": "Resume one capability-isolated upload without enumerating its siblings.",
+        "operationId": "get_api_v1_admin_backup_restore_uploads_upload_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreUploadSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}": {
+      "put": {
+        "description": "Persist exactly one ordered chunk; identical retries are idempotent.",
+        "operationId": "put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chunk_index",
+            "required": true,
+            "schema": {
+              "title": "Chunk Index",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Chunk-SHA256",
+            "required": true,
+            "schema": {
+              "title": "X-Chunk-Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreChunkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Restore Chunk",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validate": {
+      "post": {
+        "description": "Start archive validation; this action cannot execute a host restore.",
+        "operationId": "post_api_v1_admin_backup_restore_uploads_upload_id_validate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Validate Restore Upload",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validation/latest": {
+      "get": {
+        "description": "Load the durable validator state after a frontend remount.",
+        "operationId": "get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Restore-Token",
+            "required": true,
+            "schema": {
+              "title": "X-Restore-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Restore Validation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/backup/schedule": {
       "post": {
-        "description": "Schedule recurring auto-backup. {enabled: bool, interval_hours: int}",
+        "description": "Persist recurring backup intent in PostgreSQL.",
         "operationId": "post_api_v1_admin_backup_schedule",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Data",
-                "type": "object"
+                "$ref": "#/components/schemas/BackupScheduleRequest"
               }
             }
           },
@@ -7964,7 +10748,7 @@
         "description": "Remove all gallery-dl metadata JSON files from downloads directory.",
         "operationId": "post_api_v1_admin_cleanup_metadata_jsons",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -8113,7 +10897,7 @@
     },
     "/api/v1/admin/clear/{entity}": {
       "post": {
-        "description": "Clear a specific entity or 'all' for complete cleanup.",
+        "description": "Compatibility route for the registered asynchronous clear operation.",
         "operationId": "post_api_v1_admin_clear_entity",
         "parameters": [
           {
@@ -8146,7 +10930,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -8212,7 +10996,7 @@
         "description": "Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment.",
         "operationId": "post_api_v1_admin_creators_re_enrich",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -8689,7 +11473,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -9080,7 +11864,7 @@
     },
     "/api/v1/admin/gallerydl-config/test-connection": {
       "post": {
-        "description": "Test gallery-dl connectivity for a given source using current credentials.",
+        "description": "Start a gallery-dl connectivity test as a durable TaskRun.",
         "operationId": "post_api_v1_admin_gallerydl_config_test_connection",
         "requestBody": {
           "content": {
@@ -9095,11 +11879,11 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -9152,8 +11936,83 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/gallerydl-config/test-connection/latest": {
+      "get": {
+        "description": "Read the latest successful connectivity result for one source.",
+        "operationId": "get_api_v1_admin_gallerydl_config_test_connection_latest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
         ],
-        "x-response-schema-status": "generic"
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Source Connection",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/gitllery/settings": {
@@ -9288,15 +12147,15 @@
       }
     },
     "/api/v1/admin/integrity-check": {
-      "get": {
-        "description": "Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records.",
-        "operationId": "get_api_v1_admin_integrity_check",
+      "post": {
+        "description": "Start a durable integrity scan without walking storage in this request.",
+        "operationId": "post_api_v1_admin_integrity_check",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -9349,8 +12208,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/integrity-check/latest": {
+      "get": {
+        "description": "Read the latest successful integrity result from PostgreSQL.",
+        "operationId": "get_api_v1_admin_integrity_check_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Integrity Check",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/library/import-from-disk": {
@@ -9375,7 +12298,7 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -9458,7 +12381,7 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -9521,7 +12444,7 @@
     },
     "/api/v1/admin/memory": {
       "get": {
-        "description": "Memory snapshot for OOM diagnosis: process RSS + a census of the most\ncommon live Python object types. A runaway type count (e.g. millions of\nWork/Row/dict) points straight at what is filling RAM. Cheap — no\nalways-on tracemalloc.",
+        "description": "Return bounded Linux process and SQLAlchemy pool metrics.",
         "operationId": "get_api_v1_admin_memory",
         "parameters": [
           {
@@ -9746,7 +12669,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -9884,16 +12807,93 @@
         "x-response-schema-status": "generic"
       }
     },
-    "/api/v1/admin/proxy/test": {
+    "/api/v1/admin/operations/{task_id}/retry": {
       "post": {
-        "description": "Test connectivity through the configured proxy to key external sites.",
-        "operationId": "post_api_v1_admin_proxy_test",
+        "description": "Retry a failed registered administrator operation on the same TaskRun.",
+        "operationId": "post_api_v1_admin_operations_task_id_retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Retry Registered Admin Operation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/admin/proxy/test": {
+      "post": {
+        "description": "Start the proxy connectivity test as a durable TaskRun.",
+        "operationId": "post_api_v1_admin_proxy_test",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -9946,8 +12946,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/proxy/test/latest": {
+      "get": {
+        "description": "Read the latest successful proxy connectivity result.",
+        "operationId": "get_api_v1_admin_proxy_test_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Proxy Connectivity",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/reset-settings": {
@@ -10104,7 +13168,7 @@
         "description": "Enqueue a full Meilisearch reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
         "operationId": "post_api_v1_admin_search_reindex",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -10307,14 +13371,14 @@
     },
     "/api/v1/admin/storage-breakdown": {
       "get": {
-        "description": "Return per-source and per-creator storage breakdown.",
+        "description": "Return a bounded, ledger-backed storage breakdown.",
         "operationId": "get_api_v1_admin_storage_breakdown",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/StorageBreakdownResponse"
                 }
               }
             },
@@ -10367,20 +13431,19 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/system-info": {
       "get": {
-        "description": "Return system-level info: disk usage, archive sizes, version.\n\nCached (this endpoint is polled by the dashboard) and computed off the\nevent loop — the directory-size walk is O(files) over the whole library.\nA single in-flight walk is serialized by a lock so a burst of polls can't\nspawn concurrent multi-GB walks; stale cache is served meanwhile.",
+        "description": "Return ledger-backed storage facts and constant-time mount capacity.",
         "operationId": "get_api_v1_admin_system_info",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SystemInfoResponse"
                 }
               }
             },
@@ -10433,8 +13496,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/auth/change-password": {
@@ -12644,7 +15706,7 @@
         "description": "Enqueue the baseline backfill — it replays the whole library and must\nrun in a worker, never inline in the backend process.",
         "operationId": "post_api_v1_curation_backfill",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -13756,7 +16818,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -16593,7 +19655,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -16989,7 +20051,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -17210,7 +20272,7 @@
         "description": "Incrementally refresh Danbooru mappings for every current creator.",
         "operationId": "post_api_v1_reference_danbooru_mappings_refresh",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -17363,7 +20425,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -17844,7 +20906,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/RepositoryDetailResponse"
                 }
               }
             },
@@ -17897,8 +20959,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "library"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/repositories/{source_id}/curation-graph": {
@@ -20252,7 +23313,7 @@
         "description": "Queue a full Meilisearch rebuild on the protected import worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
         "operationId": "post_api_v1_system_reindex_works",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -21927,6 +24988,361 @@
           "tasks"
         ],
         "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tasks_task_id_conflicts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Download Conflicts",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/media": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tasks_task_id_conflicts_media",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "relative_path",
+            "required": true,
+            "schema": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Relative Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "side",
+            "required": true,
+            "schema": {
+              "enum": [
+                "canonical",
+                "staged"
+              ],
+              "title": "Side",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Download Conflict Media",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/resolutions/{resolution_id}/rollback": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resolution_id",
+            "required": true,
+            "schema": {
+              "title": "Resolution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rollback Download Conflict Resolution",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": true,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/conflicts/resolve": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_conflicts_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDownloadConflictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resolve Download Conflicts",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": true,
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,

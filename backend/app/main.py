@@ -235,6 +235,26 @@ async def lifespan(app: FastAPI):
         settings.download_dispatch_recovery_batch_size,
     )
 
+    async def admin_dispatch_recovery_loop():
+        from app.services.operations import (
+            ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS,
+            recover_admin_operation_dispatches,
+        )
+
+        while True:
+            await asyncio.sleep(ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS)
+            try:
+                result = await recover_admin_operation_dispatches(
+                    include_published=True,
+                )
+                if result.get("published") or result.get("deferred") or result.get("failed"):
+                    logger.info("Admin TaskRun dispatch recovery cycle", **result)
+            except Exception:
+                logger.warning("Admin TaskRun dispatch recovery failed", exc_info=True)
+
+    admin_dispatch_recovery_task = asyncio.create_task(admin_dispatch_recovery_loop())
+    logger.info("Admin TaskRun dispatch recovery started (every 30s, grace 15s, batch 25)")
+
     async def outbox_coordinator_loop():
         # HTTP workers only publish bounded wake-ups. libvips/ffmpeg/Gitllery
         # and deep dedup always execute in an RQ workhorse with a resource
@@ -330,6 +350,7 @@ async def lifespan(app: FastAPI):
     operation_maintenance_task.cancel()
     import_recovery_task.cancel()
     download_dispatch_recovery_task.cancel()
+    admin_dispatch_recovery_task.cancel()
     outbox_coordinator_task.cancel()
     memory_task.cancel()
     resource_pressure_task.cancel()
@@ -352,6 +373,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await download_dispatch_recovery_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await admin_dispatch_recovery_task
     except asyncio.CancelledError:
         pass
     try:

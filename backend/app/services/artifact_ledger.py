@@ -21,6 +21,12 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".webm"}
 
 
+def downloads_artifact_predicate():
+    """Return the invariant that identifies an artifact in DOWNLOAD_ROOT."""
+
+    return StorageArtifact.storage_root == "downloads"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkClaimBatch:
     """Classification produced by one bounded, non-blocking claim attempt."""
@@ -146,23 +152,94 @@ class ArtifactLedger:
             await self.db.execute(stmt)
         return len(rows)
 
-    async def new_metadata_paths(self, download_job_id: UUID) -> list[str]:
+    async def new_metadata_paths(
+        self,
+        download_job_id: UUID,
+        *,
+        import_job_id: UUID | None = None,
+    ) -> list[str]:
+        filters = (
+            downloads_artifact_predicate(),
+            StorageArtifact.download_job_id == download_job_id,
+            StorageArtifact.artifact_type == "metadata_json",
+            StorageArtifact.state.in_(("new", "importing")),
+        )
+
+        async def load_paths(import_scope) -> list[str]:
+            result = await self.db.execute(
+                select(StorageArtifact.file_path)
+                .where(*filters, import_scope)
+                .order_by(StorageArtifact.created_at, StorageArtifact.id)
+            )
+            return list(result.scalars())
+
+        if import_job_id is not None:
+            return await load_paths(
+                StorageArtifact.import_job_id == import_job_id,
+            )
         result = await self.db.execute(
             select(StorageArtifact.file_path)
-            .where(
-                StorageArtifact.download_job_id == download_job_id,
-                StorageArtifact.artifact_type == "metadata_json",
-                StorageArtifact.state.in_(("new", "importing")),
-            )
+            .where(*filters)
             .order_by(StorageArtifact.created_at, StorageArtifact.id)
         )
         return list(result.scalars())
 
+    async def reset_retry_assignment(
+        self,
+        download_job_id: UUID,
+        import_job_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Reset only retryable rows already owned by one durable child.
+
+        Artifact rows are locked before the caller locks the parent/child
+        lifecycle rows.  A live lease remains owned by its concrete execution;
+        failed rows and expired executions retain the same ``import_job_id``.
+        """
+
+        checked_at = now or datetime.now(timezone.utc)
+        retryable = (
+            (StorageArtifact.state == "failed")
+            | (
+                (StorageArtifact.state == "importing")
+                & (
+                    StorageArtifact.lease_expires_at.is_(None)
+                    | (StorageArtifact.lease_expires_at <= checked_at)
+                )
+            )
+        )
+        rows = list((await self.db.execute(
+            select(StorageArtifact)
+            .where(
+                downloads_artifact_predicate(),
+                StorageArtifact.download_job_id == download_job_id,
+                StorageArtifact.import_job_id == import_job_id,
+                retryable,
+            )
+            .order_by(
+                StorageArtifact.source_work_id,
+                StorageArtifact.created_at,
+                StorageArtifact.id,
+            )
+            .with_for_update(of=StorageArtifact)
+        )).scalars())
+        for row in rows:
+            row.state = "new"
+            row.lease_token = None
+            row.lease_expires_at = None
+            row.last_error = None
+        await self.db.flush()
+        return len(rows)
+
     async def counts(self, download_job_id: UUID) -> tuple[int, int, list[str]]:
         result = await self.db.execute(
             select(StorageArtifact.artifact_type, func.count(StorageArtifact.id))
-            .where(StorageArtifact.download_job_id == download_job_id,
-                   StorageArtifact.state.in_(("new", "importing")))
+            .where(
+                downloads_artifact_predicate(),
+                StorageArtifact.download_job_id == download_job_id,
+                StorageArtifact.state.in_(("new", "importing")),
+            )
             .group_by(StorageArtifact.artifact_type)
         )
         counts = dict(result.all())
@@ -234,6 +311,7 @@ class ArtifactLedger:
         )
         active_artifact = aliased(StorageArtifact)
         active_identity_lease = exists().where(
+            active_artifact.storage_root == "downloads",
             active_artifact.source == StorageArtifact.source,
             active_artifact.source_work_id == StorageArtifact.source_work_id,
             active_artifact.artifact_type == "metadata_json",
@@ -261,6 +339,7 @@ class ArtifactLedger:
                 .label("work_rank"),
             )
             .where(
+                downloads_artifact_predicate(),
                 *identity_scope,
                 StorageArtifact.artifact_type == "metadata_json",
                 eligible,
@@ -298,6 +377,7 @@ class ArtifactLedger:
             await self.db.execute(
                 update(StorageArtifact)
                 .where(
+                    downloads_artifact_predicate(),
                     *update_scope,
                     StorageArtifact.source_work_id.in_(claimed),
                     eligible,
@@ -403,6 +483,7 @@ class ArtifactLedger:
         result = await self.db.execute(
             update(StorageArtifact)
             .where(
+                downloads_artifact_predicate(),
                 StorageArtifact.source_work_id.in_(values),
                 StorageArtifact.artifact_type == "metadata_json",
                 StorageArtifact.state == "importing",
@@ -426,8 +507,11 @@ class ArtifactLedger:
     async def mark_work(self, download_job_id: UUID, source_work_id: str, state: str, error: str | None = None) -> None:
         await self.db.execute(
             update(StorageArtifact)
-            .where(StorageArtifact.download_job_id == download_job_id,
-                   StorageArtifact.source_work_id == source_work_id)
+            .where(
+                downloads_artifact_predicate(),
+                StorageArtifact.download_job_id == download_job_id,
+                StorageArtifact.source_work_id == source_work_id,
+            )
             .values(
                 state=state,
                 lease_token=None,
@@ -454,6 +538,7 @@ class ArtifactLedger:
         changed = 0
         for offset in range(0, len(values), chunk_size):
             conditions = [
+                downloads_artifact_predicate(),
                 StorageArtifact.source_work_id.in_(
                     values[offset : offset + chunk_size]
                 ),
@@ -527,6 +612,7 @@ class ArtifactLedger:
             batch = items[offset : offset + 500]
             source_work_ids = [source_work_id for source_work_id, _, _ in batch]
             conditions = [
+                downloads_artifact_predicate(),
                 StorageArtifact.source_work_id.in_(source_work_ids),
             ]
             if expected_lease_token is None:
@@ -580,18 +666,18 @@ class ArtifactLedger:
         import_job_id: UUID,
         lease_token: UUID,
     ) -> set[str]:
-        """Return unfinished leases owned by one execution to the ready pool."""
+        """Release one execution lease while retaining its durable child feed."""
 
         result = await self.db.execute(
             update(StorageArtifact)
             .where(
+                downloads_artifact_predicate(),
                 StorageArtifact.import_job_id == import_job_id,
                 StorageArtifact.lease_token == lease_token,
                 StorageArtifact.state == "importing",
             )
             .values(
                 state="new",
-                import_job_id=None,
                 lease_token=None,
                 lease_expires_at=None,
             )

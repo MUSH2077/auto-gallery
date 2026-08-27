@@ -1,15 +1,16 @@
 "use client";
 import Link from "next/link";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
+import { DownloadConflictDialog, ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
 import { useT, type TFunction } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
+import { canPauseDownload } from "@/lib/task-actions";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -58,6 +59,7 @@ export function TaskDetailDrawer({
   const t = useT();
   const fmt = useI18nFormat();
   const { mounted, closing } = usePresence(!!id, motionTokens.duration.base);
+  const [showConflict, setShowConflict] = useState(false);
   // Hold the last id through the slide-out so content doesn't blank mid-exit.
   const lastId = useRef<string | null>(null);
   if (id) lastId.current = id;
@@ -72,6 +74,8 @@ export function TaskDetailDrawer({
   const outcome = parseSyncOutcome(item?.result_data);
   const retryable = item?.operation_type === "admin-disk-import" || item?.operation_type === "admin-rebuild";
   const canRetry = retryable && ["failed", "stale", "cancelled"].includes(item?.status || "");
+  const existingResolution = item?.meta?.staging_conflict_resolution as { resolution_id: string; expires_at?: string } | undefined;
+  const hasConflictWorkflow = item?.reason_code === "download_staging_conflict" || !!existingResolution;
 
   return (
     <>
@@ -90,6 +94,7 @@ export function TaskDetailDrawer({
         {item && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
+              {hasConflictWorkflow && <button onClick={() => setShowConflict(true)} className="btn-primary text-xs">{existingResolution ? t("jobs.conflict.view_resolution") : t("jobs.conflict.compare")}</button>}
               {canRetry && <button onClick={() => onRetryTask(item.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
               {item.subject_type === "download_job" && item.subject_id && (
                 <button onClick={() => onOpenDownload(item.subject_id!)} className="btn-ghost text-xs">{t("jobs.open_download")}</button>
@@ -169,6 +174,14 @@ export function TaskDetailDrawer({
         )}
       </div>
     </aside>
+    {hasConflictWorkflow && (
+      <DownloadConflictDialog
+        open={showConflict}
+        taskId={heldId}
+        existingResolution={existingResolution}
+        onClose={() => setShowConflict(false)}
+      />
+    )}
     </>
   );
 }
@@ -241,7 +254,7 @@ export function JobDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               {dl.retryable !== false && <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              {["enqueued","downloading","downloaded","importing","failed","stale"].includes(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {canPauseDownload(dl.status) && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
               {dl.status === "paused" && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>
             </div>

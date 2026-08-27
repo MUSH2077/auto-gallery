@@ -1,8 +1,11 @@
+import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import redis
 import pytest
 from rq import Worker
+from sqlalchemy import text
 
 from app.services.resource_aware_worker import (
     ResourceAwareWorker,
@@ -322,6 +325,128 @@ def test_operations_worker_selects_profile_from_job_function(monkeypatch):
     assert heavy_io.worker_flock_is_inherited() is False
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_disk_publisher_parent_admission_cannot_mutate_rotated_attempt_resource_state():
+    """The pre-workhorse admission projection belongs to the captured attempt."""
+    from app.database import async_session, engine
+    from app.models.task_run import TaskRun
+    from app.services.heavy_io import register_resource_state_callback
+    from app.services.tasks import TaskService, update_task_resource_state
+
+    task_id = uuid4()
+    attempt_a = uuid4().hex
+    attempt_b = uuid4().hex
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "rq-stale-admission",
+            "func_name": "app.jobs.admin_operations.run_disk_import_operation",
+            "args": (str(task_id), {}, attempt_a),
+            "meta": {},
+            "save_meta": lambda self: None,
+        },
+    )()
+
+    try:
+        register_resource_state_callback(update_task_resource_state)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="rotated admission",
+                status="enqueued",
+                queue_name="maintenance",
+                meta={"_bounded_import_publisher_attempt": attempt_b},
+            )
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            worker._profile_admission,
+            job,
+            "maintenance",
+        )
+        assert result == (None, None, str(task_id))
+
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            assert current.meta["_bounded_import_publisher_attempt"] == attempt_b
+            assert current.resource_state == "waiting"
+            assert current.resource_reason is None
+    finally:
+        register_resource_state_callback(None)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_legacy_disk_parent_admission_cannot_mutate_attempt_owned_resource_state():
+    """A no-token rolling RQ delivery has no authority over attempt B."""
+    from app.database import async_session, engine
+    from app.models.task_run import TaskRun
+    from app.services.heavy_io import register_resource_state_callback
+    from app.services.tasks import TaskService, update_task_resource_state
+
+    task_id = uuid4()
+    attempt_b = uuid4().hex
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "rq-legacy-admission",
+            "func_name": "app.jobs.admin_operations.run_disk_import_operation",
+            "args": (str(task_id), {}),
+            "meta": {},
+            "save_meta": lambda self: None,
+        },
+    )()
+
+    try:
+        register_resource_state_callback(update_task_resource_state)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await TaskService(db).create_task(
+                task_id=task_id,
+                kind="admin",
+                operation_type="admin-disk-import",
+                title="attempt-owned legacy admission",
+                status="enqueued",
+                queue_name="maintenance",
+                resource_state="waiting",
+                meta={"_bounded_import_publisher_attempt": attempt_b},
+            )
+            await db.commit()
+
+        result = await asyncio.to_thread(
+            worker._profile_admission,
+            job,
+            "maintenance",
+        )
+        assert result == (None, None, str(task_id))
+
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            assert current.meta["_bounded_import_publisher_attempt"] == attempt_b
+            assert current.resource_state == "waiting"
+            assert current.resource_reason is None
+    finally:
+        register_resource_state_callback(None)
+        async with async_session() as db:
+            await db.execute(text("TRUNCATE task_events, task_runs RESTART IDENTITY CASCADE"))
+            await db.commit()
+        await engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("func_name", "expected"),
     [
@@ -349,6 +474,25 @@ def test_asset_dedup_coordinator_uses_child_owned_image_slices():
 
     assert ResourceAwareWorker._job_workload(job, queue) == "image_derive"
     assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
+
+
+def test_registered_admin_transport_preserves_child_owned_resource_profile():
+    job = type(
+        "Job",
+        (),
+        {
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "meta": {
+                "registered_admin_operation": "asset-dedup-scan",
+                "registered_admin_internal_profile": "image_derive",
+            },
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "image_derive"
+    assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
 
 
 def test_outbox_slice_bounds_are_applied_before_fork():

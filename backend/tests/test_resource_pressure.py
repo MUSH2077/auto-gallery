@@ -183,7 +183,10 @@ def test_new_cgroup_memory_events_fail_closed_immediately(field, reason):
     assert reason in snapshot["hard_reasons"]
 
 
-def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause():
+def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause(monkeypatch):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "shadow")
     machine = ResourcePressureStateMachine()
     sample = _sample(memory_psi=8.0, io_psi=40.0)
 

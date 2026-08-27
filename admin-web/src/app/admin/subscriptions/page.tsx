@@ -8,7 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
 import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
-import { useI18nFormat } from "@/lib/i18n-format";
+import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
 
@@ -388,8 +388,9 @@ function SubscriptionsContent() {
             const blocked = summary?.schedule.blocked_sources || 0;
             const due = summary?.schedule.due_sources || 0;
             const schedule = summary?.schedule;
-            const scheduleValue = schedule?.effective_mode === "fixed_time"
-              ? t("subscriptions.schedule_daily", { time: schedule.scheduled_times || "—" })
+            const calendarMode = schedule?.effective_mode === "calendar" || schedule?.effective_mode === "fixed_time";
+            const scheduleValue = calendarMode
+              ? `${scheduleModeLabel(t, schedule?.effective_mode)} · ${calendarScheduleRuleLabel(t, schedule?.schedule_rule, schedule?.scheduled_times)}`
               : schedule?.effective_mode === "manual"
                 ? t("subscriptions.manual")
                 : t("subscriptions.schedule_interval", { hours: schedule?.sync_interval_hours || s.sync_interval_hours });

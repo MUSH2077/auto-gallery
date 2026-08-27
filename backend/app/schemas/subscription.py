@@ -2,10 +2,29 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 
 
-ScheduleMode = Literal["inherit", "interval", "fixed_time", "manual"]
+ScheduleMode = Literal["inherit", "interval", "calendar", "manual"]
+
+
+class _ScheduleInput(BaseModel):
+    schedule_mode: ScheduleMode | None = None
+    schedule_rule: CalendarScheduleRule | None = None
+    scheduled_times: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_schedule(cls, value):
+        return normalize_legacy_schedule_payload(value)
+
+    @model_validator(mode="after")
+    def require_calendar_rule(self):
+        if self.schedule_mode == "calendar" and self.schedule_rule is None:
+            raise ValueError("calendar schedule_mode requires schedule_rule")
+        return self
 
 
 class ActivatedSubscriptionSource(BaseModel):
@@ -15,25 +34,21 @@ class ActivatedSubscriptionSource(BaseModel):
     selection_reason: str
 
 
-class SubscriptionCreate(BaseModel):
+class SubscriptionCreate(_ScheduleInput):
     creator_id: UUID
     name: str | None = None
     is_active: bool = True
     sync_enabled: bool = True
     sync_interval_hours: int = 6
-    schedule_mode: ScheduleMode | None = None
-    scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-class SubscriptionUpdate(BaseModel):
+class SubscriptionUpdate(_ScheduleInput):
     name: str | None = None
     is_active: bool | None = None
     sync_enabled: bool | None = None
     sync_interval_hours: int | None = None
-    schedule_mode: ScheduleMode | None = None
-    scheduled_times: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -48,6 +63,7 @@ class SubscriptionRead(BaseModel):
     sync_enabled: bool
     sync_interval_hours: int = 6
     schedule_mode: str | None = None
+    schedule_rule: dict | None = None
     scheduled_times: str | None = None
     last_synced_at: datetime | None = None
     source_count: int | None = None
@@ -83,6 +99,7 @@ class SubscriptionScheduleSummary(BaseModel):
     inherited: bool
     timezone: str
     scheduled_times: str | None = None
+    schedule_rule: dict | None = None
     sync_interval_hours: int
     next_due_at: datetime | None = None
     oldest_due_at: datetime | None = None

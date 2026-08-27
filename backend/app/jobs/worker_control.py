@@ -13,7 +13,7 @@ import logging
 import os
 import signal
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from app.services.redis_client import get_redis
 from app.services.redis_pubsub import TaskChannel, TaskEventPublisher
@@ -187,10 +187,18 @@ class HeartbeatPublisher:
             hb.stop()
     """
 
-    def __init__(self, job_id: str, task_type: str, *, pid: int | None = None):
+    def __init__(
+        self,
+        job_id: str,
+        task_type: str,
+        *,
+        pid: int | None = None,
+        heartbeat_callback: Callable[[], bool] | None = None,
+    ):
         self.job_id = job_id
         self.task_type = task_type
         self.pid = pid or os.getpid()
+        self.heartbeat_callback = heartbeat_callback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -202,15 +210,34 @@ class HeartbeatPublisher:
 
     def stop(self) -> None:
         self._stop_event.set()
+        thread = self._thread
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=1)
 
     def _run(self) -> None:
         while not self._stop_event.wait(HEARTBEAT_INTERVAL):
             try:
-                TaskEventPublisher.publish_heartbeat(
-                    self.job_id, self.task_type, pid=self.pid,
+                published = (
+                    self.heartbeat_callback()
+                    if self.heartbeat_callback is not None
+                    else TaskEventPublisher.publish_heartbeat(
+                        self.job_id,
+                        self.task_type,
+                        pid=self.pid,
+                    )
                 )
+                if published is False:
+                    self._stop_event.set()
+                    return
             except Exception:
                 logger.debug("Heartbeat failed for job %s", self.job_id, exc_info=True)
+                if self.heartbeat_callback is not None:
+                    self._stop_event.set()
+                    return
 
 
 # ──────────────────────────────────────────────

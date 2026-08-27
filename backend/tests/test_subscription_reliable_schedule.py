@@ -32,8 +32,8 @@ async def _subscription_fixture(db, *, suffix: str = "one"):
     subscription = Subscription(
         creator_id=creator.id,
         name=f"Summary {suffix}",
-        schedule_mode="fixed_time",
-        scheduled_times="22:00",
+        schedule_mode="calendar",
+        schedule_rule={"frequency": "daily", "times": ["22:00"]},
         sync_enabled=True,
     )
     db.add(subscription)

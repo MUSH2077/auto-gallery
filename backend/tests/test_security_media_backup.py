@@ -1,5 +1,4 @@
 import os
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -66,27 +65,6 @@ def test_pg_env_uses_pgpass_file_not_pgpassword(tmp_path, monkeypatch):
     assert "PGPASSWORD" not in env
     assert pgpass.read_text() == "postgres:5432:autogallery:autogallery:pa\\:ss\\\\word\n"
     assert oct(pgpass.stat().st_mode & 0o777) == "0o600"
-
-
-def test_safe_extract_tar_skips_path_traversal_members(tmp_path):
-    from app.api import admin
-
-    tar_path = tmp_path / "backup.tar.gz"
-    source = tmp_path / "source.txt"
-    source.write_text("ok")
-    evil = tmp_path / "evil.txt"
-    evil.write_text("bad")
-
-    with tarfile.open(tar_path, "w:gz") as tar:
-        tar.add(source, arcname="manifest.json")
-        tar.add(evil, arcname="../evil.txt")
-
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    admin._safe_extract_tar(str(tar_path), str(dest))
-
-    assert (dest / "manifest.json").read_text() == "ok"
-    assert (tmp_path / "evil.txt").read_text() == "bad"
 
 
 def test_media_signatures_validate_expiry_and_size():

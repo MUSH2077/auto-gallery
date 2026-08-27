@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 
 class _Result:
     def __init__(self, *, scalar=None, rows=None):
@@ -15,12 +17,17 @@ class _Result:
     def all(self):
         return self._rows
 
+    def __iter__(self):
+        return iter(self._rows)
+
 
 class _FakeDB:
     def __init__(self, results):
         self.results = list(results)
+        self.statements = []
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(statement)
         return self.results.pop(0)
 
 
@@ -45,6 +52,7 @@ def test_tag_detail_aggregates_usage_count_instead_of_reading_orm_attribute(monk
     db = _FakeDB([
         _Result(scalar=7),
         _Result(rows=[(creator_id, "Test Creator", 3)]),
+        _Result(rows=[(tag_id, "pixiv", 5), (tag_id, "iwara", 2)]),
     ])
 
     detail = asyncio.run(tags.get_tag(tag_id, db=db))
@@ -53,6 +61,79 @@ def test_tag_detail_aggregates_usage_count_instead_of_reading_orm_attribute(monk
     assert detail.usage_count == 7
     assert detail.top_creators[0].creator_id == creator_id
     assert detail.top_creators[0].work_count == 3
+    assert [(usage.source, usage.work_count) for usage in detail.source_usage] == [
+        ("pixiv", 5),
+        ("iwara", 2),
+    ]
+
+
+def test_tag_list_batches_source_usage_for_all_returned_tags():
+    """Fails if source composition is omitted or queried once per tag."""
+    from app.repositories.tag import TagRepository
+
+    first_tag_id = uuid4()
+    second_tag_id = uuid4()
+    first_tag = SimpleNamespace(
+        id=first_tag_id,
+        normalized_name="arknights",
+        category="general",
+        created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+    )
+    second_tag = SimpleNamespace(
+        id=second_tag_id,
+        normalized_name="amiya",
+        category="character",
+        created_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+    )
+    db = _FakeDB([
+        _Result(rows=[(first_tag, 4), (second_tag, 2)]),
+        _Result(rows=[
+            (first_tag_id, "pixiv", 3),
+            (first_tag_id, "iwara", 1),
+            (second_tag_id, "danbooru", 2),
+        ]),
+    ])
+
+    tags = asyncio.run(TagRepository(db).list_all())
+
+    assert tags[0].source_usage == [
+        {"source": "pixiv", "work_count": 3},
+        {"source": "iwara", "work_count": 1},
+    ]
+    assert tags[1].source_usage == [{"source": "danbooru", "work_count": 2}]
+    assert len(db.statements) == 2
+    assert db.results == []
+
+
+@pytest.mark.asyncio
+async def test_source_usage_high_cardinality_uses_one_postgresql_array_parameter():
+    """An include-all tag map must not expand one asyncpg bind per UUID."""
+    from uuid import UUID
+
+    from sqlalchemy.dialects import postgresql
+
+    from app.repositories.tag import source_usage_by_tag
+
+    class EmptyResult:
+        def all(self):
+            return []
+
+    class CompilingSession:
+        parameter_count = 0
+
+        async def execute(self, statement):
+            compiled = statement.compile(
+                dialect=postgresql.dialect(paramstyle="numeric"),
+                compile_kwargs={"render_postcompile": True},
+            )
+            self.parameter_count = len(compiled.params)
+            return EmptyResult()
+
+    session = CompilingSession()
+    tag_ids = [UUID(int=index + 1) for index in range(70_000)]
+
+    assert await source_usage_by_tag(session, tag_ids) == {}
+    assert session.parameter_count <= 4
 
 
 def test_list_tags_include_all_removes_offset_and_limit(monkeypatch):

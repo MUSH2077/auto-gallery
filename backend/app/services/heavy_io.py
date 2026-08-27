@@ -93,7 +93,7 @@ return 0
 """
 
 F = TypeVar("F", bound=Callable[..., Any])
-ResourceStateCallback = Callable[[str, str, str | None], Any]
+ResourceStateCallback = Callable[..., Any]
 _resource_state_callback: ResourceStateCallback | None = None
 
 
@@ -146,6 +146,7 @@ async def set_resource_state(
     reason: str | None = None,
     *,
     workload: str | None = None,
+    publisher_attempt: str | None = None,
 ) -> None:
     """Expose running/waiting/yielded state through RQ and an optional callback."""
 
@@ -162,7 +163,16 @@ async def set_resource_state(
     if callback is None:
         return
     try:
-        result = callback(str(owner), state, reason)
+        result = (
+            callback(
+                str(owner),
+                state,
+                reason,
+                publisher_attempt=publisher_attempt,
+            )
+            if publisher_attempt is not None
+            else callback(str(owner), state, reason)
+        )
         if inspect.isawaitable(result):
             await result
     except Exception:
@@ -556,6 +566,7 @@ async def wait_for_resource_capacity(
     workload: str,
     owner: str,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
+    publisher_attempt: str | None = None,
 ) -> dict[str, Any]:
     """Wait until the host pressure controller permits heavy work."""
 
@@ -566,7 +577,13 @@ async def wait_for_resource_capacity(
         if permitted:
             if logged_wait:
                 logger.info("Resource pressure recovered; resuming %s owner=%s", workload, owner)
-            await set_resource_state(owner, "running", None, workload=workload)
+            await set_resource_state(
+                owner,
+                "running",
+                None,
+                workload=workload,
+                publisher_attempt=publisher_attempt,
+            )
             return snapshot
         if not logged_wait:
             logger.warning(
@@ -578,7 +595,13 @@ async def wait_for_resource_capacity(
             )
             logged_wait = True
         reason = str(profile.get("reason") or "resource_pressure")
-        await set_resource_state(owner, "waiting", reason, workload=workload)
+        await set_resource_state(
+            owner,
+            "waiting",
+            reason,
+            workload=workload,
+            publisher_attempt=publisher_attempt,
+        )
         await _wait_for_resource_event(
             workload,
             _adaptive_poll_seconds(attempt, poll_seconds),
@@ -898,6 +921,7 @@ async def heavy_io_slot(
     renew_seconds: int = DEFAULT_RENEW_SECONDS,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     redis_client=None,
+    publisher_attempt: str | None = None,
 ):
     from app.services.resource_pressure import workload_profile_name
 
@@ -918,7 +942,13 @@ async def heavy_io_slot(
         permitted, snapshot, profile = await resource_profile_permitted(workload)
         if not permitted:
             reason = str(profile.get("reason") or "resource_pressure")
-            await set_resource_state(owner, "waiting", reason, workload=workload)
+            await set_resource_state(
+                owner,
+                "waiting",
+                reason,
+                workload=workload,
+                publisher_attempt=publisher_attempt,
+            )
             raise HeavyIOUnavailable(
                 "resource_pressure",
                 {
@@ -944,6 +974,7 @@ async def heavy_io_slot(
                     "waiting",
                     "maintenance_pending",
                     workload=workload,
+                    publisher_attempt=publisher_attempt,
                 )
                 raise HeavyIOUnavailable("maintenance_pending")
 
@@ -969,6 +1000,7 @@ async def heavy_io_slot(
                     "waiting",
                     "profile_memory_reserve_live",
                     workload=workload,
+                    publisher_attempt=publisher_attempt,
                 )
                 raise HeavyIOUnavailable("profile_memory_reserve_live")
             budget_token = resource_budget_token_key(workload)
@@ -997,7 +1029,13 @@ async def heavy_io_slot(
                 lease.start_renewal()
             elif not inherited_flock or needs_child_budget_token:
                 denial_reason = lease.denial_reason or "redis_lease_busy"
-                await set_resource_state(owner, "waiting", denial_reason, workload=workload)
+                await set_resource_state(
+                    owner,
+                    "waiting",
+                    denial_reason,
+                    workload=workload,
+                    publisher_attempt=publisher_attempt,
+                )
                 raise HeavyIOUnavailable(denial_reason)
             else:
                 logger.warning(
@@ -1036,6 +1074,7 @@ async def heavy_io_slot(
                         "waiting",
                         "profile_busy",
                         workload=workload,
+                        publisher_attempt=publisher_attempt,
                     )
                     raise HeavyIOUnavailable("profile_busy")
         logger.info(
@@ -1045,7 +1084,13 @@ async def heavy_io_slot(
             inherited_flock,
             redis_acquired,
         )
-        await set_resource_state(owner, "running", None, workload=workload)
+        await set_resource_state(
+            owner,
+            "running",
+            None,
+            workload=workload,
+            publisher_attempt=publisher_attempt,
+        )
         yield lease
     finally:
         if lease is not None:
@@ -1366,11 +1411,17 @@ async def run_heavy_io_operation(
     workload: str,
     owner: str,
     operation_factory: Callable[[], Awaitable[Any]],
+    *,
+    publisher_attempt: str | None = None,
 ) -> Any:
     """Run an async operation under the process lock and auxiliary lease."""
 
     try:
-        async with heavy_io_slot(workload, owner):
+        async with heavy_io_slot(
+            workload,
+            owner,
+            publisher_attempt=publisher_attempt,
+        ):
             return await operation_factory()
     except HeavyIOUnavailable as unavailable:
         return _defer_current_rq_job(unavailable)

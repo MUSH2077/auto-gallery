@@ -74,6 +74,22 @@ def test_project_backup_and_core_health_failures_are_fail_closed():
     assert 'if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 ]]' in source
 
 
+def test_rollback_commands_override_frozen_custom_image_configuration():
+    """Rollback must use snapshotted image identities, not .env image aliases."""
+    source = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+
+    assert (
+        'BACKEND_IMAGE="$candidate_backend_id" ADMIN_IMAGE="$candidate_admin_id" \\\n'
+        "      docker compose"
+    ) in source
+    assert (
+        'BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \\\n'
+        "  docker compose"
+    ) in source
+    assert "run --rm --no-deps migrate alembic downgrade" in source
+    assert "up -d --force-recreate --no-deps --no-build --wait" in source
+
+
 def test_verified_mode_retains_manifest_correctness_checks():
     source = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
 

@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { GitlleryPanel, HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
-import ActivityDotMatrix, { type ActivityDay } from "@/components/charts/ActivityDotMatrix";
+import { HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
+import ActivityDotMatrix, { type ActivityDay, type ActivityTimeline } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
 import HairlineSeries from "@/components/charts/HairlineSeries";
@@ -200,6 +200,7 @@ export default function CreatorDetailPage() {
   const [editing, setEditing] = useState(false);
   const [worksTag, setWorksTag] = useState("");
   const [activityYear, setActivityYear] = useState<number | null>(null);
+  const [hasLoadedActivityTimeline, setHasLoadedActivityTimeline] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -234,12 +235,19 @@ export default function CreatorDetailPage() {
   }, [availableActivityYears]);
   const timeline = useQuery({
     queryKey: ["creator-timeline", id, activityYear],
-    queryFn: () => api.getCreatorTimeline(
-      id,
-      `${activityYear}-01-01`,
-      `${Number(activityYear) + 1}-01-01`,
-    ),
+    queryFn: async () => {
+      if (activityYear === null) throw new Error("Activity year is required");
+      return {
+        requestYear: activityYear,
+        timeline: await api.getCreatorTimeline(
+          id,
+          `${activityYear}-01-01`,
+          `${activityYear + 1}-01-01`,
+        ),
+      };
+    },
     enabled: activityYear !== null,
+    placeholderData: keepPreviousData,
     refetchInterval: POLL_IDLE_MS,
     staleTime: POLL_IDLE_MS,
   });
@@ -268,10 +276,6 @@ export default function CreatorDetailPage() {
       const hasDue = query.state.data?.items.some((item) => item.creator_id === id && item.due);
       return hasRunning || hasDue ? 5000 : 15000;
     },
-  });
-  const curationHistory = useQuery({
-    queryKey: queryKeys.curation.subject("creator", id),
-    queryFn: () => api.listCurationCommits({ subject_type: "creator", subject_id: id, limit: 6 }),
   });
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "creator", id],
@@ -401,7 +405,19 @@ export default function CreatorDetailPage() {
     (current, point) => current === null || point.value > current.value ? point : current,
     null,
   );
-  const activityPeak = (timeline.data?.days || []).reduce<ActivityDay | null>(
+  const selectedTimelineData = timeline.data
+    && !timeline.isPlaceholderData
+    && timeline.data.requestYear === activityYear
+    ? timeline.data.timeline
+    : null;
+  useEffect(() => {
+    if (selectedTimelineData) setHasLoadedActivityTimeline(true);
+  }, [selectedTimelineData]);
+  const activityCalendarData: ActivityTimeline | null = selectedTimelineData
+    || (hasLoadedActivityTimeline && activityYear !== null
+      ? { creator_id: id, sources: [], days: [], total: 0 }
+      : null);
+  const activityPeak = (selectedTimelineData?.days || []).reduce<ActivityDay | null>(
     (current, day) => current === null || day.total > current.total ? day : current,
     null,
   );
@@ -544,25 +560,6 @@ export default function CreatorDetailPage() {
 
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{t("curation.title")}</h2>
-              <Link href={`${adminRoutes.curation}?subject_type=creator&subject_id=${id}`} className="text-sm text-accent hover:underline dark:text-accent">{t("common.open")}</Link>
-            </div>
-            {curationHistory.data?.items.length ? (
-              <div className="space-y-3">
-                {curationHistory.data.items.map((commit) => (
-                  <div key={commit.id} className="border-l-2 border-accent pl-3 text-xs dark:border-accent">
-                    <div className="font-medium text-fg">{commit.message}</div>
-                    <div className="mt-0.5 text-muted">{commit.trigger} · {fmt.date(commit.occurred_at)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : <p className="text-sm text-muted">{t("curation.empty_title")}</p>}
-          </section>
-
-          <GitlleryPanel creatorId={id} />
-
-          <section className="card p-4">
-            <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{t("creator_detail.external_links")}</h2>
               <button onClick={() => setShowAddLink(true)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.add")}</button>
             </div>
@@ -599,7 +596,7 @@ export default function CreatorDetailPage() {
             <div className="space-y-5">
               <ChartFrame
                 title={t("creator_detail.works_timeline")}
-                insight={activityYear && timeline.data
+                insight={activityYear && selectedTimelineData
                   ? activityPeak
                     ? t("charts.activity_insight", {
                       year: activityYear,
@@ -617,9 +614,9 @@ export default function CreatorDetailPage() {
                 footer={t("charts.creator_activity_footer")}
                 testId="creator-activity-chart"
               >
-                {timeline.isPending || activityYear === null ? (
+                {activityYear === null || (timeline.isPending && !timeline.data) ? (
                   <div className="h-44 animate-pulse rounded-md bg-subtle" aria-label={t("common.loading")} />
-                ) : timeline.error && !timeline.data ? (
+                ) : timeline.error && !activityCalendarData ? (
                   <div className="rounded-md border border-danger/30 bg-danger-subtle p-4" role="alert">
                     <p className="font-semibold text-danger">{t("charts.activity_error")}</p>
                     <p className="mt-1 break-words text-xs text-muted">{(timeline.error as Error).message}</p>
@@ -627,15 +624,23 @@ export default function CreatorDetailPage() {
                       {t("common.retry")}
                     </button>
                   </div>
-                ) : timeline.data ? (
+                ) : activityCalendarData ? (
                   <>
-                    {timeline.isRefetchError ? (
-                      <div className="mb-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning" role="status">
-                        {t("charts.activity_refresh_error")}
+                    {timeline.error ? (
+                      <div className="mb-3 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">
+                        <p className="font-semibold">{t("charts.activity_error")}</p>
+                        <p className="mt-1 break-words text-muted">{(timeline.error as Error).message}</p>
+                        <button type="button" className="btn-ghost mt-2" onClick={() => timeline.refetch()}>
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    ) : timeline.isPlaceholderData ? (
+                      <div className="mb-3 rounded-md border border-border bg-subtle px-3 py-2 text-xs text-muted" role="status">
+                        {t("common.loading")}
                       </div>
                     ) : null}
                     <ActivityDotMatrix
-                      data={timeline.data}
+                      data={activityCalendarData}
                       year={activityYear}
                       availableYears={availableActivityYears}
                       onYearChange={setActivityYear}

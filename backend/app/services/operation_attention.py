@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import and_, case, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
@@ -19,9 +20,11 @@ from app.models.repository_sync_receipt import RepositorySyncReceipt
 from app.models.repository_sync_receipt import MaintenanceAuditEvent, SearchIndexState
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
+from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
+from app.services.job_manifest import get_manifest
 from app.services.sync_outcome import download_job_outcome
-from app.services.tasks import TaskService, task_payload
+from app.services.tasks import TaskService, normalize_task_status, task_payload
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +220,72 @@ async def upsert_repository_sync_receipt(
     return receipt
 
 
+async def _repository_has_recoverable_backlog(
+    db: AsyncSession,
+    repository_id: UUID,
+) -> bool:
+    """Fail closed when repository-scoped importable ledger work remains."""
+
+    repository = await db.get(SubscriptionSource, repository_id)
+    if repository is None:
+        return True
+    subscription = await db.get(Subscription, repository.subscription_id)
+    if subscription is None:
+        return True
+
+    # Reuse Task 5's exact provider/creator mapping rather than treating every
+    # same-source directory as belonging to this repository.
+    from app.services.repository_artifact_reconciliation import _repository_creator_dirs
+    from app.services.artifact_ledger import downloads_artifact_predicate
+
+    creator_dirs = await _repository_creator_dirs(
+        db,
+        repository,
+        subscription.creator_id,
+    )
+    if not creator_dirs:
+        return True
+    return (
+        await db.execute(
+            select(StorageArtifact.id)
+            .where(
+                downloads_artifact_predicate(),
+                StorageArtifact.source == repository.source,
+                StorageArtifact.creator_dir.in_(creator_dirs),
+                StorageArtifact.artifact_type == "metadata_json",
+                StorageArtifact.state.in_(("new", "importing", "failed")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def _orphan_has_recoverable_repository_state(
+    db: AsyncSession,
+    task: TaskRun,
+) -> bool:
+    """Keep compacted/removed failed repository work visible to operators."""
+
+    if task.subject_type != "download_job" or task.subject_id is None:
+        return False
+    receipt = (
+        await db.execute(
+            select(RepositorySyncReceipt).where(
+                RepositorySyncReceipt.source_download_job_id == task.subject_id
+            )
+        )
+    ).scalar_one_or_none()
+    if receipt is not None and receipt.status in {"failed", "stale"}:
+        return True
+    repository_id = receipt.repository_id if receipt is not None else None
+    if repository_id is None:
+        try:
+            repository_id = UUID(str((task.meta or {}).get("subscription_source_id")))
+        except (TypeError, ValueError):
+            return False
+    return await _repository_has_recoverable_backlog(db, repository_id)
+
+
 async def reconcile_task_truth(
     db: AsyncSession,
     *,
@@ -225,6 +294,9 @@ async def reconcile_task_truth(
 ) -> dict[str, Any]:
     """Reconcile TaskRun projections with their authoritative domain rows."""
 
+    # Candidate selection is deliberately lock-free. The lifecycle-wide order
+    # is StorageArtifact -> DownloadJob -> ImportJob -> TaskRun; taking a
+    # TaskRun here would invert reconciliation's DownloadJob -> TaskRun path.
     tasks = list(
         (
             await db.execute(
@@ -240,6 +312,34 @@ async def reconcile_task_truth(
             )
         ).scalars()
     )
+
+    # Truth reconciliation retains row locks until its final commit. Acquire
+    # every parent it may project in the same UUID order used by repository
+    # artifact ownership before any child or TaskRun mutation can take a lock.
+    parent_ids = {
+        task.subject_id
+        for task in tasks
+        if task.subject_type == "download_job" and task.subject_id is not None
+    }
+    import_subject_ids = {
+        task.subject_id
+        for task in tasks
+        if task.subject_type == "import_job" and task.subject_id is not None
+    }
+    if import_subject_ids:
+        parent_ids.update((await db.execute(
+            select(ImportJob.download_job_id).where(
+                ImportJob.id.in_(import_subject_ids),
+            )
+        )).scalars())
+    if parent_ids:
+        await db.execute(
+            select(DownloadJob.id)
+            .where(DownloadJob.id.in_(parent_ids))
+            .order_by(DownloadJob.id.asc())
+            .with_for_update(of=DownloadJob)
+        )
+
     report: dict[str, Any] = {
         "dry_run": dry_run,
         "scanned": len(tasks),
@@ -369,10 +469,22 @@ async def reconcile_task_truth(
                 .limit(1)
             )
         ).scalar_one_or_none()
+        if (
+            later_receipt is not None
+            and later_receipt.outcome_code == "no_changes"
+            and await _repository_has_recoverable_backlog(
+                db,
+                parent.subscription_source_id,
+            )
+        ):
+            # A later empty scan only says that scan found nothing.  It is not
+            # evidence that this repository's previous import backlog drained.
+            return current_receipt, None
         return current_receipt, later_receipt
 
     for task in tasks:
         target_status: str | None = None
+        target_domain_status: str | None = None
         reason_code: str | None = None
         message: str | None = None
         domain_job: DownloadJob | ImportJob | None = None
@@ -387,6 +499,7 @@ async def reconcile_task_truth(
                 task.reason_code == "orphaned_subject"
                 and domain_job is None
                 and not _rq_reference_is_active(task)
+                and not await _orphan_has_recoverable_repository_state(db, task)
             ):
                 await resolve_open_attention(
                     task,
@@ -419,6 +532,33 @@ async def reconcile_task_truth(
                 reason_code = "orphaned_subject"
                 message = "Task references a download job that no longer exists"
                 report["orphaned"] += 1
+            elif get_manifest(domain_job).get("disk_import_recovery"):
+                from app.services.import_lifecycle import (
+                    bounded_import_parent_completion,
+                )
+
+                completion = await bounded_import_parent_completion(
+                    db,
+                    domain_job.id,
+                    fallback_message="Bounded import truth reconciled",
+                )
+                if completion is not None:
+                    domain_job = completion.parent
+                    expected_task_status = normalize_task_status(
+                        completion.status,
+                    )
+                    if (
+                        domain_job.status != completion.status
+                        or task.status != expected_task_status
+                    ):
+                        target_domain_status = completion.status
+                        target_status = expected_task_status
+                        reason_code = infer_reason_code(
+                            completion.status,
+                            completion.message,
+                        )
+                        message = completion.message
+                        report["parent_child_conflicts"] += 1
             elif domain_job.status == "importing":
                 child = (
                     await db.execute(
@@ -448,7 +588,23 @@ async def reconcile_task_truth(
                 reason_code = infer_reason_code(target_status, domain_job.error_log)
                 message = f"Import job is authoritative: {domain_job.status}"
 
-        if not target_status or target_status == task.status:
+        task_needs_correction = bool(
+            target_status and target_status != task.status
+        )
+        effective_domain_status = target_domain_status
+        if (
+            effective_domain_status is None
+            and isinstance(domain_job, DownloadJob)
+            and domain_job.status == "importing"
+            and target_status in {"failed", "stale"}
+        ):
+            effective_domain_status = target_status
+        domain_needs_correction = bool(
+            isinstance(domain_job, DownloadJob)
+            and effective_domain_status
+            and domain_job.status != effective_domain_status
+        )
+        if not task_needs_correction and not domain_needs_correction:
             continue
         issue = {
             "task_id": str(task.id),
@@ -458,23 +614,39 @@ async def reconcile_task_truth(
             "to_status": target_status,
             "reason_code": reason_code,
             "message": message,
+            "domain_from_status": (
+                domain_job.status
+                if isinstance(domain_job, DownloadJob)
+                else None
+            ),
+            "domain_to_status": effective_domain_status,
         }
         report["issues"].append(issue)
         report["corrected"] += 1
         if dry_run:
             continue
 
-        if isinstance(domain_job, DownloadJob) and domain_job.status == "importing" and target_status in {"failed", "stale"}:
-            domain_job.status = target_status
-            domain_job.error_log = message
-        await task_service.update_task(
-            task,
-            status=target_status,
-            error=message,
-            resource_state="yielded",
-            resource_reason=None,
-            reason_code=reason_code,
-        )
+        if isinstance(domain_job, DownloadJob):
+            if domain_needs_correction:
+                domain_job.status = effective_domain_status
+                domain_job.error_log = (
+                    message
+                    if effective_domain_status in {"failed", "stale"}
+                    else None
+                )
+        if task_needs_correction:
+            await task_service.update_task(
+                task,
+                status=target_status,
+                error=(
+                    message
+                    if target_status in {"failed", "stale"}
+                    else None
+                ),
+                resource_state="yielded",
+                resource_reason=None,
+                reason_code=reason_code,
+            )
         await task_service.add_event(
             task,
             "reconciled",
@@ -483,8 +655,15 @@ async def reconcile_task_truth(
             message=message,
             payload={"source": "reconciliation", "reason_code": reason_code},
         )
-        if isinstance(domain_job, DownloadJob) and target_status in {"failed", "stale", "complete"}:
-            await upsert_repository_sync_receipt(db, domain_job, status=target_status)
+        if (
+            isinstance(domain_job, DownloadJob)
+            and effective_domain_status in {"failed", "stale", "complete"}
+        ):
+            await upsert_repository_sync_receipt(
+                db,
+                domain_job,
+                status=effective_domain_status,
+            )
 
     if dry_run:
         await db.rollback()
@@ -539,9 +718,22 @@ async def compact_terminal_tasks(
             )
         ).scalar_one()
     )
+    # A receipt is durable history, but it must never turn recoverable ledger
+    # state into disposable operational state.  Keep its DownloadJob (and its
+    # TaskRun) while any owned artifact can still be imported or retried.
+    recoverable_artifacts = exists().where(
+        StorageArtifact.download_job_id == DownloadJob.id,
+        StorageArtifact.state.in_(("new", "importing", "failed")),
+    )
+    child_task = aliased(TaskRun)
+    open_child_attention = exists().where(
+        child_task.parent_task_id == TaskRun.id,
+        child_task.attention_state == "open",
+    )
     downloadable = exists().where(
         DownloadJob.id == TaskRun.subject_id,
         DownloadJob.status.in_(COMPACTABLE_DOWNLOAD_STATUSES),
+        ~recoverable_artifacts,
         or_(
             DownloadJob.subscription_source_id.is_(None),
             exists().where(
@@ -550,6 +742,37 @@ async def compact_terminal_tasks(
         ),
     )
     download_missing = ~exists().where(DownloadJob.id == TaskRun.subject_id)
+    # TaskRun is the snapshot authority. Protect exactly the newest completed
+    # row for every registered operation/scope pair, even after its ordinary
+    # 24-hour admin retention expires. A later cycle may delete the former
+    # snapshot once a newer completed row exists.
+    from app.services.operations import (
+        ADMIN_DISPATCH_META_KEY,
+        ADMIN_OPERATION_REGISTRY,
+    )
+
+    snapshot_scope = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["scope_key"].astext
+    protected_snapshot_ids = set(
+        (
+            await db.execute(
+                select(TaskRun.id)
+                .where(
+                    TaskRun.kind == "admin",
+                    TaskRun.operation_type.in_(tuple(ADMIN_OPERATION_REGISTRY)),
+                    TaskRun.status == "complete",
+                    TaskRun.finished_at.is_not(None),
+                    snapshot_scope.is_not(None),
+                )
+                .distinct(TaskRun.operation_type, snapshot_scope)
+                .order_by(
+                    TaskRun.operation_type,
+                    snapshot_scope,
+                    TaskRun.finished_at.desc(),
+                    TaskRun.id.desc(),
+                )
+            )
+        ).scalars()
+    )
     tasks = list(
         (
             await db.execute(
@@ -557,6 +780,11 @@ async def compact_terminal_tasks(
                 .where(
                     TaskRun.compactable_at.is_not(None),
                     TaskRun.compactable_at <= now,
+                    TaskRun.attention_state != "open",
+                    TaskRun.id.not_in(protected_snapshot_ids)
+                    if protected_snapshot_ids
+                    else True,
+                    ~open_child_attention,
                     or_(TaskRun.subject_type.is_(None), TaskRun.subject_type != "import_job"),
                     or_(
                         TaskRun.subject_type.is_(None),
@@ -568,7 +796,6 @@ async def compact_terminal_tasks(
                 )
                 .order_by(TaskRun.compactable_at.asc(), TaskRun.id.asc())
                 .limit(max(1, min(limit, 1000)))
-                .with_for_update(skip_locked=True)
             )
         ).scalars()
     )
@@ -581,20 +808,49 @@ async def compact_terminal_tasks(
         "skipped_without_receipt": guarded_without_receipt,
     }
 
-    selected_task_ids = {task.id for task in tasks}
     candidate_download_ids = {
         task.subject_id
         for task in tasks
         if task.subject_type == "download_job" and task.subject_id is not None
     }
-    download_ids: set[UUID] = set()
+    # Compaction, claims, and repository reconciliation share artifact rows.
+    # Every path locks artifacts first (owner/id order) and then DownloadJobs,
+    # so neither can hold an owner while waiting for a claimed artifact.  TaskRun
+    # locks happen only in this compactor path and never participate in the
+    # repository reconciliation transaction.
     if candidate_download_ids:
+        await db.execute(
+            select(StorageArtifact.id)
+            .where(StorageArtifact.download_job_id.in_(candidate_download_ids))
+            .order_by(
+                StorageArtifact.download_job_id.asc(),
+                StorageArtifact.created_at.asc(),
+                StorageArtifact.id.asc(),
+            )
+            .with_for_update()
+        )
+
+    locked_download_ids: set[UUID] = set()
+    if candidate_download_ids:
+        locked_download_ids.update(
+            (
+                await db.execute(
+                    select(DownloadJob.id)
+                    .where(DownloadJob.id.in_(candidate_download_ids))
+                    .order_by(DownloadJob.id.asc())
+                    .with_for_update()
+                )
+            ).scalars()
+        )
+    download_ids: set[UUID] = set()
+    if locked_download_ids:
         download_ids.update(
             (
                 await db.execute(
                     select(DownloadJob.id).where(
-                        DownloadJob.id.in_(candidate_download_ids),
+                        DownloadJob.id.in_(locked_download_ids),
                         DownloadJob.status.in_(COMPACTABLE_DOWNLOAD_STATUSES),
+                        ~recoverable_artifacts,
                         or_(
                             DownloadJob.subscription_source_id.is_(None),
                             exists().where(
@@ -606,12 +862,27 @@ async def compact_terminal_tasks(
                 )
             ).scalars()
         )
+    # A DownloadJob that became non-compactable after the task-row selection
+    # keeps its parent TaskRun.  A genuinely missing job is still safe to
+    # compact as an orphan projection.
+    selected_task_ids = {
+        task.id
+        for task in tasks
+        if not (
+            task.subject_type == "download_job"
+            and task.subject_id in locked_download_ids
+            and task.subject_id not in download_ids
+        )
+    }
     import_ids: set[UUID] = set()
     if download_ids:
         import_ids.update(
             (
                 await db.execute(
-                    select(ImportJob.id).where(ImportJob.download_job_id.in_(download_ids))
+                    select(ImportJob.id)
+                    .where(ImportJob.download_job_id.in_(download_ids))
+                    .order_by(ImportJob.id.asc())
+                    .with_for_update(of=ImportJob)
                 )
             ).scalars()
         )
@@ -621,6 +892,7 @@ async def compact_terminal_tasks(
             (
                 await db.execute(
                     select(TaskRun.id).where(
+                        TaskRun.attention_state != "open",
                         or_(
                             TaskRun.parent_task_id.in_(selected_task_ids)
                             if selected_task_ids
@@ -637,7 +909,38 @@ async def compact_terminal_tasks(
             ).scalars()
         )
 
-    all_task_ids = selected_task_ids | child_task_ids
+    proposed_task_ids = selected_task_ids | child_task_ids
+    # TaskRun is always last. Recheck mutable attention/compaction predicates
+    # under these locks because the initial candidates were intentionally
+    # lock-free and a concurrent retry/reconciliation may have changed them.
+    locked_task_ids: set[UUID] = set()
+    if proposed_task_ids:
+        locked_task_ids.update(
+            (
+                await db.execute(
+                    select(TaskRun.id)
+                    .where(
+                        TaskRun.id.in_(proposed_task_ids),
+                        TaskRun.attention_state != "open",
+                        or_(
+                            TaskRun.id.in_(child_task_ids)
+                            if child_task_ids
+                            else False,
+                            and_(
+                                TaskRun.id.in_(selected_task_ids),
+                                TaskRun.compactable_at.is_not(None),
+                                TaskRun.compactable_at <= now,
+                            )
+                            if selected_task_ids
+                            else False,
+                        ),
+                    )
+                    .order_by(TaskRun.id.asc())
+                    .with_for_update(of=TaskRun)
+                )
+            ).scalars()
+        )
+    all_task_ids = locked_task_ids
     compacted_ids = [str(task_id) for task_id in sorted(all_task_ids, key=str)]
     report["deleted_tasks"] = len(all_task_ids)
     report["deleted_import_jobs"] = len(import_ids)
@@ -755,6 +1058,7 @@ async def operations_overview(
     view: str = "attention",
     offset: int = 0,
     limit: int = 50,
+    excluded_admin_operation_types: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Return one compact operations feed for desktop and mobile clients."""
 
@@ -838,7 +1142,16 @@ async def operations_overview(
                 "available_actions": ["open_repository", "copy_diagnostics"],
                 "task": None,
             })
-    filters = [TaskRun.kind != "account"]
+    visible_task = (
+        or_(
+            TaskRun.kind != "admin",
+            TaskRun.operation_type.is_(None),
+            TaskRun.operation_type.not_in(excluded_admin_operation_types),
+        )
+        if excluded_admin_operation_types
+        else True
+    )
+    filters = [TaskRun.kind != "account", visible_task]
     if view == "attention":
         filters.append(TaskRun.attention_state == "open")
     elif view == "resolved":
@@ -869,7 +1182,7 @@ async def operations_overview(
         (
             await db.execute(
                 select(TaskRun.attention_state, func.count(TaskRun.id))
-                .where(TaskRun.kind != "account")
+                .where(TaskRun.kind != "account", visible_task)
                 .group_by(TaskRun.attention_state)
             )
         ).all()
@@ -879,6 +1192,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                 )
             )
@@ -895,6 +1209,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.attention_state == "open",
                     TaskRun.reason_code.in_(severe_reason_codes),
                 )
@@ -906,6 +1221,7 @@ async def operations_overview(
             await db.execute(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
+                    visible_task,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                     TaskRun.resource_state == "waiting",
                     TaskRun.resource_reason.is_not(None),

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -89,6 +90,130 @@ def test_conflicting_canonical_file_is_never_overwritten(tmp_path):
     assert staged.read_bytes() == b"different"
     manifest = json.loads(stage.manifest_path.read_text(encoding="utf-8"))
     assert manifest["state"] == "conflict"
+
+
+@pytest.mark.parametrize(
+    ("winner", "expected", "loser"),
+    [("staged", b"different", b"canonical"), ("canonical", b"canonical", b"different")],
+)
+def test_full_conflict_resolution_preserves_loser_and_is_promotable(
+    tmp_path, winner, expected, loser,
+):
+    download_root = tmp_path / "downloads"
+    target = download_root / "pixiv" / "creator" / "work.jpg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"canonical")
+    stage = DownloadStage.open(download_root, "job-resolve", "pixiv")
+    staged = stage.root / target.relative_to(download_root)
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"different")
+    with pytest.raises(DownloadStageConflict):
+        stage.promote()
+
+    resolution = stage.resolve_conflicts(
+        {"pixiv/creator/work.jpg": winner},
+        resolution_id=f"resolution-{winner}",
+    )
+
+    assert target.read_bytes() == expected
+    assert len(resolution.entries) == 1
+    quarantine = download_root / resolution.entries[0]["quarantine_path"]
+    assert quarantine.read_bytes() == loser
+    assert stage.promote().paths == (target,)
+    manifest = json.loads(stage.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["state"] == "promoted"
+    assert manifest["resolution"]["state"] == "applied"
+
+
+def test_conflict_resolution_resumes_after_atomic_switch_interruption(
+    tmp_path, monkeypatch,
+):
+    download_root = tmp_path / "downloads"
+    first_target = download_root / "pixiv" / "creator" / "first.jpg"
+    second_target = download_root / "pixiv" / "creator" / "second.jpg"
+    first_target.parent.mkdir(parents=True)
+    first_target.write_bytes(b"first-canonical")
+    second_target.write_bytes(b"second-canonical")
+    stage = DownloadStage.open(download_root, "job-resolve-recovery", "pixiv")
+    first_staged = stage.root / first_target.relative_to(download_root)
+    second_staged = stage.root / second_target.relative_to(download_root)
+    first_staged.parent.mkdir(parents=True)
+    first_staged.write_bytes(b"first-staged")
+    second_staged.write_bytes(b"second-staged")
+    with pytest.raises(DownloadStageConflict):
+        stage.promote()
+
+    real_replace = os.replace
+    interrupted = False
+
+    def replace_then_interrupt(source, destination):
+        nonlocal interrupted
+        real_replace(source, destination)
+        if Path(source) == first_staged and not interrupted:
+            interrupted = True
+            raise RuntimeError("simulated interruption after conflict switch")
+
+    monkeypatch.setattr(download_staging.os, "replace", replace_then_interrupt)
+    decisions = {
+        "pixiv/creator/first.jpg": "staged",
+        "pixiv/creator/second.jpg": "canonical",
+    }
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        stage.resolve_conflicts(decisions, resolution_id="interrupted-resolution")
+
+    assert first_target.read_bytes() == b"first-staged"
+    assert not first_staged.exists()
+    manifest = json.loads(stage.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["resolution"]["state"] == "prepared"
+
+    monkeypatch.setattr(download_staging.os, "replace", real_replace)
+    recovered = DownloadStage.open(
+        download_root,
+        "job-resolve-recovery",
+        "pixiv",
+    )
+    resolution = recovered.resolve_conflicts(
+        decisions,
+        resolution_id="a-new-request-id-is-ignored-while-resuming",
+    )
+
+    assert resolution.resolution_id == "interrupted-resolution"
+    assert first_target.read_bytes() == b"first-staged"
+    assert second_target.read_bytes() == b"second-canonical"
+    quarantined = {
+        entry["relative_path"]: (
+            download_root / entry["quarantine_path"]
+        ).read_bytes()
+        for entry in resolution.entries
+    }
+    assert quarantined == {
+        "pixiv/creator/first.jpg": b"first-canonical",
+        "pixiv/creator/second.jpg": b"second-staged",
+    }
+    manifest = json.loads(recovered.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["resolution"]["state"] == "applied"
+    assert {entry["state"] for entry in manifest["resolution"]["entries"]} == {
+        "applied"
+    }
+
+
+def test_conflict_resolution_requires_one_decision_per_conflict(tmp_path):
+    download_root = tmp_path / "downloads"
+    target = download_root / "pixiv" / "creator" / "work.jpg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"canonical")
+    stage = DownloadStage.open(download_root, "job-incomplete-resolution", "pixiv")
+    staged = stage.root / target.relative_to(download_root)
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"different")
+    with pytest.raises(DownloadStageConflict):
+        stage.promote()
+
+    with pytest.raises(DownloadStageManifestError, match="exactly one decision"):
+        stage.resolve_conflicts({}, resolution_id="missing")
+
+    assert target.read_bytes() == b"canonical"
+    assert staged.read_bytes() == b"different"
 
 
 def test_retry_recovers_crash_after_atomic_link(tmp_path, monkeypatch):

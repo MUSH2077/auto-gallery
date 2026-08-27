@@ -2,37 +2,14 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState } from "@/components";
+import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { Plus, X } from "lucide-react";
 
 const TIMEZONES = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
   "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
   "America/Sao_Paulo", "Australia/Sydney", "Pacific/Auckland"];
-
-function ScheduledTimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const t = useT();
-  const times = value ? value.split(",").map((t) => t.trim()).filter(Boolean) : [];
-  const setTime = (idx: number, newVal: string) => { const updated = [...times]; updated[idx] = newVal; onChange(updated.join(", ")); };
-  const addTime = () => onChange([...times, "03:00:00"].join(", "));
-  const removeTime = (idx: number) => onChange(times.filter((_, i) => i !== idx).join(", "));
-  return (
-    <div className="space-y-2">
-      {times.length === 0 && <button type="button" onClick={addTime} className="btn-ghost inline-flex min-h-11 items-center gap-2 px-3 text-xs"><Plus aria-hidden="true" className="h-4 w-4" />{t("subdefaults.add_time")}</button>}
-      {times.map((time, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <input aria-label={t("subdefaults.scheduled_times")} type="time" step="1" value={time.length <= 5 ? time + ":00" : time} onChange={(e) => setTime(i, e.target.value)}
-            className="input px-2 py-1 font-mono w-36" />
-          <span className="font-mono text-xs text-muted">{time}</span>
-          <button type="button" onClick={() => removeTime(i)} className="btn-icon text-danger" aria-label={t("subdefaults.remove_time")}><X aria-hidden="true" className="h-4 w-4" /></button>
-          {i === times.length - 1 && <button type="button" onClick={addTime} className="btn-icon text-accent" aria-label={t("subdefaults.add_time")}><Plus aria-hidden="true" className="h-4 w-4" /></button>}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 export default function SchedulerDefaultsPage() {
   const toast = useToast();
@@ -96,10 +73,13 @@ export default function SchedulerDefaultsPage() {
             <div className="flex items-center justify-between">
               <div><span className="font-medium">{t("subdefaults.schedule_mode")}</span>
                 <p className="text-xs text-muted mt-1">{t("subdefaults.schedule_mode.desc")}</p></div>
-              <select aria-label={t("subdefaults.schedule_mode")} value={sub.schedule_mode || "interval"} onChange={(e) => setSub("schedule_mode", e.target.value)}
+              <select aria-label={t("subdefaults.schedule_mode")} value={sub.schedule_mode || "interval"} onChange={(e) => {
+                const mode = e.target.value as SubscriptionDefaults["schedule_mode"];
+                if (subLocal) setSubLocal({ ...subLocal, schedule_mode: mode, schedule_rule: mode === "calendar" ? (subLocal.schedule_rule || defaultCalendarRule()) : null });
+              }}
                 className="select px-2 py-1">
                 <option value="interval">{t("subdefaults.interval")}</option>
-                <option value="fixed_time">{t("subdefaults.fixed_time")}</option>
+                <option value="calendar">{t("subdefaults.calendar")}</option>
               </select>
             </div>
 
@@ -112,11 +92,7 @@ export default function SchedulerDefaultsPage() {
                   className="input w-20 px-2 py-1 text-center font-mono" />
               </div>
             ) : (
-              <div>
-                <div className="mb-2"><span className="font-medium">{t("subdefaults.scheduled_times")}</span>
-                  <p className="text-xs text-muted mt-1">{t("subdefaults.scheduled_times.desc")}</p></div>
-                <ScheduledTimePicker value={sub.scheduled_times || ""} onChange={(v) => setSub("scheduled_times", v)} />
-              </div>
+              <CalendarScheduleEditor value={sub.schedule_rule} onChange={(rule) => setSub("schedule_rule", rule)} />
             )}
 
             <div className="flex items-center justify-between">

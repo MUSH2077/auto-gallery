@@ -78,13 +78,7 @@ export interface paths {
         put?: never;
         /**
          * Create Backup
-         * @description Create a system backup with optional content selection.
-         *
-         *     Body (optional): {contents: ["database", "gallerydl-config", ...]}
-         *     Defaults to all components if not specified.
-         *
-         *     The whole body is blocking (pg_dump, copytree, rglob, tar.gz) and is run
-         *     off the event loop so a backup doesn't freeze the gallery for everyone.
+         * @description Start backup creation and return its durable TaskRun immediately.
          */
         post: operations["post_api_v1_admin_backup"];
         delete?: never;
@@ -120,14 +114,51 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Estimate Backup Sizes
-         * @description Return estimated sizes for each backup component.
-         *
-         *     Offloaded to a thread — _estimate_component_sizes walks lib_root for
-         *     metadata.json files, a full-tree traversal that must not block the loop.
+         * @description Start a backup estimate without traversing storage in this request.
          */
-        get: operations["get_api_v1_admin_backup_estimate"];
+        post: operations["post_api_v1_admin_backup_estimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/estimate/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Backup Estimate
+         * @description Read the latest successful backup estimate from PostgreSQL.
+         */
+        get: operations["get_api_v1_admin_backup_estimate_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Backup
+         * @description Read the latest successful backup-creation result.
+         */
+        get: operations["get_api_v1_admin_backup_latest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -156,7 +187,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/backup/restore": {
+    "/api/v1/admin/backup/restore/receipts/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Restore Receipt
+         * @description Read the external immutable host receipt without using TaskRun state.
+         */
+        get: operations["get_api_v1_admin_backup_restore_receipts_request_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads": {
         parameters: {
             query?: never;
             header?: never;
@@ -166,12 +217,90 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restore Backup
-         * @description Restore system from a backup file. THIS IS DESTRUCTIVE — replaces current data.
-         *
-         *     Requires ``?confirm=DELETE-EVERYTHING`` to prevent accidental invocation.
+         * Create Restore Upload
+         * @description Create a resumable upload outside every live configuration directory.
          */
-        post: operations["post_api_v1_admin_backup_restore"];
+        post: operations["post_api_v1_admin_backup_restore_uploads"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Restore Upload
+         * @description Resume one capability-isolated upload without enumerating its siblings.
+         */
+        get: operations["get_api_v1_admin_backup_restore_uploads_upload_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/chunks/{chunk_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload Restore Chunk
+         * @description Persist exactly one ordered chunk; identical retries are idempotent.
+         */
+        put: operations["put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Restore Upload
+         * @description Start archive validation; this action cannot execute a host restore.
+         */
+        post: operations["post_api_v1_admin_backup_restore_uploads_upload_id_validate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup/restore/uploads/{upload_id}/validation/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Restore Validation
+         * @description Load the durable validator state after a frontend remount.
+         */
+        get: operations["get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -189,7 +318,7 @@ export interface paths {
         put?: never;
         /**
          * Schedule Backup
-         * @description Schedule recurring auto-backup. {enabled: bool, interval_hours: int}
+         * @description Persist recurring backup intent in PostgreSQL.
          */
         post: operations["post_api_v1_admin_backup_schedule"];
         delete?: never;
@@ -269,7 +398,7 @@ export interface paths {
         put?: never;
         /**
          * Clear Entity
-         * @description Clear a specific entity or 'all' for complete cleanup.
+         * @description Compatibility route for the registered asynchronous clear operation.
          */
         post: operations["post_api_v1_admin_clear_entity"];
         delete?: never;
@@ -495,9 +624,29 @@ export interface paths {
         put?: never;
         /**
          * Test Source Connection
-         * @description Test gallery-dl connectivity for a given source using current credentials.
+         * @description Start a gallery-dl connectivity test as a durable TaskRun.
          */
         post: operations["post_api_v1_admin_gallerydl_config_test_connection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/gallerydl-config/test-connection/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Source Connection
+         * @description Read the latest successful connectivity result for one source.
+         */
+        get: operations["get_api_v1_admin_gallerydl_config_test_connection_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -555,11 +704,31 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Integrity Check
-         * @description Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records.
+         * @description Start a durable integrity scan without walking storage in this request.
          */
-        get: operations["get_api_v1_admin_integrity_check"];
+        post: operations["post_api_v1_admin_integrity_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/integrity-check/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Integrity Check
+         * @description Read the latest successful integrity result from PostgreSQL.
+         */
+        get: operations["get_api_v1_admin_integrity_check_latest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -617,10 +786,7 @@ export interface paths {
         };
         /**
          * Memory Diagnostics
-         * @description Memory snapshot for OOM diagnosis: process RSS + a census of the most
-         *     common live Python object types. A runaway type count (e.g. millions of
-         *     Work/Row/dict) points straight at what is filling RAM. Cheap — no
-         *     always-on tracemalloc.
+         * @description Return bounded Linux process and SQLAlchemy pool metrics.
          */
         get: operations["get_api_v1_admin_memory"];
         put?: never;
@@ -712,6 +878,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/operations/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Registered Admin Operation
+         * @description Retry a failed registered administrator operation on the same TaskRun.
+         */
+        post: operations["post_api_v1_admin_operations_task_id_retry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/proxy/test": {
         parameters: {
             query?: never;
@@ -723,9 +909,29 @@ export interface paths {
         put?: never;
         /**
          * Test Proxy Connectivity
-         * @description Test connectivity through the configured proxy to key external sites.
+         * @description Start the proxy connectivity test as a durable TaskRun.
          */
         post: operations["post_api_v1_admin_proxy_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/proxy/test/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Proxy Connectivity
+         * @description Read the latest successful proxy connectivity result.
+         */
+        get: operations["get_api_v1_admin_proxy_test_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -833,7 +1039,7 @@ export interface paths {
         };
         /**
          * Storage Breakdown
-         * @description Return per-source and per-creator storage breakdown.
+         * @description Return a bounded, ledger-backed storage breakdown.
          */
         get: operations["get_api_v1_admin_storage_breakdown"];
         put?: never;
@@ -853,12 +1059,7 @@ export interface paths {
         };
         /**
          * System Info
-         * @description Return system-level info: disk usage, archive sizes, version.
-         *
-         *     Cached (this endpoint is polled by the dashboard) and computed off the
-         *     event loop — the directory-size walk is O(files) over the whole library.
-         *     A single in-flight walk is serialized by a lock so a burst of polls can't
-         *     spawn concurrent multi-GB walks; stale cache is served meanwhile.
+         * @description Return ledger-backed storage facts and constant-time mount capacity.
          */
         get: operations["get_api_v1_admin_system_info"];
         put?: never;
@@ -3418,6 +3619,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/{task_id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Download Conflicts
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_tasks_task_id_conflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Download Conflict Media
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_tasks_task_id_conflicts_media"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/resolutions/{resolution_id}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback Download Conflict Resolution
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/conflicts/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Download Conflicts
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_conflicts_resolve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{task_id}/pause": {
         parameters: {
             query?: never;
@@ -3895,6 +4176,70 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
         };
+        /** AdminOperationAccepted */
+        AdminOperationAccepted: {
+            /** Job Id */
+            job_id: string;
+            /** Operation Type */
+            operation_type: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+        };
+        /** AdminOperationCurrent */
+        AdminOperationCurrent: {
+            /** Job Id */
+            job_id?: string | null;
+            /** Operation Type */
+            operation_type: string;
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "enqueued" | "running" | "recovering" | "paused";
+            /** Task Id */
+            task_id: string;
+        };
+        /** AdminOperationSnapshot */
+        AdminOperationSnapshot: {
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Job Id */
+            job_id?: string | null;
+            /** Operation Type */
+            operation_type: string;
+            /** Progress */
+            progress?: {
+                [key: string]: unknown;
+            } | null;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @constant
+             */
+            status: "complete";
+            /** Task Id */
+            task_id: string;
+        };
+        /** AdminOperationSnapshotResponse */
+        AdminOperationSnapshotResponse: {
+            current?: components["schemas"]["AdminOperationCurrent"] | null;
+            snapshot?: components["schemas"]["AdminOperationSnapshot"] | null;
+        };
         /** AdminSettingsUpdate */
         AdminSettingsUpdate: {
             dedup?: components["schemas"]["DedupSettings"] | null;
@@ -4127,6 +4472,16 @@ export interface components {
              */
             batch_size: number;
         };
+        /** BackupScheduleRequest */
+        BackupScheduleRequest: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Interval Hours
+             * @default 24
+             */
+            interval_hours: number;
+        };
         /** BatchCurateRequest */
         BatchCurateRequest: {
             /**
@@ -4160,11 +4515,6 @@ export interface components {
             livephoto?: boolean | null;
             /** Sleep Request */
             sleep_request?: string | null;
-        };
-        /** Body_post_api_v1_admin_backup_restore */
-        Body_post_api_v1_admin_backup_restore: {
-            /** File */
-            file: string;
         };
         /** Body_post_api_v1_upload */
         Body_post_api_v1_upload: {
@@ -4211,6 +4561,16 @@ export interface components {
              * @default 200
              */
             limit: number;
+        };
+        /** ConflictDecision */
+        ConflictDecision: {
+            /** Relative Path */
+            relative_path: string;
+            /**
+             * Winner
+             * @enum {string}
+             */
+            winner: "canonical" | "staged";
         };
         /** CreatorCreate */
         CreatorCreate: {
@@ -4368,6 +4728,21 @@ export interface components {
             creator_id: string;
             /** Creator Name */
             creator_name: string;
+            /** Work Count */
+            work_count: number;
+        };
+        /** CreatorStorageNode */
+        CreatorStorageNode: {
+            /** Creator Id */
+            creator_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Repositories */
+            repositories: components["schemas"]["StorageRepositoryNode"][];
+            /** Repository Count */
+            repository_count: number;
+            /** Size Mb */
+            size_mb: number;
             /** Work Count */
             work_count: number;
         };
@@ -4547,6 +4922,16 @@ export interface components {
              */
             visibility: string;
         };
+        /** DailyScheduleRule */
+        DailyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "daily";
+            /** Times */
+            times: string[];
+        };
         /** DanbooruMappingRefreshEnqueueResponse */
         DanbooruMappingRefreshEnqueueResponse: {
             /** Job Id */
@@ -4614,6 +4999,15 @@ export interface components {
             password?: string | null;
             /** Username */
             username?: string | null;
+        };
+        /** DataCenterPipelineStats */
+        DataCenterPipelineStats: {
+            /** Failed Artifacts */
+            failed_artifacts: number;
+            /** Orphan Pending Artifacts */
+            orphan_pending_artifacts: number;
+            /** Pending Import Works */
+            pending_import_works: number;
         };
         /** DedupSettings */
         DedupSettings: {
@@ -4733,6 +5127,11 @@ export interface components {
         };
         /** DownloadDefaults */
         DownloadDefaults: {
+            /**
+             * Auto Resolve Upstream Conflicts
+             * @default true
+             */
+            auto_resolve_upstream_conflicts: boolean;
             /**
              * Download Concurrency
              * @default 3
@@ -5182,6 +5581,8 @@ export interface components {
         };
         /** ImportFromDiskRequest */
         ImportFromDiskRequest: {
+            /** Repository Id */
+            repository_id?: string | null;
             /**
              * Reset Ledger
              * @default false
@@ -5327,6 +5728,24 @@ export interface components {
             upload_used_bytes: number;
             /** Username */
             username: string;
+        };
+        /** MonthlyScheduleRule */
+        MonthlyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "monthly";
+            /** Month Days */
+            month_days: number[];
+            /**
+             * Overflow
+             * @default last_day
+             * @constant
+             */
+            overflow: "last_day";
+            /** Times */
+            times: string[];
         };
         /** PinterestSourceConfig */
         PinterestSourceConfig: {
@@ -5511,6 +5930,52 @@ export interface components {
              */
             limit: number;
         };
+        /** RepositoryCapabilities */
+        RepositoryCapabilities: {
+            /** Can Download */
+            can_download: boolean;
+            /** Can Import Local */
+            can_import_local: boolean;
+            /** Is Reference Only */
+            is_reference_only: boolean;
+            /** Supports Gallerydl */
+            supports_gallerydl: boolean;
+            /** Supports Tags */
+            supports_tags: boolean;
+        };
+        /** RepositoryCreator */
+        RepositoryCreator: {
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Favorite */
+            is_favorite: boolean;
+            /** Name */
+            name: string;
+            /** Thumbnail Url */
+            thumbnail_url?: string | null;
+        };
+        /** RepositoryDetailResponse */
+        RepositoryDetailResponse: {
+            /** Active Jobs */
+            active_jobs: components["schemas"]["RepositoryRecentJob"][];
+            creator: components["schemas"]["RepositoryCreator"];
+            provider: components["schemas"]["RepositoryProvider"];
+            /** Recent Jobs */
+            recent_jobs: components["schemas"]["RepositoryRecentJob"][];
+            /** Recent Works */
+            recent_works: components["schemas"]["RepositoryRecentWork"][];
+            repository: components["schemas"]["RepositoryRead"];
+            subscription: components["schemas"]["RepositorySubscription"];
+            /** Sync History */
+            sync_history: components["schemas"]["RepositoryRecentJob"][];
+            /** Work Total */
+            work_total: number;
+        };
         /** RepositoryGraphEdge */
         RepositoryGraphEdge: {
             /**
@@ -5576,10 +6041,274 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** RepositoryProvider */
+        RepositoryProvider: {
+            capabilities: components["schemas"]["RepositoryCapabilities"];
+            /** Display Name */
+            display_name: string;
+            /** Normalized Url */
+            normalized_url?: string | null;
+            /** Source */
+            source: string;
+            /** Url Valid */
+            url_valid: boolean;
+        };
+        /** RepositoryRead */
+        RepositoryRead: {
+            /** Auth Error Reason */
+            auth_error_reason?: string | null;
+            /** Auth Healthy */
+            auth_healthy: boolean;
+            /** Auth Status */
+            auth_status?: string | null;
+            /** Can Download */
+            can_download: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Enabled */
+            is_enabled: boolean;
+            /** Is Repository */
+            is_repository: boolean;
+            /** Last Attempted At */
+            last_attempted_at?: string | null;
+            /** Last Auth Checked At */
+            last_auth_checked_at?: string | null;
+            /** Last Successful Auth */
+            last_successful_auth?: string | null;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            latest_job?: components["schemas"]["RepositoryRecentJob"] | null;
+            /** Source */
+            source: string;
+            /** Source Creator Id */
+            source_creator_id?: string | null;
+            /** Source Display Name */
+            source_display_name: string;
+            /** Source Url */
+            source_url?: string | null;
+            /**
+             * Subscription Id
+             * Format: uuid
+             */
+            subscription_id: string;
+            /** Supports Gallerydl */
+            supports_gallerydl: boolean;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Url Valid */
+            url_valid: boolean;
+        };
+        /** RepositoryRecentJob */
+        RepositoryRecentJob: {
+            /** Attempts */
+            attempts?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Download Job Id */
+            download_job_id?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Log Excerpt */
+            error_log_excerpt?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /** Import Job Id */
+            import_job_id?: string | null;
+            /** Media Count */
+            media_count?: number | null;
+            /** Metadata Count */
+            metadata_count?: number | null;
+            /** Original Task Id */
+            original_task_id?: string | null;
+            outcome?: components["schemas"]["RepositorySyncOutcome"] | null;
+            /** Outcome Code */
+            outcome_code?: string | null;
+            /** Receipt Id */
+            receipt_id?: string | null;
+            /** Record Type */
+            record_type?: string | null;
+            /** Recovered */
+            recovered?: boolean | null;
+            /** Recovered At */
+            recovered_at?: string | null;
+            /** Retry Count */
+            retry_count: number;
+            /** Source */
+            source: string;
+            /** Source Url */
+            source_url?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
+            /** Subscription Id */
+            subscription_id: string;
+            /** Subscription Source Id */
+            subscription_source_id?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Works Imported */
+            works_imported?: number | null;
+        };
+        /** RepositoryRecentWork */
+        RepositoryRecentWork: {
+            /** Asset Count */
+            asset_count: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Creator Id */
+            creator_id: string;
+            /** Creator Name */
+            creator_name: string;
+            /** Has Video */
+            has_video: boolean;
+            /** Id */
+            id: string;
+            /** Is Ai Generated */
+            is_ai_generated: boolean;
+            /** Is Favorite */
+            is_favorite: boolean;
+            /** Is Nsfw */
+            is_nsfw: boolean;
+            /** Posted At */
+            posted_at?: string | null;
+            /** Source */
+            source: string;
+            /** Thumbnail Asset Id */
+            thumbnail_asset_id?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** RepositorySubscription */
+        RepositorySubscription: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Schedule Mode */
+            schedule_mode?: string | null;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scheduled Times */
+            scheduled_times?: string | null;
+            /** Sync Enabled */
+            sync_enabled: boolean;
+            /** Sync Interval Hours */
+            sync_interval_hours: number;
+        };
+        /** RepositorySyncOutcome */
+        RepositorySyncOutcome: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "new_content" | "no_changes" | "no_content";
+            /** Completed At */
+            completed_at?: string | null;
+            /** Downloaded Metadata Count */
+            downloaded_metadata_count?: number | null;
+            /** Media Count */
+            media_count?: number | null;
+            /** Metadata Count */
+            metadata_count?: number | null;
+            /** Pending Work Count */
+            pending_work_count?: number | null;
+            /** Recovered Metadata Count */
+            recovered_metadata_count?: number | null;
+        };
         /** ResetPasswordOut */
         ResetPasswordOut: {
             /** Password */
             password: string;
+        };
+        /** ResolveDownloadConflictRequest */
+        ResolveDownloadConflictRequest: {
+            /** Decisions */
+            decisions: components["schemas"]["ConflictDecision"][];
+            /** Resolution Id */
+            resolution_id?: string | null;
+        };
+        /** RestoreChunkResponse */
+        RestoreChunkResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
+        };
+        /** RestoreReceiptResponse */
+        RestoreReceiptResponse: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Diagnostic */
+            diagnostic?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Phase */
+            phase: string;
+            /** Request Id */
+            request_id: string;
+            /** Rollback Command */
+            rollback_command?: string | null;
+            /** Rollback Components */
+            rollback_components?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
+            /** Rollback Performed */
+            rollback_performed?: boolean | null;
+            /** Rollback Status */
+            rollback_status?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
         };
         /** RestoreSubscriptionSlotRequest */
         RestoreSubscriptionSlotRequest: {
@@ -5595,6 +6324,83 @@ export interface components {
             slot_at: string;
             /** Source Ids */
             source_ids: string[];
+        };
+        /** RestoreUploadCreateRequest */
+        RestoreUploadCreateRequest: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Filename */
+            filename: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Total Chunks */
+            total_chunks: number;
+        };
+        /** RestoreUploadCreatedResponse */
+        RestoreUploadCreatedResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Upload Token */
+            upload_token: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
+        };
+        /** RestoreUploadSessionResponse */
+        RestoreUploadSessionResponse: {
+            /** Chunk Size */
+            chunk_size: number;
+            /** Created At */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Next Chunk */
+            next_chunk: number;
+            /** Received Bytes */
+            received_bytes: number;
+            /** Received Chunks */
+            received_chunks: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** State */
+            state: string;
+            /** Total Chunks */
+            total_chunks: number;
+            /** Updated At */
+            updated_at: string;
+            /** Upload Id */
+            upload_id: string;
+            /** Validation Task Id */
+            validation_task_id?: string | null;
         };
         /** RuleSuggestionRead */
         RuleSuggestionRead: {
@@ -5716,6 +6522,91 @@ export interface components {
              */
             updated_at: string;
         };
+        /** StorageBreakdownResponse */
+        StorageBreakdownResponse: {
+            /** Creator Tree */
+            creator_tree: components["schemas"]["CreatorStorageNode"][];
+            /** Creators */
+            creators: components["schemas"]["StorageCreatorEntry"][];
+            /** Db Stats */
+            db_stats: {
+                [key: string]: number;
+            };
+            /**
+             * Inventory Source
+             * @constant
+             */
+            inventory_source: "storage_artifacts";
+            /** Inventory Updated At */
+            inventory_updated_at?: string | null;
+            /** Layers */
+            layers: {
+                [key: string]: components["schemas"]["StorageLayer"];
+            };
+            pipeline_stats: components["schemas"]["DataCenterPipelineStats"];
+            /** Sources */
+            sources: {
+                [key: string]: components["schemas"]["StorageSourceStats"];
+            };
+            /** Unlinked Repositories */
+            unlinked_repositories: components["schemas"]["StorageRepositoryNode"][];
+        };
+        /** StorageCreatorEntry */
+        StorageCreatorEntry: {
+            /** Creator Id */
+            creator_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Name */
+            name: string;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** Size Mb */
+            size_mb: number;
+            /** Source */
+            source: string;
+            /** Work Count */
+            work_count: number;
+        };
+        /** StorageLayer */
+        StorageLayer: {
+            /** Description */
+            description: string;
+            /** Path */
+            path: string;
+            /** Size Mb */
+            size_mb: number;
+        };
+        /** StorageRepositoryNode */
+        StorageRepositoryNode: {
+            /** Directory Name */
+            directory_name: string;
+            /** Disk Source */
+            disk_source: string;
+            /** Logical Size Mb */
+            logical_size_mb: number;
+            /** Repository Id */
+            repository_id?: string | null;
+            /** Size Mb */
+            size_mb: number;
+            /** Source */
+            source: string;
+            /** Source Display Name */
+            source_display_name: string;
+            /** Work Count */
+            work_count: number;
+        };
+        /** StorageSourceStats */
+        StorageSourceStats: {
+            /** Creator Count */
+            creator_count: number;
+            /** Logical Size Mb */
+            logical_size_mb: number;
+            /** Size Mb */
+            size_mb: number;
+            /** Work Count */
+            work_count: number;
+        };
         /** SubscriptionCreate */
         SubscriptionCreate: {
             /**
@@ -5731,7 +6622,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
+            schedule_mode?: ("inherit" | "interval" | "calendar" | "manual") | null;
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /**
@@ -5760,8 +6653,11 @@ export interface components {
             /**
              * Schedule Mode
              * @default interval
+             * @enum {string}
              */
-            schedule_mode: string;
+            schedule_mode: "interval" | "calendar";
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /**
              * Scheduled Times
              * @default
@@ -5848,6 +6744,10 @@ export interface components {
             running_job_count?: number | null;
             /** Schedule Mode */
             schedule_mode?: string | null;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Source Count */
@@ -5892,6 +6792,10 @@ export interface components {
              * @default 0
              */
             overdue_sources: number;
+            /** Schedule Rule */
+            schedule_rule?: {
+                [key: string]: unknown;
+            } | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Interval Hours */
@@ -6018,7 +6922,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Schedule Mode */
-            schedule_mode?: ("inherit" | "interval" | "fixed_time" | "manual") | null;
+            schedule_mode?: ("inherit" | "interval" | "calendar" | "manual") | null;
+            /** Schedule Rule */
+            schedule_rule?: (components["schemas"]["DailyScheduleRule"] | components["schemas"]["WeeklyScheduleRule"] | components["schemas"]["MonthlyScheduleRule"]) | null;
             /** Scheduled Times */
             scheduled_times?: string | null;
             /** Sync Enabled */
@@ -6043,6 +6949,45 @@ export interface components {
             /** Metadata Count */
             metadata_count: number;
         };
+        /** SystemInfoResponse */
+        SystemInfoResponse: {
+            /** Archives Kb */
+            archives_kb: {
+                [key: string]: number;
+            };
+            /** Db Stats */
+            db_stats: {
+                [key: string]: number;
+            };
+            /** Downloads Free Gb */
+            downloads_free_gb: number;
+            /** Downloads Size Mb */
+            downloads_size_mb: number;
+            /** Downloads Total Gb */
+            downloads_total_gb: number;
+            /** Downloads Used Gb */
+            downloads_used_gb: number;
+            /**
+             * Inventory Source
+             * @constant
+             */
+            inventory_source: "storage_artifacts";
+            /** Inventory Updated At */
+            inventory_updated_at?: string | null;
+            /** Library Free Gb */
+            library_free_gb: number;
+            /** Library Size Mb */
+            library_size_mb: number;
+            /** Library Total Gb */
+            library_total_gb: number;
+            /** Library Used Gb */
+            library_used_gb: number;
+            pipeline_stats: components["schemas"]["DataCenterPipelineStats"];
+            /** Python */
+            python: string;
+            /** Version */
+            version: string;
+        };
         /** TagCreate */
         TagCreate: {
             /** Category */
@@ -6066,6 +7011,11 @@ export interface components {
             id: string;
             /** Normalized Name */
             normalized_name: string;
+            /**
+             * Source Usage
+             * @default []
+             */
+            source_usage: components["schemas"]["TagSourceUsage"][];
             /**
              * Top Creators
              * @default []
@@ -6094,10 +7044,22 @@ export interface components {
             /** Normalized Name */
             normalized_name: string;
             /**
+             * Source Usage
+             * @default []
+             */
+            source_usage: components["schemas"]["TagSourceUsage"][];
+            /**
              * Usage Count
              * @default 0
              */
             usage_count: number;
+        };
+        /** TagSourceUsage */
+        TagSourceUsage: {
+            /** Source */
+            source: string;
+            /** Work Count */
+            work_count: number;
         };
         /** TagUpdate */
         TagUpdate: {
@@ -6285,6 +7247,18 @@ export interface components {
             expires_in: number;
             /** Ticket */
             ticket: string;
+        };
+        /** WeeklyScheduleRule */
+        WeeklyScheduleRule: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            frequency: "weekly";
+            /** Times */
+            times: string[];
+            /** Weekdays */
+            weekdays: number[];
         };
         /** WeiboSourceConfig */
         WeiboSourceConfig: {
@@ -6647,12 +7621,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -6736,7 +7710,54 @@ export interface operations {
             };
         };
     };
-    get_api_v1_admin_backup_estimate: {
+    post_api_v1_admin_backup_estimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_estimate_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -6751,7 +7772,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -6830,18 +7898,175 @@ export interface operations {
             };
         };
     };
-    post_api_v1_admin_backup_restore: {
+    get_api_v1_admin_backup_restore_receipts_request_id: {
         parameters: {
-            query?: {
-                confirm?: string;
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
             };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreReceiptResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_backup_restore_uploads: {
+        parameters: {
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_post_api_v1_admin_backup_restore"];
+                "application/json": components["schemas"]["RestoreUploadCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreUploadCreatedResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_restore_uploads_upload_id: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreUploadSessionResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_api_v1_admin_backup_restore_uploads_upload_id_chunks_chunk_index: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+                "X-Chunk-SHA256": string;
+            };
+            path: {
+                upload_id: string;
+                chunk_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
             };
         };
         responses: {
@@ -6851,7 +8076,109 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["RestoreChunkResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_backup_restore_uploads_upload_id_validate: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_backup_restore_uploads_upload_id_validation_latest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Restore-Token": string;
+            };
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -6892,9 +8219,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BackupScheduleRequest"];
             };
         };
         responses: {
@@ -6995,7 +8320,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7097,7 +8422,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7144,7 +8469,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7442,7 +8767,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7694,12 +9019,61 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_gallerydl_config_test_connection_latest: {
+        parameters: {
+            query: {
+                source: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -7825,7 +9199,54 @@ export interface operations {
             };
         };
     };
-    get_api_v1_admin_integrity_check: {
+    post_api_v1_admin_integrity_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_integrity_check_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -7840,7 +9261,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -7886,7 +9307,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7937,7 +9358,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8131,7 +9552,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8217,7 +9638,103 @@ export interface operations {
             };
         };
     };
+    post_api_v1_admin_operations_task_id_retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_admin_proxy_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_proxy_test_latest: {
         parameters: {
             query?: never;
             header?: never;
@@ -8232,7 +9749,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8372,7 +9889,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8522,7 +10039,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["StorageBreakdownResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -8569,7 +10086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["SystemInfoResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -10018,7 +11535,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10706,7 +12223,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12391,7 +13908,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12652,7 +14169,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12801,7 +14318,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12903,7 +14420,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13168,7 +14685,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["RepositoryDetailResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14672,7 +16189,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15592,6 +17109,210 @@ export interface operations {
                 "application/json": {
                     [key: string]: unknown;
                 } | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_tasks_task_id_conflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_tasks_task_id_conflicts_media: {
+        parameters: {
+            query: {
+                relative_path: string;
+                side: "canonical" | "staged";
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_conflicts_resolutions_resolution_id_rollback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                resolution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_conflicts_resolve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveDownloadConflictRequest"];
             };
         };
         responses: {

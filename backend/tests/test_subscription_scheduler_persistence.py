@@ -29,7 +29,7 @@ def test_next_sync_migration_follows_import_lease_head_and_is_concurrent():
     assert "WHERE is_enabled IS TRUE" in migration
 
 
-def test_subscription_setting_mutations_invalidate_persisted_due_time():
+def test_subscription_setting_mutations_replan_only_schedule_changes():
     from app.services.subscription import SubscriptionService
     from app.api.admin import settings
 
@@ -38,10 +38,42 @@ def test_subscription_setting_mutations_invalidate_persisted_due_time():
     put_setting = inspect.getsource(settings._put_setting)
 
     assert "SCHEDULE_FIELDS.intersection(data)" in update_subscription
-    assert ".values(next_sync_at=None)" in update_subscription
+    assert "replan_subscription_sources" in update_subscription
     assert "ss.next_sync_at = None" in update_source
-    assert 'key == "subscription_defaults" and changed' in put_setting
-    assert ".values(next_sync_at=None)" in put_setting
+    assert "subscription_schedule_changed" in put_setting
+    assert "replan_inherited_subscription_sources" in put_setting
+    assert ".values(next_sync_at=None)" not in put_setting
+
+
+def test_subscription_schedule_change_ignores_enablement_and_scan_cadence():
+    from app.services.subscription_replan import subscription_schedule_changed
+
+    original = {
+        "scheduler_enabled": True,
+        "scheduler_scan_interval_minutes": 5,
+        "schedule_mode": "calendar",
+        "schedule_rule": {"frequency": "daily", "times": ["22:00:00"]},
+        "timezone": "Asia/Shanghai",
+        "default_sync_interval_hours": 6,
+    }
+    disabled = {
+        **original,
+        "scheduler_enabled": False,
+        "scheduler_scan_interval_minutes": 60,
+    }
+
+    assert subscription_schedule_changed(original, disabled) is False
+    assert subscription_schedule_changed(
+        original,
+        {
+            **disabled,
+            "schedule_rule": {"frequency": "weekly", "weekdays": [1], "times": ["22:00:00"]},
+        },
+    ) is True
+    assert subscription_schedule_changed(
+        original,
+        {**disabled, "timezone": "UTC"},
+    ) is True
 
 
 def test_success_invalidates_and_enqueue_advances_persisted_due_time():

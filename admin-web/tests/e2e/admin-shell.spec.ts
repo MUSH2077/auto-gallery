@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { createHash } from "node:crypto";
 
 const me = {
   id: 1,
@@ -260,7 +261,13 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
       const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
-      const days = year === 2025
+      const days = year === 2023
+        ? []
+        : year === 2024
+        ? [
+            { date: "2024-02-29", total: 1, pixiv: 1, pixiv_ids: ["work-2024-1"] },
+          ]
+        : year === 2025
         ? [
             { date: "2025-02-04", total: 2, pixiv: 2, pixiv_ids: ["work-2025-1", "work-2025-2"] },
             { date: "2025-09-18", total: 1, x: 1, x_ids: ["work-2025-3"] },
@@ -273,7 +280,7 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({
         json: {
           creator_id: "fixture-creator",
-          sources: ["pixiv", "x"],
+          sources: year === 2023 ? ["pixiv"] : ["pixiv", "x"],
           days,
           total: days.reduce((sum, day) => sum + day.total, 0),
         },
@@ -299,6 +306,8 @@ async function installFixtureRoutes(context: BrowserContext) {
             { tag: "seventh-is-not-charted", count: 8 },
           ],
           monthly_frequency: [
+            { month: "2023-01", count: 0 },
+            { month: "2024-02", count: 1 },
             { month: "2025-01", count: 1 },
             { month: "2025-02", count: 3 },
             { month: "2025-09", count: 2 },
@@ -389,6 +398,8 @@ async function installFixtureRoutes(context: BrowserContext) {
             },
           },
           recent_jobs: [],
+          sync_history: [],
+          work_total: 13,
           recent_works: [],
         },
       });
@@ -557,10 +568,18 @@ async function installFixtureRoutes(context: BrowserContext) {
           library_size_mb: 0,
           downloads_free_gb: 500,
           archives_kb: {},
+          db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
         },
       });
     } else if (path === "/api/v1/admin/storage-breakdown") {
-      await route.fulfill({ json: { sources: {}, creator_tree: [], unlinked_repositories: [] } });
+      await route.fulfill({
+        json: {
+          sources: {},
+          creator_tree: [],
+          unlinked_repositories: [],
+          db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
+        },
+      });
     } else if (path === "/api/v1/admin/integrity-check") {
       await route.fulfill({
         json: { issues: [], db_stats: {}, checked_at: "2026-07-27T12:00:00Z" },
@@ -1148,7 +1167,7 @@ for (const viewport of [
   });
 }
 
-test("creator charts share the data contract and year selection reloads the requested range", async ({ page }) => {
+test("creator activity calendar aligns real month spans and its year listbox supports keyboard selection", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/creators/fixture-creator");
 
@@ -1161,13 +1180,28 @@ test("creator charts share the data contract and year selection reloads the requ
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
 
   const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
+  await expect(activityGrid).toHaveAttribute("data-calendar-grid", "shared");
+  await expect(activityGrid.getByRole("row")).toHaveCount(7);
+  await expect(activityGrid.getByRole("row").first().getByRole("gridcell")).not.toHaveCount(0);
+  const activityGridAxe = await new AxeBuilder({ page })
+    .include('[data-chart-kind="activity-dot-matrix"]')
+    .analyze();
+  expect(activityGridAxe.violations.filter((violation) => (
+    violation.id === "aria-required-children" || violation.id === "aria-required-parent"
+  ))).toEqual([]);
+  await expect(activityGrid.locator('[data-calendar-month="0"]')).toHaveCSS("grid-column", "2 / span 4");
+  await expect(activityGrid.locator('[data-calendar-month="11"]')).toHaveCSS("grid-column", "50 / span 5");
+  await expect(activityGrid.locator("[data-calendar-weekday]")).toHaveCount(7);
+  await expect(activityGrid.locator('[data-calendar-weekday="1"]')).not.toBeEmpty();
+  await expect(activityGrid.locator("#activity-day-2026-01-01")).toHaveCSS("grid-column", "2");
+  await expect(activityGrid.locator("#activity-day-2026-01-01")).toHaveCSS("grid-row", "5");
   await activityGrid.focus();
   const firstActiveDay = await activityGrid.getAttribute("aria-activedescendant");
   await page.keyboard.press("ArrowRight");
   const nextActiveDay = await activityGrid.getAttribute("aria-activedescendant");
   expect(nextActiveDay).not.toBe(firstActiveDay);
   await page.keyboard.press("Enter");
-  await expect(page.locator('.activity-desktop [aria-live="polite"]')).toBeVisible();
+  await expect(page.locator('[data-chart-kind="activity-dot-matrix"] [aria-live="polite"]')).toBeVisible();
   await page.keyboard.press("Escape");
 
   const multiSourceDay = page.locator("#activity-day-2026-04-12");
@@ -1182,11 +1216,53 @@ test("creator charts share the data contract and year selection reloads the requ
     return url.pathname === "/api/v1/creators/fixture-creator/timeline"
       && url.searchParams.get("from_date") === "2025-01-01";
   });
-  await page.getByLabel("Year", { exact: true }).selectOption("2025");
+  const yearPicker = page.getByRole("button", { name: "Year", exact: true });
+  await yearPicker.click();
+  const yearListbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await expect(yearListbox).toBeFocused();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
+  await expect(page.getByRole("option", { name: "2026", exact: true })).toHaveAttribute("aria-selected", "true");
+  await yearListbox.press("ArrowUp");
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2025");
+  await yearListbox.press("Escape");
+  await expect(yearPicker).toBeFocused();
+  await yearPicker.click();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
+  await yearListbox.press("ArrowUp");
+  await page.getByRole("heading", { name: "Fixture Creator" }).click();
+  await expect(yearListbox).toBeHidden();
+  await yearPicker.click();
+  await expect(yearListbox).toHaveAttribute("aria-activedescendant", "activity-year-option-2026");
+  await yearListbox.press("Home");
+  await yearListbox.press("End");
+  await yearListbox.press("ArrowUp");
+  await yearListbox.press(" ");
+  await expect(yearListbox).toBeHidden();
+  await expect(yearPicker).toBeFocused();
   const request = await request2025;
   const requestUrl = new URL(request.url());
   expect(requestUrl.searchParams.get("to_date")).toBe("2026-01-01");
   await expect(page.getByTestId("creator-activity-chart")).toContainText("Activity peaked on");
+  await expect(activityGrid.getByRole("gridcell")).toHaveCount(365);
+
+  await yearPicker.click();
+  await yearListbox.press("Tab");
+  await expect(yearListbox).toBeHidden();
+  await expect(page.getByRole("button", { name: "Next year", exact: true })).toBeFocused();
+  await yearPicker.click();
+  await yearListbox.press("Shift+Tab");
+  await expect(yearListbox).toBeHidden();
+  await expect(yearPicker).toBeFocused();
+
+  const request2024 = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/creators/fixture-creator/timeline"
+      && url.searchParams.get("from_date") === "2024-01-01";
+  });
+  await page.getByRole("button", { name: "Previous year", exact: true }).click();
+  await request2024;
+  await expect(activityGrid.locator("#activity-day-2024-02-29")).toBeVisible();
+  await expect(activityGrid.getByRole("gridcell")).toHaveCount(366);
 
   await expect(page.locator("[data-chart-frame] details")).toHaveCount(0);
   await expect(page.locator("[data-chart-frame] table")).toHaveCount(0);
@@ -1209,10 +1285,11 @@ test("creator charts share the data contract and year selection reloads the requ
     ));
     expect(overflowingCharts).toEqual([]);
   }
-  await expect(page.locator(".activity-mobile button")).toHaveCount(12);
-  await page.locator(".activity-mobile button").nth(1).click();
-  await expect(page.locator(".activity-mobile")).toContainText("February publishing details");
-  await expect(page.locator(".activity-mobile")).toContainText("pixiv: 2 works");
+  const calendarScrollMetrics = await page.locator('[data-calendar-scroll]').evaluate((node) => ({
+    scrollWidth: node.scrollWidth,
+    clientWidth: node.clientWidth,
+  }));
+  expect(calendarScrollMetrics.scrollWidth).toBeGreaterThan(calendarScrollMetrics.clientWidth);
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-mobile.png", fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.reload();
@@ -1232,6 +1309,93 @@ test("creator activity distinguishes a failed request from a genuinely empty yea
   await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
   await expect(activity).not.toContainText("No publishing activity was recorded");
   await expect(activity.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+test("creator activity hides stale data while a selected year request loads or fails", async ({ page }) => {
+  await page.goto("/admin/creators/fixture-creator");
+
+  const activity = page.getByTestId("creator-activity-chart");
+  await expect(activity.locator("#activity-day-2026-04-12")).toBeVisible();
+
+  let releaseSelectedYear: (() => void) | undefined;
+  let selectedYearRequestCount = 0;
+  await page.route("**/api/v1/creators/fixture-creator/timeline?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("from_date") !== "2025-01-01") {
+      await route.fallback();
+      return;
+    }
+    selectedYearRequestCount += 1;
+    if (selectedYearRequestCount === 1) {
+      await new Promise<void>((resolve) => {
+        releaseSelectedYear = resolve;
+      });
+    }
+    await route.fulfill({ status: 500, json: { detail: "selected-year fixture failure" } });
+  });
+
+  await page.getByRole("button", { name: "Year", exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await listbox.press("ArrowUp");
+  await listbox.press("Enter");
+
+  await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
+  await expect(activity).not.toContainText("Activity peaked on");
+  if (!releaseSelectedYear) throw new Error("Expected the selected-year request to be intercepted");
+  releaseSelectedYear();
+  await expect(activity.getByRole("alert")).toContainText("Publishing activity could not be loaded");
+  await expect(activity.locator("#activity-day-2026-04-12")).toHaveCount(0);
+  const picker = page.getByRole("button", { name: "Year", exact: true });
+  await expect(picker).toBeVisible();
+  await picker.focus();
+  await expect(picker).toBeFocused();
+  await picker.click();
+  const recoveryListbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await recoveryListbox.press("ArrowDown");
+  await recoveryListbox.press("Enter");
+  await expect(picker).toBeFocused();
+  await expect(activity.locator("#activity-day-2026-04-12")).toBeVisible();
+  await expect(activity).toContainText("Activity peaked on");
+});
+
+test("creator activity accepts an empty response only for its requested year", async ({ page }) => {
+  await page.goto("/admin/creators/fixture-creator");
+
+  const activity = page.getByTestId("creator-activity-chart");
+  const picker = page.getByRole("button", { name: "Year", exact: true });
+  await picker.click();
+  const listbox = page.getByRole("listbox", { name: "Year", exact: true });
+  await listbox.press("Home");
+  await listbox.press("Enter");
+  await expect(picker).toHaveText(/2023/);
+  await expect(activity).toContainText("pixiv");
+
+  let releaseSelectedYear: (() => void) | undefined;
+  await page.route("**/api/v1/creators/fixture-creator/timeline?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("from_date") !== "2024-01-01") {
+      await route.fallback();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      releaseSelectedYear = resolve;
+    });
+    await route.fulfill({
+      json: { creator_id: "fixture-creator", sources: ["x"], days: [], total: 0 },
+    });
+  });
+
+  await picker.click();
+  await listbox.press("ArrowDown");
+  await listbox.press("Enter");
+  await expect(picker).toBeFocused();
+  await expect(activity.getByRole("status")).toContainText("Loading...");
+  await expect(activity).not.toContainText("pixiv");
+  if (!releaseSelectedYear) throw new Error("Expected the empty selected-year request to be intercepted");
+  releaseSelectedYear();
+  await expect(activity.getByRole("status")).toHaveCount(0);
+  await expect(activity).toContainText("x");
+  await expect(activity).not.toContainText("Activity peaked on");
 });
 
 test("data management charts preserve 100 ticks, exact values, hierarchy, and diagnostics", async ({ page }) => {
@@ -1353,6 +1517,36 @@ test("data management charts preserve 100 ticks, exact values, hierarchy, and di
   }
   await page.screenshot({ path: "/tmp/auto-gallery-data-charts-mobile.png", fullPage: true });
   await expectNoPageOverflow(page);
+});
+
+test("data center overview shows a retryable error instead of permanent placeholders", async ({ page }) => {
+  await page.route("**/api/v1/admin/system-info", (route) => route.fulfill({
+    status: 500,
+    json: { detail: "ledger unavailable" },
+  }));
+  await page.route("**/api/v1/admin/storage-breakdown", (route) => route.fulfill({
+    json: {
+      sources: {},
+      creators: [],
+      creator_tree: [],
+      unlinked_repositories: [],
+      db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
+      inventory_source: "storage_artifacts",
+      inventory_updated_at: null,
+      pipeline_stats: {
+        pending_import_works: 0,
+        orphan_pending_artifacts: 0,
+        failed_artifacts: 0,
+      },
+    },
+  }));
+
+  await page.goto("/admin/data-mgmt");
+
+  const overview = page.locator('[data-page-primary-content]');
+  await expect(overview.getByRole("alert")).toContainText("Data Center overview could not be loaded");
+  await expect(overview.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(overview).not.toContainText("Original Media -");
 });
 
 for (const route of QUALITY_ROUTES) {
@@ -1850,6 +2044,7 @@ test("settings no longer duplicates data management or language controls", async
 test("subscription list uses one authoritative latest state and page-scoped summary ids", async ({ page }) => {
   const subscriptionId = "11111111-1111-4111-8111-111111111111";
   let requestedIds = "";
+  let runtimeScheduleRule: unknown = { frequency: "daily", times: ["22:00:00"] };
   await page.route("**/api/v1/search**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname !== "/api/v1/search" || url.searchParams.get("scope") !== "subscriptions") {
@@ -1906,10 +2101,11 @@ test("subscription list uses one authoritative latest state and page-scoped summ
         enabled_source_count: 1,
         schedule: {
           configured_mode: "inherit",
-          effective_mode: "fixed_time",
+          effective_mode: "calendar",
           inherited: true,
           timezone: "Asia/Shanghai",
-          scheduled_times: "22:00",
+          scheduled_times: null,
+          schedule_rule: runtimeScheduleRule,
           sync_interval_hours: 6,
           next_due_at: "2026-08-14T14:00:00Z",
           oldest_due_at: null,
@@ -1931,7 +2127,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Sync successful · No new works")).toBeVisible();
     await expect(page.getByText("1 failed")).toHaveCount(0);
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("System default · Daily at 22:00")).toBeVisible();
+    await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
     const results = await new AxeBuilder({ page })
       .include("#main-content")
@@ -1944,6 +2140,16 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     });
   }
   expect(requestedIds).toBe(subscriptionId);
+
+  runtimeScheduleRule = { frequency: "weekly", times: "22:00:00" };
+  await page.goto("/admin/subscriptions");
+  await expect(page.getByText("System default · Calendar · Schedule at 22:00")).toBeVisible();
+  await expect(page.getByText("Application error")).toHaveCount(0);
+
+  runtimeScheduleRule = { frequency: "daily", times: {} };
+  await page.goto("/admin/subscriptions");
+  await expect(page.getByText("System default · Calendar · Daily at —")).toBeVisible();
+  await expect(page.getByText("System default · Calendar · Daily at 22:00")).toHaveCount(0);
 });
 
 test("saving inherit sends the typed strategy and survives authoritative reload", async ({ page }) => {
@@ -1965,7 +2171,8 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
     running_job_count: 0,
     failed_job_count: 0,
     configured_mode: inherited ? "inherit" : "manual",
-    effective_mode: inherited ? "fixed_time" : "manual",
+    effective_mode: inherited ? "calendar" : "manual",
+    schedule_rule: inherited ? { frequency: "daily", times: ["22:00:00"] } : null,
     auto_enabled_source: inherited
       ? { id: "fixture-source", source: "pixiv", source_url: "https://www.pixiv.net/users/1" }
       : null,
@@ -2006,10 +2213,11 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
         enabled_source_count: inherited ? 1 : 0,
         schedule: {
           configured_mode: inherited ? "inherit" : "manual",
-          effective_mode: inherited ? "fixed_time" : "manual",
+          effective_mode: inherited ? "calendar" : "manual",
           inherited,
           timezone: "Asia/Shanghai",
-          scheduled_times: inherited ? "22:00" : null,
+          scheduled_times: null,
+          schedule_rule: inherited ? { frequency: "daily", times: ["22:00:00"] } : null,
           sync_interval_hours: 6,
           next_due_at: inherited ? "2026-08-14T14:00:00Z" : null,
           oldest_due_at: null,
@@ -2030,10 +2238,10 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
   await expect.poll(() => updatePayload).not.toBeNull();
   expect(updatePayload).toMatchObject({ schedule_mode: "inherit" });
   expect(updatePayload).not.toHaveProperty("sync_enabled");
-  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+  await expect(page.locator("dl").getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
   await expect(page.locator("dl").getByText("Manual Only", { exact: true })).toHaveCount(0);
   await page.reload();
-  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+  await expect(page.locator("dl").getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
 });
 
 test("compact scheduler omits healthy auth details and storage chart footers are removed", async ({ page }) => {
@@ -2224,6 +2432,920 @@ test("subscription and repository details use clickable hierarchy breadcrumbs", 
   await expect(page).toHaveURL(/\/admin\/subscriptions$/);
 });
 
+test("slow administrator integrity flow starts once, polls one task, and renders its snapshot", async ({ page }) => {
+  let starts = 0;
+  let polls = 0;
+  let releaseCompletion!: () => void;
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  await page.route("**/api/v1/admin/integrity-check/latest", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.fulfill({ json: { snapshot: null } });
+  });
+  await page.route("**/api/v1/admin/integrity-check", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    starts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await route.fulfill({
+      status: 202,
+      json: {
+        task_id: "integrity-task",
+        job_id: "admin-integrity-task-attempt-1",
+        status: "enqueued",
+        operation_type: "admin-integrity-scan",
+      },
+    });
+  });
+  await page.route("**/api/v1/admin/operations/integrity-task", async (route) => {
+    polls += 1;
+    const complete = polls >= 2;
+    if (complete) await completionGate;
+    await route.fulfill({
+      json: {
+        task_id: "integrity-task",
+        job_id: "integrity-task",
+        rq_job_id: "admin-integrity-task-attempt-1",
+        status: complete ? "complete" : "running",
+        operation_type: "admin-integrity-scan",
+        progress: complete
+          ? { phase: "complete", label: "Integrity scan complete" }
+          : { phase: "scanning", label: "Scanning data integrity", current: 2, total: 6 },
+        result: complete
+          ? { issues: [], db_stats: { works: 12 }, checked_at: "2026-08-24T12:00:00Z", message: "Integrity scan complete" }
+          : {},
+        error: null,
+        updated_at: Date.now() / 1000,
+      },
+    });
+  });
+
+  await page.goto("/admin/data-mgmt");
+  await expect(page.getByText("Loading the latest successful result…").first()).toBeVisible();
+  const runButton = page.getByRole("button", { name: "Run Check" });
+  await runButton.click();
+  await expect(runButton).toBeDisabled();
+  await expect(page.getByRole("link", { name: "Task detail" }).first())
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=integrity-task");
+  await expect(page.getByText("Scanning data integrity")).toBeVisible();
+  releaseCompletion();
+  await expect(page.getByText("All Clear")).toBeVisible({ timeout: 10_000 });
+  expect(starts).toBe(1);
+  expect(polls).toBeGreaterThanOrEqual(2);
+  expect(polls).toBeLessThanOrEqual(3);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-admin-operation='admin-integrity-scan']")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("slow administrator proxy failure exposes structured retry and the successful result", async ({ page }) => {
+  let retried = false;
+  let postPending = false;
+  let proxyStarts = 0;
+  let taskPolls = 0;
+  await page.route("**/api/v1/admin/proxy/test/latest", (route) => route.fulfill({
+    json: { snapshot: null },
+  }));
+  await page.route("**/api/v1/admin/proxy/test", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    proxyStarts += 1;
+    postPending = true;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await route.fulfill({
+      status: 202,
+      json: {
+        task_id: "proxy-task",
+        job_id: "admin-proxy-task-attempt-1",
+        status: "enqueued",
+        operation_type: "admin-proxy-test",
+      },
+    });
+  });
+  await page.route("**/api/v1/admin/operations/proxy-task/retry", async (route) => {
+    retried = true;
+    await route.fulfill({
+      status: 202,
+      json: {
+        task_id: "proxy-task",
+        job_id: "admin-proxy-task-attempt-2",
+        status: "enqueued",
+        operation_type: "admin-proxy-test",
+      },
+    });
+  });
+  await page.route("**/api/v1/admin/operations/proxy-task", async (route) => {
+    taskPolls += 1;
+    if (!retried) {
+      await route.fulfill({
+        json: {
+          task_id: "proxy-task",
+          job_id: "proxy-task",
+          status: "failed",
+          operation_type: "admin-proxy-test",
+          progress: { phase: "failed", label: "Operation failed" },
+          result: {},
+          error: "Proxy probe worker exited unexpectedly",
+          reason_code: "worker_crash",
+        },
+      });
+      return;
+    }
+    const complete = taskPolls >= 3;
+    await route.fulfill({
+      json: {
+        task_id: "proxy-task",
+        job_id: "proxy-task",
+        status: complete ? "complete" : "running",
+        operation_type: "admin-proxy-test",
+        progress: complete
+          ? { phase: "complete", label: "Proxy connectivity test complete" }
+          : { phase: "testing", label: "Testing proxy connectivity" },
+        result: complete ? {
+          proxy_enabled: true,
+          proxy_reachable: true,
+          proxy_reachable_error: "",
+          proxy_config: { http: "configured", https: "configured" },
+          results: [{
+            name: "Pixiv", url: "https://www.pixiv.net", direct_ok: true,
+            direct_ms: 25, direct_error: "", proxy_ok: true, proxy_ms: 30, proxy_error: "",
+          }],
+          message: "Proxy connectivity test complete",
+        } : {},
+        error: null,
+      },
+    });
+  });
+
+  await page.goto("/admin/settings/proxy");
+  const start = page.getByRole("button", { name: "Test Now" });
+  await start.click();
+  await expect.poll(() => postPending).toBe(true);
+  await expect(page.getByRole("button", { name: "Starting…" })).toBeDisabled();
+  await expect(page.locator("[data-admin-operation='admin-proxy-test']").getByRole("alert"))
+    .toContainText("Proxy probe worker exited unexpectedly");
+  await expect(page.getByText("worker_crash")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=proxy-task");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
+  await expect(page.getByText("Proxy is reachable")).toBeVisible({ timeout: 10_000 });
+  expect(retried).toBe(true);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect.poll(() => proxyStarts).toBe(2);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-admin-operation='admin-proxy-test']")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("backup estimate and creation use independent TaskRuns without request waterfalls", async ({ page }) => {
+  let estimateStarts = 0;
+  let createStarts = 0;
+  await page.route("**/api/v1/admin/backup/estimate/latest", (route) => route.fulfill({
+    json: {
+      snapshot: {
+        task_id: "old-estimate",
+        job_id: "admin-old-estimate-attempt-1",
+        status: "complete",
+        operation_type: "admin-backup-estimate",
+        progress: { phase: "complete", label: "Backup estimate complete" },
+        result: { components: { database: 4, "gallerydl-config": 2 }, message: "Backup estimate complete" },
+        completed_at: "2026-08-24T12:00:00Z",
+      },
+    },
+  }));
+  await page.route("**/api/v1/admin/backup/latest", (route) => route.fulfill({ json: { snapshot: null } }));
+  await page.route("**/api/v1/admin/backup/estimate", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    estimateStarts += 1;
+    await route.fulfill({ status: 202, json: {
+      task_id: "estimate-task", job_id: "admin-estimate-task-attempt-1",
+      status: "enqueued", operation_type: "admin-backup-estimate",
+    } });
+  });
+  await page.route("**/api/v1/admin/backup", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    createStarts += 1;
+    await route.fulfill({ status: 202, json: {
+      task_id: "backup-task", job_id: "admin-backup-task-attempt-1",
+      status: "enqueued", operation_type: "admin-backup-create",
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/estimate-task", (route) => route.fulfill({ json: {
+    task_id: "estimate-task", job_id: "estimate-task", status: "complete",
+    operation_type: "admin-backup-estimate",
+    progress: { phase: "complete", label: "Backup estimate complete" },
+    result: { components: { database: 8, "gallerydl-config": 3 }, message: "Backup estimate complete" },
+  } }));
+  await page.route("**/api/v1/admin/operations/backup-task", (route) => route.fulfill({ json: {
+    task_id: "backup-task", job_id: "backup-task", status: "complete",
+    operation_type: "admin-backup-create",
+    progress: { phase: "complete", label: "Backup created" },
+    result: { filename: "auto-gallery-backup_20260824_120000.tar.gz", size_mb: 12.5, message: "Backup created" },
+  } }));
+
+  await page.goto("/admin/settings/backup");
+  await expect(page.getByText("6 KB")).toBeVisible();
+  await page.getByRole("button", { name: "Refresh estimate" }).click();
+  await expect(page.getByText("11 KB")).toBeVisible();
+  await page.getByRole("button", { name: "Create Backup" }).click();
+  await expect(page.getByText("auto-gallery-backup_20260824_120000.tar.gz")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Task detail" }).last())
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=backup-task");
+  expect(estimateStarts).toBe(1);
+  const createButton = page.getByRole("button", { name: "Create Backup" });
+  await expect(createButton).toBeEnabled();
+  await createButton.click();
+  await expect.poll(() => createStarts).toBe(2);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-admin-operation]")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("restore stages ordered chunks, validates once, and surfaces external rollback diagnostics", async ({ page }) => {
+  const uploadId = "00000000-0000-0000-0000-000000000123";
+  const token = "restore-capability";
+  const restoreBytes = Buffer.alloc(2 * 1024 * 1024 + 3, 7);
+  const expectedArchiveHash = createHash("sha256").update(restoreBytes).digest("hex");
+  const chunkIndexes: number[] = [];
+  let validationStarts = 0;
+  let latestPolls = 0;
+  let taskPolls = 0;
+  let receiptPolls = 0;
+
+  await page.route("**/api/v1/admin/backup/restore/uploads", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    const body = route.request().postDataJSON();
+    expect(body.filename).toBe("restore-fixture.tar.gz");
+    expect(body.total_chunks).toBe(3);
+    expect(body.sha256).toBe(expectedArchiveHash);
+    await route.fulfill({ status: 201, json: {
+      upload_id: uploadId,
+      upload_token: token,
+      filename: body.filename,
+      size_bytes: body.size_bytes,
+      sha256: body.sha256,
+      chunk_size: body.chunk_size,
+      total_chunks: body.total_chunks,
+      received_chunks: 0,
+      received_bytes: 0,
+      next_chunk: 0,
+      state: "uploading",
+      created_at: "2026-08-24T12:00:00Z",
+      updated_at: "2026-08-24T12:00:00Z",
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/chunks/*`, async (route) => {
+    const index = Number(new URL(route.request().url()).pathname.split("/").at(-1));
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().headers()["x-restore-token"]).toBe(token);
+    const chunkBody = route.request().postDataBuffer();
+    expect(chunkBody).not.toBeNull();
+    expect(route.request().headers()["x-chunk-sha256"]).toBe(
+      createHash("sha256").update(chunkBody!).digest("hex"),
+    );
+    chunkIndexes.push(index);
+    await route.fulfill({ json: {
+      upload_id: uploadId,
+      next_chunk: index + 1,
+      received_chunks: index + 1,
+      received_bytes: Math.min((index + 1) * 1024 * 1024, 2 * 1024 * 1024 + 3),
+      total_chunks: 3,
+      state: index === 2 ? "uploaded" : "uploading",
+      idempotent: false,
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validation/latest`, (route) => {
+    latestPolls += 1;
+    return route.fulfill({ json: { snapshot: null } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validate`, async (route) => {
+    validationStarts += 1;
+    await route.fulfill({ status: 202, json: {
+      task_id: "restore-validation-task",
+      job_id: "admin-restore-validation-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-restore-validate",
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/restore-validation-task", async (route) => {
+    taskPolls += 1;
+    if (taskPolls === 1) {
+      await route.fulfill({ json: {
+        task_id: "restore-validation-task",
+        job_id: "admin-restore-validation-task-attempt-1",
+        status: "running",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "validating", label: "Validating restore archive", current: 2, total: 3 },
+        result: null,
+      } });
+      return;
+    }
+    await route.fulfill({ json: {
+      task_id: "restore-validation-task",
+      job_id: "admin-restore-validation-task-attempt-1",
+      status: "complete",
+      operation_type: "admin-restore-validate",
+      progress: { phase: "ready", label: "Ready for offline host execution" },
+      result: {
+        state: "ready",
+        request_id: uploadId,
+        host_command: `./scripts/offline-restore.py --request "$HOST_RESTORE_STAGING/${uploadId}/ready-request.json"`,
+        manifest: { version: "0.3.0", contents: ["database"] },
+        message: "Restore request is ready for offline host execution",
+      },
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/receipts/${uploadId}`, async (route) => {
+    receiptPolls += 1;
+    await route.fulfill({ json: receiptPolls === 1
+      ? { request_id: uploadId, status: "pending", phase: "handoff" }
+      : {
+          request_id: uploadId,
+          status: "recovery_failed",
+          phase: "integrity",
+          rollback_performed: true,
+          rollback_status: "failed",
+          diagnostic: "Foreground services only; background writers remain stopped.",
+          error: "Restore failed during integrity: RestoreHostError",
+          rollback_components: {
+            files: { status: "complete" },
+            database: { status: "failed", error: "RestoreHostError: identity unproven" },
+            redis: { status: "complete" },
+            foreground: { status: "complete" },
+          },
+        },
+    });
+  });
+
+  await page.goto("/admin/settings/backup");
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: "restore-fixture.tar.gz",
+    mimeType: "application/gzip",
+    buffer: restoreBytes,
+  });
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
+
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(uploadId, { exact: true })).toBeVisible();
+  await expect(page.getByText("Foreground services only; background writers remain stopped.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Rollback needs manual diagnosis")).toBeVisible();
+  await expect(page.getByText("database: failed")).toBeVisible();
+  await expect(page.getByText("RestoreHostError: identity unproven")).toBeVisible();
+  expect(chunkIndexes).toEqual([0, 1, 2]);
+  expect(validationStarts).toBe(1);
+  expect(latestPolls).toBe(1);
+  expect(taskPolls).toBe(2);
+  expect(receiptPolls).toBe(2);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-restore-flow]")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("restore validation recovers from session token after response loss and remount", async ({ page }) => {
+  const uploadId = "00000000-0000-0000-0000-000000000987";
+  const token = "restore-remount-capability";
+  const session = {
+    upload_id: uploadId,
+    filename: "auto-gallery-backup_20260824_120000.tar.gz",
+    size_bytes: 123,
+    sha256: "a".repeat(64),
+    chunk_size: 123,
+    total_chunks: 1,
+    received_chunks: 1,
+    received_bytes: 123,
+    next_chunk: 1,
+    state: "uploaded",
+    validation_task_id: null,
+    request_id: null,
+    created_at: "2026-08-24T12:00:00Z",
+    updated_at: "2026-08-24T12:00:01Z",
+  };
+  let validationStarts = 0;
+  let latestRequests = 0;
+  let completed = false;
+
+  await page.addInitScript(({ savedSession, savedToken }) => {
+    window.localStorage.setItem(
+      "auto-gallery-restore-upload-v1",
+      JSON.stringify({ session: savedSession, token: savedToken }),
+    );
+  }, { savedSession: session, savedToken: token });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}`, (route) => route.fulfill({
+    json: {
+      ...session,
+      validation_task_id: validationStarts ? "restore-remount-task" : null,
+      state: validationStarts ? "validating" : "uploaded",
+    },
+  }));
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validation/latest`, (route) => {
+    latestRequests += 1;
+    if (!validationStarts) return route.fulfill({ json: { snapshot: null, current: null } });
+    if (completed) return route.fulfill({ json: {
+      current: null,
+      snapshot: {
+        task_id: "restore-remount-task",
+        job_id: "admin-restore-remount-task-attempt-1",
+        status: "complete",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "ready", label: "Ready for offline host execution" },
+        result: {
+          state: "ready",
+          request_id: uploadId,
+          host_command: "./scripts/offline-restore.py --request ready-request.json",
+          manifest: { version: "0.3.0", contents: ["database"] },
+          message: "Restore request is ready for offline host execution",
+        },
+        completed_at: "2026-08-24T12:00:02Z",
+      },
+    } });
+    return route.fulfill({ json: {
+      snapshot: null,
+      current: {
+        task_id: "restore-remount-task",
+        job_id: "admin-restore-remount-task-attempt-1",
+        status: "running",
+        operation_type: "admin-restore-validate",
+        progress: { phase: "validating", label: "Validating restore archive" },
+      },
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/uploads/${uploadId}/validate`, async (route) => {
+    validationStarts += 1;
+    // PostgreSQL accepted the exact-scope TaskRun, but the HTTP/Redis handoff
+    // response is lost. The client must discover current state, not POST again.
+    await route.abort("connectionreset");
+  });
+  await page.route("**/api/v1/admin/operations/restore-remount-task", async (route) => {
+    completed = true;
+    await route.fulfill({ json: {
+      task_id: "restore-remount-task",
+      job_id: "admin-restore-remount-task-attempt-1",
+      status: "complete",
+      operation_type: "admin-restore-validate",
+      progress: { phase: "ready", label: "Ready for offline host execution" },
+      result: {
+        state: "ready",
+        request_id: uploadId,
+        host_command: "./scripts/offline-restore.py --request ready-request.json",
+        manifest: { version: "0.3.0", contents: ["database"] },
+        message: "Restore request is ready for offline host execution",
+      },
+      error: null,
+    } });
+  });
+  await page.route(`**/api/v1/admin/backup/restore/receipts/${uploadId}`, (route) => route.fulfill({
+    json: { request_id: uploadId, status: "pending", phase: "handoff" },
+  }));
+
+  await page.goto("/admin/settings/backup");
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 10_000 });
+  expect(validationStarts).toBe(1);
+  expect(latestRequests).toBeGreaterThanOrEqual(2);
+
+  await page.reload();
+  await expect(page.getByText("Ready for offline host execution")).toBeVisible({ timeout: 10_000 });
+  expect(validationStarts).toBe(1);
+});
+
+test("gallery-dl connectivity saves then starts one asynchronous source test", async ({ page }) => {
+  let configSaves = 0;
+  let testStarts = 0;
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    testStarts += 1;
+    await route.fulfill({ status: 202, json: {
+      task_id: "gallery-task", job_id: "admin-gallery-task-attempt-1",
+      status: "enqueued", operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      configSaves += 1;
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: { pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" } },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/gallery-task", (route) => route.fulfill({ json: {
+    task_id: "gallery-task", job_id: "gallery-task", status: "complete",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "complete", label: "Connection test passed" },
+    result: { source: "pixiv", success: true, message: "Connection test passed for pixiv.", details: "ok" },
+  } }));
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  await expect(page.getByText("Connection test passed for pixiv.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=gallery-task");
+  expect(configSaves).toBe(1);
+  expect(testStarts).toBe(1);
+
+  const results = await new AxeBuilder({ page })
+    .include("[data-admin-operation='admin-gallerydl-connectivity-test']")
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("gallery-dl connectivity never carries a completed task across source tabs", async ({ page }) => {
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", (route) => route.fulfill({
+    status: 202,
+    json: {
+      task_id: "pixiv-gallery-task",
+      job_id: "admin-pixiv-gallery-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/pixiv-gallery-task", (route) => route.fulfill({ json: {
+    task_id: "pixiv-gallery-task",
+    job_id: "admin-pixiv-gallery-task-attempt-1",
+    status: "complete",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "complete", label: "Pixiv connection complete" },
+    result: { source: "pixiv", success: true, message: "Pixiv-only result", details: "ok" },
+    error: null,
+  } }));
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  await expect(page.getByText("Pixiv-only result")).toBeVisible();
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  await expect(page.getByText("Pixiv-only result")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Task detail" })).toHaveCount(0);
+  await expect(page.getByText("No successful result yet.")).toBeVisible();
+});
+
+test("gallery-dl connectivity serializes cross-scope retry and preserves both tasks", async ({ page }) => {
+  let pixivRetried = false;
+  let retryRequested = false;
+  let releaseRetry!: () => void;
+  const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve; });
+
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    const taskId = body.source === "twitter" ? "twitter-scope-task" : "pixiv-scope-task";
+    await route.fulfill({ status: 202, json: {
+      task_id: taskId,
+      job_id: `admin-${taskId}-attempt-1`,
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/pixiv-scope-task", (route) => route.fulfill({ json: {
+    task_id: "pixiv-scope-task",
+    job_id: pixivRetried
+      ? "admin-pixiv-scope-task-attempt-2"
+      : "admin-pixiv-scope-task-attempt-1",
+    status: pixivRetried ? "running" : "failed",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: pixivRetried
+      ? { phase: "testing", label: "Retrying Pixiv" }
+      : { phase: "failed", label: "Pixiv failed" },
+    result: null,
+    error: pixivRetried ? null : "Pixiv unavailable",
+  } }));
+  await page.route("**/api/v1/admin/operations/twitter-scope-task", (route) => route.fulfill({ json: {
+    task_id: "twitter-scope-task",
+    job_id: "admin-twitter-scope-task-attempt-1",
+    status: "running",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "testing", label: "Testing Twitter" },
+    result: null,
+    error: null,
+  } }));
+  await page.route("**/api/v1/admin/operations/pixiv-scope-task/retry", async (route) => {
+    retryRequested = true;
+    await retryGate;
+    pixivRetried = true;
+    await route.fulfill({ status: 202, json: {
+      task_id: "pixiv-scope-task",
+      job_id: "admin-pixiv-scope-task-attempt-2",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  const operation = page.locator("[data-admin-operation='admin-gallerydl-connectivity-test']");
+  await expect(operation.getByRole("alert")).toContainText("Pixiv unavailable");
+  await operation.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => retryRequested).toBe(true);
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  const testConnection = page.getByRole("button", { name: "Test Connection" });
+  await expect(testConnection).toBeDisabled();
+  releaseRetry();
+  await expect(testConnection).toBeEnabled();
+  await testConnection.click();
+  await expect(operation.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=twitter-scope-task");
+
+  await page.getByRole("tab", { name: "Pixiv" }).click();
+  await expect(operation.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=pixiv-scope-task");
+  await expect(page.getByText("Retrying Pixiv")).toBeVisible();
+});
+
+test("gallery-dl connectivity blocks cross-scope retry while a start is pending", async ({ page }) => {
+  let startRequested = false;
+  let retryRequested = false;
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: {
+      snapshot: null,
+      current: {
+        task_id: "twitter-failed-task",
+        job_id: "admin-twitter-failed-task-attempt-1",
+        status: "failed",
+        operation_type: "admin-gallerydl-connectivity-test",
+      },
+    },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", async (route) => {
+    startRequested = true;
+    await startGate;
+    await route.fulfill({ status: 202, json: {
+      task_id: "pixiv-start-task",
+      job_id: "admin-pixiv-start-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/twitter-failed-task", (route) => route.fulfill({ json: {
+    task_id: "twitter-failed-task",
+    job_id: "admin-twitter-failed-task-attempt-1",
+    status: "failed",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "failed", label: "Twitter failed" },
+    result: null,
+    error: "Twitter unavailable",
+  } }));
+  await page.route("**/api/v1/admin/operations/twitter-failed-task/retry", async (route) => {
+    retryRequested = true;
+    await route.fulfill({ status: 202, json: {
+      task_id: "twitter-failed-task",
+      job_id: "admin-twitter-failed-task-attempt-2",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  await expect.poll(() => startRequested).toBe(true);
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  const retry = page.locator("[data-admin-operation='admin-gallerydl-connectivity-test']")
+    .getByRole("button", { name: "Retry" });
+  await expect(retry).toBeDisabled();
+  expect(retryRequested).toBe(false);
+
+  releaseStart();
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect.poll(() => retryRequested).toBe(true);
+});
+
+test("proxy operation discovery starts with settings and reattaches across reload", async ({ page }) => {
+  let latestRequestedAt = 0;
+  let settingsFulfilledAt = 0;
+  let starts = 0;
+  let operationState: "running" | "failed" | "complete" = "running";
+
+  await page.context().unroute("**/api/v1/**");
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention", total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+
+  await page.route("**/api/v1/admin/settings**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    settingsFulfilledAt = Date.now();
+    await route.fulfill({ json: {
+      proxy: { enabled: true, http_proxy: "http://proxy.example:7890", https_proxy: "", no_proxy: "", ssl_verify: true },
+    } });
+  });
+  await page.route("**/api/v1/admin/proxy/test/latest", async (route) => {
+    latestRequestedAt ||= Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await route.fulfill({ json: operationState === "complete" ? {
+      current: null,
+      snapshot: {
+        task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-1",
+        status: "complete", operation_type: "admin-proxy-test",
+        progress: { phase: "complete", label: "Proxy connectivity test complete" },
+        result: {
+          proxy_enabled: true, proxy_reachable: true, proxy_reachable_error: "",
+          proxy_config: { http: "http://proxy.example:7890", https: "not set" }, results: [],
+        },
+        completed_at: "2026-08-24T12:00:00Z",
+      },
+    } : operationState === "running" ? {
+      snapshot: null,
+      current: {
+        task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-1",
+        status: "running", operation_type: "admin-proxy-test",
+        progress: { phase: "testing", label: "Testing proxy connectivity" },
+      },
+    } : { snapshot: null, current: null } });
+  });
+  await page.route("**/api/v1/admin/proxy/test", async (route) => {
+    if (route.request().method() === "POST") starts += 1;
+    await route.fulfill({ status: 409, json: { detail: "duplicate start" } });
+  });
+  await page.route("**/api/v1/admin/operations/reattached-proxy-task", async (route) => {
+    await route.fulfill({ json: operationState === "complete" ? {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "complete",
+      operation_type: "admin-proxy-test", progress: { phase: "complete", label: "Proxy connectivity test complete" },
+      result: {
+        proxy_enabled: true, proxy_reachable: true, proxy_reachable_error: "",
+        proxy_config: { http: "http://proxy.example:7890", https: "not set" }, results: [],
+      }, error: null,
+    } : operationState === "failed" ? {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "failed",
+      operation_type: "admin-proxy-test", progress: { phase: "failed", label: "Proxy test failed" },
+      result: {}, error: "Proxy endpoint unavailable", reason_code: "task_failed",
+    } : {
+      task_id: "reattached-proxy-task", job_id: "reattached-proxy-task", status: "running",
+      operation_type: "admin-proxy-test", progress: { phase: "testing", label: "Testing proxy connectivity" },
+      result: {}, error: null,
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/reattached-proxy-task/retry", async (route) => {
+    operationState = "complete";
+    await route.fulfill({ status: 202, json: {
+      task_id: "reattached-proxy-task", job_id: "admin-reattached-proxy-task-attempt-2",
+      status: "enqueued", operation_type: "admin-proxy-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/proxy");
+  await expect.poll(() => latestRequestedAt).toBeGreaterThan(0);
+  await expect.poll(() => settingsFulfilledAt).toBeGreaterThan(0);
+  expect(latestRequestedAt).toBeLessThan(settingsFulfilledAt);
+  const start = page.getByRole("button", { name: /Test Now|Testing/ });
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=reattached-proxy-task");
+
+  await page.reload();
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Testing proxy connectivity")).toBeVisible();
+  expect(starts).toBe(0);
+
+  operationState = "failed";
+  const operation = page.locator("[data-admin-operation='admin-proxy-test']");
+  await expect(operation.getByRole("alert")).toContainText("Proxy endpoint unavailable", { timeout: 10_000 });
+  await page.waitForTimeout(1_500);
+  await expect(operation.getByRole("button", { name: "Retry" })).toBeVisible();
+  await operation.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Proxy is reachable")).toBeVisible({ timeout: 10_000 });
+  await expect(start).toBeEnabled();
+  expect(starts).toBe(0);
+});
+
+test("gallery-dl operation discovery is concurrent with its config request", async ({ page }) => {
+  let latestRequestedAt = 0;
+  let configFulfilledAt = 0;
+  await page.context().unroute("**/api/v1/**");
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention", total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", async (route) => {
+    latestRequestedAt = Date.now();
+    await route.fulfill({ json: { snapshot: null, current: null } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    configFulfilledAt = Date.now();
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: { pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" } },
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await expect(page.getByRole("button", { name: "Test Connection" })).toBeVisible();
+  expect(latestRequestedAt).toBeGreaterThan(0);
+  expect(latestRequestedAt).toBeLessThan(configFulfilledAt);
+});
+
+test("integrity scan failure never renders All Clear and remains retryable", async ({ page }) => {
+  await page.route("**/api/v1/admin/integrity-check/latest", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/integrity-check", (route) => route.fulfill({
+    status: 202,
+    json: {
+      task_id: "failed-integrity-task", job_id: "admin-failed-integrity-task-attempt-1",
+      status: "enqueued", operation_type: "admin-integrity-scan",
+    },
+  }));
+  await page.route("**/api/v1/admin/operations/failed-integrity-task", (route) => route.fulfill({ json: {
+    task_id: "failed-integrity-task", job_id: "failed-integrity-task", status: "failed",
+    operation_type: "admin-integrity-scan", progress: { phase: "failed", label: "Operation failed" },
+    result: {}, error: "Integrity database unavailable", reason_code: "task_failed",
+  } }));
+
+  await page.goto("/admin/data-mgmt");
+  await page.getByRole("button", { name: "Run Check" }).click();
+  await expect(page.locator("[data-admin-operation='admin-integrity-scan']").getByRole("alert"))
+    .toContainText("Integrity database unavailable");
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByText("All Clear")).toHaveCount(0);
+});
+
 test("profile is independent and the legacy settings URL redirects with its query", async ({ page }) => {
   await page.goto("/admin/profile");
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
@@ -2314,12 +3436,46 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
     }
   });
   page.on("pageerror", (error) => consoleIssues.push(error.message));
+  await page.addInitScript(() => {
+    const prototype = CanvasRenderingContext2D.prototype as unknown as {
+      arc: (this: CanvasRenderingContext2D, x: number, y: number, radius: number, start: number, end: number, ...rest: unknown[]) => void;
+      stroke: (this: CanvasRenderingContext2D, ...args: unknown[]) => void;
+    };
+    const originalArc = prototype.arc;
+    const originalStroke = prototype.stroke;
+    const lastArc = new WeakMap<CanvasRenderingContext2D, [number, number, number, number, number]>();
+    const strokes: Array<{ x: number; y: number; radius: number; start: number; end: number; color: string; lineWidth: number }> = [];
+    Object.assign(window, { __tagBubbleRingStrokes: strokes });
+    prototype.arc = function(this: CanvasRenderingContext2D, x, y, radius, start, end, ...rest) {
+      lastArc.set(this, [x, y, radius, start, end]);
+      return originalArc.call(this, x, y, radius, start, end, ...rest);
+    };
+    prototype.stroke = function(...args) {
+      const arc = lastArc.get(this);
+      if (arc) {
+        strokes.push({
+          x: arc[0],
+          y: arc[1],
+          radius: arc[2],
+          start: arc[3],
+          end: arc[4],
+          color: String(this.strokeStyle),
+          lineWidth: this.lineWidth,
+        });
+      }
+      return originalStroke.apply(this, args);
+    };
+  });
   const fixtureCount = Number(process.env.TAG_MAP_FIXTURE_COUNT || 240);
+  const categoryFixtures = ["meta", "general", "artist", "character", "copyright", "unknown"];
   const tagFixtures = Array.from({ length: fixtureCount }, (_, index) => ({
     id: `map-tag-${index}`,
     normalized_name: `map_tag_${String(index).padStart(3, "0")}`,
-    category: index % 5 === 0 ? "meta" : "general",
-    usage_count: 1 + ((index * 37) % 500),
+    category: categoryFixtures[index] || (index % 5 === 0 ? "meta" : "general"),
+    usage_count: index < categoryFixtures.length ? 999 - index : 1 + ((index * 37) % 500),
+    source_usage: index === 0
+      ? [{ source: "pixiv", work_count: 3 }, { source: "iwara", work_count: 1 }]
+      : [{ source: "pixiv", work_count: 1 }],
     created_at: "2026-08-14T00:00:00Z",
   }));
   let includeAll = false;
@@ -2341,8 +3497,51 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expect(chart).toHaveAttribute("data-tag-count", String(fixtureCount));
   expect(includeAll).toBe(true);
   await expect(page.getByText("Ctrl + wheel to zoom · Drag to pan")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Previous" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Next" })).toHaveCount(0);
+  if (fixtureCount <= 1_000) {
+    const metaBubble = page.getByRole("link", { name: /map_tag_000, meta, 999, pixiv 3, iwara 1/i });
+    await expect(metaBubble).toBeVisible();
+    await expect(metaBubble).toHaveAttribute("data-bubble-fill", "hsl(32 34% 22%)");
+    await expect(metaBubble).toHaveAttribute("data-bubble-ring", "pixiv:#0066FF:3|iwara:#EC4899:1");
+    await expect(metaBubble).toHaveAttribute("data-bubble-text", "hsl(32 55% 88%)");
+    for (const [index, hue] of [32, 216, 0, 120, 275, 210].entries()) {
+      await expect(page.getByRole("link", { name: new RegExp(`map_tag_${String(index).padStart(3, "0")}`) }))
+        .toHaveAttribute("data-bubble-fill", `hsl(${hue} 34% 22%)`);
+    }
+
+    const readRenderedRing = async () => {
+      const bubble = await metaBubble.boundingBox();
+      expect(bubble).not.toBeNull();
+      return page.evaluate((bubbleBox) => {
+        const canvas = document.querySelector<HTMLCanvasElement>("[data-testid='tag-bubble-chart'] canvas");
+        if (!canvas || !bubbleBox) throw new Error("tag bubble canvas is unavailable");
+        const canvasBox = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / canvasBox.width;
+        const scaleY = canvas.height / canvasBox.height;
+        const centerX = (bubbleBox.x - canvasBox.x + bubbleBox.width / 2) * scaleX;
+        const centerY = (bubbleBox.y - canvasBox.y + bubbleBox.height / 2) * scaleY;
+        return (window as typeof window & {
+          __tagBubbleRingStrokes: Array<{ x: number; y: number; radius: number; start: number; end: number; color: string; lineWidth: number }>;
+        }).__tagBubbleRingStrokes.filter((stroke) => (
+          Math.abs(stroke.x - centerX) < 1
+          && Math.abs(stroke.y - centerY) < 1
+          && Math.abs(stroke.radius - bubbleBox.width * scaleX / 2) < 1
+          && ["#0066ff", "rgb(0, 102, 255)", "#ec4899", "rgb(236, 72, 153)"].includes(stroke.color.toLowerCase())
+        )).slice(-2);
+      }, bubble);
+    };
+
+    const initialRing = await readRenderedRing();
+    expect(initialRing).toHaveLength(2);
+    expect(initialRing.find((stroke) => stroke.color.toLowerCase() === "#0066ff" || stroke.color === "rgb(0, 102, 255)")?.end).toBeCloseTo(Math.PI * 1.5);
+    expect(initialRing.find((stroke) => stroke.color.toLowerCase() === "#ec4899" || stroke.color === "rgb(236, 72, 153)")?.end).toBeCloseTo(Math.PI * 2);
+    expect(initialRing.reduce((total, stroke) => total + (stroke.end - stroke.start), 0)).toBeCloseTo(Math.PI * 2);
+    expect(initialRing.map((stroke) => stroke.lineWidth)).toEqual([1.5, 1.5]);
+
+    await metaBubble.hover();
+    await expect(page.getByText("pixiv 3, iwara 1")).toBeVisible();
+    await expect.poll(async () => (await readRenderedRing()).map((stroke) => stroke.lineWidth))
+      .toEqual([3, 3]);
+  }
 
   const initialZoom = Number(await chart.getAttribute("data-zoom-level"));
   const box = await chart.boundingBox();
@@ -2357,13 +3556,6 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   });
   await expect.poll(async () => Number(await chart.getAttribute("data-zoom-level")))
     .toBeGreaterThan(initialZoom);
-  if (fixtureCount <= 1_000) {
-    const firstBubble = page.getByRole("link", { name: /map_tag_/ }).first();
-    await expect(firstBubble).toBeVisible();
-    await expect(firstBubble).toHaveAttribute("data-bubble-fill", / 34% 22%\)$/);
-    await expect(firstBubble).toHaveAttribute("data-bubble-border", / 36% 38%\)$/);
-    await expect(firstBubble).toHaveAttribute("data-bubble-text", / 55% 88%\)$/);
-  }
   await expectNoPageOverflow(page);
   expect(consoleIssues).toEqual([]);
   await page.screenshot({ path: "/tmp/auto-gallery-tag-map-zoomed.png", fullPage: false });
@@ -2582,12 +3774,63 @@ test("Gitllery v1 settings expose safe shadow controls, CLI copy, verify, and cr
   await expect(page.getByText("Bounded Gitllery v1 verify task queued")).toBeVisible();
 
   await page.goto("/admin/creators/fixture-creator");
-  await expect(page.getByRole("link", { name: "Open Gitllery log" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Open Gitllery log" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Open Gitllery settings" })).toHaveCount(0);
+});
+
+test("repository detail scopes history and opens the full work search", async ({ page }) => {
+  await page.route("**/api/v1/curation/repositories/fixture-repository/gitllery/status", (route) => route.fulfill({
+    json: {
+      repositories: [{
+        repository_id: "fixture-repository",
+        source: "pixiv",
+        creator_dir: "fixture-source",
+        exists: true,
+        behind: 0,
+        object_integrity_ok: true,
+        drift: [],
+        clean: true,
+        product_version: "v1",
+        format_id: "gitllery-segment",
+        format_revision: 1,
+        projection_mode: "shadow",
+      }],
+      missing_repos: 0,
+      behind_total: 0,
+      product_version: "v1",
+      format_id: "gitllery-segment",
+      format_revision: 1,
+      projection_mode: "shadow",
+    },
+  }));
+  await page.route("**/api/v1/curation/repositories/fixture-repository/gitllery/log", (route) => route.fulfill({
+    json: {
+      repository_id: "fixture-repository",
+      total: 1,
+      entries: [{
+        commit: "segment-123",
+        message: "Repository-only projection",
+        trigger: "source_synced",
+        occurred_at: "2026-07-28T10:00:00Z",
+        change_count: 2,
+      }],
+    },
+  }));
+
+  await page.goto("/admin/subscriptions/repositories/fixture-repository");
+  await expect(page.getByRole("button", { name: /Content\s*13/ })).toBeVisible();
+  await page.getByRole("button", { name: /Content\s*13/ }).click();
+  await expect(page.getByRole("link", { name: "View all 13 works" })).toHaveAttribute(
     "href",
-    "/admin/data-mgmt/curation?subject_type=creator&subject_id=fixture-creator",
+    "/admin/works?q=repo%3Afixture-repository%20sort%3Aposted-desc",
   );
-  const creatorSettingsLink = page.getByRole("link", { name: "Open Gitllery settings" });
-  await expect(creatorSettingsLink).toHaveAttribute("href", "/admin/settings/gitllery");
+
+  await page.getByRole("button", { name: /Sync history/ }).click();
+  await expect(page.getByRole("heading", { name: "Synchronization history" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repository curation graph" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Gitllery status" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Gitllery log" })).toBeVisible();
+  await expect(page.getByText("Repository-only projection")).toBeVisible();
 });
 
 test("mobile drawer is discoverable, dismissible, and the task page stays in bounds", async ({ page }) => {

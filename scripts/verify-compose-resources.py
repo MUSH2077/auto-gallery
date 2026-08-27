@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIB = 1024 * 1024
@@ -282,6 +281,8 @@ def main() -> int:
                     "HOST_LIBRARY": f"{test_root}/library",
                     "HOST_CONFIG_GALLERYDL": f"{test_root}/gallery-dl",
                     "HOST_CONFIG_APP": f"{test_root}/app-config",
+                    "HOST_RESTORE_STAGING": f"{test_root}/restore-staging",
+                    "HOST_RESTORE_RECEIPTS": f"{test_root}/restore-receipts",
                     "BACKEND_IMAGE": "auto-gallery-backend:candidate-contract",
                     "ADMIN_IMAGE": "auto-gallery-admin-web:candidate-contract",
                     "BACKEND_PORT": "18818",

@@ -61,9 +61,6 @@ async def resolve_repository_source_creator_ids(
         if exact:
             return list(dict.fromkeys(exact))
 
-    if len(candidates) == 1:
-        return [candidates[0].source_creator_id]
-
     try:
         provider = registry.get(subscription_source.source)
         repository_dir = provider.get_creator_dir_from_url(

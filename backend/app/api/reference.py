@@ -68,6 +68,7 @@ async def list_reference_providers():
 @router.post(
     "/danbooru/mappings/refresh",
     response_model=DanbooruMappingRefreshEnqueueResponse,
+    status_code=202,
 )
 async def refresh_all_danbooru_mappings():
     """Incrementally refresh Danbooru mappings for every current creator."""
@@ -96,7 +97,14 @@ async def refresh_all_danbooru_mappings():
 async def get_danbooru_mapping_refresh(job_id: str):
     """Return status only for the subscription-scoped mapping refresh job."""
 
-    status = get_operation_status(job_id)
+    from app.api.admin.data import get_admin_operation
+
+    try:
+        status = await get_admin_operation(job_id)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        status = get_operation_status(job_id)
     if not status or status.get("operation_type") != "danbooru-mapping-refresh":
         raise HTTPException(status_code=404, detail="Danbooru mapping refresh not found")
     return status
@@ -132,14 +140,15 @@ async def import_all_danbooru(data: dict, db: AsyncSession = Depends(get_db)):
     return await import_all_danbooru_artist(data, db)
 
 
-@router.post("/danbooru/artist/import-all/async")
+@router.post("/danbooru/artist/import-all/async", status_code=202)
 async def import_all_danbooru_async(data: dict):
     """Enqueue one-click Danbooru import and return a pollable operation id."""
     from app.services.reference import ReferenceService
+
     try:
-        return ReferenceService.enqueue_async_import(data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return await ReferenceService.enqueue_async_import(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _precheck_pixiv_ids(pixiv_ids: list[str]) -> dict:
@@ -162,7 +171,7 @@ async def preview_batch_import(data: dict):
     return {k: v for k, v in precheck.items() if k not in ("unique_ids", "existing_ids")}
 
 
-@router.post("/danbooru/artist/batch-import")
+@router.post("/danbooru/artist/batch-import", status_code=202)
 async def batch_import_danbooru_artists(data: dict):
     """Enqueue a batch import job for Pixiv user IDs via Danbooru.
 
@@ -197,33 +206,31 @@ async def batch_import_danbooru_artists(data: dict):
             "skipped_existing": skipped_existing,
         }
 
-    r = get_redis()
-    q = Queue(name="imports", connection=r)
-
-    # Generate key before enqueue so it can be passed to the RQ function AND
-    # returned as job_id. This ensures Redis keys match the polling ID.
-    job_key = str(uuid.uuid4())
-
-    job = checked_enqueue(
-        q,
-        "app.jobs.batch_import.run_batch_import",
-        pixiv_ids,
-        job_key,
-        job_timeout=3600,  # 1 hour max
-        result_ttl=3600,
+    operation_id = uuid.uuid4()
+    operation = await enqueue_admin_operation(
+        lock_key=f"danbooru:batch-import:{operation_id}",
+        operation_type="admin-danbooru-batch-import",
+        title="Import Danbooru artist batch",
+        entity="danbooru-artists",
+        func="app.jobs.batch_import.run_batch_import",
+        options={"pixiv_ids": pixiv_ids},
+        job_timeout=3600,
+        queue_name="imports",
     )
 
-    logger.info("Enqueued batch import job_key=%s (rq_job=%s) with %d new pixiv_ids (%d duplicates removed, %d already exist — skipped)",
-                job_key, job.id, len(pixiv_ids), deduped, skipped_existing)
+    logger.info(
+        "Enqueued durable batch import task=%s with %d new pixiv_ids",
+        operation["task_id"],
+        len(pixiv_ids),
+    )
     return {
-        "status": "ok",
+        **operation,
         "message": (
             f"Batch import enqueued ({len(pixiv_ids)} new IDs"
             + (f", {deduped} duplicates removed" if deduped > 0 else "")
             + (f", {skipped_existing} already exist — skipped" if skipped_existing > 0 else "")
             + ")"
         ),
-        "job_id": job_key,
         "total": len(pixiv_ids),
         "duplicates_removed": deduped,
         "already_exists": precheck["already_exists"],
@@ -238,6 +245,28 @@ async def get_batch_import_status(job_id: str | None = None):
     Without job_id: returns the most recent batch result from Redis.
     With job_id: fetches RQ job status + Redis progress/result.
     """
+    if job_id:
+        from app.api.admin.data import get_admin_operation
+
+        try:
+            operation = await get_admin_operation(job_id)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+        else:
+            if operation.get("operation_type") in {
+                "admin-danbooru-batch-import",
+                "admin-danbooru-url-batch-import",
+            }:
+                return {
+                    "status": operation["status"],
+                    "progress": operation.get("progress"),
+                    "result": operation.get("result"),
+                    "job_status": operation["status"],
+                    "task_id": operation.get("task_id") or operation.get("job_id"),
+                    "job_id": operation.get("rq_job_id") or operation.get("job_id"),
+                }
+
     import redis as redis_lib
 
     r = redis_lib.from_url(settings.redis_url)
@@ -322,7 +351,7 @@ async def preview_url_batch_import(data: dict):
     }
 
 
-@router.post("/danbooru/url-batch-import")
+@router.post("/danbooru/url-batch-import", status_code=202)
 async def url_batch_import_danbooru(data: dict):
     """Enqueue a batch import job for URLs via Danbooru lookup.
 
@@ -330,8 +359,6 @@ async def url_batch_import_danbooru(data: dict):
     Returns immediately with a job_id. Poll GET /danbooru/artist/batch-import/status
     for progress and results.
     """
-    import uuid as uuid_mod
-
     urls = data.get("urls", [])
     if not urls or not isinstance(urls, list):
         raise HTTPException(status_code=400, detail="urls list is required")
@@ -341,26 +368,25 @@ async def url_batch_import_danbooru(data: dict):
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
-    r = get_redis()
-    q = Queue(name="imports", connection=r)
-
-    # Generate key before enqueue so Redis keys match the polling ID
-    job_key = str(uuid_mod.uuid4())
-
-    job = checked_enqueue(
-        q,
-        "app.jobs.batch_import.run_url_batch_import",
-        urls,
-        job_key,
+    operation_id = uuid.uuid4()
+    operation = await enqueue_admin_operation(
+        lock_key=f"danbooru:url-batch-import:{operation_id}",
+        operation_type="admin-danbooru-url-batch-import",
+        title="Import Danbooru URL batch",
+        entity="danbooru-urls",
+        func="app.jobs.batch_import.run_url_batch_import",
+        options={"urls": urls},
         job_timeout=3600,
-        result_ttl=3600,
+        queue_name="imports",
     )
 
-    logger.info("Enqueued URL batch import job_key=%s (rq_job=%s) with %d URLs",
-                job_key, job.id, len(urls))
+    logger.info(
+        "Enqueued durable URL batch import task=%s with %d URLs",
+        operation["task_id"],
+        len(urls),
+    )
     return {
-        "status": "ok",
+        **operation,
         "message": f"URL batch import enqueued ({len(urls)} URLs)",
-        "job_id": job_key,
         "total": len(urls),
     }

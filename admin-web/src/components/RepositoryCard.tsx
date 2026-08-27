@@ -39,7 +39,8 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
   const t = useT();
   if (!decision) return null;
-  const warning = ["auth_unhealthy", "url_invalid", "scheduler_disabled"].includes(decision.reason);
+  const displayReason = decision.suppression_reason || decision.reason;
+  const warning = ["auth_unhealthy", "url_invalid"].includes(decision.reason);
   const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
   const cls = decision.due
     ? "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent"
@@ -51,7 +52,7 @@ function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${decision.due ? "animate-pulse bg-current" : "bg-current"}`} />
-      {schedulerDecisionLabel(t, decision.reason, decision.due)}
+      {schedulerDecisionLabel(t, displayReason, decision.due)}
     </span>
   );
 }

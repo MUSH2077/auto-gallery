@@ -14,6 +14,7 @@ import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/j
 import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
+import { PAUSABLE_DOWNLOAD_STATUSES } from "@/lib/task-actions";
 
 
 const JOB_LIST_LIMIT = 200;
@@ -38,7 +39,7 @@ const BATCH_ACTIONS_BY_TAB: Record<JobsTab, BatchAction[]> = {
 };
 const DOWNLOAD_BATCH_ALLOWED: Record<BatchAction, string[]> = {
   retry: ["failed", "stale", "downloading", "complete"],
-  pause: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale"],
+  pause: [...PAUSABLE_DOWNLOAD_STATUSES],
   resume: ["paused"],
   cancel: ["enqueued", "downloading", "downloaded", "importing", "failed", "stale", "paused"],
   delete: ["enqueued", "downloading", "downloaded", "failed", "stale", "complete", "paused", "cancelled"],

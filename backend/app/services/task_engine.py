@@ -69,7 +69,10 @@ STALE_START_GRACE_SECONDS = TaskEventPublisher.HEARTBEAT_TTL
 STALE_SCAN_LIMIT = 100
 
 
-def _heartbeat_presence(redis_client, task_ids: list[UUID]) -> list[bool]:
+def _heartbeat_presence(
+    redis_client,
+    heartbeat_keys: list[str | UUID],
+) -> list[bool]:
     """Read all heartbeat TTL keys in one Redis round trip.
 
     Exceptions deliberately propagate.  The caller treats an unreadable Redis
@@ -78,10 +81,18 @@ def _heartbeat_presence(redis_client, task_ids: list[UUID]) -> list[bool]:
     """
 
     pipeline = redis_client.pipeline(transaction=False)
-    for task_id in task_ids:
-        pipeline.exists(f"task:{task_id}:heartbeat_ts")
+    resolved_keys = [
+        (
+            f"task:{heartbeat_key}:heartbeat_ts"
+            if isinstance(heartbeat_key, UUID)
+            else heartbeat_key
+        )
+        for heartbeat_key in heartbeat_keys
+    ]
+    for heartbeat_key in resolved_keys:
+        pipeline.exists(heartbeat_key)
     values = pipeline.execute()
-    if len(values) != len(task_ids):
+    if len(values) != len(heartbeat_keys):
         raise RuntimeError("Redis heartbeat pipeline returned an incomplete result")
     return [bool(value) for value in values]
 
@@ -431,13 +442,27 @@ class TaskEngine:
         """Retry a download job. Resets retry_count and clears error_log."""
         job = await self._get_download(job_id)
 
-        staging_events = [
-            event
-            for event in ((job.manifest or {}).get("events") or [])
+        manifest_events = list((job.manifest or {}).get("events") or [])
+        conflict_indices = [
+            index for index, event in enumerate(manifest_events)
             if isinstance(event, dict) and event.get("event") == "staging_conflict"
         ]
-        latest_staging_conflict = staging_events[-1] if staging_events else None
-        if latest_staging_conflict and latest_staging_conflict.get("conflict_details"):
+        resolution_indices = [
+            index for index, event in enumerate(manifest_events)
+            if isinstance(event, dict) and event.get("event") == "staging_conflict_resolved"
+        ]
+        latest_conflict_index = conflict_indices[-1] if conflict_indices else -1
+        latest_resolution_index = resolution_indices[-1] if resolution_indices else -1
+        latest_staging_conflict = (
+            manifest_events[latest_conflict_index]
+            if latest_conflict_index >= 0
+            else None
+        )
+        if (
+            latest_staging_conflict
+            and latest_conflict_index > latest_resolution_index
+            and latest_staging_conflict.get("conflict_details")
+        ):
             raise TaskEngineError(
                 "This download has an unsafe canonical-file conflict and cannot be fixed by retrying"
             )
@@ -507,6 +532,16 @@ class TaskEngine:
                 f"Cannot retry import job with status '{job.status}'."
             )
 
+        # Artifact locks precede the shared parent/child/task locks taken by
+        # projection.  Reset only this durable child's failed or expired rows;
+        # a live execution lease and every sibling assignment remain untouched.
+        if hasattr(self.db, "execute") and getattr(job, "download_job_id", None):
+            from app.services.artifact_ledger import ArtifactLedger
+
+            await ArtifactLedger(self.db).reset_retry_assignment(
+                job.download_job_id,
+                job.id,
+            )
         old_status = job.status
         job.status = IMPORT_ENQUEUED
         job.import_retry_count = (job.import_retry_count or 0) + 1
@@ -615,7 +650,7 @@ class TaskEngine:
         now: datetime | None = None,
         limit: int = STALE_SCAN_LIMIT,
     ) -> int:
-        """Mark active domain jobs stale when their Redis heartbeat TTL is gone.
+        """Mark active workers stale when their Redis heartbeat TTL is gone.
 
         Redis is the sole liveness authority.  PostgreSQL supplies only the
         bounded set of currently executing jobs and their TaskRun start time;
@@ -655,6 +690,7 @@ class TaskEngine:
         import_candidates = list((await self.db.execute(
             select(
                 ImportJob.id,
+                ImportJob.download_job_id,
                 func.coalesce(
                     import_task.started_at,
                     import_task.created_at,
@@ -673,14 +709,14 @@ class TaskEngine:
             .limit(bounded_limit)
         )).all())
 
-        candidates: list[tuple[str, UUID]] = [
-            ("download", task_id)
+        candidates: list[tuple[str, UUID, str | None]] = [
+            ("download", task_id, None)
             for task_id, anchor in download_candidates
             if _outside_start_grace(anchor, checked_at)
         ]
         candidates.extend(
-            ("import", task_id)
-            for task_id, anchor in import_candidates
+            ("import", task_id, None)
+            for task_id, _parent_id, anchor in import_candidates
             if _outside_start_grace(anchor, checked_at)
         )
         if not candidates:
@@ -691,7 +727,12 @@ class TaskEngine:
             heartbeat_exists = await asyncio.to_thread(
                 _heartbeat_presence,
                 client,
-                [task_id for _task_type, task_id in candidates],
+                [
+                    (
+                        f"task:{task_id}:heartbeat_ts"
+                    )
+                    for task_type, task_id, attempt_token in candidates
+                ],
             )
         except Exception:
             logger.warning(
@@ -702,7 +743,7 @@ class TaskEngine:
 
         missing_download_ids = [
             task_id
-            for (task_type, task_id), exists in zip(
+            for (task_type, task_id, _attempt), exists in zip(
                 candidates,
                 heartbeat_exists,
                 strict=True,
@@ -711,7 +752,7 @@ class TaskEngine:
         ]
         missing_import_ids = [
             task_id
-            for (task_type, task_id), exists in zip(
+            for (task_type, task_id, _attempt), exists in zip(
                 candidates,
                 heartbeat_exists,
                 strict=True,
@@ -744,42 +785,36 @@ class TaskEngine:
                 .with_for_update(of=DownloadJob, skip_locked=True)
             )).all())
 
-        locked_import_task = aliased(TaskRun, name="locked_import_task")
-        locked_parent_task = aliased(TaskRun, name="locked_parent_task")
         locked_import_rows = []
+        locked_import_parents: dict[UUID, DownloadJob] = {}
         if missing_import_ids:
+            candidate_parent_ids = {
+                parent_id
+                for task_id, parent_id, _anchor in import_candidates
+                if task_id in missing_import_ids
+            }
+            locked_import_parents = {
+                parent.id: parent
+                for parent in (await self.db.execute(
+                    select(DownloadJob)
+                    .where(DownloadJob.id.in_(candidate_parent_ids))
+                    .order_by(DownloadJob.id)
+                    .with_for_update(of=DownloadJob, skip_locked=True)
+                )).scalars()
+            }
             locked_import_rows = list((await self.db.execute(
-                select(
-                    ImportJob,
-                    locked_import_task,
-                    DownloadJob,
-                    locked_parent_task,
-                )
-                .join(DownloadJob, DownloadJob.id == ImportJob.download_job_id)
-                .outerjoin(
-                    locked_import_task,
-                    and_(
-                        locked_import_task.subject_type == "import_job",
-                        locked_import_task.subject_id == ImportJob.id,
-                    ),
-                )
-                .outerjoin(
-                    locked_parent_task,
-                    and_(
-                        locked_parent_task.subject_type == "download_job",
-                        locked_parent_task.subject_id == DownloadJob.id,
-                    ),
-                )
+                select(ImportJob)
                 .where(
                     ImportJob.id.in_(missing_import_ids),
+                    ImportJob.download_job_id.in_(locked_import_parents),
                     ImportJob.status == IMPORT_RUNNING,
                 )
-                .order_by(ImportJob.id)
+                .order_by(ImportJob.download_job_id, ImportJob.id)
                 .with_for_update(
-                    of=(ImportJob, DownloadJob),
+                    of=ImportJob,
                     skip_locked=True,
                 )
-            )).all())
+            )).scalars())
 
         task_service = TaskService(self.db)
         notifications: list[tuple[str, str, str, str]] = []
@@ -829,15 +864,18 @@ class TaskEngine:
             notifications.append((str(job.id), "download", old_status, "stale"))
             stale_count += 1
 
-        for import_job, import_task_row, parent, parent_task in locked_import_rows:
+        for import_job in locked_import_rows:
+            parent = locked_import_parents[import_job.download_job_id]
             old_import_status = import_job.status
+            old_parent_status = parent.status
             import_error = "Redis heartbeat TTL expired while import was running"
             transition_import_job(import_job, IMPORT_STALE, import_error)
-            await update_task_projection(
-                import_task_row,
+            await project_import_pipeline_state(
+                self.db,
                 import_job,
-                subject_type="import_job",
+                status=IMPORT_STALE,
                 error=import_error,
+                reason_code="lost_heartbeat",
             )
             notifications.append((
                 str(import_job.id),
@@ -847,48 +885,32 @@ class TaskEngine:
             ))
             stale_count += 1
 
-            # The parent's ``importing`` state represents this exact child
-            # worker.  Transition both projections together so retries never
-            # leave the subscription view permanently "importing".
-            if parent.status == "importing":
-                old_parent_status = parent.status
-                parent_error = (
-                    "Import worker heartbeat TTL expired "
-                    f"(import_job={import_job.id})"
-                )
-                transition_download_job(parent, "stale", parent_error)
-                append_manifest_event(
-                    parent,
-                    "status_changed",
-                    from_status=old_parent_status,
-                    to_status="stale",
-                    reason="import_heartbeat_ttl_expired",
-                    import_job_id=str(import_job.id),
-                )
-                await update_task_projection(
-                    parent_task,
-                    parent,
-                    subject_type="download_job",
-                    error=parent_error,
-                )
+            if parent.status != old_parent_status:
                 if parent.subscription_id:
                     subscription_ids.add(parent.subscription_id)
                 notifications.append((
                     str(parent.id),
                     "download",
                     old_parent_status,
-                    "stale",
+                    parent.status,
                 ))
                 stale_count += 1
 
         if not stale_count:
+            # Release any TaskRun/parent locks acquired during the repeated
+            # active-state scan.
+            await self.db.rollback()
             return 0
 
-        await request_search_projection(
-            self.db,
-            subscription_ids=subscription_ids,
-        )
-        await self.db.commit()
+        try:
+            await request_search_projection(
+                self.db,
+                subscription_ids=subscription_ids,
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
 
         # Publish only after the domain rows, TaskRuns, and search outbox are
         # atomically committed.  Pub/sub is best effort and never rolls state
@@ -908,7 +930,7 @@ class TaskEngine:
                     exc_info=True,
                 )
         logger.warning(
-            "Marked %d domain tasks stale (Redis heartbeat TTL expired)",
+            "Marked %d worker tasks stale (Redis heartbeat TTL expired)",
             stale_count,
         )
         return stale_count

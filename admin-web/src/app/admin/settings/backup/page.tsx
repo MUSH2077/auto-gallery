@@ -1,15 +1,37 @@
 "use client";
-import { useState, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
+import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } from "@/lib/api/types";
 import { useT } from "@/lib/i18n";
+import { sha256Blob } from "@/lib/sha256";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Archive, Database, FileJson, FileText, Settings } from "lucide-react";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
 const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
+type BackupEstimateResult = { components: Record<string, number>; message?: string };
+type BackupCreateResult = {
+  status: string;
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  contents: string[];
+  restorable: boolean;
+  component_sizes: Record<string, number>;
+  message?: string;
+};
+type RestoreFlow = {
+  session: RestoreUploadSession;
+  token: string;
+};
+
+const RESTORE_CHUNK_SIZE = 1024 * 1024;
+const RESTORE_STORAGE_KEY = "auto-gallery-restore-upload-v1";
 
 const CONTENT_ICONS = {
   database: Database,
@@ -35,6 +57,102 @@ function contentBadgeColor(content: string): string {
   return colors[content] || "bg-subtle text-fg";
 }
 
+function loadSavedRestoreFlow(): RestoreFlow | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = JSON.parse(localStorage.getItem(RESTORE_STORAGE_KEY) || "null");
+    return value?.session?.upload_id && value?.token
+      ? value as RestoreFlow
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRestoreFlow(flow: RestoreFlow): void {
+  try {
+    localStorage.setItem(RESTORE_STORAGE_KEY, JSON.stringify(flow));
+  } catch {
+    // Restore progress remains usable for this mount when storage is blocked.
+  }
+}
+
+function RestoreValidationFlow({ flow }: { flow: RestoreFlow }) {
+  const t = useT();
+  const requestedValidation = useRef(false);
+  const validation = useAdminOperation<RestoreValidationResult>({
+    operationType: "admin-restore-validate",
+    scope: flow.session.upload_id,
+    startOperation: () => api.startRestoreValidation(flow.session.upload_id, flow.token),
+    loadLatest: () => api.getLatestRestoreValidation(flow.session.upload_id, flow.token),
+  });
+  const shouldStartValidation = !validation.isLatestLoading
+    && !validation.result
+    && validation.canStart
+    && ["uploaded", "validating", "validation_failed"].includes(flow.session.state);
+  useEffect(() => {
+    if (!shouldStartValidation || requestedValidation.current) return;
+    requestedValidation.current = true;
+    validation.start(undefined);
+  }, [shouldStartValidation, validation]);
+  const requestId = validation.result?.request_id ?? null;
+  const receipt = useQuery<RestoreReceipt>({
+    queryKey: ["restore-receipt", requestId],
+    queryFn: () => api.getRestoreReceipt(requestId!, flow.token),
+    enabled: requestId !== null,
+    refetchInterval: (query) => query.state.data?.status === "pending" ? 1_000 : false,
+    refetchOnWindowFocus: false,
+  });
+  const rollbackComplete = receipt.data?.status === "rolled_back"
+    && receipt.data.rollback_status === "complete";
+
+  return (
+    <div className="mt-4 space-y-3">
+      <AdminOperationStatus controller={validation} />
+      {validation.result ? (
+        <div className="rounded-md border border-warning/40 bg-warning-subtle p-4 text-sm">
+          <h4 className="font-medium text-fg">{t("backup.restore_ready")}</h4>
+          <p className="mt-1 text-xs text-muted">{t("backup.restore_handoff_desc")}</p>
+          <p className="mt-3 text-xs text-muted">{t("backup.restore_request_id")}</p>
+          <code className="block break-all rounded bg-surface p-2 text-xs">{validation.result.request_id}</code>
+          <p className="mt-3 text-xs text-muted">{t("backup.restore_host_command")}</p>
+          <code className="block overflow-x-auto rounded bg-surface p-2 text-xs">{validation.result.host_command}</code>
+        </div>
+      ) : null}
+      {requestId ? (
+        <div className="rounded-md border border-border bg-surface p-4 text-sm" aria-live="polite">
+          <h4 className="font-medium text-fg">{t("backup.restore_receipt")}</h4>
+          {receipt.isLoading || receipt.data?.status === "pending" ? (
+            <p role="status" className="mt-1 text-xs text-muted">{t("backup.restore_receipt_pending")}</p>
+          ) : null}
+          {receipt.error ? <p role="alert" className="mt-1 text-xs text-danger">{(receipt.error as Error).message}</p> : null}
+          {receipt.data?.status === "success" ? (
+            <p className="mt-1 text-xs text-success">{t("backup.restore_receipt_success")}</p>
+          ) : null}
+          {receipt.data?.status === "rolled_back" || receipt.data?.status === "recovery_failed" ? (
+            <div role="alert" className="mt-2 rounded border border-danger/30 bg-danger-subtle p-3 text-danger">
+              <p className="font-medium">{rollbackComplete ? t("backup.restore_rollback_complete") : t("backup.restore_rollback_failed")}</p>
+              {receipt.data.error ? <p className="mt-1 text-xs">{receipt.data.error}</p> : null}
+              {receipt.data.diagnostic ? <p className="mt-1 text-xs">{receipt.data.diagnostic}</p> : null}
+              <code className="mt-2 block text-[11px]">{receipt.data.phase}</code>
+              {receipt.data.rollback_components ? (
+                <ul className="mt-2 space-y-1 text-[11px]">
+                  {Object.entries(receipt.data.rollback_components).map(([component, outcome]) => (
+                    <li key={component}>
+                      <code>{component}: {outcome.status}</code>
+                      {outcome.error ? <span className="ml-1">— {outcome.error}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function BackupPage() {
   const toast = useToast();
   const t = useT();
@@ -45,14 +163,29 @@ export default function BackupPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set(ALL_CONTENTS));
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
-  const [restoreManifest, setRestoreManifest] = useState<any>(null);
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState<{ current: number; total: number } | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoreFlow, setRestoreFlow] = useState<RestoreFlow | null>(loadSavedRestoreFlow);
 
   const backups = useQuery({ queryKey: queryKeys.backups.list, queryFn: api.listBackups });
-  const estimate = useQuery({ queryKey: queryKeys.backups.estimate, queryFn: () => api.estimateBackupSizes() });
+  const handleBackupCompleted = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: queryKeys.backups.list });
+  }, [qc]);
+  const estimate = useAdminOperation<BackupEstimateResult>({
+    operationType: "admin-backup-estimate",
+    scope: "global",
+    startOperation: () => api.startBackupEstimate(),
+    loadLatest: () => api.getLatestBackupEstimate(),
+  });
+  const createOperation = useAdminOperation<BackupCreateResult, string[]>({
+    operationType: "admin-backup-create",
+    scope: "global",
+    startOperation: (contents) => api.createBackup(contents),
+    loadLatest: () => api.getLatestBackup(),
+    onCompleted: handleBackupCompleted,
+  });
   const backupItems = backups.data?.backups || [];
   const backupEntrance = useStaggeredEntrance(backupItems.map((backup) => backup.filename));
 
@@ -63,18 +196,8 @@ export default function BackupPage() {
   };
   const toggleAll = () => setSelected(selected.size === ALL_CONTENTS.length ? new Set() : new Set(ALL_CONTENTS));
   const selectedArr = [...selected];
-  const estTotal = estimate.data?.components
-    ? selectedArr.reduce((sum, c) => sum + (estimate.data!.components[c] || 0), 0) : 0;
-
-  const handleCreate = async () => {
-    setIsCreating(true);
-    try {
-      const data = await api.createBackup(selectedArr);
-      toast.success({ message: t("backup.created").replace("{filename}", data.filename).replace("{size}", String(data.size_mb)) });
-      qc.invalidateQueries({ queryKey: ["backups"] });
-    } catch (e) { toast.error({ message: (e as Error).message }); }
-    setIsCreating(false);
-  };
+  const estTotal = estimate.result?.components
+    ? selectedArr.reduce((sum, c) => sum + (estimate.result!.components[c] || 0), 0) : 0;
 
   const handleRestoreClick = () => fileRef.current?.click();
 
@@ -90,18 +213,57 @@ export default function BackupPage() {
     if (!restoreFile) return;
     setIsRestoring(true);
     setConfirmRestore(false);
+    setRestoreError(null);
     try {
-      const data = await api.restoreBackup(restoreFile);
-      if (data.status === "ok" || data.status === "partial") {
-        const errorSuffix = data.errors.length ? ` · ${t("backup.restore_errors", { count: data.errors.length })}` : "";
-        setResult({ ok: data.status === "ok", msg: t("backup.restored").replace("{count}", String(data.restored.length)) + errorSuffix });
-        qc.invalidateQueries();
+      const archiveHash = await sha256Blob(restoreFile);
+      const saved = loadSavedRestoreFlow();
+      let token: string;
+      let session: RestoreUploadSession;
+      if (
+        saved?.session?.filename === restoreFile.name
+        && saved?.session?.size_bytes === restoreFile.size
+        && saved?.session?.sha256 === archiveHash
+        && saved?.token
+      ) {
+        token = saved.token;
+        session = await api.getRestoreUpload(saved.session.upload_id, token);
       } else {
-        setResult({ ok: false, msg: data.errors?.join("; ") || t("backup.restore_failed") });
+        const totalChunks = Math.ceil(restoreFile.size / RESTORE_CHUNK_SIZE);
+        const created = await api.createRestoreUpload({
+          filename: restoreFile.name,
+          size_bytes: restoreFile.size,
+          sha256: archiveHash,
+          chunk_size: RESTORE_CHUNK_SIZE,
+          total_chunks: totalChunks,
+        });
+        token = created.upload_token;
+        session = created;
       }
-    } catch (e) { setResult({ ok: false, msg: (e as Error).message }); }
-    setIsRestoring(false);
-    setRestoreFile(null);
+      saveRestoreFlow({ session, token });
+      for (let index = session.next_chunk; index < session.total_chunks; index += 1) {
+        const start = index * session.chunk_size;
+        const chunk = restoreFile.slice(start, Math.min(start + session.chunk_size, restoreFile.size));
+        const chunkHash = await sha256Blob(chunk);
+        const updated = await api.uploadRestoreChunk(
+          session.upload_id,
+          token,
+          index,
+          chunk,
+          chunkHash,
+        );
+        session = { ...session, ...updated };
+        setRestoreProgress({ current: session.received_chunks, total: session.total_chunks });
+        saveRestoreFlow({ session, token });
+      }
+      const flow = { session, token };
+      saveRestoreFlow(flow);
+      setRestoreFlow(flow);
+    } catch (e) {
+      setRestoreError((e as Error).message);
+    } finally {
+      setIsRestoring(false);
+      setRestoreFile(null);
+    }
   };
 
   const handleDelete = async (filename: string) => {
@@ -121,13 +283,6 @@ export default function BackupPage() {
     <PageShell>
       <PageHeader title={t("backup.title")} description={t("backup.desc")} />
 
-      {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
-          <span>{result.msg}</span>
-          <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("common.close")}</button>
-        </div>
-      )}
-
       {/* Create Backup */}
       <div className="card p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
@@ -136,12 +291,26 @@ export default function BackupPage() {
             <span className="text-xs text-muted">
               {t("backup.estimated_size")}: <span className="font-mono font-medium">{fmtKB(estTotal)}</span>
             </span>
-            <button onClick={handleCreate} disabled={isCreating || selected.size === 0}
+            <button
+              type="button"
+              onClick={() => estimate.start(undefined)}
+              disabled={!estimate.canStart}
+              className="btn-ghost"
+            >
+              {estimate.isStarting ? t("admin_operation.starting") : t("backup.refresh_estimate")}
+            </button>
+            <button onClick={() => createOperation.start(selectedArr)} disabled={!createOperation.canStart || selected.size === 0}
               className="btn-primary">
-              {isCreating ? t("backup.creating") : t("backup.create")}
+              {createOperation.isStarting || createOperation.isActive ? t("backup.creating") : t("backup.create")}
             </button>
           </div>
         </div>
+
+        <AdminOperationStatus controller={estimate} />
+        <AdminOperationStatus controller={createOperation} />
+        {createOperation.result?.filename ? (
+          <p className="mt-2 text-xs text-success">{createOperation.result.filename}</p>
+        ) : null}
 
         <label className="flex items-center gap-2 mb-3 text-xs text-muted cursor-pointer">
           <input type="checkbox" aria-label={t("backup.select_all")} checked={selected.size === ALL_CONTENTS.length} onChange={toggleAll} className="rounded" />
@@ -150,7 +319,7 @@ export default function BackupPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {ALL_CONTENTS.map((c) => {
-            const size = estimate.data?.components?.[c];
+            const size = estimate.result?.components?.[c];
             const checked = selected.has(c);
             const keyMap: Record<string, string> = {
               database: "db", "gallerydl-config": "config", "app-config": "appconfig",
@@ -193,6 +362,11 @@ export default function BackupPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium dark:text-white font-mono text-xs">{b.filename}</span>
                     {b.version && <span className="text-[10px] text-muted">{t("backup.manifest_version")} {b.version}</span>}
+                    {b.restorable === false ? (
+                      <span className="rounded-full bg-warning-subtle px-1.5 py-0.5 text-[10px] text-warning">
+                        {t("backup.non_restorable")}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="text-xs text-muted mt-1">{b.size_mb} MB &middot; {fmt.dateTime(b.created_at)}</div>
                   {b.contents && b.contents.length > 0 && (
@@ -224,14 +398,24 @@ export default function BackupPage() {
       </div>
 
       {/* Restore */}
-      <div className="card p-6">
+      <div className="card p-6" data-restore-flow>
         <h3 className="font-medium dark:text-white mb-1">{t("backup.restore_title")}</h3>
         <p className="text-xs text-muted mb-4">{t("backup.restore_desc")}</p>
         <input ref={fileRef} type="file" accept=".tar.gz" className="hidden" onChange={handleFileSelected} />
         <button onClick={handleRestoreClick} disabled={isRestoring}
           className="btn-danger">
-          {isRestoring ? t("backup.restoring") : t("backup.restore_btn")}
+          {isRestoring ? t("backup.restore_staging") : t("backup.restore_btn")}
         </button>
+        {restoreProgress ? (
+          <p role="status" className="mt-3 text-xs text-muted">
+            {t("backup.restore_upload_progress", {
+              current: restoreProgress.current,
+              total: restoreProgress.total,
+            })}
+          </p>
+        ) : null}
+        {restoreError ? <p role="alert" className="mt-3 text-xs text-danger">{restoreError}</p> : null}
+        {restoreFlow ? <RestoreValidationFlow key={restoreFlow.session.upload_id} flow={restoreFlow} /> : null}
       </div>
 
       {confirmRestore && restoreFile && (

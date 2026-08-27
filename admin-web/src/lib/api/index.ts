@@ -98,6 +98,21 @@ export const api = {
   },
 
   getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
+  getDownloadConflicts: (id: string) =>
+    request<T.DownloadConflictCase>(`/api/v1/tasks/${id}/conflicts`),
+  downloadConflictMediaUrl: (id: string, relativePath: string, side: "canonical" | "staged") =>
+    `/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`,
+  resolveDownloadConflicts: (
+    id: string,
+    decisions: Array<{ relative_path: string; winner: T.DownloadConflictWinner }>,
+  ) => request<T.DownloadConflictResolution>(`/api/v1/tasks/${id}/conflicts/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ decisions }),
+  }),
+  rollbackDownloadConflictResolution: (id: string, resolutionId: string) =>
+    request<T.DownloadConflictResolution>(`/api/v1/tasks/${id}/conflicts/resolutions/${encodeURIComponent(resolutionId)}/rollback`, {
+      method: "POST",
+    }),
   retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
   cancelTask: (id: string, note?: string) =>
     request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
@@ -231,7 +246,8 @@ export const api = {
   updateSubscription: (id: string, data: {
     name?: string;
     is_active?: boolean;
-    schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+    schedule_mode?: "inherit" | "interval" | "calendar" | "manual" | null;
+    schedule_rule?: T.CalendarScheduleRule | null;
     sync_interval_hours?: number;
     scheduled_times?: string | null;
     sync_enabled?: boolean;
@@ -417,6 +433,9 @@ export const api = {
   gitlleryStatus: () =>
     request<T.GitlleryStatus>("/api/v1/curation/gitllery/status"),
 
+  gitlleryRepositoryStatus: (repositoryId: string) =>
+    request<T.GitlleryStatus>(`/api/v1/curation/repositories/${encodeURIComponent(repositoryId)}/gitllery/status`),
+
   gitlleryVerify: (repositoryId: string, deep = false) =>
     request<{ status: string; job_id: string }>("/api/v1/curation/gitllery/verify", {
       method: "POST",
@@ -580,24 +599,28 @@ export const api = {
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 
-  testProxy: () => request<{
+  testProxy: () => request<T.AdminOperationAccepted>("/api/v1/admin/proxy/test", { method: "POST" }),
+  getLatestProxyTest: () => request<T.AdminOperationSnapshotResponse<{
     proxy_enabled: boolean;
     proxy_reachable: boolean | null;
     proxy_reachable_error: string;
     proxy_config: { http: string; https: string };
     results: { name: string; url: string; direct_ok: boolean; direct_ms: number; direct_error: string; proxy_ok: boolean | null; proxy_ms: number | null; proxy_error: string }[];
-  }>("/api/v1/admin/proxy/test", { method: "POST" }),
+    message?: string;
+  }>>("/api/v1/admin/proxy/test/latest"),
 
-  getSystemInfo: () => request<{ version: string; downloads_size_mb: number; library_size_mb: number; downloads_free_gb: number; archives_kb: Record<string, number> }>("/api/v1/admin/system-info"),
+  getSystemInfo: () => request<T.SystemInfoResponse>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
   cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
-  getIntegrityCheck: () => request<{
+  startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
+  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<{
     issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
     db_stats: Record<string, number>;
     checked_at: string;
-  }>("/api/v1/admin/integrity-check"),
+    message?: string;
+  }>>("/api/v1/admin/integrity-check/latest"),
   clearEntity: (entity: T.ClearEntity, confirmation: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, {
       method: "POST",
@@ -612,7 +635,7 @@ export const api = {
       body: JSON.stringify(options),
     }),
 
-  importFromDisk: (options: { source?: string; reset_ledger?: boolean } = {}) =>
+  importFromDisk: (options: T.ImportFromDiskRequest = {}) =>
     request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
       method: "POST",
       body: JSON.stringify(options),
@@ -648,6 +671,12 @@ export const api = {
       meta?: Record<string, any>;
       updated_at?: number;
     }>(`/api/v1/admin/operations/${jobId}`),
+
+  getAdminOperationTask: <TResult = Record<string, unknown>>(taskId: string) =>
+    request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${taskId}`),
+
+  retryAdminOperation: (taskId: string) =>
+    request<T.AdminOperationAccepted>(`/api/v1/admin/operations/${taskId}/retry`, { method: "POST" }),
 
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
@@ -810,25 +839,87 @@ export const api = {
     request<{ status: string; message: string; path: string }>("/api/v1/admin/gallerydl-config", { method: "PUT", body: JSON.stringify(data) }),
 
   testGalleryDLConnection: (source: string) =>
-    request<{ source: string; success: boolean; message: string; details: string }>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
+    request<T.AdminOperationAccepted>("/api/v1/admin/gallerydl-config/test-connection", { method: "POST", body: JSON.stringify({ source }) }),
+
+  getLatestGalleryDLConnection: (source: string) =>
+    request<T.AdminOperationSnapshotResponse<{ source: string; success: boolean; message: string; details: string }>>(
+      `/api/v1/admin/gallerydl-config/test-connection/latest?source=${encodeURIComponent(source)}`,
+    ),
 
   // Backup & Restore
   createBackup: (contents?: string[]) =>
-    request<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; component_sizes: Record<string, number> }>(
+    request<T.AdminOperationAccepted>(
       "/api/v1/admin/backup", { method: "POST", body: JSON.stringify({ contents: contents || ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] }) }),
 
+  getLatestBackup: () =>
+    request<T.AdminOperationSnapshotResponse<{ status: string; filename: string; size_bytes: number; size_mb: number; contents: string[]; restorable: boolean; component_sizes: Record<string, number>; message?: string }>>(
+      "/api/v1/admin/backup/latest",
+    ),
+
   listBackups: () =>
-    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; component_sizes?: Record<string, number>; version?: string }[] }>(
+    request<{ backups: { filename: string; size_mb: number; created_at: string; contents: string[]; restorable: boolean; component_sizes?: Record<string, number>; version?: string }[] }>(
       "/api/v1/admin/backup/list"),
 
-  estimateBackupSizes: () =>
-    request<{ components: Record<string, number> }>("/api/v1/admin/backup/estimate"),
+  startBackupEstimate: () =>
+    request<T.AdminOperationAccepted>("/api/v1/admin/backup/estimate", { method: "POST" }),
 
-  restoreBackup: (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return fetch("/api/v1/admin/backup/restore?confirm=DELETE-EVERYTHING", { method: "POST", body: formData }).then(r => r.json()) as Promise<{ status: string; restored: string[]; errors: string[]; manifest: any }>;
-  },
+  getLatestBackupEstimate: () =>
+    request<T.AdminOperationSnapshotResponse<{ components: Record<string, number>; message?: string }>>(
+      "/api/v1/admin/backup/estimate/latest",
+    ),
+
+  createRestoreUpload: (data: {
+    filename: string;
+    size_bytes: number;
+    sha256: string;
+    chunk_size: number;
+    total_chunks: number;
+  }) => request<T.RestoreUploadSession & { upload_token: string }>(
+    "/api/v1/admin/backup/restore/uploads",
+    { method: "POST", body: JSON.stringify(data) },
+  ),
+
+  getRestoreUpload: (uploadId: string, token: string) => request<T.RestoreUploadSession>(
+    `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}`,
+    { headers: { "X-Restore-Token": token } },
+  ),
+
+  uploadRestoreChunk: (
+    uploadId: string,
+    token: string,
+    index: number,
+    data: Blob,
+    sha256: string,
+  ) => request<T.RestoreUploadSession & { idempotent: boolean }>(
+    `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/chunks/${index}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Restore-Token": token,
+        "X-Chunk-SHA256": sha256,
+      },
+      body: data,
+    },
+  ),
+
+  startRestoreValidation: (uploadId: string, token: string) =>
+    request<T.AdminOperationAccepted>(
+      `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/validate`,
+      { method: "POST", headers: { "X-Restore-Token": token } },
+    ),
+
+  getLatestRestoreValidation: (uploadId: string, token: string) =>
+    request<T.AdminOperationSnapshotResponse<T.RestoreValidationResult>>(
+      `/api/v1/admin/backup/restore/uploads/${encodeURIComponent(uploadId)}/validation/latest`,
+      { headers: { "X-Restore-Token": token } },
+    ),
+
+  getRestoreReceipt: (requestId: string, token: string) =>
+    request<T.RestoreReceipt>(
+      `/api/v1/admin/backup/restore/receipts/${encodeURIComponent(requestId)}`,
+      { headers: { "X-Restore-Token": token } },
+    ),
 
   deleteBackup: (filename: string) =>
     request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
@@ -883,6 +974,7 @@ export const queryKeys = {
     all: ["gitllery"] as const,
     settings: ["gitllery", "settings"] as const,
     status: ["gitllery", "status"] as const,
+    repositoryStatus: (repositoryId: string) => ["gitllery", "status", repositoryId] as const,
     log: (repositoryId: string) => ["gitllery", "log", repositoryId] as const,
   },
   downloadJobs: {

@@ -190,6 +190,41 @@ class TaskService:
         attention_state: str | None = None,
         reason_code: str | None | object = _UNSET,
     ) -> TaskRun:
+        # Registered administrator workers carry their immutable delivery in
+        # a context variable.  Re-lock and refresh the TaskRun before every
+        # nested business-handler update, so a retry handoff cannot race a
+        # stale progress or terminal write between an in-memory check and
+        # flush.  Control-plane callers have no worker context and retain
+        # their existing explicit locking rules.
+        from app.services.operations import (
+            ADMIN_DISPATCH_META_KEY,
+            AdminOperationAttemptRejected,
+            current_admin_operation_attempt,
+        )
+
+        delivery = current_admin_operation_attempt()
+        if delivery is not None and task.id == delivery[0]:
+            task = (
+                await self.db.execute(
+                    select(TaskRun)
+                    .where(TaskRun.id == task.id)
+                    .with_for_update(of=TaskRun)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            dispatch = (
+                (task.meta or {}).get(ADMIN_DISPATCH_META_KEY)
+                if task is not None
+                else None
+            )
+            if (
+                task is None
+                or not isinstance(dispatch, dict)
+                or int(dispatch.get("attempt") or 0) != delivery[1]
+            ):
+                raise AdminOperationAttemptRejected(
+                    "Administrator operation attempt is no longer current"
+                )
         old_status = task.status
         if status is not None:
             task.status = normalize_task_status(status)
@@ -383,6 +418,7 @@ class TaskService:
         visibility: str = "all",
         offset: int = 0,
         limit: int = 50,
+        excluded_admin_operation_types: frozenset[str] = frozenset(),
     ) -> tuple[int, list[TaskRun]]:
         stmt = select(TaskRun)
         count_stmt = select(func.count(TaskRun.id))
@@ -404,6 +440,12 @@ class TaskService:
             filters.append(TaskRun.operation_type == operation_type)
         if source:
             filters.append(TaskRun.source == source)
+        if excluded_admin_operation_types:
+            filters.append(or_(
+                TaskRun.kind != "admin",
+                TaskRun.operation_type.is_(None),
+                TaskRun.operation_type.not_in(excluded_admin_operation_types),
+            ))
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)
@@ -419,6 +461,8 @@ class TaskService:
 
 
 def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[str, Any]:
+    from app.services.publisher_attempts import public_task_meta
+
     return {
         "id": str(task.id),
         "kind": task.kind,
@@ -445,7 +489,7 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
         "progress_data": task.progress_data,
         "result_data": task.result_data,
         "error_log": task.error_log,
-        "meta": task.meta,
+        "meta": public_task_meta(task.meta),
         "priority": task.priority,
         "attempts": task.attempts,
         "enqueued_at": task.enqueued_at.isoformat() if task.enqueued_at else None,
@@ -473,6 +517,8 @@ async def update_task_resource_state(
     owner: str,
     state: str,
     reason: str | None,
+    *,
+    publisher_attempt: str | None = None,
 ) -> None:
     """Bridge a resource-profile owner to its user-facing TaskRun.
 
@@ -488,19 +534,60 @@ async def update_task_resource_state(
     from app.database import async_session
 
     async with async_session() as db:
-        task = (
-            await db.execute(
-                select(TaskRun)
-                .where(
-                    (TaskRun.id == owner_id) | (TaskRun.subject_id == owner_id)
+        if publisher_attempt is not None:
+            task = (
+                await db.execute(
+                    select(TaskRun)
+                    .where(TaskRun.id == owner_id, TaskRun.kind == "admin")
+                    .with_for_update(of=TaskRun)
                 )
-                .order_by((TaskRun.id == owner_id).desc())
-                .limit(1)
+            ).scalar_one_or_none()
+            dispatch = (
+                ((task.meta or {}).get("admin_dispatch") or {})
+                if task is not None
+                else {}
             )
-        ).scalar_one_or_none()
+            if dispatch:
+                try:
+                    owned = int(dispatch.get("attempt") or 0) == int(publisher_attempt)
+                except (TypeError, ValueError):
+                    owned = False
+            else:
+                from app.services.publisher_attempts import current_publisher_attempt
+
+                owned = bool(
+                    task is not None
+                    and current_publisher_attempt(task) == publisher_attempt
+                )
+            if task is None or not owned:
+                await db.rollback()
+                return
+        else:
+            task = (
+                await db.execute(
+                    select(TaskRun)
+                    .where(
+                        (TaskRun.id == owner_id)
+                        | (TaskRun.subject_id == owner_id)
+                    )
+                    .order_by((TaskRun.id == owner_id).desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if task is not None:
+                from app.services.publisher_attempts import current_publisher_attempt
+
+                if (
+                    (task.meta or {}).get("admin_dispatch") is not None
+                    or current_publisher_attempt(task) is not None
+                ):
+                    await db.rollback()
+                    return
         if task is None or (
             task.resource_state == state and task.resource_reason == reason
         ):
+            if publisher_attempt is not None:
+                await db.rollback()
             return
         task.resource_state = state
         task.resource_reason = reason

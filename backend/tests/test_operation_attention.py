@@ -1,4 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
@@ -11,6 +13,7 @@ async def _clear(db):
             search_index_states,
             task_events,
             task_runs,
+            storage_artifacts,
             import_jobs,
             download_jobs,
             subscription_sources,
@@ -114,6 +117,278 @@ async def test_compaction_never_deletes_repository_job_without_receipt():
             assert await db.get(TaskRun, task.id) is not None
             assert await db.get(DownloadJob, download.id) is not None
     finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_keeps_open_attention_even_after_repository_receipt_exists():
+    """An operator-visible failure must survive its normal retention window."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, TaskRun
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(db, download_status="failed")
+            task = await TaskService(db).ensure_download_task(download)
+            task.attention_state = "open"
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await upsert_repository_sync_receipt(db, download, status="failed")
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+
+            assert report["deleted_tasks"] == 0
+            assert await db.get(TaskRun, task.id) is not None
+            assert await db.get(DownloadJob, download.id) is not None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_keeps_download_that_owns_recoverable_artifacts():
+    """The receipt is history, not permission to drop retryable ledger rows."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact, TaskRun
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(db)
+            task = await TaskService(db).ensure_download_task(download)
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/unfinished.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="unfinished",
+                file_name="unfinished.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="failed",
+            ))
+            await upsert_repository_sync_receipt(db, download)
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+
+            assert report["deleted_download_jobs"] == 0
+            assert await db.get(TaskRun, task.id) is not None
+            assert await db.get(DownloadJob, download.id) is not None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_preserves_only_latest_completed_admin_scope_snapshot():
+    """TaskRun retention keeps the one snapshot used by the latest endpoint."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+    from app.services.operation_attention import compact_terminal_tasks
+    from app.services.tasks import TaskService
+
+    expired = datetime.now(timezone.utc) - timedelta(minutes=1)
+    ids: list[UUID] = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            service = TaskService(db)
+            first = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(
+                first.task,
+                status="complete",
+                result={"issues": [], "generation": 1},
+            )
+            first.task.compactable_at = expired
+            ids.append(first.task.id)
+
+            cancelled = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(cancelled.task, status="cancelled")
+            cancelled.task.compactable_at = expired
+            ids.append(cancelled.task.id)
+
+            latest = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+                title="Integrity scan",
+                entity="integrity",
+                options={},
+            )
+            await service.update_task(
+                latest.task,
+                status="complete",
+                result={"issues": [], "generation": 2},
+            )
+            latest.task.compactable_at = expired
+            ids.append(latest.task.id)
+            latest_id = latest.task.id
+            await db.commit()
+
+            report = await compact_terminal_tasks(db, dry_run=False)
+            assert report["deleted_tasks"] == 2
+            remaining = set(
+                (
+                    await db.execute(select(TaskRun.id).where(TaskRun.id.in_(ids)))
+                ).scalars()
+            )
+            assert remaining == {latest_id}
+
+            state = await operations.latest_successful_admin_operation(
+                db,
+                operation_type="admin-integrity-scan",
+                scope_key="diagnostics:integrity:active",
+            )
+            assert state["snapshot"]["task_id"] == str(latest_id)
+            assert state["snapshot"]["result"]["generation"] == 2
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repository_backlog_guard_ignores_library_metadata_projection():
+    """Only DOWNLOAD_ROOT artifacts may keep a repository failure actionable."""
+    from app.database import async_session, engine
+    from app.models import StorageArtifact
+    from app.services.operation_attention import _repository_has_recoverable_backlog
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, download = await _repository_fixture(db)
+            db.add(StorageArtifact(
+                storage_root="library",
+                file_path="pixiv/123/same.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="library-only",
+                file_name="same.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="new",
+            ))
+            await db.commit()
+
+            assert await _repository_has_recoverable_backlog(db, repository.id) is False
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_compaction_rechecks_artifacts_after_competing_claim_commits():
+    """A force-reset claim racing compaction must retain its DownloadJob."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, ImportJob, StorageArtifact
+    from app.services.artifact_ledger import ArtifactLedger
+    from app.services.operation_attention import (
+        compact_terminal_tasks,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    worker_db = None
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            _repository, download = await _repository_fixture(setup_db)
+            task = await TaskService(setup_db).ensure_download_task(download)
+            task.compactable_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            artifact = StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/race.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="race",
+                file_name="race.json",
+                artifact_type="metadata_json",
+                download_job_id=download.id,
+                state="done",
+            )
+            setup_db.add(artifact)
+            await upsert_repository_sync_receipt(setup_db, download)
+            await setup_db.commit()
+
+            worker_db = async_session()
+            await worker_db.get(DownloadJob, download.id, with_for_update=True)
+            locked_artifact = await worker_db.get(StorageArtifact, artifact.id, with_for_update=True)
+            # ``reset_ledger`` makes a previously done row claimable.  Use the
+            # production claim primitive so this covers the same transition a
+            # resumed import worker performs, not merely a hand-written state.
+            locked_artifact.state = "new"
+            claimant = ImportJob(
+                download_job_id=download.id,
+                status="running",
+                execution_token=uuid4(),
+            )
+            worker_db.add(claimant)
+            await worker_db.flush()
+            claim = await ArtifactLedger(worker_db).claim_work_batch(
+                download.id,
+                claimant.id,
+                lease_token=claimant.execution_token,
+                limit=25,
+            )
+            assert claim.claimed == ("race",)
+
+            async with async_session() as compactor_db:
+                compacting = asyncio.create_task(
+                    compact_terminal_tasks(compactor_db, dry_run=False),
+                )
+                await asyncio.sleep(0.05)
+                assert not compacting.done()
+                await worker_db.commit()
+                report = await compacting
+
+            assert report["deleted_download_jobs"] == 0
+            async with async_session() as check_db:
+                assert await check_db.get(DownloadJob, download.id) is not None
+                current_artifact = await check_db.get(StorageArtifact, artifact.id)
+                assert current_artifact.download_job_id == download.id
+                assert current_artifact.state == "importing"
+    finally:
+        if worker_db is not None:
+            await worker_db.close()
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
@@ -265,6 +540,116 @@ async def test_later_success_resolves_historical_stale_and_marks_receipt_recover
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_no_changes_receipt_does_not_resolve_failed_task_while_repository_backlog_remains():
+    """A clean later scan cannot hide importable work left by an earlier failure."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, StorageArtifact
+    from app.services.operation_attention import (
+        reconcile_task_truth,
+        upsert_repository_sync_receipt,
+    )
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, failed_download = await _repository_fixture(
+                db,
+                download_status="failed",
+            )
+            failed_task = await TaskService(db).ensure_download_task(failed_download)
+            failed_task.finished_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            failed_task.updated_at = failed_task.finished_at
+            await upsert_repository_sync_receipt(db, failed_download, status="failed")
+            db.add(StorageArtifact(
+                storage_root="downloads",
+                file_path="pixiv/123/pending.json",
+                source="pixiv",
+                creator_dir="123",
+                source_work_id="pending",
+                file_name="pending.json",
+                artifact_type="metadata_json",
+                state="new",
+            ))
+            later = DownloadJob(
+                subscription_id=failed_download.subscription_id,
+                subscription_source_id=repository.id,
+                source="pixiv",
+                source_url=repository.source_url,
+                status="complete",
+                manifest={"outcome": {"code": "no_changes"}},
+            )
+            db.add(later)
+            await db.flush()
+            later_task = await TaskService(db).ensure_download_task(later)
+            later_task.finished_at = datetime.now(timezone.utc)
+            later_task.updated_at = later_task.finished_at
+            later_receipt = await upsert_repository_sync_receipt(
+                db,
+                later,
+                status="complete",
+            )
+            later_receipt.outcome_code = "no_changes"
+            await db.commit()
+
+            report = await reconcile_task_truth(db, dry_run=False)
+            await db.refresh(failed_task)
+
+            assert report["recovered"] == 0
+            assert failed_task.attention_state == "open"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_orphan_with_failed_repository_receipt_remains_actionable():
+    """Do not auto-resolve a retryable orphan merely because its row was compacted."""
+    from uuid import uuid4
+
+    from app.database import async_session, engine
+    from app.models import RepositorySyncReceipt, TaskRun
+    from app.services.operation_attention import reconcile_task_truth
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, _download = await _repository_fixture(db)
+            missing_download_id = uuid4()
+            task = TaskRun(
+                kind="download",
+                subject_type="download_job",
+                subject_id=missing_download_id,
+                status="failed",
+                attention_state="open",
+                reason_code="orphaned_subject",
+                meta={"subscription_source_id": str(repository.id)},
+            )
+            db.add(task)
+            db.add(RepositorySyncReceipt(
+                repository_id=repository.id,
+                source_download_job_id=missing_download_id,
+                source="pixiv",
+                status="failed",
+                finished_at=datetime.now(timezone.utc),
+            ))
+            await db.commit()
+
+            report = await reconcile_task_truth(db, dry_run=False)
+            await db.refresh(task)
+
+            assert report["recovered"] == 0
+            assert task.attention_state == "open"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_later_import_retry_under_same_download_resolves_stale_child():
     from app.database import async_session, engine
     from app.models import ImportJob
@@ -382,6 +767,231 @@ async def test_import_pause_resume_cancel_updates_parent_and_both_task_runs_atom
             assert parent_task.compactable_at is not None
             assert child_task.compactable_at is not None
             assert int((await db.execute(select(func.count(RepositorySyncReceipt.id)))).scalar_one()) == 1
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_bounded_truth_reconciliation_waits_for_publication_then_aggregates():
+    """Periodic truth uses all bounded children and the publication barrier."""
+    from app.database import async_session, engine
+    from app.models import ImportJob
+    from app.services.import_lifecycle import close_bounded_import_publication
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(
+                db,
+                download_status="importing",
+            )
+            download.manifest = {
+                **dict(download.manifest or {}),
+                "disk_import_recovery": True,
+                "bounded_import_publication_open": True,
+            }
+            child = ImportJob(download_job_id=download.id, status="failed")
+            db.add(child)
+            await db.flush()
+            parent_task = await TaskService(db).ensure_download_task(download)
+            await TaskService(db).ensure_import_task(child)
+            await db.commit()
+            download_id = download.id
+
+            open_report = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            open_download = await db.get(type(download), download_id)
+            open_parent_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+            assert open_report["corrected"] == 0
+            assert open_download.status == "importing"
+            assert open_parent_task.status == "running"
+
+            completion = await close_bounded_import_publication(db, download_id)
+            assert completion is not None
+            assert completion.should_finalize is True
+            assert completion.status == "failed"
+            await db.commit()
+
+            closed_report = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            closed_download = await db.get(type(download), download_id)
+            closed_parent_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+            assert closed_report["corrected"] == 1
+            assert closed_download.status == "failed"
+            assert closed_parent_task.status == "failed"
+            assert parent_task.id == closed_parent_task.id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_bounded_truth_reconciliation_repairs_domain_only_mismatch():
+    """A correct TaskRun must not hide a wrong bounded parent status."""
+    from app.database import async_session, engine
+    from app.models import DownloadJob, ImportJob
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.tasks import TaskService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            _repository, download = await _repository_fixture(
+                db,
+                download_status="failed",
+            )
+            download.manifest = {
+                **dict(download.manifest or {}),
+                "disk_import_recovery": True,
+                "bounded_import_publication_open": True,
+            }
+            child = ImportJob(download_job_id=download.id, status="running")
+            db.add(child)
+            await db.flush()
+            parent_task = await TaskService(db).ensure_download_task(download)
+            await TaskService(db).update_task(parent_task, status="running")
+            await TaskService(db).ensure_import_task(child)
+            await db.commit()
+            download_id = download.id
+
+            first = await reconcile_task_truth(db, dry_run=False)
+            second = await reconcile_task_truth(db, dry_run=False)
+            db.expire_all()
+            repaired_download = await db.get(DownloadJob, download_id)
+            repaired_task = await TaskService(db).get_by_subject(
+                "download_job",
+                download_id,
+            )
+
+            assert first["corrected"] == 1
+            assert second["corrected"] == 0
+            assert repaired_download.status == "importing"
+            assert repaired_task.status == "running"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_truth_and_repository_owner_locking_share_uuid_parent_order():
+    """Truth reconciliation cannot retain B then wait on owner-locked A."""
+    from app.database import async_session, engine
+    from app.models import Creator, DownloadJob, ImportJob, Subscription, TaskRun
+    from app.services.operation_attention import reconcile_task_truth
+    from app.services.repository_artifact_reconciliation import (
+        _locked_recoverable_download_owner_ids,
+    )
+    from app.services.tasks import TaskService
+
+    parent_a_id = UUID("10000000-0000-0000-0000-000000000001")
+    parent_b_id = UUID("20000000-0000-0000-0000-000000000002")
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            creator = Creator(name=f"truth-lock-order-{uuid4()}")
+            setup_db.add(creator)
+            await setup_db.flush()
+            subscription = Subscription(
+                creator_id=creator.id,
+                name="Truth lock order",
+            )
+            setup_db.add(subscription)
+            await setup_db.flush()
+            parent_a = DownloadJob(
+                id=parent_a_id,
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/1001",
+                status="failed",
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": False,
+                },
+            )
+            parent_b = DownloadJob(
+                id=parent_b_id,
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_url="https://www.pixiv.net/users/2002",
+                status="failed",
+                manifest={
+                    "disk_import_recovery": True,
+                    "bounded_import_publication_open": False,
+                },
+            )
+            setup_db.add_all([parent_a, parent_b])
+            await setup_db.flush()
+            setup_db.add_all([
+                ImportJob(download_job_id=parent_a.id, status="complete"),
+                ImportJob(download_job_id=parent_b.id, status="complete"),
+            ])
+            await setup_db.flush()
+
+            # Task creation order deliberately conflicts with UUID owner order.
+            task_b = await TaskService(setup_db).ensure_download_task(parent_b)
+            task_b.created_at = old
+            await TaskService(setup_db).update_task(task_b, status="running")
+            task_a = await TaskService(setup_db).ensure_download_task(parent_a)
+            task_a.created_at = old + timedelta(seconds=1)
+            await TaskService(setup_db).update_task(task_a, status="running")
+            await setup_db.commit()
+
+        async with async_session() as owner_db:
+            await owner_db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == parent_a_id)
+                .with_for_update()
+            )
+
+            async def reconcile_in_second_session():
+                async with async_session() as truth_db:
+                    return await reconcile_task_truth(truth_db, dry_run=False)
+
+            truth = asyncio.create_task(reconcile_in_second_session())
+            await asyncio.sleep(0.2)
+            locked_ids = await _locked_recoverable_download_owner_ids(
+                owner_db,
+                {parent_a_id, parent_b_id},
+            )
+            assert locked_ids == {parent_a_id, parent_b_id}
+            await owner_db.commit()
+            report = await asyncio.wait_for(truth, timeout=5)
+
+        async with async_session() as verify_db:
+            parents = {
+                parent.id: parent
+                for parent in (await verify_db.execute(
+                    select(DownloadJob).where(
+                        DownloadJob.id.in_((parent_a_id, parent_b_id)),
+                    )
+                )).scalars()
+            }
+            tasks = list((await verify_db.execute(
+                select(TaskRun).where(
+                    TaskRun.subject_type == "download_job",
+                    TaskRun.subject_id.in_((parent_a_id, parent_b_id)),
+                )
+            )).scalars())
+            assert report["corrected"] == 2
+            assert {parent.status for parent in parents.values()} == {"complete"}
+            assert {task.status for task in tasks} == {"complete"}
     finally:
         async with async_session() as db:
             await _clear(db)

@@ -96,11 +96,12 @@ def test_scheduler_supervisor_runs_watchdog_every_sixty_seconds():
     assert "scheduler_watchdog()" in source
 
 
-def _sub(mode=None, interval=6, times=None, created_at=None):
+def _sub(mode=None, interval=6, times=None, rule=None, created_at=None):
     return SimpleNamespace(
         schedule_mode=mode,
         sync_interval_hours=interval,
         scheduled_times=times,
+        schedule_rule=rule,
         created_at=created_at,
     )
 
@@ -140,7 +141,7 @@ def test_fixed_time_slot_triggers_once_and_uses_attempted_at():
     assert _should_sync_now(_sub(), config, None, now, tz, last_attempted_at=attempted) is False
 
 
-def test_fixed_time_slot_remains_due_after_old_execution_window():
+def test_fixed_time_slot_is_skipped_after_lateness_window():
     from app.jobs.subscription_sync import _should_sync_now, schedule_decision_snapshot
 
     tz = ZoneInfo("Asia/Shanghai")
@@ -152,13 +153,13 @@ def test_fixed_time_slot_remains_due_after_old_execution_window():
     slot = datetime(2026, 8, 13, 22, 0, tzinfo=tz)
     now = slot + timedelta(hours=3)
 
-    assert _should_sync_now(_sub(), config, None, now, tz) is True
+    assert _should_sync_now(_sub(), config, None, now, tz) is False
     decision = schedule_decision_snapshot(_sub(), config, None, None, now, tz)
-    assert decision["reason"] == "fixed_time_backlog_due"
-    assert decision["next_due_at"] == slot.isoformat()
+    assert decision["reason"] == "calendar_missed_skipped"
+    assert decision["next_due_at"] == datetime(2026, 8, 14, 22, 0, tzinfo=tz).isoformat()
 
 
-def test_persisted_due_timestamp_survives_resource_deferral():
+def test_persisted_calendar_due_is_skipped_after_lateness_window():
     from app.jobs.subscription_sync import schedule_decision_snapshot
 
     tz = ZoneInfo("Asia/Shanghai")
@@ -173,9 +174,78 @@ def test_persisted_due_timestamp_survives_resource_deferral():
         tz,
         persisted_next_sync_at=slot,
     )
+    assert decision["due"] is False
+    assert decision["reason"] == "calendar_missed_skipped"
+    assert decision["next_due_at"] == datetime(2026, 8, 15, 22, 0, tzinfo=tz).isoformat()
+
+
+def test_weekly_calendar_runs_selected_weekdays_and_multiple_times():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 8, 17, 9, 5, tzinfo=tz)  # Monday
+    decision = schedule_decision_snapshot(
+        _sub(
+            mode="calendar",
+            rule={"frequency": "weekly", "weekdays": [1, 5], "times": ["09:00", "21:00"]},
+        ),
+        {"scheduler_scan_interval_minutes": 5},
+        None,
+        None,
+        now,
+        tz,
+    )
+
     assert decision["due"] is True
-    assert decision["reason"] == "fixed_time_backlog_due"
-    assert decision["next_due_at"] == slot.isoformat()
+    assert decision["scheduled_for"] == datetime(2026, 8, 17, 9, 0, tzinfo=tz).isoformat()
+
+
+def test_monthly_calendar_clamps_31st_to_month_end_and_deduplicates():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime(2027, 2, 28, 22, 5, tzinfo=tz)
+    decision = schedule_decision_snapshot(
+        _sub(
+            mode="calendar",
+            rule={
+                "frequency": "monthly",
+                "month_days": [28, 30, 31],
+                "times": ["22:00"],
+                "overflow": "last_day",
+            },
+        ),
+        {"scheduler_scan_interval_minutes": 5},
+        None,
+        None,
+        now,
+        tz,
+    )
+
+    assert decision["due"] is True
+    assert decision["scheduled_for"] == datetime(2027, 2, 28, 22, 0, tzinfo=tz).isoformat()
+    assert decision["next_due_at"] == datetime(2027, 2, 28, 22, 0, tzinfo=tz).isoformat()
+
+
+def test_calendar_skips_nonexistent_dst_wall_time():
+    from app.jobs.subscription_sync import schedule_decision_snapshot
+
+    tz = ZoneInfo("America/New_York")
+    now = datetime(2027, 3, 14, 3, 5, tzinfo=tz)
+    decision = schedule_decision_snapshot(
+        _sub(
+            mode="calendar",
+            rule={"frequency": "daily", "times": ["02:30"]},
+        ),
+        {"scheduler_scan_interval_minutes": 5},
+        None,
+        None,
+        now,
+        tz,
+    )
+
+    assert decision["due"] is False
+    assert decision["next_due_at"] == datetime(2027, 3, 15, 2, 30, tzinfo=tz).isoformat()
 
 
 def test_fixed_time_does_not_trigger_before_scheduled_time():
@@ -316,6 +386,17 @@ def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
     paths = {route.path for route in router.routes} | {route.path for route in tasks_ops_router.routes}
     assert "/system/workbench" in paths
     assert "/system/scheduler-decisions" in paths
+
+
+def test_scheduler_disabled_is_global_suppression_not_one_attention_per_source():
+    import inspect
+
+    from app.api.system import scheduler_decisions
+
+    source = inspect.getsource(scheduler_decisions)
+    assert 'suppression_reason = "scheduler_disabled"' in source
+    assert '\n            reason = "scheduler_disabled"' not in source
+    assert '"scheduler_disabled",' not in source[source.index("is_attention =") :]
 
 
 def test_rq_can_import_scheduler_job_path():

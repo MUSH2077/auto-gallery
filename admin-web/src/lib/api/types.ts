@@ -251,6 +251,148 @@ export interface TaskRunListResponse {
   items: TaskRun[];
 }
 
+export interface AdminOperationAccepted {
+  task_id: string;
+  job_id: string;
+  status: "enqueued";
+  operation_type: string;
+}
+
+export interface AdminOperationStatus<TResult = Record<string, unknown>> {
+  task_id: string;
+  job_id: string;
+  rq_job_id?: string | null;
+  status: "enqueued" | "running" | "recovering" | "paused" | "complete" | "failed" | "stale" | "cancelled" | string;
+  operation_type: string;
+  progress?: {
+    phase?: string;
+    label?: string;
+    current?: number;
+    total?: number;
+    percent?: number;
+  } | null;
+  result?: TResult | null;
+  error?: string | null;
+  reason_code?: string | null;
+  updated_at?: number | string | null;
+}
+
+export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
+  task_id: string;
+  job_id?: string | null;
+  status: "complete";
+  operation_type: string;
+  progress?: AdminOperationStatus<TResult>["progress"];
+  result: TResult;
+  completed_at: string;
+}
+
+export interface AdminOperationCurrent {
+  task_id: string;
+  job_id?: string | null;
+  status: "enqueued" | "running" | "recovering" | "paused";
+  operation_type: string;
+  progress?: AdminOperationStatus["progress"];
+}
+
+export interface AdminOperationSnapshotResponse<TResult = Record<string, unknown>> {
+  snapshot: AdminOperationSnapshot<TResult> | null;
+  current?: AdminOperationCurrent | null;
+}
+
+export interface RestoreUploadSession {
+  upload_id: string;
+  upload_token?: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  chunk_size: number;
+  total_chunks: number;
+  received_chunks: number;
+  received_bytes: number;
+  next_chunk: number;
+  state: "uploading" | "uploaded" | "validating" | "validation_failed" | "ready" | string;
+  validation_task_id?: string | null;
+  request_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RestoreValidationResult {
+  state: "ready";
+  request_id: string;
+  host_command: string;
+  manifest: {
+    version: string;
+    contents: string[];
+    entries?: Record<string, { size: number; sha256: string }>;
+  };
+  message: string;
+}
+
+export interface RestoreReceipt {
+  request_id: string;
+  status: "pending" | "success" | "rolled_back" | "failed" | string;
+  phase: string;
+  started_at?: string;
+  completed_at?: string;
+  rollback_performed?: boolean;
+  rollback_status?: string;
+  rollback_components?: Record<string, { status: string; error?: string }>;
+  diagnostic?: string;
+  error?: string;
+  rollback_command?: string;
+}
+
+export type DownloadConflictWinner = "canonical" | "staged";
+
+export interface DownloadConflictEvidence {
+  auto_eligible: boolean;
+  recommended_winner: DownloadConflictWinner;
+  checks: Record<"source" | "repository" | "work" | "creator" | "page" | "source_asset", boolean>;
+  database_identity?: Record<string, unknown> | null;
+  canonical_identity?: Record<string, unknown> | null;
+  staged_identity?: Record<string, unknown> | null;
+}
+
+export interface DownloadConflictItem {
+  relative_path: string;
+  file_type: "metadata" | "media" | string;
+  mime_type: string;
+  canonical_size?: number | null;
+  staged_size?: number | null;
+  canonical_sha256?: string | null;
+  staged_sha256?: string | null;
+  evidence: DownloadConflictEvidence;
+}
+
+export interface DownloadConflictCase {
+  task_id: string;
+  download_job_id: string;
+  source: string;
+  source_url: string;
+  status: string;
+  reason_code?: string | null;
+  resolution?: {
+    resolution_id: string;
+    state: string;
+    expires_at: string;
+  } | null;
+  all_auto_eligible: boolean;
+  items: DownloadConflictItem[];
+}
+
+export interface DownloadConflictResolution {
+  resolution_id: string;
+  task_id: string;
+  download_job_id: string;
+  state: string;
+  automatic: boolean;
+  resolved_at: string;
+  expires_at: string;
+  retry?: { status: string; message?: string };
+}
+
 export type OperationsView = "attention" | "active" | "resolved";
 export type ClearEntity = "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
 
@@ -388,7 +530,8 @@ export interface Subscription {
   is_active: boolean;
   sync_enabled: boolean;
   sync_interval_hours: number;
-  schedule_mode?: "inherit" | "interval" | "fixed_time" | "manual" | null;
+  schedule_mode?: "inherit" | "interval" | "calendar" | "manual" | null;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times?: string | null;
   last_synced_at?: string;
   source_count?: number;
@@ -435,6 +578,7 @@ export interface SubscriptionScheduleSummary {
   inherited: boolean;
   timezone: string;
   scheduled_times?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   sync_interval_hours: number;
   next_due_at?: string | null;
   oldest_due_at?: string | null;
@@ -476,115 +620,12 @@ export interface SubscriptionSource {
   updated_at: string;
 }
 
-export interface RepositoryLatestJob {
-  id: string;
-  status: string;
-  created_at?: string | null;
-  updated_at?: string | null;
-  error_log_excerpt?: string | null;
-  outcome?: SyncOutcome | null;
-}
+export type RepositoryLatestJob = components["schemas"]["RepositoryRecentJob"];
+export type CreatorRepository = components["schemas"]["RepositoryRead"];
+export type RepositoryRecentJob = components["schemas"]["RepositoryRecentJob"];
+export type RepositoryRecentWork = components["schemas"]["RepositoryRecentWork"];
 
-export interface CreatorRepository {
-  id: string;
-  subscription_id: string;
-  source: string;
-  source_display_name?: string;
-  source_creator_id?: string;
-  source_url?: string;
-  is_enabled: boolean;
-  auth_healthy: boolean;
-  last_successful_auth?: string | null;
-  last_synced_at?: string | null;
-  last_attempted_at?: string | null;
-  auth_status?: string | null;
-  auth_error_reason?: string | null;
-  last_auth_checked_at?: string | null;
-  can_download: boolean;
-  supports_gallerydl: boolean;
-  url_valid: boolean;
-  is_repository: boolean;
-  latest_job?: RepositoryLatestJob | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface RepositoryRecentJob {
-  id: string;
-  subscription_id: string;
-  subscription_source_id?: string | null;
-  source: string;
-  source_url: string;
-  status: string;
-  retry_count: number;
-  error_log_excerpt?: string | null;
-  outcome?: SyncOutcome | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  record_type?: "sync_receipt" | string;
-  original_task_id?: string | null;
-  download_job_id?: string | null;
-  import_job_id?: string | null;
-  outcome_code?: string | null;
-  attempts?: number;
-  metadata_count?: number;
-  media_count?: number;
-  works_imported?: number;
-  duration_ms?: number | null;
-  error_code?: string | null;
-  recovered?: boolean;
-  recovered_at?: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface RepositoryRecentWork {
-  id: string;
-  title?: string | null;
-  posted_at?: string | null;
-  thumbnail_asset_id?: string | null;
-  asset_count: number;
-  has_video?: boolean;
-  is_nsfw: boolean;
-  is_ai_generated: boolean;
-  is_favorite: boolean;
-  created_at?: string | null;
-  source?: string | null;
-  creator_name?: string | null;
-  creator_id?: string | null;
-}
-
-export interface RepositoryDetailResponse {
-  repository: CreatorRepository;
-  creator: {
-    id: string;
-    name: string;
-    display_name?: string | null;
-    thumbnail_url?: string | null;
-    is_favorite: boolean;
-  };
-  subscription: {
-    id: string;
-    name?: string | null;
-    is_active: boolean;
-    sync_enabled: boolean;
-    sync_interval_hours: number;
-    schedule_mode?: string | null;
-    scheduled_times?: string | null;
-    last_synced_at?: string | null;
-  };
-  provider: {
-    source: string;
-    display_name: string;
-    normalized_url?: string | null;
-    url_valid: boolean;
-    capabilities: ProviderInfo["capabilities"];
-  };
-  recent_jobs: RepositoryRecentJob[];
-  active_jobs: RepositoryRecentJob[];
-  sync_history: RepositoryRecentJob[];
-  recent_works: RepositoryRecentWork[];
-}
+export type RepositoryDetailResponse = components["schemas"]["RepositoryDetailResponse"];
 
 export interface CurationState {
   visibility: "visible" | "trashed" | "purged" | "archived" | string;
@@ -862,6 +903,7 @@ export interface QueueStatsResponse {
   scheduler_mode?: string;
   scheduler_timezone?: string;
   scheduled_times?: string;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduler_scan_interval_minutes?: number;
   next_sync_scan_at?: string | null;
   scheduler_loop?: SchedulerLoopState | null;
@@ -895,12 +937,14 @@ export interface SchedulerDecisionItem {
   effective_mode: string;
   timezone: string;
   scheduled_times?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   sync_interval_hours: number;
   last_synced_at?: string | null;
   last_attempted_at?: string | null;
   due: boolean;
   decision: string;
   reason: string;
+  suppression_reason?: string | null;
   next_due_at?: string | null;
   window_start?: string | null;
   window_end?: string | null;
@@ -914,6 +958,7 @@ export interface SchedulerDecisionItem {
 export interface SchedulerDecisionsResponse {
   updated_at: string;
   scheduler_enabled: boolean;
+  suppressed_count?: number;
   timezone: string;
   view?: "attention" | "all";
   total?: number;
@@ -1008,63 +1053,20 @@ export interface Work {
   updated_at: string;
 }
 
-export interface Tag {
-  id: string;
-  normalized_name: string;
-  category?: string;
-  usage_count: number;
-  created_at: string;
-}
+export type Tag = components["schemas"]["TagRead"];
+
+export type TagSourceUsage = components["schemas"]["TagSourceUsage"];
 
 export interface RepositoryTagsResponse {
   items: Tag[];
   total: number;
 }
 
-export interface StorageRepositoryNode {
-  repository_id?: string | null;
-  source: string;
-  source_display_name: string;
-  disk_source: string;
-  directory_name: string;
-  size_mb: number;
-  logical_size_mb?: number;
-  work_count: number;
-}
-
-export interface CreatorStorageNode {
-  creator_id: string;
-  display_name: string;
-  size_mb: number;
-  work_count: number;
-  repository_count: number;
-  repositories: StorageRepositoryNode[];
-}
-
-export interface StorageBreakdownResponse {
-  sources: Record<
-    string,
-    {
-      size_mb: number;
-      logical_size_mb?: number;
-      creator_count: number;
-      work_count: number;
-    }
-  >;
-  creators: {
-    name: string;
-    display_name: string;
-    source: string;
-    size_mb: number;
-    work_count: number;
-    creator_id?: string;
-    repository_id?: string;
-  }[];
-  creator_tree: CreatorStorageNode[];
-  unlinked_repositories: StorageRepositoryNode[];
-  db_stats?: Record<string, number>;
-  layers?: Record<string, { path: string; size_mb: number; description: string }>;
-}
+export type StorageRepositoryNode = components["schemas"]["StorageRepositoryNode"];
+export type CreatorStorageNode = components["schemas"]["CreatorStorageNode"];
+export type DataCenterPipelineStats = components["schemas"]["DataCenterPipelineStats"];
+export type SystemInfoResponse = components["schemas"]["SystemInfoResponse"];
+export type StorageBreakdownResponse = components["schemas"]["StorageBreakdownResponse"];
 
 export interface CreatorRef {
   creator_id: string;
@@ -1072,14 +1074,7 @@ export interface CreatorRef {
   work_count: number;
 }
 
-export interface TagDetail {
-  id: string;
-  normalized_name: string;
-  category?: string;
-  usage_count: number;
-  top_creators: CreatorRef[];
-  created_at: string;
-}
+export type TagDetail = components["schemas"]["TagDetail"];
 
 export interface CreatorSearchHit {
   id: string;
@@ -1199,6 +1194,7 @@ export interface SubscriptionSearchHit {
   sync_enabled: boolean;
   sync_interval_hours: number;
   schedule_mode?: string | null;
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times?: string | null;
   last_synced_at?: string | null;
   source_count: number;
@@ -1369,11 +1365,17 @@ export interface AssetDedupDecision {
   curation_commit_id?: string | null;
 }
 
+export type CalendarScheduleRule =
+  | { frequency: "daily"; times: string[] }
+  | { frequency: "weekly"; weekdays: number[]; times: string[] }
+  | { frequency: "monthly"; month_days: number[]; times: string[]; overflow?: "last_day" };
+
 export interface SubscriptionDefaults {
   default_sync_interval_hours: number;
   scheduler_scan_interval_minutes: number;
   scheduler_enabled: boolean;
-  schedule_mode: "interval" | "fixed_time";
+  schedule_mode: "interval" | "calendar";
+  schedule_rule?: CalendarScheduleRule | null;
   scheduled_times: string;
   timezone: string;
 }
@@ -1389,6 +1391,7 @@ export interface DownloadDefaults {
   gallerydl_timeout: number;
   gallerydl_abort: number;
   download_concurrency: number;
+  auto_resolve_upstream_conflicts: boolean;
 }
 
 // Gallery-dl multi-source config types
@@ -1720,3 +1723,11 @@ export type GeneratedWork = components["schemas"]["WorkRead"];
 export type GeneratedWorkList = components["schemas"]["WorkList"];
 export type GeneratedCreator = components["schemas"]["CreatorRead"];
 export type GeneratedSubscription = components["schemas"]["SubscriptionRead"];
+export type ImportFromDiskRequest = Omit<
+  components["schemas"]["ImportFromDiskRequest"],
+  "reset_ledger"
+> & {
+  // FastAPI accepts an omitted field and applies its Pydantic default, while
+  // openapi-typescript currently marks a defaulted boolean as required.
+  reset_ledger?: components["schemas"]["ImportFromDiskRequest"]["reset_ledger"];
+};

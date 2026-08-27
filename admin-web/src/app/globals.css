@@ -409,8 +409,6 @@
     animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     animation-delay: var(--delay, 0ms);
   }
-  .activity-desktop { display: block; }
-  .activity-mobile { display: none; }
   .activity-calendar-cell { min-height: 8px; }
   @keyframes chartMarkReveal {
     from { opacity: 0; transform: scaleY(0); }
@@ -487,10 +485,6 @@
   .creator-narrative-item {
     animation: creatorNarrativeRise 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
     animation-delay: var(--chart-delay, 0ms);
-  }
-  @media (max-width: 767px), (pointer: coarse) {
-    .activity-desktop { display: none; }
-    .activity-mobile { display: block; }
   }
   @keyframes bubblePop {
     0% { opacity: 0; transform: scale(0.35); }

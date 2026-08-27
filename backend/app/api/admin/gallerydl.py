@@ -22,6 +22,10 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationSnapshotResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -428,12 +432,52 @@ AUTH_ERROR_PATTERNS = [
     (r"(?i)Could not authenticate", "Authentication rejected by server"),
 ]
 
-@router.post("/gallerydl-config/test-connection")
+@router.post(
+    "/gallerydl-config/test-connection",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def test_source_connection(data: dict):
-    """Test gallery-dl connectivity for a given source using current credentials."""
+    """Start a gallery-dl connectivity test as a durable TaskRun."""
     source = data.get("source", "")
     if source not in TEST_URLS:
         raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+
+    from app.services.operations import start_admin_operation
+
+    return await start_admin_operation(
+        operation_type="admin-gallerydl-connectivity-test",
+        scope_key=f"diagnostics:gallerydl:{source}",
+        title=f"Test {source} connectivity",
+        entity="gallerydl-connectivity",
+        options={"source": source},
+        queue_name="maintenance",
+        job_timeout=180,
+    )
+
+
+@router.get(
+    "/gallerydl-config/test-connection/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_source_connection(
+    source: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Read the latest successful connectivity result for one source."""
+    if source not in TEST_URLS:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-gallerydl-connectivity-test",
+        scope_key=f"diagnostics:gallerydl:{source}",
+    )
+
+
+async def _run_source_connection_test(source: str):
+    """Execute gallery-dl connectivity using the saved source configuration."""
 
     test_url = TEST_URLS[source]
     import json as _json, os, re as _re, subprocess, tempfile, shutil

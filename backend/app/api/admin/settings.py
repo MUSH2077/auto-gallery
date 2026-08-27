@@ -1,7 +1,6 @@
 """System info, storage, memory, settings, proxy, integrity check, reset."""
 
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -18,7 +17,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, select, update as sql_update
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -29,14 +28,25 @@ from app.auth import RequirePermission
 from app.database import async_session, get_db
 from app.models.system_setting import SystemSetting
 from app.models.subscription_source import SubscriptionSource
+from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 from app.schemas.gitllery import GitllerySettingsResponse
+from app.schemas.data_center import StorageBreakdownResponse, SystemInfoResponse
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationSnapshotResponse,
+)
 from app.services.redis_client import get_redis
 from app.services.queue_admission import (
     QueueAdmissionError,
+    checked_enqueue,
     checked_enqueue_in,
 )
 from app.services import admin_data
 from app.services.admin_data import ENTITIES, clear_entity_data
+from app.services.subscription_replan import (
+    replan_inherited_subscription_sources,
+    subscription_schedule_changed,
+)
 
 from ._routers import router
 
@@ -88,6 +98,21 @@ def _reschedule_subscription_sync_scan(config: dict) -> dict:
     return {"removed": removed, "job_id": job.id, "interval_minutes": interval}
 
 
+async def _enqueue_download_conflict_reconciliation() -> dict:
+    from app.services.operations import enqueue_admin_operation
+
+    return await enqueue_admin_operation(
+        lock_key="diagnostics:download-conflicts:active",
+        operation_type="admin-download-conflict-reconciliation",
+        title="Reconcile historical download conflicts",
+        entity="download-conflicts",
+        func="app.jobs.download_conflicts.reconcile_historical_download_conflicts",
+        options={"limit": 500},
+        job_timeout=3600,
+        queue_name="maintenance",
+    )
+
+
 DEFAULT_DEDUP = {
     "auto_group_enabled": True,
     "phash_threshold": 4,
@@ -97,7 +122,7 @@ DEFAULT_DEDUP = {
     "review_score": 70,
     "quarantine_days": 30,
 }
-DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False}
+DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seconds": 60, "max_posts": 200, "skip_ai_generated": False, "auto_resolve_upstream_conflicts": True}
 
 _system_info_cache: dict | None = None
 _system_info_cache_ts: float = 0.0
@@ -123,10 +148,22 @@ class SubscriptionDefaults(BaseModel):
     default_sync_interval_hours: int = 6
     scheduler_scan_interval_minutes: int = 60
     scheduler_enabled: bool = True
-    schedule_mode: str = "interval"
+    schedule_mode: Literal["interval", "calendar"] = "interval"
+    schedule_rule: CalendarScheduleRule | None = None
     scheduled_times: str = ""
     timezone: str = "UTC"
     auto_enable_sources: str = "pixiv"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_schedule(cls, value):
+        return normalize_legacy_schedule_payload(value)
+
+    @model_validator(mode="after")
+    def require_calendar_rule(self):
+        if self.schedule_mode == "calendar" and self.schedule_rule is None:
+            raise ValueError("calendar schedule_mode requires schedule_rule")
+        return self
 
 DEFAULT_SUB = {"default_sync_interval_hours": 6, "scheduler_scan_interval_minutes": 60, "scheduler_enabled": True, "schedule_mode": "interval", "scheduled_times": "", "timezone": "UTC", "auto_enable_sources": "pixiv"}
 
@@ -141,6 +178,7 @@ class DownloadDefaults(BaseModel):
     max_posts: int = 200
     skip_ai_generated: bool = False
     download_concurrency: int = 3  # parallel download jobs, clamped to 1-5 on read
+    auto_resolve_upstream_conflicts: bool = True
 
 class ProxySettings(BaseModel):
     http_proxy: str = ""
@@ -167,17 +205,18 @@ async def _get_setting(db: AsyncSession, key: str, default: dict = None) -> dict
 async def _put_setting(db: AsyncSession, key: str, value: dict):
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
     row = result.scalar_one_or_none()
-    changed = row is None or row.value != value
+    previous = dict(row.value) if row and isinstance(row.value, dict) else {}
+    changed = row is None or previous != value
     if row:
         row.value = value
     else:
         db.add(SystemSetting(key=key, value=value))
-    if key == "subscription_defaults" and changed:
-        # Inherited schedules can change for every source.  NULL is the durable
-        # invalidation marker consumed fairly by the next 100-row coverage pass.
-        await db.execute(
-            sql_update(SubscriptionSource).values(next_sync_at=None)
-        )
+    if (
+        key == "subscription_defaults"
+        and changed
+        and subscription_schedule_changed(previous, value)
+    ):
+        await replan_inherited_subscription_sources(db, value)
     await db.commit()
 
     # Invalidate caches when relevant settings change
@@ -188,62 +227,164 @@ async def _put_setting(db: AsyncSession, key: str, value: dict):
         except Exception:
             pass
 
-def _gather_system_info() -> dict:
-    """Blocking: disk_usage + recursive directory-size walks. Runs in a thread
-    (never on the event loop) — an rglob over a multi-hundred-GB library takes
-    seconds to minutes and would freeze all concurrent requests otherwise."""
-    info = {"version": "0.1.0", "python": "3.12"}
-    for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
-        try:
-            usage = shutil.disk_usage(path)
-            info[f"{label}_total_gb"] = round(usage.total / (1024**3), 1)
-            info[f"{label}_used_gb"] = round(usage.used / (1024**3), 1)
-            info[f"{label}_free_gb"] = round(usage.free / (1024**3), 1)
-        except Exception:
-            pass
+def _disk_capacity(path: str) -> dict[str, float]:
+    """Read mount capacity without walking the managed storage tree."""
     try:
-        dl_root = Path(settings.download_root)
-        archives = {}
-        for af in dl_root.glob("archive-*.sqlite3"):
-            archives[af.stem.replace("archive-", "")] = round(af.stat().st_size / 1024, 1)
-        info["archives_kb"] = archives
-    except Exception:
-        pass
-    try:
-        for label, path in [("downloads", settings.download_root), ("library", settings.library_root)]:
-            total = 0
-            for f in Path(path).rglob("*"):
-                if f.is_file():
-                    try:
-                        total += f.stat().st_size
-                    except Exception:
-                        pass
-            info[f"{label}_size_mb"] = round(total / (1024**2), 1)
-    except Exception:
-        pass
-    return info
+        usage = shutil.disk_usage(path)
+        return {
+            "total_gb": round(usage.total / (1024 ** 3), 1),
+            "used_gb": round(usage.used / (1024 ** 3), 1),
+            "free_gb": round(usage.free / (1024 ** 3), 1),
+        }
+    except OSError:
+        return {"total_gb": 0.0, "used_gb": 0.0, "free_gb": 0.0}
 
 
-@router.get("/system-info")
-async def system_info():
-    """Return system-level info: disk usage, archive sizes, version.
+async def _ledger_inventory(db: AsyncSession) -> dict:
+    """Return bounded storage and entity facts from the artifact ledger."""
+    from app.models.asset import Asset
+    from app.models.creator import Creator
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.tag import Tag
+    from app.models.work import Work
+    from app.services.artifact_ledger import downloads_artifact_predicate
 
-    Cached (this endpoint is polled by the dashboard) and computed off the
-    event loop — the directory-size walk is O(files) over the whole library.
-    A single in-flight walk is serialized by a lock so a burst of polls can't
-    spawn concurrent multi-GB walks; stale cache is served meanwhile.
-    """
+    bytes_expr = func.coalesce(StorageArtifact.file_size, 0)
+    roots_result = await db.execute(
+        select(
+            StorageArtifact.storage_root,
+            func.coalesce(func.sum(bytes_expr), 0).label("size_bytes"),
+            func.coalesce(
+                func.sum(case((StorageArtifact.artifact_type == "archive", bytes_expr), else_=0)),
+                0,
+            ).label("archive_bytes"),
+        ).group_by(StorageArtifact.storage_root)
+    )
+    roots = {
+        row.storage_root: {
+            "size_bytes": int(row.size_bytes or 0),
+            "archive_bytes": int(row.archive_bytes or 0),
+        }
+        for row in roots_result
+    }
+
+    source_rows = list((await db.execute(
+        select(
+            StorageArtifact.source,
+            StorageArtifact.creator_dir,
+            func.coalesce(func.sum(bytes_expr), 0).label("size_bytes"),
+            func.count(func.distinct(StorageArtifact.source_work_id)).label("work_count"),
+        )
+        .where(StorageArtifact.storage_root == "downloads")
+        .group_by(StorageArtifact.source, StorageArtifact.creator_dir)
+    )).all())
+    archive_rows = await db.execute(
+        select(
+            StorageArtifact.source,
+            func.coalesce(func.sum(bytes_expr), 0).label("size_bytes"),
+        )
+        .where(
+            StorageArtifact.storage_root == "downloads",
+            StorageArtifact.artifact_type == "archive",
+        )
+        .group_by(StorageArtifact.source)
+    )
+
+    db_counts = (await db.execute(select(
+        select(func.count(Work.id)).scalar_subquery().label("works"),
+        select(func.count(Asset.id)).scalar_subquery().label("assets"),
+        select(func.count(Creator.id)).scalar_subquery().label("creators"),
+        select(func.count(Subscription.id)).scalar_subquery().label("subscriptions"),
+        select(func.count(Tag.id)).scalar_subquery().label("tags"),
+    ))).one()
+
+    pending_states = ("new", "importing")
+    pending_works = (
+        select(StorageArtifact.source, StorageArtifact.source_work_id)
+        .where(
+            downloads_artifact_predicate(),
+            StorageArtifact.artifact_type == "metadata_json",
+            StorageArtifact.state.in_(pending_states),
+        )
+        .group_by(StorageArtifact.source, StorageArtifact.source_work_id)
+        .subquery()
+    )
+    pipeline = (await db.execute(select(
+        select(func.count()).select_from(pending_works).scalar_subquery().label("pending_import_works"),
+        select(func.count(StorageArtifact.id))
+        .where(
+            downloads_artifact_predicate(),
+            StorageArtifact.state.in_(pending_states),
+            StorageArtifact.download_job_id.is_(None),
+        )
+        .scalar_subquery()
+        .label("orphan_pending_artifacts"),
+        select(func.count(StorageArtifact.id))
+        .where(
+            downloads_artifact_predicate(),
+            StorageArtifact.state == "failed",
+        )
+        .scalar_subquery()
+        .label("failed_artifacts"),
+    ))).one()
+    inventory_updated_at = (await db.execute(select(func.max(StorageArtifact.updated_at)))).scalar_one()
+
+    return {
+        "roots": roots,
+        "source_rows": source_rows,
+        "archives_kb": {
+            row.source: round(int(row.size_bytes or 0) / 1024, 1)
+            for row in archive_rows
+        },
+        "db_stats": {
+            "works": int(db_counts.works or 0),
+            "assets": int(db_counts.assets or 0),
+            "creators": int(db_counts.creators or 0),
+            "subscriptions": int(db_counts.subscriptions or 0),
+            "tags": int(db_counts.tags or 0),
+        },
+        "inventory_updated_at": inventory_updated_at.isoformat() if inventory_updated_at else None,
+        "inventory_source": "storage_artifacts",
+        "pipeline_stats": {
+            "pending_import_works": int(pipeline.pending_import_works or 0),
+            "orphan_pending_artifacts": int(pipeline.orphan_pending_artifacts or 0),
+            "failed_artifacts": int(pipeline.failed_artifacts or 0),
+        },
+    }
+
+
+@router.get("/system-info", response_model=SystemInfoResponse)
+async def system_info(db: AsyncSession = Depends(get_db)):
+    """Return ledger-backed storage facts and constant-time mount capacity."""
     global _system_info_cache, _system_info_cache_ts
     now_mono = time.monotonic()
     if _system_info_cache is not None and (now_mono - _system_info_cache_ts) < _SYSTEM_INFO_CACHE_TTL:
         return _system_info_cache
-    if _system_info_lock.locked() and _system_info_cache is not None:
-        return _system_info_cache  # another walk in progress — serve stale
     async with _system_info_lock:
         now_mono = time.monotonic()
         if _system_info_cache is not None and (now_mono - _system_info_cache_ts) < _SYSTEM_INFO_CACHE_TTL:
             return _system_info_cache
-        info = await asyncio.to_thread(_gather_system_info)
+        inventory = await _ledger_inventory(db)
+        downloads_capacity = await asyncio.to_thread(_disk_capacity, settings.download_root)
+        library_capacity = await asyncio.to_thread(_disk_capacity, settings.library_root)
+        info = {
+            "version": "0.1.0",
+            "python": "3.12",
+            "downloads_size_mb": round(inventory["roots"].get("downloads", {}).get("size_bytes", 0) / (1024 ** 2), 1),
+            "library_size_mb": round(inventory["roots"].get("library", {}).get("size_bytes", 0) / (1024 ** 2), 1),
+            "downloads_total_gb": downloads_capacity["total_gb"],
+            "downloads_used_gb": downloads_capacity["used_gb"],
+            "downloads_free_gb": downloads_capacity["free_gb"],
+            "library_total_gb": library_capacity["total_gb"],
+            "library_used_gb": library_capacity["used_gb"],
+            "library_free_gb": library_capacity["free_gb"],
+            "archives_kb": inventory["archives_kb"],
+            "db_stats": inventory["db_stats"],
+            "inventory_updated_at": inventory["inventory_updated_at"],
+            "inventory_source": inventory["inventory_source"],
+            "pipeline_stats": inventory["pipeline_stats"],
+        }
         _system_info_cache = info
         _system_info_cache_ts = time.monotonic()
         return info
@@ -262,40 +403,62 @@ def _current_rss_mb() -> float | None:
 
 @router.get("/memory")
 async def memory_diagnostics(top: int = 25):
-    """Memory snapshot for OOM diagnosis: process RSS + a census of the most
-    common live Python object types. A runaway type count (e.g. millions of
-    Work/Row/dict) points straight at what is filling RAM. Cheap — no
-    always-on tracemalloc."""
-    import gc
-    import sys
-    from collections import Counter
+    """Return bounded Linux process and SQLAlchemy pool metrics."""
+    del top  # Kept as a rolling compatibility query parameter.
 
-    def _snapshot() -> dict:
-        gc.collect()
-        counts: Counter = Counter()
-        sizes: Counter = Counter()
-        for obj in gc.get_objects():
-            try:
-                tn = type(obj).__name__
-                counts[tn] += 1
-                sizes[tn] += sys.getsizeof(obj)
-            except Exception:
-                continue
-        top_by_count = [
-            {"type": t, "count": c, "approx_kb": round(sizes[t] / 1024, 1)}
-            for t, c in counts.most_common(max(1, min(top, 100)))
-        ]
-        return {
-            "total_tracked_objects": sum(counts.values()),
-            "gc_counts": gc.get_count(),
-            "top_types": top_by_count,
-        }
+    proc: dict[str, int | float] = {}
+    try:
+        with open("/proc/self/status", encoding="utf-8") as status_file:
+            for line in status_file:
+                name, separator, raw = line.partition(":")
+                if not separator or name not in {
+                    "VmRSS",
+                    "VmSize",
+                    "RssAnon",
+                    "RssFile",
+                    "Threads",
+                }:
+                    continue
+                value = raw.strip().split()[0]
+                if name == "Threads":
+                    proc["threads"] = int(value)
+                else:
+                    proc[
+                        {
+                            "VmRSS": "rss_mb",
+                            "VmSize": "virtual_mb",
+                            "RssAnon": "anonymous_rss_mb",
+                            "RssFile": "file_rss_mb",
+                        }[name]
+                    ] = round(int(value) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        proc = {}
 
-    snap = await asyncio.to_thread(_snapshot)
+    from app.database import engine
+
+    pool = engine.sync_engine.pool
+
+    def pool_value(name: str):
+        value = getattr(pool, name, None)
+        if not callable(value):
+            return None
+        try:
+            return int(value())
+        except Exception:
+            return None
+
+    runtime_size = pool_value("size")
     return {
-        "rss_mb": _current_rss_mb(),
-        "pool": {"size": settings.db_pool_size, "max_overflow": settings.db_max_overflow},
-        **snap,
+        "source": "/proc/self/status",
+        "rss_mb": proc.get("rss_mb", _current_rss_mb()),
+        "proc": proc,
+        "pool": {
+            "size": runtime_size if runtime_size is not None else settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+            "checked_in": pool_value("checkedin"),
+            "checked_out": pool_value("checkedout"),
+            "overflow": pool_value("overflow"),
+        },
     }
 
 
@@ -310,318 +473,171 @@ def invalidate_storage_breakdown_cache() -> None:
     _storage_breakdown_cache_ts = 0.0
 
 
-@router.get("/storage-breakdown")
-async def storage_breakdown(db: AsyncSession = Depends(get_db)):
-    """Return per-source and per-creator storage breakdown."""
-    global _storage_breakdown_cache, _storage_breakdown_cache_ts
-    _now_mono = time.monotonic()
-    if _storage_breakdown_cache is not None and (_now_mono - _storage_breakdown_cache_ts) < _STORAGE_BREAKDOWN_CACHE_TTL:
-        return _storage_breakdown_cache
-
-    from sqlalchemy import text
-
-    dl_root = Path(settings.download_root)
-    lib_root = Path(settings.library_root)
-
-    def _compute_fs_sizes() -> dict:
-        """Walk storage once and recover provider-native repository identity."""
-        from app.providers import registry
-        from app.services.settings import source_key_for_extractor
-
-        def _safe_file_stat(path: Path):
-            try:
-                return path.stat() if path.is_file() else None
-            except Exception:
-                return None
-
-        def _safe_file_size(path: Path) -> int:
-            stat = _safe_file_stat(path)
-            return stat.st_size if stat else 0
-
-        def _safe_dir_size(
-            path: Path,
-            seen_inodes: set[tuple[int, int]] | None = None,
-        ) -> int:
-            total = 0
-            if seen_inodes is None:
-                seen_inodes = set()
-            try:
-                if not path.exists():
-                    return 0
-                for f in path.rglob("*"):
-                    if f.is_file():
-                        stat = _safe_file_stat(f)
-                        if not stat:
-                            continue
-                        inode = (stat.st_dev, stat.st_ino)
-                        if inode in seen_inodes:
-                            continue
-                        seen_inodes.add(inode)
-                        total += stat.st_size
-            except Exception:
-                return total
-            return total
-
-        archive_bytes = 0
-        try:
-            archive_bytes = sum(_safe_file_size(af) for af in dl_root.glob("archive-*.sqlite3"))
-        except Exception:
-            pass
-
-        backup_bytes = 0
-        for backup_root in (dl_root / ".backups", Path(settings.app_config_root) / "backups"):
-            backup_bytes += _safe_dir_size(backup_root)
-
-        library_index_bytes = _safe_dir_size(lib_root)
-        original_media_bytes = 0
-        original_media_inodes: set[tuple[int, int]] = set()
-        source_acc: dict[str, dict] = {}
-        repositories: list[dict] = []
-        try:
-            for source_dir in dl_root.iterdir():
-                if not source_dir.is_dir():
-                    continue
-                if source_dir.name == ".dedup-quarantine":
-                    original_media_bytes += _safe_dir_size(
-                        source_dir,
-                        original_media_inodes,
-                    )
-                    continue
-                if source_dir.name.startswith("."):
-                    continue
-                canonical_source = source_key_for_extractor(source_dir.name)
-                try:
-                    provider = registry.get(canonical_source)
-                except KeyError:
-                    original_media_bytes += _safe_dir_size(
-                        source_dir,
-                        original_media_inodes,
-                    )
-                    continue
-
-                source_stats = source_acc.setdefault(
-                    canonical_source,
-                    {
-                        "size_bytes": 0,
-                        "logical_size_bytes": 0,
-                        "creators": set(),
-                        "work_ids": set(),
-                    },
-                )
-                for creator_dir in source_dir.iterdir():
-                    if not creator_dir.is_dir():
-                        continue
-                    repo_bytes = 0.0
-                    repo_logical_bytes = 0
-                    work_ids: set[str] = set()
-                    source_creator_id: str | None = None
-                    source_url: str | None = None
-                    metadata_display_name: str | None = None
-
-                    for file_path in creator_dir.rglob("*"):
-                        if not file_path.is_file():
-                            continue
-                        stat = _safe_file_stat(file_path)
-                        if not stat:
-                            continue
-                        file_size = stat.st_size
-                        repo_logical_bytes += file_size
-                        # A hard-linked byte has multiple repository paths but
-                        # occupies disk once. Attribute an equal share to each
-                        # link so creator/repository totals remain meaningful.
-                        repo_bytes += file_size / max(1, stat.st_nlink)
-                        inode = (stat.st_dev, stat.st_ino)
-                        if inode not in original_media_inodes:
-                            original_media_inodes.add(inode)
-                            original_media_bytes += file_size
-                        if file_path.suffix.lower() != ".json":
-                            continue
-                        try:
-                            with file_path.open(encoding="utf-8") as handle:
-                                raw = json.load(handle)
-                            work_data = provider.parse_work_source(raw)
-                            work_id = str(work_data.get("source_work_id") or "").strip()
-                            if work_id:
-                                work_ids.add(work_id)
-                            if source_creator_id is None:
-                                creator_data = provider.parse_source_creator(raw)
-                                source_creator_id = str(
-                                    creator_data.get("source_creator_id") or "",
-                                ).strip() or None
-                                source_url = creator_data.get("source_url")
-                                metadata_display_name = creator_data.get("display_name")
-                        except Exception:
-                            continue
-
-                    if not work_ids:
-                        work_ids = {
-                            child.name
-                            for child in creator_dir.iterdir()
-                            if child.is_dir()
-                        }
-
-                    repo_physical_bytes = round(repo_bytes)
-                    source_stats["size_bytes"] += repo_physical_bytes
-                    source_stats["logical_size_bytes"] += repo_logical_bytes
-                    source_stats["creators"].add(creator_dir.name)
-                    source_stats["work_ids"].update(work_ids)
-                    repositories.append({
-                        "disk_source": source_dir.name,
-                        "source": canonical_source,
-                        "directory_name": creator_dir.name,
-                        "size_bytes": repo_physical_bytes,
-                        "logical_size_bytes": repo_logical_bytes,
-                        "work_count": len(work_ids),
-                        "source_creator_id": source_creator_id,
-                        "source_url": source_url,
-                        "metadata_display_name": metadata_display_name,
-                    })
-        except Exception:
-            logger.warning("Storage breakdown filesystem scan was incomplete", exc_info=True)
-
-        sources = {
-            source: {
-                "size_mb": round(stats["size_bytes"] / (1024 ** 2), 1),
-                "logical_size_mb": round(
-                    stats["logical_size_bytes"] / (1024 ** 2),
-                    1,
-                ),
-                "creator_count": len(stats["creators"]),
-                "work_count": len(stats["work_ids"]),
-            }
-            for source, stats in source_acc.items()
-        }
-
-        return {
-            "archive_bytes": archive_bytes,
-            "backup_bytes": backup_bytes,
-            "original_media_bytes": original_media_bytes,
-            "library_index_bytes": library_index_bytes,
-            "sources": sources,
-            "repositories": repositories,
-        }
-
-    _fs = await asyncio.to_thread(_compute_fs_sizes)
-    archive_bytes = _fs["archive_bytes"]
-    backup_bytes = _fs["backup_bytes"]
-    original_media_bytes = _fs["original_media_bytes"]
-    library_index_bytes = _fs["library_index_bytes"]
-    sources = _fs["sources"]
-    filesystem_repositories = _fs["repositories"]
-
-    # Resolve physical repository directories to stable creator/repository IDs.
+async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
+    """Build the Data Center hierarchy from durable artifact rows only."""
     from app.models.creator import Creator
     from app.models.source_creator import SourceCreator
     from app.models.subscription import Subscription
     from app.models.subscription_source import SubscriptionSource
     from app.providers import registry
+    from app.services.settings import extractor_key_for_source
 
+    inventory = await _ledger_inventory(db)
     repository_contexts = list((await db.execute(
-        select(SubscriptionSource, Subscription, Creator)
+        select(SubscriptionSource, Creator)
         .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
         .join(Creator, Creator.id == Subscription.creator_id)
     )).all())
     source_creators = list((await db.execute(
-        select(SourceCreator).where(SourceCreator.creator_id.is_not(None))
-    )).scalars().all())
-    source_creator_owner = {
-        (row.source, row.source_creator_id): str(row.creator_id)
-        for row in source_creators
-        if row.creator_id
-    }
+        select(SourceCreator, Creator)
+        .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
+    )).all())
 
-    contexts_by_source: dict[str, list[tuple]] = {}
-    creator_by_id: dict[str, Creator] = {}
-    for subscription_source, subscription, creator in repository_contexts:
-        contexts_by_source.setdefault(subscription_source.source, []).append(
-            (subscription_source, subscription, creator),
-        )
-        creator_by_id[str(creator.id)] = creator
+    creators_by_id: dict[str, Creator] = {}
+    for repository, creator in repository_contexts:
+        creators_by_id[str(creator.id)] = creator
 
-    def _normalized_url(source: str, value: str | None) -> str:
-        if not value:
-            return ""
+    def source_display_name(source: str) -> str:
+        try:
+            return registry.get(source).display_name
+        except KeyError:
+            return source
+
+    def provider_directory(source: str, source_url: str | None) -> str | None:
+        if not source_url:
+            return None
         try:
             provider = registry.get(source)
-            return (provider.normalize_url(value) or value).rstrip("/").casefold()
-        except Exception:
-            return value.rstrip("/").casefold()
+            normalized_url = provider.normalize_url(source_url) or source_url
+            return provider.get_creator_dir_from_url(normalized_url)
+        except KeyError:
+            return None
 
+    missing = object()
+    ambiguous = object()
+
+    def add_unique(mapping: dict, key: tuple[str, str] | None, value, identity) -> None:
+        if key is None:
+            return
+        existing = mapping.get(key, missing)
+        if existing is missing:
+            mapping[key] = (identity, value)
+        elif existing is not ambiguous and existing[0] != identity:
+            mapping[key] = ambiguous
+
+    owner_by_directory: dict[tuple[str, str], object] = {}
+    for source_creator, creator in source_creators:
+        if source_creator.creator_id:
+            owner_id = str(source_creator.creator_id)
+            add_unique(
+                owner_by_directory,
+                (source_creator.source, source_creator.source_creator_id),
+                owner_id,
+                owner_id,
+            )
+            url_directory = provider_directory(source_creator.source, source_creator.source_url)
+            if url_directory:
+                add_unique(
+                    owner_by_directory,
+                    (source_creator.source, url_directory),
+                    owner_id,
+                    owner_id,
+                )
+            if creator:
+                creators_by_id[str(creator.id)] = creator
+
+    repositories_by_source_creator: dict[tuple[str, str], object] = {}
+    repositories_by_provider_directory: dict[tuple[str, str], object] = {}
+    for repository, creator in repository_contexts:
+        context = (repository, creator)
+        if repository.source_creator_id:
+            add_unique(
+                repositories_by_source_creator,
+                (repository.source, repository.source_creator_id),
+                context,
+                repository.id,
+            )
+        repository_directory = provider_directory(repository.source, repository.source_url)
+        if repository_directory:
+            add_unique(
+                repositories_by_provider_directory,
+                (repository.source, repository_directory),
+                context,
+                repository.id,
+            )
+
+    def unique_repository_context(source: str, directory: str):
+        key = (source, directory)
+        exact = repositories_by_source_creator.get(key, missing)
+        provider_match = repositories_by_provider_directory.get(key, missing)
+        if exact is ambiguous or provider_match is ambiguous:
+            return None
+        matches = [
+            value
+            for value in (exact, provider_match)
+            if value is not missing
+        ]
+        if not matches:
+            return None
+        repository_ids = {value[0] for value in matches}
+        return matches[0][1] if len(repository_ids) == 1 else None
+
+    source_totals: dict[str, dict] = {}
     creator_nodes: dict[str, dict] = {}
     unlinked_repositories: list[dict] = []
     legacy_creators: list[dict] = []
 
-    for fs_repo in filesystem_repositories:
-        source = fs_repo["source"]
-        candidates = contexts_by_source.get(source, [])
-        owner_id = source_creator_owner.get(
-            (source, fs_repo.get("source_creator_id")),
+    for row in inventory["source_rows"]:
+        source = row.source
+        directory_name = row.creator_dir
+        size_bytes = int(row.size_bytes or 0)
+        work_count = int(row.work_count or 0)
+        source_total = source_totals.setdefault(source, {
+            "size_bytes": 0,
+            "creator_count": 0,
+            "work_count": 0,
+        })
+        source_total["size_bytes"] += size_bytes
+        source_total["creator_count"] += 1
+        source_total["work_count"] += work_count
+
+        owner_match = owner_by_directory.get((source, directory_name), missing)
+        owner_id = (
+            owner_match[1]
+            if owner_match is not missing and owner_match is not ambiguous
+            else None
         )
-        fs_url = _normalized_url(source, fs_repo.get("source_url"))
-        best_context = None
-        best_score = 0
-        for context in candidates:
-            subscription_source, _, creator = context
-            score = 0
-            if (
-                fs_repo.get("source_creator_id")
-                and subscription_source.source_creator_id == fs_repo["source_creator_id"]
-            ):
-                score = max(score, 100)
-            if fs_url and _normalized_url(source, subscription_source.source_url) == fs_url:
-                score = max(score, 95)
-            try:
-                provider = registry.get(source)
-                url_dir = provider.get_creator_dir_from_url(subscription_source.source_url or "")
-                if (
-                    url_dir
-                    and str(url_dir).casefold() == fs_repo["directory_name"].casefold()
-                ):
-                    score = max(score, 90)
-            except Exception:
-                pass
-            if owner_id and str(creator.id) == owner_id:
-                score = max(score, 80)
-            if score > best_score:
-                best_score = score
-                best_context = context
+        best_context = unique_repository_context(source, directory_name)
 
-        creator_id: str | None = owner_id
+        creator_id = owner_id
         repository_id: str | None = None
-        display_name = fs_repo.get("metadata_display_name") or fs_repo["directory_name"]
+        display_name = directory_name
         if best_context:
-            subscription_source, _, creator = best_context
+            repository, creator = best_context
             creator_id = str(creator.id)
-            repository_id = str(subscription_source.id)
+            repository_id = str(repository.id)
             display_name = creator.display_name or creator.name or display_name
-        elif creator_id and creator_id in creator_by_id:
-            creator = creator_by_id[creator_id]
+        elif creator_id and creator_id in creators_by_id:
+            creator = creators_by_id[creator_id]
             display_name = creator.display_name or creator.name or display_name
 
-        try:
-            source_display_name = registry.get(source).display_name
-        except Exception:
-            source_display_name = source
-
+        size_mb = round(size_bytes / (1024 ** 2), 1)
         child = {
             "repository_id": repository_id,
             "source": source,
-            "source_display_name": source_display_name,
-            "disk_source": fs_repo["disk_source"],
-            "directory_name": fs_repo["directory_name"],
-            "size_mb": round(fs_repo["size_bytes"] / (1024 ** 2), 1),
-            "logical_size_mb": round(
-                fs_repo["logical_size_bytes"] / (1024 ** 2),
-                1,
-            ),
-            "work_count": fs_repo["work_count"],
+            "source_display_name": source_display_name(source),
+            "disk_source": extractor_key_for_source(source),
+            "directory_name": directory_name,
+            "size_mb": size_mb,
+            "logical_size_mb": size_mb,
+            "work_count": work_count,
         }
         legacy_entry = {
-            "name": fs_repo["directory_name"],
+            "name": directory_name,
             "display_name": display_name,
             "source": source,
-            "size_mb": child["size_mb"],
-            "work_count": child["work_count"],
+            "size_mb": size_mb,
+            "work_count": work_count,
         }
         if creator_id:
             legacy_entry["creator_id"] = creator_id
@@ -632,7 +648,6 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
         if not creator_id:
             unlinked_repositories.append(child)
             continue
-
         node = creator_nodes.setdefault(creator_id, {
             "creator_id": creator_id,
             "display_name": display_name,
@@ -641,8 +656,8 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
             "repository_count": 0,
             "repositories": [],
         })
-        node["size_mb"] = round(node["size_mb"] + child["size_mb"], 1)
-        node["work_count"] += child["work_count"]
+        node["size_mb"] = round(node["size_mb"] + size_mb, 1)
+        node["work_count"] += work_count
         node["repository_count"] += 1
         node["repositories"].append(child)
 
@@ -657,54 +672,100 @@ async def storage_breakdown(db: AsyncSession = Depends(get_db)):
     unlinked_repositories.sort(
         key=lambda child: (-child["size_mb"], child["source"], child["directory_name"]),
     )
-    creators = sorted(
-        legacy_creators,
-        key=lambda entry: (-entry["size_mb"], entry["display_name"].casefold()),
-    )[:20]
 
-    db_stats = {}
-    try:
-        for table in ("works", "assets", "creators", "subscriptions", "tags"):
-            result = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
-            db_stats[table] = int(result.scalar() or 0)
-    except Exception:
-        db_stats = {}
-
-    result = {
-        "sources": sources,
-        "creators": creators,
+    return {
+        "sources": {
+            source: {
+                "size_mb": round(stats["size_bytes"] / (1024 ** 2), 1),
+                "logical_size_mb": round(stats["size_bytes"] / (1024 ** 2), 1),
+                "creator_count": stats["creator_count"],
+                "work_count": stats["work_count"],
+            }
+            for source, stats in source_totals.items()
+        },
+        "creators": sorted(
+            legacy_creators,
+            key=lambda entry: (-entry["size_mb"], entry["display_name"].casefold()),
+        )[:20],
         "creator_tree": creator_tree,
         "unlinked_repositories": unlinked_repositories,
-        "db_stats": db_stats,
+        "db_stats": inventory["db_stats"],
+        "inventory_updated_at": inventory["inventory_updated_at"],
+        "inventory_source": inventory["inventory_source"],
+        "pipeline_stats": inventory["pipeline_stats"],
         "layers": {
             "original_media_store": {
-                "path": str(dl_root),
-                "size_mb": round(max(original_media_bytes, 0) / (1024 ** 2), 1),
-                "description": "Original media files stored long-term in DOWNLOAD_ROOT.",
+                "path": settings.download_root,
+                "size_mb": round(inventory["roots"].get("downloads", {}).get("size_bytes", 0) / (1024 ** 2), 1),
+                "description": "Ledger-tracked artifacts in DOWNLOAD_ROOT.",
             },
             "library_index": {
-                "path": str(lib_root),
-                "size_mb": round(library_index_bytes / (1024 ** 2), 1),
-                "description": "Metadata and thumbnails stored in LIBRARY_ROOT.",
+                "path": settings.library_root,
+                "size_mb": round(inventory["roots"].get("library", {}).get("size_bytes", 0) / (1024 ** 2), 1),
+                "description": "Ledger-tracked metadata and thumbnails in LIBRARY_ROOT.",
             },
             "download_archives": {
-                "path": str(dl_root),
-                "size_mb": round(archive_bytes / (1024 ** 2), 1),
-                "description": "gallery-dl archive sqlite files used to avoid duplicate downloads.",
+                "path": settings.download_root,
+                "size_mb": round(inventory["roots"].get("downloads", {}).get("archive_bytes", 0) / (1024 ** 2), 1),
+                "description": "Ledger-tracked download archive files.",
             },
             "backups": {
-                "path": f"{dl_root / '.backups'}; {Path(settings.app_config_root) / 'backups'}",
-                "size_mb": round(backup_bytes / (1024 ** 2), 1),
-                "description": "Backup archives created by admin backup tools.",
+                "path": f"{Path(settings.download_root) / '.backups'}; {Path(settings.app_config_root) / 'backups'}",
+                "size_mb": round(inventory["roots"].get("backups", {}).get("size_bytes", 0) / (1024 ** 2), 1),
+                "description": "Ledger-tracked backup artifacts.",
             },
         },
     }
+
+
+@router.get("/storage-breakdown", response_model=StorageBreakdownResponse, response_model_exclude_unset=True)
+async def storage_breakdown(db: AsyncSession = Depends(get_db)):
+    """Return a bounded, ledger-backed storage breakdown."""
+    global _storage_breakdown_cache, _storage_breakdown_cache_ts
+    now_mono = time.monotonic()
+    if _storage_breakdown_cache is not None and (now_mono - _storage_breakdown_cache_ts) < _STORAGE_BREAKDOWN_CACHE_TTL:
+        return _storage_breakdown_cache
+    result = await _ledger_storage_breakdown(db)
     _storage_breakdown_cache = result
     _storage_breakdown_cache_ts = time.monotonic()
     return result
 
-@router.get("/integrity-check")
-async def integrity_check(db: AsyncSession = Depends(get_db)):
+
+@router.post(
+    "/integrity-check",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def integrity_check():
+    """Start a durable integrity scan without walking storage in this request."""
+    from app.services.operations import start_admin_operation
+
+    return await start_admin_operation(
+        operation_type="admin-integrity-scan",
+        scope_key="diagnostics:integrity:active",
+        title="Integrity scan",
+        entity="integrity",
+        options={},
+        queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/integrity-check/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_integrity_check(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful integrity result from PostgreSQL."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-integrity-scan",
+        scope_key="diagnostics:integrity:active",
+    )
+
+
+async def _run_integrity_check(db: AsyncSession):
     """Scan for data integrity issues: orphaned files, missing thumbnails, orphaned records."""
     from sqlalchemy import text
     issues = []
@@ -748,8 +809,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "description": "下载目录中存在但数据库无对应 work_source 记录的文件",
                 "items": orphaned_files[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned files: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned files")
+        raise
 
     # 2. Missing thumbnails (works with asset but no thumbnail)
     try:
@@ -774,8 +837,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "description": "有资产记录但缺少缩略图的作品",
                 "items": missing_thumbs[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - missing thumbs: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning missing thumbnails")
+        raise
 
     # 3. Orphaned creators (no works, no subscriptions, no source_creators)
     try:
@@ -795,8 +860,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "description": "无作品、无订阅、无来源账号的孤立创作者",
                 "items": orphaned_creators,
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned creators: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned creators")
+        raise
 
     # 4. Orphaned tags (no work_tags associations)
     try:
@@ -814,8 +881,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "description": "无关联作品的孤立标签",
                 "items": orphaned_tags,
             })
-    except Exception as e:
-        logger.warning("Integrity check - orphaned tags: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning orphaned tags")
+        raise
 
     # 5. Dead links (asset records where file doesn't exist on disk)
     try:
@@ -863,8 +932,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "description": "数据库记录指向不存在文件的死链",
                 "items": dead_links[:50],
             })
-    except Exception as e:
-        logger.warning("Integrity check - dead links: %s", e)
+    except Exception:
+        await db.rollback()
+        logger.exception("Integrity check failed while scanning dead links")
+        raise
 
     # 6. DB table stats
     try:
@@ -875,7 +946,9 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
             r = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             db_stats[table] = r.scalar() or 0
     except Exception:
-        db_stats = {}
+        await db.rollback()
+        logger.exception("Integrity check failed while collecting database statistics")
+        raise
 
     return {"issues": issues, "db_stats": db_stats, "checked_at": datetime.now(timezone.utc).isoformat()}
 
@@ -967,6 +1040,7 @@ async def get_gitllery_settings(db: AsyncSession = Depends(get_db)):
 @router.put("/settings")
 async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(get_db)):
     sync_scan_reschedule = None
+    conflict_reconciliation = None
     if data.dedup is not None:
         await _put_setting(db, "dedup", data.dedup.model_dump())
     if data.subscription_defaults is not None:
@@ -979,16 +1053,60 @@ async def update_settings(data: AdminSettingsUpdate, db: AsyncSession = Depends(
         except Exception:
             logger.warning("Failed to reschedule subscription sync scan after settings update", exc_info=True)
     if data.download_defaults is not None:
-        await _put_setting(db, "download_defaults", data.download_defaults.model_dump())
+        download_defaults = data.download_defaults.model_dump()
+        await _put_setting(db, "download_defaults", download_defaults)
+        if download_defaults.get("auto_resolve_upstream_conflicts", True):
+            try:
+                conflict_reconciliation = await _enqueue_download_conflict_reconciliation()
+            except Exception:
+                logger.warning("Failed to enqueue historical conflict reconciliation", exc_info=True)
     if data.proxy is not None:
         await _put_setting(db, "proxy", data.proxy.model_dump())
-    return {"status": "ok", "message": "Settings saved to database", "sync_scan_reschedule": sync_scan_reschedule}
+    return {
+        "status": "ok",
+        "message": "Settings saved to database",
+        "sync_scan_reschedule": sync_scan_reschedule,
+        "conflict_reconciliation": conflict_reconciliation,
+    }
 
 
 # ── Proxy Test ──
 
-@router.post("/proxy/test")
-async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
+@router.post(
+    "/proxy/test",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def test_proxy_connectivity():
+    """Start the proxy connectivity test as a durable TaskRun."""
+    from app.services.operations import start_admin_operation
+
+    return await start_admin_operation(
+        operation_type="admin-proxy-test",
+        scope_key="diagnostics:proxy:active",
+        title="Proxy connectivity test",
+        entity="proxy-test",
+        options={},
+        queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/proxy/test/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_proxy_connectivity(db: AsyncSession = Depends(get_db)):
+    """Read the latest successful proxy connectivity result."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-proxy-test",
+        scope_key="diagnostics:proxy:active",
+    )
+
+
+async def _run_proxy_connectivity_test(db: AsyncSession):
     """Test connectivity through the configured proxy to key external sites."""
     import urllib.error
     import urllib.parse
@@ -1113,7 +1231,7 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
 
     import concurrent.futures
     logger.info("Proxy test starting: enabled=%s proxy=%s targets=%d", enabled,
-                config.get("http_proxy", "not set"), len(targets))
+                _redact_proxy_url(config.get("http_proxy")), len(targets))
 
     def _run_all():
         # list(executor.map(...)) blocks until all probes finish (~TEST_TIMEOUT)
@@ -1131,11 +1249,33 @@ async def test_proxy_connectivity(db: AsyncSession = Depends(get_db)):
         "proxy_reachable": proxy_reachable,
         "proxy_reachable_error": proxy_reachable_error,
         "proxy_config": {
-            "http": config.get("http_proxy", "not set"),
-            "https": config.get("https_proxy", "not set"),
+            "http": _redact_proxy_url(config.get("http_proxy")),
+            "https": _redact_proxy_url(config.get("https_proxy")),
         },
         "results": results,
     }
+
+
+def _redact_proxy_url(value: object) -> str:
+    """Return a useful proxy endpoint without persisting or logging userinfo."""
+
+    import urllib.parse
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "not set"
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        hostname = parsed.hostname
+        if not hostname:
+            return "configured"
+        rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, f"{rendered_host}{port}", parsed.path, parsed.query, parsed.fragment)
+        )
+    except (TypeError, ValueError):
+        return "configured"
 
 
 # ── Data Management ──

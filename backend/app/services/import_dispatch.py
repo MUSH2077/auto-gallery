@@ -23,15 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.task_run import TaskRun
-from app.models.task_state import transition_download_job, transition_import_job
-from app.services.job_progress import apply_download_progress, apply_import_progress
+from app.models.task_state import transition_import_job
+from app.services.job_progress import apply_import_progress
 from app.services.queue_admission import (
     QueueAdmissionError,
     checked_enqueue,
     checked_enqueue_in,
 )
 from app.services.redis_client import get_redis
-from app.services.search_projection_outbox import request_search_projection
 from app.services.tasks import TaskService
 
 logger = logging.getLogger(__name__)
@@ -199,6 +198,53 @@ async def _persist_invalid_dispatch(
     """Make non-retryable publication errors terminal and explicit."""
 
     message = f"Import queue publication failed: {error}"
+    job_id = job.id
+    parent_id = job.download_job_id
+    task_id = task.id
+    rq_job_id = task.rq_job_id
+    attempt = int(
+        (((task.meta or {}).get(IMPORT_DISPATCH_META_KEY) or {}).get("attempt"))
+        or 0,
+    )
+
+    # The caller validated while holding ImportJob -> TaskRun.  Release those
+    # locks before asking for the shared parent, then reacquire and revalidate
+    # in the lifecycle-wide parent -> child -> TaskRun order.
+    await db.rollback()
+    parent = (
+        await db.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id == parent_id)
+            .with_for_update(of=DownloadJob)
+        )
+    ).scalar_one_or_none()
+    job = (
+        await db.execute(
+            select(ImportJob)
+            .where(ImportJob.id == job_id)
+            .with_for_update(of=ImportJob)
+        )
+    ).scalar_one_or_none()
+    task = (
+        await db.execute(
+            select(TaskRun)
+            .where(TaskRun.id == task_id)
+            .with_for_update(of=TaskRun)
+        )
+    ).scalar_one_or_none()
+    if parent is None or job is None or task is None:
+        await db.rollback()
+        return
+    dispatch = (task.meta or {}).get(IMPORT_DISPATCH_META_KEY) or {}
+    if (
+        job.status != "enqueued"
+        or task.rq_job_id != rq_job_id
+        or int(dispatch.get("attempt") or 0) != attempt
+        or dispatch.get("state") == IMPORT_DISPATCH_PUBLISHED
+    ):
+        await db.rollback()
+        return
+
     _set_dispatch_state(task, IMPORT_DISPATCH_INVALID, error=error)
     if job.status == "enqueued":
         transition_import_job(job, "failed", message)
@@ -212,28 +258,18 @@ async def _persist_invalid_dispatch(
         rq_job_id=task.rq_job_id,
     )
 
-    # Initial imports leave their parent download in importing.  Preserve the
-    # old explicit-failure behaviour for code/serialization faults, while never
-    # applying it to Redis capacity or connectivity failures.
-    parent = await db.get(DownloadJob, job.download_job_id)
-    if parent is not None and parent.status == "importing":
-        transition_download_job(parent, "failed", message)
-        apply_download_progress(parent, "failed", message, publish=False)
-        await TaskService(db).update_subject(
-            "download_job",
-            parent.id,
-            status="failed",
-            progress=parent.progress_data,
-            error=message,
-        )
-        await request_search_projection(
-            db,
-            subscription_ids=(
-                [parent.subscription_id]
-                if parent.subscription_id
-                else ()
-            ),
-        )
+    # Invalid durable publication is one terminal child outcome. Shared disk
+    # import parents derive their state under the same sibling/publication lock
+    # as every other exit; ordinary one-child parents retain explicit failure.
+    from app.services.import_lifecycle import project_import_pipeline_state
+
+    await project_import_pipeline_state(
+        db,
+        job,
+        status="failed",
+        error=message,
+        reason_code="import_dispatch_invalid",
+    )
     await db.commit()
 
 
@@ -281,6 +317,7 @@ def _enqueue_import_rq(
     enqueue_kwargs = {
         "job_id": rq_job_id,
         "job_timeout": int(job_timeout),
+        "description": f"import task={import_job_id}",
     }
     if delay_seconds is not None and delay_seconds > 0:
         return checked_enqueue_in(

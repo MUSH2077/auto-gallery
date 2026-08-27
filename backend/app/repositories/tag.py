@@ -1,9 +1,50 @@
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import any_, bindparam, select, func
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Tag, WorkTag
+from app.models import Tag, WorkSource, WorkSourceTag, WorkTag
 from app.repositories.base import BaseRepository
+
+
+async def source_usage_by_tag(
+    session: AsyncSession,
+    tag_ids: list[UUID],
+    *filters,
+) -> dict[UUID, list[dict[str, int | str]]]:
+    """Return source composition for many tags with one grouped query."""
+    if not tag_ids:
+        return {}
+
+    tag_id_array = bindparam(
+        "source_usage_tag_ids",
+        value=tag_ids,
+        type_=ARRAY(PG_UUID(as_uuid=True)),
+    )
+
+    result = await session.execute(
+        select(
+            WorkSourceTag.tag_id,
+            WorkSource.source,
+            func.count(func.distinct(WorkSource.work_id)).label("work_count"),
+        )
+        .join(WorkSource, WorkSource.id == WorkSourceTag.work_source_id)
+        .where(WorkSourceTag.tag_id == any_(tag_id_array), *filters)
+        .group_by(WorkSourceTag.tag_id, WorkSource.source)
+        .order_by(
+            WorkSourceTag.tag_id,
+            func.count(func.distinct(WorkSource.work_id)).desc(),
+            WorkSource.source,
+        )
+    )
+    usage: dict[UUID, list[dict[str, int | str]]] = {}
+    for tag_id, source, work_count in result.all():
+        usage.setdefault(tag_id, []).append({
+            "source": str(source),
+            "work_count": int(work_count or 0),
+        })
+    return usage
 
 
 class TagRepository(BaseRepository[Tag]):
@@ -34,6 +75,12 @@ class TagRepository(BaseRepository[Tag]):
                 tag = row[0]
                 tag.usage_count = row[1] or 0
                 tags.append(tag)
+            source_usage = await source_usage_by_tag(
+                self.session,
+                [tag.id for tag in tags],
+            )
+            for tag in tags:
+                tag.source_usage = source_usage.get(tag.id, [])
             return tags
 
         count_sub = (
@@ -59,6 +106,12 @@ class TagRepository(BaseRepository[Tag]):
             tag = row[0]
             tag.usage_count = row[1] or 0
             tags.append(tag)
+        source_usage = await source_usage_by_tag(
+            self.session,
+            [tag.id for tag in tags],
+        )
+        for tag in tags:
+            tag.source_usage = source_usage.get(tag.id, [])
         return tags
 
     async def get_or_create(self, normalized_name: str) -> Tag:

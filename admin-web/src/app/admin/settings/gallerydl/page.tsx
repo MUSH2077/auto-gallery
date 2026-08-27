@@ -1,14 +1,17 @@
 "use client";
-import { useState, useEffect, useId, useRef } from "react";
+import { useState, useId } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta } from "@/lib/api";
+import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta, GalleryDLMultiConfig } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { PageHeader, ErrorState, PageShell } from "@/components";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
+import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 type PatternTarget = "directory" | "filename";
+type GalleryConnectionResult = { source: string; success: boolean; message: string; details: string };
 
 type NamingToken = {
   token: string;
@@ -387,79 +390,8 @@ function NamingReferencePanel({
   );
 }
 
-export default function GalleryDLConfigPage() {
-  const t = useT();
-  const tabs = useGalleryTabs();
-  const qc = useQueryClient();
-  const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
-  const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
-  const [saved, setSaved] = useState<string | null>(null);
-
-  // Per-source local state
-  const [pixiv, setPixiv] = useState<PixivSourceConfig>({});
-  const [twitter, setTwitter] = useState<TwitterSourceConfig>({});
-  const [iwara, setIwara] = useState<IwaraSourceConfig>({});
-  const [danbooru, setDanbooru] = useState<DanbooruSourceConfig>({});
-  const [pinterest, setPinterest] = useState<PinterestSourceConfig>({});
-  const [lofter, setLofter] = useState<LofterSourceConfig>({});
-  const [weibo, setWeibo] = useState<WeiboSourceConfig>({});
-  const [bilibili, setBilibili] = useState<BilibiliSourceConfig>({});
-  const seeded = useRef(false);
-
-  const save = useMutation({
-    mutationFn: () => {
-      // Strip empty strings before saving to avoid gallery-dl IsADirectoryError
-      const strip = (obj: Record<string, unknown>) => {
-        const cleaned: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(obj)) {
-          if (v !== "" && v !== null && v !== undefined) cleaned[k] = v;
-        }
-        return cleaned;
-      };
-      return api.updateGalleryDLConfig({
-        pixiv: strip(pixiv as unknown as Record<string, unknown>),
-        twitter: strip(twitter as unknown as Record<string, unknown>),
-        iwara: strip(iwara as unknown as Record<string, unknown>),
-        danbooru: strip(danbooru as unknown as Record<string, unknown>),
-        pinterest: strip(pinterest as unknown as Record<string, unknown>),
-        lofter: strip(lofter as unknown as Record<string, unknown>),
-        weibo: strip(weibo as unknown as Record<string, unknown>),
-        bilibili: strip(bilibili as unknown as Record<string, unknown>),
-      });
-    },
-    onSuccess: (_, v) => {
-      qc.invalidateQueries({ queryKey: ["gallerydl-config"] });
-      setSaved(activeTab); setTimeout(() => setSaved(null), 3000);
-    },
-  });
-
-  const [testResult, setTestResult] = useState<{ source: string; success: boolean; message: string } | null>(null);
-  const testConn = useMutation({
-    mutationFn: async (source: string) => {
-      await save.mutateAsync();
-      return api.testGalleryDLConnection(source);
-    },
-    onSuccess: (data) => { setTestResult(data); setTimeout(() => setTestResult(null), 8000); },
-    onError: (e: Error) => { setTestResult({ source: "", success: false, message: e.message }); },
-  });
-
-  useEffect(() => {
-    if (config.data && !seeded.current) {
-      const d = config.data;
-      setPixiv(initPixiv(d.pixiv));
-      setTwitter(initTwitter(d.twitter));
-      setIwara(initIwara(d.iwara));
-      setDanbooru(initDanbooru(d.danbooru));
-      setPinterest(initPinterest(d.pinterest));
-      setLofter(initLofter(d.lofter));
-      setWeibo(initWeibo(d.weibo));
-      setBilibili(initBilibili(d.bilibili));
-      seeded.current = true;
-    }
-  }, [config.data]);
-
-  // Seed helpers
-  const initPixiv = (d: any) => ({
+function initPixiv(d: any): PixivSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? true,
     refresh_token: str(d?.refresh_token), cookies_path: str(d?.cookies_path),
     cookie_content: str(d?.cookie_content),
@@ -472,66 +404,92 @@ export default function GalleryDLConfigPage() {
     captions: d?.captions ?? false,
     comments: d?.comments ?? false,
     sanity: d?.sanity ?? false,
-  });
-  const initTwitter = (d: any) => ({
+  };
+}
+
+function initTwitter(d: any): TwitterSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
-    strategy: str(d?.strategy, "tweets"),
-    include: str(d?.include, "timeline"),
+    strategy: str(d?.strategy, "tweets"), include: str(d?.include, "timeline"),
     retweets: d?.retweets ?? false, replies: d?.replies ?? false,
     cards: d?.cards ?? true, videos: d?.videos ?? true,
     text_tweets: d?.text_tweets ?? false, quoted: d?.quoted ?? false,
     pinned: d?.pinned ?? false, previews: d?.previews ?? false, articles: d?.articles ?? false,
     max_posts: d?.max_posts,
-  });
-  const initIwara = (d: any) => ({
+  };
+}
+
+function initIwara(d: any): IwaraSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
-    username: str(d?.username), password: str(d?.password),
-    filename: str(d?.filename),
-    directory: str(d?.directory), format: str(d?.format),
-    include: str(d?.include),
-  });
-  const initDanbooru = (d: any) => ({
+    username: str(d?.username), password: str(d?.password), filename: str(d?.filename),
+    directory: str(d?.directory), format: str(d?.format), include: str(d?.include),
+  };
+}
+
+function initDanbooru(d: any): DanbooruSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
-    username: str(d?.username), password: str(d?.password),
-    api_key: str(d?.api_key),
+    username: str(d?.username), password: str(d?.password), api_key: str(d?.api_key),
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
-    external: d?.external ?? false,
-    metadata: d?.metadata ?? false,
+    external: d?.external ?? false, metadata: d?.metadata ?? false,
     filename: str(d?.filename), directory: str(d?.directory),
-  });
-  const initPinterest = (d: any) => ({
+  };
+}
+
+function initPinterest(d: any): PinterestSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     domain: str(d?.domain), stories: d?.stories ?? true,
     videos: d?.videos ?? true, sections: d?.sections ?? true,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
-  });
-  const initLofter = (d: any) => ({
+  };
+}
+
+function initLofter(d: any): LofterSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
     filename: str(d?.filename), directory: str(d?.directory),
-  });
-  const initWeibo = (d: any) => ({
+  };
+}
+
+function initWeibo(d: any): WeiboSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
-    videos: d?.videos ?? true,
-    retweets: d?.retweets ?? false,
-    gifs: d?.gifs ?? true,
-    livephoto: d?.livephoto ?? false,
-    movies: d?.movies ?? false,
-    text: d?.text ?? false,
-    include: str(d?.include),
-    filename: str(d?.filename), directory: str(d?.directory),
-  });
-  const initBilibili = (d: any) => ({
+    videos: d?.videos ?? true, retweets: d?.retweets ?? false,
+    gifs: d?.gifs ?? true, livephoto: d?.livephoto ?? false,
+    movies: d?.movies ?? false, text: d?.text ?? false,
+    include: str(d?.include), filename: str(d?.filename), directory: str(d?.directory),
+  };
+}
+
+function initBilibili(d: any): BilibiliSourceConfig {
+  return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     livephoto: d?.livephoto ?? true,
     sleep_request: str(d?.sleep_request, "3.0-6.0"),
-    filename: str(d?.filename),
-    directory: str(d?.directory),
+    filename: str(d?.filename), directory: str(d?.directory),
+  };
+}
+
+export default function GalleryDLConfigPage() {
+  const t = useT();
+  const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
+  const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
+  const connection = useAdminOperation<GalleryConnectionResult, () => Promise<unknown>>({
+    operationType: "admin-gallerydl-connectivity-test",
+    scope: activeTab,
+    startOperation: async (saveConfig) => {
+      await saveConfig();
+      return api.testGalleryDLConnection(activeTab);
+    },
+    loadLatest: () => api.getLatestGalleryDLConnection(activeTab),
   });
 
   if (config.isError) {
@@ -545,7 +503,64 @@ export default function GalleryDLConfigPage() {
     </PageShell>;
   }
 
-  const meta = config.data.sources || {} as Record<string, GalleryDLSourceMeta>;
+  return (
+    <GalleryDLConfigForm
+      initial={config.data}
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      connection={connection}
+    />
+  );
+}
+
+function GalleryDLConfigForm({
+  initial,
+  activeTab,
+  setActiveTab,
+  connection,
+}: {
+  initial: GalleryDLMultiConfig;
+  activeTab: TabKey;
+  setActiveTab: (tab: TabKey) => void;
+  connection: AdminOperationController<GalleryConnectionResult, () => Promise<unknown>>;
+}) {
+  const t = useT();
+  const tabs = useGalleryTabs();
+  const qc = useQueryClient();
+  const [saved, setSaved] = useState<string | null>(null);
+  const [pixiv, setPixiv] = useState<PixivSourceConfig>(() => initPixiv(initial.pixiv));
+  const [twitter, setTwitter] = useState<TwitterSourceConfig>(() => initTwitter(initial.twitter));
+  const [iwara, setIwara] = useState<IwaraSourceConfig>(() => initIwara(initial.iwara));
+  const [danbooru, setDanbooru] = useState<DanbooruSourceConfig>(() => initDanbooru(initial.danbooru));
+  const [pinterest, setPinterest] = useState<PinterestSourceConfig>(() => initPinterest(initial.pinterest));
+  const [lofter, setLofter] = useState<LofterSourceConfig>(() => initLofter(initial.lofter));
+  const [weibo, setWeibo] = useState<WeiboSourceConfig>(() => initWeibo(initial.weibo));
+  const [bilibili, setBilibili] = useState<BilibiliSourceConfig>(() => initBilibili(initial.bilibili));
+
+  const save = useMutation({
+    mutationFn: () => {
+      const strip = (obj: Record<string, unknown>) => Object.fromEntries(
+        Object.entries(obj).filter(([, value]) => value !== "" && value !== null && value !== undefined),
+      );
+      return api.updateGalleryDLConfig({
+        pixiv: strip(pixiv as unknown as Record<string, unknown>),
+        twitter: strip(twitter as unknown as Record<string, unknown>),
+        iwara: strip(iwara as unknown as Record<string, unknown>),
+        danbooru: strip(danbooru as unknown as Record<string, unknown>),
+        pinterest: strip(pinterest as unknown as Record<string, unknown>),
+        lofter: strip(lofter as unknown as Record<string, unknown>),
+        weibo: strip(weibo as unknown as Record<string, unknown>),
+        bilibili: strip(bilibili as unknown as Record<string, unknown>),
+      });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["gallerydl-config"] });
+      setSaved(activeTab);
+      setTimeout(() => setSaved(null), 3000);
+    },
+  });
+
+  const meta = initial.sources || {} as Record<string, GalleryDLSourceMeta>;
   const currentMeta = meta[activeTab];
 
   return (
@@ -592,23 +607,41 @@ export default function GalleryDLConfigPage() {
         </div>
         {save.error && <p className="text-danger text-sm mt-2">{(save.error as Error).message}</p>}
 
-        {/* Test Connection */}
-        <div className="flex items-center gap-3 pt-2 border-t mt-4">
-          <button
-            onClick={() => testConn.mutate(activeTab)}
-            disabled={testConn.isPending}
-            className="btn-primary min-h-11 px-3 text-xs"
-          >
-            {testConn.isPending ? t("gallerydl.testing") : t("gallerydl.test_connection")}
-          </button>
-          {testResult && (
-            <span className={`text-xs ${testResult.success ? "text-success" : "text-danger"}`}>
-              {testResult.success ? "✓" : "✗"} {testResult.message}
-            </span>
-          )}
-        </div>
+        <GalleryConnectionControl
+          connection={connection}
+          saveConfig={() => save.mutateAsync()}
+        />
       </div>
     </PageShell>
+  );
+}
+
+function GalleryConnectionControl({
+  connection,
+  saveConfig,
+}: {
+  connection: AdminOperationController<GalleryConnectionResult, () => Promise<unknown>>;
+  saveConfig: () => Promise<unknown>;
+}) {
+  const t = useT();
+
+  return (
+    <div className="pt-2 border-t mt-4">
+      <button
+        type="button"
+        onClick={() => connection.start(saveConfig)}
+        disabled={!connection.canStart}
+        className="btn-primary min-h-11 px-3 text-xs"
+      >
+        {connection.isStarting || connection.isActive ? t("gallerydl.testing") : t("gallerydl.test_connection")}
+      </button>
+      <AdminOperationStatus controller={connection} />
+      {connection.result ? (
+        <p className={`mt-2 text-xs ${connection.result.success ? "text-success" : "text-danger"}`}>
+          {connection.result.success ? "✓" : "✗"} {connection.result.message}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
