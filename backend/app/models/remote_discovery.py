@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ class UserSubscription(TimestampMixin, Base):
     __tablename__ = "user_subscriptions"
     __table_args__ = (
         UniqueConstraint("user_id", "subscription_id", name="uq_user_subscriptions_user_subscription"),
+        UniqueConstraint("id", "user_id", "subscription_id", name="uq_user_subscriptions_id_owner_subscription"),
     )
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
@@ -24,7 +25,11 @@ class UserSubscription(TimestampMixin, Base):
 
     user = relationship("User", back_populates="user_subscriptions")
     subscription = relationship("Subscription", back_populates="user_subscriptions")
-    subscription_sources = relationship("UserSubscriptionSource", back_populates="user_subscription")
+    subscription_sources = relationship(
+        "UserSubscriptionSource",
+        back_populates="user_subscription",
+        foreign_keys="UserSubscriptionSource.user_subscription_id",
+    )
 
 
 class RemoteAccount(TimestampMixin, Base):
@@ -33,6 +38,7 @@ class RemoteAccount(TimestampMixin, Base):
     __tablename__ = "remote_accounts"
     __table_args__ = (
         UniqueConstraint("user_id", "source", name="uq_remote_accounts_user_source"),
+        UniqueConstraint("id", "user_id", name="uq_remote_accounts_id_owner"),
         CheckConstraint("source IN ('pixiv', 'x', 'bilibili')", name="ck_remote_accounts_source"),
         CheckConstraint(
             "auto_import_min_confidence IN ('high', 'medium', 'low')",
@@ -71,8 +77,16 @@ class RemoteAccount(TimestampMixin, Base):
     auto_import_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=25, server_default=text("25"))
 
     user = relationship("User", back_populates="remote_accounts")
-    membership_sources = relationship("UserSubscriptionSource", back_populates="remote_account")
-    discovery_candidates = relationship("DiscoveryCandidate", back_populates="remote_account")
+    membership_sources = relationship(
+        "UserSubscriptionSource",
+        back_populates="remote_account",
+        foreign_keys="UserSubscriptionSource.remote_account_id",
+    )
+    discovery_candidates = relationship(
+        "DiscoveryCandidate",
+        back_populates="remote_account",
+        foreign_keys="DiscoveryCandidate.remote_account_id",
+    )
 
     def __repr__(self) -> str:
         return f"RemoteAccount(id={self.id!r}, user_id={self.user_id!r}, source={self.source!r})"
@@ -88,6 +102,24 @@ class UserSubscriptionSource(TimestampMixin, Base):
             "subscription_source_id",
             name="uq_user_subscription_sources_membership_source",
         ),
+        ForeignKeyConstraint(
+            ["user_subscription_id", "user_id", "subscription_id"],
+            ["user_subscriptions.id", "user_subscriptions.user_id", "user_subscriptions.subscription_id"],
+            name="fk_user_subscription_sources_membership_owner",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["subscription_source_id", "subscription_id"],
+            ["subscription_sources.id", "subscription_sources.subscription_id"],
+            name="fk_user_subscription_sources_source_subscription",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["remote_account_id", "user_id"],
+            ["remote_accounts.id", "remote_accounts.user_id"],
+            name="fk_user_subscription_sources_remote_account_owner",
+            ondelete="RESTRICT",
+        ),
         Index(
             "ix_user_subscription_sources_next_sync_due",
             "next_sync_at",
@@ -96,6 +128,8 @@ class UserSubscriptionSource(TimestampMixin, Base):
         ),
     )
 
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    subscription_id: Mapped[UUID] = mapped_column(ForeignKey("subscriptions.id", ondelete="RESTRICT"), nullable=False)
     user_subscription_id: Mapped[UUID] = mapped_column(
         ForeignKey("user_subscriptions.id", ondelete="RESTRICT"), nullable=False
     )
@@ -115,9 +149,21 @@ class UserSubscriptionSource(TimestampMixin, Base):
     auth_error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_auth_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    user_subscription = relationship("UserSubscription", back_populates="subscription_sources")
-    subscription_source = relationship("SubscriptionSource", back_populates="user_subscription_sources")
-    remote_account = relationship("RemoteAccount", back_populates="membership_sources")
+    user_subscription = relationship(
+        "UserSubscription",
+        back_populates="subscription_sources",
+        foreign_keys=[user_subscription_id],
+    )
+    subscription_source = relationship(
+        "SubscriptionSource",
+        back_populates="user_subscription_sources",
+        foreign_keys=[subscription_source_id],
+    )
+    remote_account = relationship(
+        "RemoteAccount",
+        back_populates="membership_sources",
+        foreign_keys=[remote_account_id],
+    )
 
 
 class DiscoveryCandidate(TimestampMixin, Base):
@@ -126,6 +172,22 @@ class DiscoveryCandidate(TimestampMixin, Base):
     __tablename__ = "discovery_candidates"
     __table_args__ = (
         UniqueConstraint("remote_account_id", "remote_creator_id", name="uq_discovery_candidates_account_creator"),
+        ForeignKeyConstraint(
+            ["remote_account_id", "user_id"],
+            ["remote_accounts.id", "remote_accounts.user_id"],
+            name="fk_discovery_candidates_account_owner",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["user_subscription_id", "user_id", "subscription_id"],
+            ["user_subscriptions.id", "user_subscriptions.user_id", "user_subscriptions.subscription_id"],
+            name="fk_discovery_candidates_membership_owner",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "user_subscription_id IS NULL OR subscription_id IS NOT NULL",
+            name="ck_discovery_candidates_membership_subscription",
+        ),
         CheckConstraint(
             "confidence IN ('high', 'medium', 'low')",
             name="ck_discovery_candidates_confidence",
@@ -140,6 +202,7 @@ class DiscoveryCandidate(TimestampMixin, Base):
     remote_account_id: Mapped[UUID] = mapped_column(
         ForeignKey("remote_accounts.id", ondelete="RESTRICT"), nullable=False
     )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     remote_creator_id: Mapped[str] = mapped_column(String(255), nullable=False)
     remote_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -157,6 +220,10 @@ class DiscoveryCandidate(TimestampMixin, Base):
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    remote_account = relationship("RemoteAccount", back_populates="discovery_candidates")
+    remote_account = relationship(
+        "RemoteAccount",
+        back_populates="discovery_candidates",
+        foreign_keys=[remote_account_id],
+    )
     subscription = relationship("Subscription", back_populates="discovery_candidates")
-    user_subscription = relationship("UserSubscription")
+    user_subscription = relationship("UserSubscription", foreign_keys=[user_subscription_id])

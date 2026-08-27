@@ -45,6 +45,8 @@ class UserSubscriptionSourceUpdate(BaseModel):
 
 class UserSubscriptionSourceRead(BaseModel):
     id: UUID
+    user_id: int
+    subscription_id: UUID
     user_subscription_id: UUID
     subscription_source_id: UUID
     remote_account_id: UUID | None = None
@@ -110,6 +112,7 @@ class RemoteAccountRead(BaseModel):
 class DiscoveryCandidateRead(BaseModel):
     id: UUID
     remote_account_id: UUID
+    user_id: int
     remote_creator_id: str
     remote_url: str | None = None
     display_name: str | None = None

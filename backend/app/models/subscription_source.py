@@ -10,6 +10,7 @@ class SubscriptionSource(TimestampMixin, Base):
     __tablename__ = "subscription_sources"
     __table_args__ = (
         UniqueConstraint("subscription_id", "source_url", name="uq_subscription_sources_sub_url"),
+        UniqueConstraint("id", "subscription_id", name="uq_subscription_sources_id_subscription"),
         Index(
             "ix_subscription_sources_next_sync_due",
             "next_sync_at",
@@ -36,4 +37,8 @@ class SubscriptionSource(TimestampMixin, Base):
     last_auth_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     subscription = relationship("Subscription", back_populates="subscription_sources")
-    user_subscription_sources = relationship("UserSubscriptionSource", back_populates="subscription_source")
+    user_subscription_sources = relationship(
+        "UserSubscriptionSource",
+        back_populates="subscription_source",
+        foreign_keys="UserSubscriptionSource.subscription_source_id",
+    )
