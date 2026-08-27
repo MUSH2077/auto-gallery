@@ -31,6 +31,12 @@ class TaskRun(TimestampMixin, Base):
     subject_type: Mapped[str | None] = mapped_column(String(50))        # domain table the run mirrors (download_job, ...)
     subject_id: Mapped[UUID | None] = mapped_column(nullable=True)      # PK in that domain table (no FK: loose coupling)
     parent_task_id: Mapped[UUID | None] = mapped_column(ForeignKey("task_runs.id", ondelete="SET NULL"))  # batch/child grouping
+    triggering_user_subscription_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("user_subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+    triggering_remote_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("remote_accounts.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Lifecycle — values come from app.models.task_state (enqueued/running/complete/failed/...).
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="enqueued")

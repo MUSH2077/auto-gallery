@@ -13,6 +13,12 @@ class DownloadJob(TimestampMixin, Base):
 
     subscription_id: Mapped[UUID] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
     subscription_source_id: Mapped[UUID | None] = mapped_column(ForeignKey("subscription_sources.id"))
+    triggering_user_subscription_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("user_subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+    triggering_remote_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("remote_accounts.id", ondelete="SET NULL"), nullable=True
+    )
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     source_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="enqueued")

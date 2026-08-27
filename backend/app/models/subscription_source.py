@@ -36,3 +36,4 @@ class SubscriptionSource(TimestampMixin, Base):
     last_auth_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     subscription = relationship("Subscription", back_populates="subscription_sources")
+    user_subscription_sources = relationship("UserSubscriptionSource", back_populates="subscription_source")
