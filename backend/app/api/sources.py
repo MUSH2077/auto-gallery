@@ -20,6 +20,9 @@ async def list_sources():
                 "supports_gallerydl": p.capabilities.supports_gallerydl,
                 "supports_tags": p.capabilities.supports_tags,
                 "is_reference_only": p.capabilities.is_reference_only,
+                "supports_remote_discovery": p.capabilities.supports_remote_discovery,
+                "discovery_auth_methods": p.capabilities.discovery_auth_methods,
+                "supports_collection_selectors": p.capabilities.supports_collection_selectors,
             },
         })
     return {"sources": sources}
