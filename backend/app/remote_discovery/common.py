@@ -34,6 +34,9 @@ class RemoteHTTPResponse:
     payload: Any
     headers: Mapping[str, str] = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        return f"RemoteHTTPResponse(status_code={self.status_code}, payload=<redacted>, headers=<redacted>)"
+
 
 class RemoteHTTPTransport(Protocol):
     async def request(self, method: str, url: str, **kwargs: Any) -> RemoteHTTPResponse: ...

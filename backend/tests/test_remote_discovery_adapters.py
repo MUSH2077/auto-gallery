@@ -23,6 +23,17 @@ def _common():
     return common
 
 
+def test_remote_response_repr_redacts_payload_and_headers():
+    response = _common().RemoteHTTPResponse(
+        200,
+        {"access_token": "response-secret"},
+        {"Set-Cookie": "session=response-secret"},
+    )
+
+    assert "response-secret" not in repr(response)
+    assert "redacted" in repr(response).lower()
+
+
 @pytest.mark.asyncio
 async def test_pixiv_lists_public_and_private_follow_collections_without_network():
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
@@ -316,6 +327,46 @@ async def test_bilibili_group_following_is_normalized_and_paged():
     assert dict(page.next_cursor) == {"page": 3}
     assert transport.requests[0][1].endswith("/x/relation/tag")
     assert transport.requests[0][2]["params"]["tagid"] == "12"
+
+
+@pytest.mark.asyncio
+async def test_bilibili_group_accepts_direct_member_list_envelope():
+    from app.remote_discovery.bilibili import BilibiliRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = BilibiliRemoteDiscoveryAdapter(
+        FixtureTransport(
+            response(
+                200,
+                {
+                    "code": 0,
+                    "message": "0",
+                    "ttl": 1,
+                    "data": [
+                        {
+                            "mid": 765,
+                            "uname": "Bili Artist",
+                            "face": "https://i0.hdslb.com/avatar.jpg",
+                            "sign": "fixture",
+                            "attribute": 6,
+                            "mtime": 1700000000,
+                            "special": 0,
+                        }
+                    ],
+                },
+                {},
+            )
+        )
+    )
+
+    page = await adapter.fetch_page(
+        {"SESSDATA": "sess", "remote_user_id": "42"},
+        selector={"kind": "group", "group_id": "12"},
+        page_size=50,
+    )
+
+    assert page.items[0].source_creator_id == "765"
+    assert page.done is True
 
 
 @pytest.mark.asyncio

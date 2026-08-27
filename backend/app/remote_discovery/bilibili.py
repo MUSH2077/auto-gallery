@@ -129,10 +129,16 @@ class BilibiliRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         )
         payload = self._api_payload(response, operation="following")
         data = payload.get("data")
-        if not isinstance(data, Mapping) or not isinstance(data.get("list"), list):
+        if isinstance(data, Mapping) and isinstance(data.get("list"), list):
+            users = data["list"]
+            raw_total = data.get("total", len(users))
+        elif group_id is not None and isinstance(data, list):
+            users = data
+            raw_total = None
+        else:
             raise MalformedRemoteResponse("Bilibili following response has invalid data")
         items: list[RemoteCandidateIdentity] = []
-        for user in data["list"]:
+        for user in users:
             if not isinstance(user, Mapping) or not user.get("mid"):
                 raise MalformedRemoteResponse("Bilibili following response contains an invalid user")
             source_creator_id = str(user["mid"])
@@ -153,11 +159,15 @@ class BilibiliRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
                     },
                 )
             )
-        try:
-            total = int(data.get("total", len(items)))
-        except (TypeError, ValueError) as exc:
-            raise MalformedRemoteResponse("Bilibili following total is invalid") from exc
-        next_cursor = {"page": page + 1} if page * min(page_size, 50) < total else None
+        if raw_total is None:
+            has_next = len(items) == min(page_size, 50) and bool(items)
+        else:
+            try:
+                total = int(raw_total)
+            except (TypeError, ValueError) as exc:
+                raise MalformedRemoteResponse("Bilibili following total is invalid") from exc
+            has_next = page * min(page_size, 50) < total
+        next_cursor = {"page": page + 1} if has_next else None
         return DiscoveryPage(items=items, next_cursor=next_cursor, done=next_cursor is None)
 
     def build_download_auth(self, credentials: Mapping[str, Any]) -> DownloadAuthenticationOverride:
