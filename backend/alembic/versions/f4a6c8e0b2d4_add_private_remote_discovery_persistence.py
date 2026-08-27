@@ -33,6 +33,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "subscription_id", name="uq_user_subscriptions_user_subscription"),
+        sa.UniqueConstraint("id", "user_id", "subscription_id", name="uq_user_subscriptions_id_owner_subscription"),
     )
     op.create_table(
         "remote_accounts",
@@ -67,6 +68,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_remote_accounts_user", ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "source", name="uq_remote_accounts_user_source"),
+        sa.UniqueConstraint("id", "user_id", name="uq_remote_accounts_id_owner"),
     )
     op.create_index(
         "ix_remote_accounts_next_scan_due",
@@ -74,11 +76,18 @@ def upgrade() -> None:
         ["next_scan_at", "id"],
         postgresql_where=sa.text("is_enabled IS TRUE"),
     )
+    op.create_unique_constraint(
+        "uq_subscription_sources_id_subscription",
+        "subscription_sources",
+        ["id", "subscription_id"],
+    )
     op.create_table(
         "user_subscription_sources",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("subscription_id", sa.Uuid(), nullable=False),
         sa.Column("user_subscription_id", sa.Uuid(), nullable=False),
         sa.Column("subscription_source_id", sa.Uuid(), nullable=False),
         sa.Column("remote_account_id", sa.Uuid(), nullable=True),
@@ -94,11 +103,33 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["user_subscription_id"], ["user_subscriptions.id"], name="fk_user_subscription_sources_membership", ondelete="RESTRICT"
         ),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_user_subscription_sources_user", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["subscription_id"], ["subscriptions.id"], name="fk_user_subscription_sources_subscription", ondelete="RESTRICT"
+        ),
         sa.ForeignKeyConstraint(
             ["subscription_source_id"], ["subscription_sources.id"], name="fk_user_subscription_sources_source", ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
             ["remote_account_id"], ["remote_accounts.id"], name="fk_user_subscription_sources_remote_account", ondelete="RESTRICT"
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_subscription_id", "user_id", "subscription_id"],
+            ["user_subscriptions.id", "user_subscriptions.user_id", "user_subscriptions.subscription_id"],
+            name="fk_user_subscription_sources_membership_owner",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["subscription_source_id", "subscription_id"],
+            ["subscription_sources.id", "subscription_sources.subscription_id"],
+            name="fk_user_subscription_sources_source_subscription",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["remote_account_id", "user_id"],
+            ["remote_accounts.id", "remote_accounts.user_id"],
+            name="fk_user_subscription_sources_remote_account_owner",
+            ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -119,6 +150,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("remote_account_id", sa.Uuid(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("remote_creator_id", sa.String(length=255), nullable=False),
         sa.Column("remote_url", sa.String(length=2000), nullable=True),
         sa.Column("display_name", sa.String(length=500), nullable=True),
@@ -135,14 +167,31 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "state IN ('pending', 'dismissed', 'imported', 'conflict')", name="ck_discovery_candidates_state"
         ),
+        sa.CheckConstraint(
+            "user_subscription_id IS NULL OR subscription_id IS NOT NULL",
+            name="ck_discovery_candidates_membership_subscription",
+        ),
         sa.ForeignKeyConstraint(
             ["remote_account_id"], ["remote_accounts.id"], name="fk_discovery_candidates_remote_account", ondelete="RESTRICT"
         ),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_discovery_candidates_user", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["subscription_id"], ["subscriptions.id"], name="fk_discovery_candidates_subscription", ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
             ["user_subscription_id"], ["user_subscriptions.id"], name="fk_discovery_candidates_membership", ondelete="RESTRICT"
+        ),
+        sa.ForeignKeyConstraint(
+            ["remote_account_id", "user_id"],
+            ["remote_accounts.id", "remote_accounts.user_id"],
+            name="fk_discovery_candidates_account_owner",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_subscription_id", "user_id", "subscription_id"],
+            ["user_subscriptions.id", "user_subscriptions.user_id", "user_subscriptions.subscription_id"],
+            name="fk_discovery_candidates_membership_owner",
+            ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("remote_account_id", "remote_creator_id", name="uq_discovery_candidates_account_creator"),
@@ -207,13 +256,14 @@ def upgrade() -> None:
     op.execute(
         """
         INSERT INTO user_subscription_sources (
-            id, user_subscription_id, subscription_source_id, is_enabled,
+            id, user_id, subscription_id, user_subscription_id, subscription_source_id, is_enabled,
             last_successful_auth, auth_healthy, last_synced_at, last_attempted_at,
             next_sync_at, auth_status, auth_error_reason, last_auth_checked_at,
             created_at, updated_at
         )
         SELECT
-            gen_random_uuid(), membership.id, source.id, source.is_enabled,
+            gen_random_uuid(), membership.user_id, membership.subscription_id,
+            membership.id, source.id, source.is_enabled,
             source.last_successful_auth, source.auth_healthy, source.last_synced_at,
             source.last_attempted_at, source.next_sync_at, source.auth_status,
             source.auth_error_reason, source.last_auth_checked_at, now(), now()
@@ -246,4 +296,5 @@ def downgrade() -> None:
     op.drop_table("user_subscription_sources")
     op.drop_index("ix_remote_accounts_next_scan_due", table_name="remote_accounts")
     op.drop_table("remote_accounts")
+    op.drop_constraint("uq_subscription_sources_id_subscription", "subscription_sources", type_="unique")
     op.drop_table("user_subscriptions")

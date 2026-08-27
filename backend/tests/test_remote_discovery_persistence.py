@@ -113,26 +113,28 @@ def test_download_and_task_records_hold_only_optional_opaque_trigger_ids():
         assert table.c.triggering_remote_account_id.type.python_type is type(uuid4())
 
 
-def test_migration_backfills_existing_rows_to_earliest_active_administrator(monkeypatch):
-    """A changed backfill query would orphan legacy subscriptions or create credentials."""
-    migration_path = (
-        Path(__file__).resolve().parents[1]
-        / "alembic"
-        / "versions"
-        / "f4a6c8e0b2d4_add_private_remote_discovery_persistence.py"
-    )
+def test_single_migration_creates_enforced_private_schema_before_backfill(monkeypatch):
+    """A later corrective revision would leave an unsafe intermediate upgrade state."""
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    migration_path = versions / "f4a6c8e0b2d4_add_private_remote_discovery_persistence.py"
+    assert not (versions / "f5b7d9e1a3c5_enforce_private_discovery_ownership.py").exists()
     spec = spec_from_file_location("remote_discovery_migration", migration_path)
     assert spec and spec.loader
     migration = module_from_spec(spec)
     spec.loader.exec_module(migration)
 
     statements: list[str] = []
+    created_tables: dict[str, tuple] = {}
 
     class Recorder:
         def create_table(self, *args, **kwargs):
+            created_tables[args[0]] = args[1:]
             return None
 
         def create_index(self, *args, **kwargs):
+            return None
+
+        def create_unique_constraint(self, *args, **kwargs):
             return None
 
         def add_column(self, *args, **kwargs):
@@ -147,6 +149,42 @@ def test_migration_backfills_existing_rows_to_earliest_active_administrator(monk
     monkeypatch.setattr(migration, "op", Recorder())
     migration.upgrade()
 
+    assert migration.down_revision == "b3d5f7a9c1e4"
+    assert set(created_tables) == {
+        "user_subscriptions",
+        "remote_accounts",
+        "user_subscription_sources",
+        "discovery_candidates",
+    }
+    assert list(created_tables).index("user_subscriptions") < list(created_tables).index("user_subscription_sources")
+    assert list(created_tables).index("remote_accounts") < list(created_tables).index("user_subscription_sources")
+    assert list(created_tables).index("remote_accounts") < list(created_tables).index("discovery_candidates")
+
+    binding_columns = {column.name for column in created_tables["user_subscription_sources"] if hasattr(column, "name")}
+    candidate_columns = {column.name for column in created_tables["discovery_candidates"] if hasattr(column, "name")}
+    assert {"user_id", "subscription_id"}.issubset(binding_columns)
+    assert "user_id" in candidate_columns
+    binding_constraints = {
+        constraint.name
+        for constraint in created_tables["user_subscription_sources"]
+        if getattr(constraint, "name", None)
+    }
+    candidate_constraints = {
+        constraint.name
+        for constraint in created_tables["discovery_candidates"]
+        if getattr(constraint, "name", None)
+    }
+    assert {
+        "fk_user_subscription_sources_membership_owner",
+        "fk_user_subscription_sources_source_subscription",
+        "fk_user_subscription_sources_remote_account_owner",
+    }.issubset(binding_constraints)
+    assert {
+        "fk_discovery_candidates_account_owner",
+        "fk_discovery_candidates_membership_owner",
+        "ck_discovery_candidates_membership_subscription",
+    }.issubset(candidate_constraints)
+
     backfills = [statement for statement in statements if "INSERT INTO user_subscriptions" in statement]
     assert len(backfills) == 1
     backfill = backfills[0]
@@ -154,7 +192,10 @@ def test_migration_backfills_existing_rows_to_earliest_active_administrator(monk
     assert "is_admin IS TRUE" in backfill
     assert "ORDER BY created_at ASC, id ASC" in backfill
     assert "ON CONFLICT (user_id, subscription_id) DO NOTHING" in backfill
-    assert any("INSERT INTO user_subscription_sources" in statement for statement in statements)
+    source_backfills = [statement for statement in statements if "INSERT INTO user_subscription_sources" in statement]
+    assert len(source_backfills) == 1
+    assert "user_id, subscription_id" in source_backfills[0]
+    assert "membership.user_id, membership.subscription_id" in source_backfills[0]
     assert "credential_ciphertext" not in backfill
 
 
