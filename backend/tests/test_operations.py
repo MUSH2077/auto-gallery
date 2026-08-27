@@ -416,6 +416,7 @@ async def test_clear_jobs_deletes_history_but_preserves_active_task_authorities(
     )
     active_ids: set[UUID] = set()
     terminal_id = None
+    restore_authority_id = None
     try:
         async with async_session() as db:
             await db.execute(delete(TaskEvent))
@@ -436,6 +437,13 @@ async def test_clear_jobs_deletes_history_but_preserves_active_task_authorities(
                 status="complete",
             )
             terminal_id = terminal.id
+            restore_authority = await service.create_task(
+                kind="admin",
+                operation_type="admin-restore-validate",
+                title="Completed restore handoff authority",
+                status="complete",
+            )
+            restore_authority_id = restore_authority.id
             await db.commit()
 
             result = await admin_data.clear_entity_data("jobs", db)
@@ -445,6 +453,7 @@ async def test_clear_jobs_deletes_history_but_preserves_active_task_authorities(
             remaining = set((await verify_db.execute(select(TaskRun.id))).scalars())
             assert active_ids <= remaining
             assert terminal_id not in remaining
+            assert restore_authority_id in remaining
     finally:
         async with async_session() as db:
             await db.execute(delete(TaskEvent))

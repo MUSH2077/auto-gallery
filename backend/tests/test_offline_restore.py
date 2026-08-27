@@ -563,6 +563,104 @@ def test_validation_atomically_publishes_read_only_ready_request(tmp_path):
     assert resealed["state"] == "ready"
 
 
+def test_registered_validation_stages_attempt_without_publishing_host_readiness(tmp_path):
+    """A cancelled validation thread must not authorize an obsolete attempt."""
+    from app.services.offline_restore import publish_validated_upload, validate_upload
+
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _stage_archive_bytes(tmp_path, archive)
+    task_id = "00000000-0000-0000-0000-000000000004"
+
+    staged = validate_upload(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        task_id=task_id,
+        attempt=3,
+        publish_ready=False,
+    )
+
+    session = tmp_path / created["upload_id"]
+    assert staged["state"] == "validated"
+    assert not (session / "ready-request.json").exists()
+    assert (session / f"archive.{task_id}.attempt-3.tar.gz").is_file()
+    assert (session / f"payload.{task_id}.attempt-3/database.sql").is_file()
+
+    published = publish_validated_upload(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        task_id=task_id,
+        attempt=3,
+        staged=staged,
+    )
+    ready = json.loads((session / "ready-request.json").read_text())
+    assert published["state"] == "ready"
+    assert ready["attempt"] == 3
+    assert ready["archive"] == f"archive.{task_id}.attempt-3.tar.gz"
+    assert ready["payload"] == f"payload.{task_id}.attempt-3"
+
+
+def test_registered_validation_retry_removes_previous_attempt_candidates(tmp_path):
+    """Only the current validation attempt may consume persistent staging space."""
+    from app.services.offline_restore import validate_upload
+
+    archive = _archive_bytes({"database.sql": b"select 1;"})
+    created = _stage_archive_bytes(tmp_path, archive)
+    task_id = "00000000-0000-0000-0000-000000000014"
+    session = tmp_path / created["upload_id"]
+
+    validate_upload(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        task_id=task_id,
+        attempt=1,
+        publish_ready=False,
+    )
+    first_archive = session / f"archive.{task_id}.attempt-1.tar.gz"
+    first_payload = session / f"payload.{task_id}.attempt-1"
+    assert first_archive.is_file()
+    assert first_payload.is_dir()
+
+    validate_upload(
+        root=tmp_path,
+        upload_id=created["upload_id"],
+        task_id=task_id,
+        attempt=2,
+        publish_ready=False,
+    )
+
+    assert not first_archive.exists()
+    assert not first_payload.exists()
+    assert (session / f"archive.{task_id}.attempt-2.tar.gz").is_file()
+    assert (session / f"payload.{task_id}.attempt-2").is_dir()
+
+
+def test_failed_registered_validation_removes_current_attempt_candidates(tmp_path):
+    """A rejected archive must not retain its assembled attempt archive or payload."""
+    from app.services.offline_restore import RestoreValidationError, validate_upload
+
+    archive = _archive_bytes(
+        {"database.sql": b"select 1;"},
+        manifest_entries={
+            "database.sql": {"size": 9, "sha256": "0" * 64},
+        },
+    )
+    created = _stage_archive_bytes(tmp_path, archive)
+    task_id = "00000000-0000-0000-0000-000000000015"
+    session = tmp_path / created["upload_id"]
+
+    with pytest.raises(RestoreValidationError, match="hash does not match"):
+        validate_upload(
+            root=tmp_path,
+            upload_id=created["upload_id"],
+            task_id=task_id,
+            attempt=1,
+            publish_ready=False,
+        )
+
+    assert not (session / f"archive.{task_id}.attempt-1.tar.gz").exists()
+    assert not (session / f"payload.{task_id}.attempt-1").exists()
+
+
 def _upload_all(root: Path, created: dict, archive: bytes, *, chunk_size: int = 32):
     from app.services.offline_restore import put_upload_chunk
 
@@ -602,6 +700,154 @@ def test_created_backup_manifest_carries_every_file_hash(tmp_path, monkeypatch):
             "sha256": _sha256(expected),
         }
     }
+
+
+def test_registered_backup_stage_neither_publishes_nor_prunes(tmp_path, monkeypatch):
+    """A cancelled backup thread may leave a candidate, never a visible backup."""
+    from app.api.admin import backup
+
+    source = tmp_path / "config-source"
+    source.mkdir()
+    (source / "settings.json").write_text("{}", encoding="utf-8")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    for index in range(11):
+        (backup_dir / f"auto-gallery-backup_20260827_1200{index:02d}.tar.gz").write_bytes(b"old")
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setenv("APP_CONFIG_ROOT", str(source))
+    pending_dir = backup_dir / ".pending"
+    pending_dir.mkdir()
+    stale = pending_dir / (
+        "auto-gallery-backup_20260827_010101.tar.gz."
+        "00000000-0000-0000-0000-000000000005-attempt-1.pending"
+    )
+    stale.write_bytes(b"stale")
+
+    staged = backup._create_backup_sync(
+        {"contents": ["app-config"]},
+        publish=False,
+        candidate_token="00000000-0000-0000-0000-000000000005-attempt-2",
+    )
+
+    assert len(backup._list_backup_files()) == 11
+    assert not (backup_dir / staged["filename"]).exists()
+    assert Path(staged["_candidate_path"]).is_file()
+    assert not stale.exists()
+    assert list(pending_dir.iterdir()) == [Path(staged["_candidate_path"])]
+
+    published = backup.publish_backup_candidate(staged)
+    assert (backup_dir / published["filename"]).is_file()
+    assert "_candidate_path" not in published
+    assert len(backup._list_backup_files()) == 10
+
+
+def test_registered_backup_rejects_symlinked_pending_directory(tmp_path, monkeypatch):
+    """Candidate cleanup must never follow .pending outside the backup root."""
+    from app.api.admin import backup
+
+    source = tmp_path / "config-source"
+    source.mkdir()
+    (source / "settings.json").write_text("{}", encoding="utf-8")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "preserve.pending"
+    victim.write_bytes(b"preserve")
+    (backup_dir / ".pending").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setenv("APP_CONFIG_ROOT", str(source))
+
+    with pytest.raises(OSError):
+        backup._create_backup_sync(
+            {"contents": ["app-config"]},
+            publish=False,
+            candidate_token="00000000-0000-0000-0000-000000000005-attempt-3",
+        )
+
+    assert victim.read_bytes() == b"preserve"
+
+
+def test_registered_backup_publish_rejects_replaced_pending_directory(
+    tmp_path,
+    monkeypatch,
+):
+    """Atomic publication must reopen .pending without following replacement."""
+    from app.api.admin import backup
+
+    source = tmp_path / "config-source"
+    source.mkdir()
+    (source / "settings.json").write_text("{}", encoding="utf-8")
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setenv("APP_CONFIG_ROOT", str(source))
+    staged = backup._create_backup_sync(
+        {"contents": ["app-config"]},
+        publish=False,
+        candidate_token="00000000-0000-0000-0000-000000000005-attempt-4",
+    )
+
+    pending = backup_dir / ".pending"
+    original_pending = backup_dir / ".pending-original"
+    pending.rename(original_pending)
+    outside = tmp_path / "outside-publish"
+    outside.mkdir()
+    external = outside / Path(staged["_candidate_path"]).name
+    external.write_bytes(b"external")
+    pending.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        backup.publish_backup_candidate(staged)
+
+    assert external.read_bytes() == b"external"
+    assert (original_pending / external.name).is_file()
+
+
+def test_registered_backup_exception_cleanup_uses_original_pending_directory(
+    tmp_path,
+    monkeypatch,
+):
+    """Failure cleanup must retain its no-follow directory authority."""
+    from app.api.admin import backup
+
+    source = tmp_path / "config-source"
+    source.mkdir()
+    (source / "settings.json").write_text("{}", encoding="utf-8")
+    backup_dir = tmp_path / "backups"
+    outside = tmp_path / "outside-cleanup"
+    outside.mkdir()
+    original_pending = backup_dir / ".pending-original"
+    external: Path | None = None
+    real_copytree = backup.shutil.copytree
+
+    def replace_pending_then_fail(*args, **kwargs):
+        nonlocal external
+        pending = backup_dir / ".pending"
+        pending.rename(original_pending)
+        candidate_name = next(original_pending.iterdir()).name
+        external = outside / candidate_name
+        external.write_bytes(b"external")
+        pending.symlink_to(outside, target_is_directory=True)
+        raise RuntimeError("injected backup failure")
+
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setenv("APP_CONFIG_ROOT", str(source))
+    monkeypatch.setattr(backup.shutil, "copytree", replace_pending_then_fail)
+    try:
+        with pytest.raises(RuntimeError, match="injected backup failure"):
+            backup._create_backup_sync(
+                {"contents": ["app-config"]},
+                publish=False,
+                candidate_token=(
+                    "00000000-0000-0000-0000-000000000005-attempt-5"
+                ),
+            )
+    finally:
+        monkeypatch.setattr(backup.shutil, "copytree", real_copytree)
+
+    assert external is not None
+    assert external.read_bytes() == b"external"
+    assert list(original_pending.iterdir()) == []
 
 
 API_PREFIX = "offline_restore_"
@@ -934,6 +1180,41 @@ async def test_validation_prepare_attachment_adopts_exact_task_after_loss_and_re
             assert tasks[0].meta[operations.ADMIN_DISPATCH_META_KEY][
                 "publication_state"
             ] == operations.ADMIN_DISPATCH_PENDING
+
+        # A ready filesystem handoff whose TaskRun row was externally lost can
+        # be reattached to a fresh durable validation attempt without upload.
+        session_dir = tmp_path / "staging" / created["upload_id"]
+        metadata_path = session_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["state"] = "ready"
+        metadata["validation_task_id"] = accepted["task_id"]
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        ready_path = session_dir / "ready-request.json"
+        ready_path.write_text("{}", encoding="utf-8")
+        ready_path.chmod(0o444)
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(
+                delete(TaskRun).where(TaskRun.id == UUID(accepted["task_id"]))
+            )
+            await db.commit()
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            replacement_response = await client.post(path, headers=headers)
+        assert replacement_response.status_code == 202
+        replacement = replacement_response.json()
+        assert replacement["task_id"] != accepted["task_id"]
+        assert not ready_path.exists()
+        recovered = offline_restore.get_upload_session(
+            root=tmp_path / "staging",
+            upload_id=created["upload_id"],
+            token=created["upload_token"],
+        )
+        assert recovered["state"] == "validating"
+        assert recovered["validation_task_id"] == replacement["task_id"]
     finally:
         async with async_session() as db:
             await db.execute(delete(TaskEvent))

@@ -14,6 +14,35 @@ from sqlalchemy import delete, func, select, text
 PREFIX = "final_control_plane_"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", ["all", "jobs", "subscriptions", "creators"])
+async def test_destructive_clear_locks_pipeline_rows_in_global_order(entity):
+    """Clear cannot invert the artifact/download/import/TaskRun lock order."""
+    from app.services.admin_data import _lock_pipeline_rows_for_clear
+
+    class RecordingSession:
+        def __init__(self):
+            self.statements: list[str] = []
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+
+    db = RecordingSession()
+    await _lock_pipeline_rows_for_clear(entity, db)  # type: ignore[arg-type]
+    locked_tables = [
+        table
+        for statement in db.statements
+        for table in ("storage_artifacts", "download_jobs", "import_jobs", "task_runs")
+        if f"FROM {table}" in statement
+    ]
+    assert locked_tables == [
+        "storage_artifacts",
+        "download_jobs",
+        "import_jobs",
+        "task_runs",
+    ]
+
+
 async def _clear_admin_tasks(db) -> None:
     from app.models import TaskEvent, TaskRun
 
@@ -39,10 +68,11 @@ async def test_registered_disk_import_uses_taskrun_attempt_when_redis_is_unavail
     monkeypatch,
 ):
     """A DB-current disk import must neither acquire nor heartbeat a Redis fence."""
+    from app.api.admin import settings as admin_settings
     from app.database import async_session, engine
     from app.jobs.admin_operations import _run_registered_admin_operation
     from app.models import Creator, TaskRun
-    from app.services import disk_import, operations
+    from app.services import disk_import, operations, redis_client
 
     task_id: UUID | None = None
     creator_name = f"{PREFIX}disk_{uuid4()}"
@@ -51,7 +81,8 @@ async def test_registered_disk_import_uses_taskrun_attempt_when_redis_is_unavail
     def redis_forbidden():
         raise redis_lib.ConnectionError("redis observability unavailable")
 
-    monkeypatch.setattr("app.services.redis_client.get_redis", redis_forbidden)
+    monkeypatch.setattr(redis_client, "get_redis", redis_forbidden)
+    monkeypatch.setattr(admin_settings, "get_redis", redis_forbidden)
 
     async def reconcile(db, _options, progress_cb, *, publisher_checkpoint, **_kwargs):
         db.add(Creator(name=creator_name, display_name=creator_name))

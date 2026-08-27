@@ -81,7 +81,9 @@ elif "ALTER DATABASE ag_rollback_" in joined and "RENAME TO" in joined:
     state = "rolled-back"
 if state_path is not None:
     state_path.write_text(state)
-if "POSTGRES_USER" in joined and "POSTGRES_DB" in joined and "pg_dump" not in joined:
+if "--set=offline_restore_phase=task-authority" in args:
+    sys.stdout.write(os.environ.get("FAKE_TASK_AUTHORITY", "complete|1\\n"))
+elif "POSTGRES_USER" in joined and "POSTGRES_DB" in joined and "pg_dump" not in joined:
     sys.stdout.write(os.environ.get("FAKE_POSTGRES_IDENTITY", "autogallery\\nautogallery\\n"))
 elif "--set=offline_restore_phase=database-identities" in args:
     live = os.environ.get(
@@ -160,6 +162,7 @@ def _fixture(tmp_path: Path):
         "request_id": request_id,
         "upload_id": request_id,
         "task_id": "00000000-0000-0000-0000-000000000456",
+        "attempt": 1,
         "archive": "archive.tar.gz",
         "payload": "payload",
         "archive_size": archive.stat().st_size,
@@ -276,6 +279,51 @@ def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path)
     assert rolled_back.returncode == 0, rolled_back.stderr
     assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
     assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+
+
+def test_host_rejects_ready_request_from_non_current_task_attempt(tmp_path):
+    """A transient authority rejection happens before irreversible retry state."""
+    fixture = _fixture(tmp_path)
+    fixture["env"]["FAKE_TASK_AUTHORITY"] = "failed|2\n"
+
+    result = _run(fixture)
+
+    assert result.returncode == 2
+    assert not (
+        fixture["receipts"] / f"{fixture['request_id']}.json"
+    ).exists()
+    assert not (
+        fixture["receipts"] / "rollbacks" / fixture["request_id"]
+    ).exists()
+    compose_calls = fixture["log"].read_text(encoding="utf-8")
+    assert "--set=offline_restore_phase=task-authority" in compose_calls
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+
+    fixture["env"]["FAKE_TASK_AUTHORITY"] = "complete|1\n"
+    retry = _run(fixture)
+    assert retry.returncode == 0, retry.stderr
+    assert (fixture["live_app"] / "value.txt").read_text() == "new-app"
+
+
+def test_initial_postgres_probe_failure_allows_same_request_retry(tmp_path):
+    """Read-only initialization failure must not poison the request identity."""
+    fixture = _fixture(tmp_path)
+    fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = "exec -T postgres"
+
+    rejected = _run(fixture)
+    assert rejected.returncode == 2
+    assert "Restore request rejected" in rejected.stderr
+    assert not (
+        fixture["receipts"] / "rollbacks" / fixture["request_id"]
+    ).exists()
+
+    fixture["env"].pop("FAKE_COMPOSE_FAIL_CONTAINS")
+    retried = _run(fixture)
+    assert retried.returncode == 0, retried.stderr
+    receipt = json.loads(
+        (fixture["receipts"] / f"{fixture['request_id']}.json").read_text()
+    )
+    assert receipt["status"] == "success"
 
 
 @pytest.mark.parametrize("phase", PHASES)
@@ -1634,6 +1682,13 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
                 "INSERT INTO restore_marker VALUES ('old');"
                 "CREATE TABLE alembic_version(version_num varchar(32) NOT NULL);"
                 "INSERT INTO alembic_version VALUES ('disposable');"
+                "CREATE TABLE task_runs("
+                "id uuid PRIMARY KEY, kind text NOT NULL, status text NOT NULL, "
+                "operation_type text NOT NULL, meta jsonb NOT NULL);"
+                "INSERT INTO task_runs VALUES ("
+                "'00000000-0000-0000-0000-000000000456', "
+                "'admin', 'complete', 'admin-restore-validate', "
+                "'{\"admin_dispatch\":{\"attempt\":1}}'::jsonb);"
             ),
         )
         command(

@@ -10,6 +10,7 @@ import type {
 } from "@/lib/api/types";
 
 const ACTIVE_STATUSES = new Set(["enqueued", "running", "recovering", "paused"]);
+const RETRYABLE_STATUSES = new Set(["failed", "stale", "cancelled"]);
 const ADMIN_OPERATION_POLL_MS = 1_000;
 
 export interface AdminOperationController<TResult, TVariables = void> {
@@ -23,6 +24,7 @@ export interface AdminOperationController<TResult, TVariables = void> {
   isActive: boolean;
   isLatestLoading: boolean;
   canStart: boolean;
+  canRetry: boolean;
   startError: Error | null;
   taskError: Error | null;
   latestError: Error | null;
@@ -48,14 +50,18 @@ export function useAdminOperation<TResult, TVariables = void>({
 }): AdminOperationController<TResult, TVariables> {
   const queryClient = useQueryClient();
   const identity = `${operationType}:${scope}`;
-  const [startedTask, setStartedTask] = useState<{ identity: string; taskId: string } | null>(
+  const [startedTasks, setStartedTasks] = useState<Record<string, string>>(
     () => initialAccepted
-      ? { identity, taskId: initialAccepted.task_id }
-      : null,
+      ? { [identity]: initialAccepted.task_id }
+      : {},
   );
-  const [displayedTaskId, setDisplayedTaskId] = useState<string | null>(
-    () => initialAccepted?.task_id ?? null,
+  const [displayedTasks, setDisplayedTasks] = useState<Record<string, string>>(
+    () => initialAccepted
+      ? { [identity]: initialAccepted.task_id }
+      : {},
   );
+  const pendingStartIdentity = useRef<string | null>(null);
+  const pendingRetryIdentity = useRef<string | null>(null);
   const notifiedCompletion = useRef<string | null>(null);
   const reconciledTerminal = useRef<string | null>(null);
   const snapshotKey = useMemo(
@@ -71,7 +77,8 @@ export function useAdminOperation<TResult, TVariables = void>({
     refetchOnWindowFocus: false,
   });
   const current = latestQuery.data?.current ?? null;
-  const startedTaskId = startedTask?.identity === identity ? startedTask.taskId : null;
+  const startedTaskId = startedTasks[identity] ?? null;
+  const displayedTaskId = displayedTasks[identity] ?? null;
   const taskId = startedTaskId ?? current?.task_id ?? displayedTaskId;
 
   const taskQuery = useQuery({
@@ -98,10 +105,12 @@ export function useAdminOperation<TResult, TVariables = void>({
   const startMutation = useMutation({
     mutationFn: startOperation,
     onSuccess: (accepted) => {
+      const acceptedIdentity = pendingStartIdentity.current ?? identity;
+      pendingStartIdentity.current = null;
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
-      setStartedTask({ identity, taskId: accepted.task_id });
-      setDisplayedTaskId(accepted.task_id);
+      setStartedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
+      setDisplayedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -113,6 +122,7 @@ export function useAdminOperation<TResult, TVariables = void>({
       );
     },
     onError: () => {
+      pendingStartIdentity.current = null;
       void latestQuery.refetch();
     },
   });
@@ -120,13 +130,16 @@ export function useAdminOperation<TResult, TVariables = void>({
   const retryMutation = useMutation({
     mutationFn: () => {
       if (!taskId) throw new Error("Missing TaskRun id");
+      pendingRetryIdentity.current = identity;
       return retryTask(taskId);
     },
     onSuccess: (accepted) => {
+      const acceptedIdentity = pendingRetryIdentity.current ?? identity;
+      pendingRetryIdentity.current = null;
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
-      setStartedTask({ identity, taskId: accepted.task_id });
-      setDisplayedTaskId(accepted.task_id);
+      setStartedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
+      setDisplayedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -141,6 +154,7 @@ export function useAdminOperation<TResult, TVariables = void>({
       });
     },
     onError: () => {
+      pendingRetryIdentity.current = null;
       void latestQuery.refetch();
     },
   });
@@ -156,10 +170,13 @@ export function useAdminOperation<TResult, TVariables = void>({
       return;
     }
     reconciledTerminal.current = `${identity}:${taskId}`;
-    setDisplayedTaskId(taskId);
-    setStartedTask((active) => (
-      active?.identity === identity && active.taskId === taskId ? null : active
-    ));
+    setDisplayedTasks((tasks) => ({ ...tasks, [identity]: taskId }));
+    setStartedTasks((tasks) => {
+      if (tasks[identity] !== taskId) return tasks;
+      const next = { ...tasks };
+      delete next[identity];
+      return next;
+    });
     if (task.status === "complete") {
       const completed: AdminOperationSnapshot<TResult> | null = task.result
         ? {
@@ -208,14 +225,19 @@ export function useAdminOperation<TResult, TVariables = void>({
       : null;
   const snapshot = completedTaskSnapshot ?? latestQuery.data?.snapshot ?? null;
   const isActive = !!task && ACTIVE_STATUSES.has(task.status);
-  const hasRetryableFailure = task?.status === "failed";
+  const hasRetryableFailure = !!task && RETRYABLE_STATUSES.has(task.status);
   const canStart = !latestQuery.isLoading
     && !latestQuery.isError
     && !startMutation.isPending
+    && !retryMutation.isPending
     && !isActive
     && !hasRetryableFailure
     && startedTaskId === null
     && current === null;
+  const canRetry = !!taskId
+    && hasRetryableFailure
+    && !startMutation.isPending
+    && !retryMutation.isPending;
 
   return {
     operationType,
@@ -228,13 +250,19 @@ export function useAdminOperation<TResult, TVariables = void>({
     isActive,
     isLatestLoading: latestQuery.isLoading,
     canStart,
+    canRetry,
     startError: startMutation.error,
     taskError: taskQuery.error,
     latestError: latestQuery.error,
     start: (variables) => {
-      if (canStart) startMutation.mutate(variables);
+      if (canStart) {
+        pendingStartIdentity.current = identity;
+        startMutation.mutate(variables);
+      }
     },
-    retry: retryMutation.mutate,
+    retry: () => {
+      if (canRetry) retryMutation.mutate();
+    },
     retryLatest: () => { void latestQuery.refetch(); },
   };
 }

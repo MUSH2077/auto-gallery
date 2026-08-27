@@ -491,10 +491,19 @@ def seal_upload_for_validation(
         ):
             raise RestoreConflict("Restore validation has already started")
         if metadata["state"] == "ready":
-            if current_task != str(task_id) or not (session / "ready-request.json").is_file():
+            if current_task == str(task_id) and (session / "ready-request.json").is_file():
+                return _public_session(metadata)
+            if current_task != replace_task_id or current_task == str(task_id):
                 raise RestoreConflict("Restore ready handoff is inconsistent")
-            return _public_session(metadata)
-        if metadata["state"] not in {"uploaded", "validating", "validation_failed"}:
+            # The attached durable TaskRun was lost. Revalidation owns the
+            # existing chunks and invalidates the obsolete host command.
+            (session / "ready-request.json").unlink(missing_ok=True)
+        if metadata["state"] not in {
+            "uploaded",
+            "validating",
+            "validation_failed",
+            "ready",
+        }:
             raise RestoreConflict("Restore upload is not complete")
         metadata["validation_task_id"] = str(task_id)
         metadata["state"] = "validating"
@@ -576,8 +585,78 @@ def _hash_stream(source) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, Any]:
-    """Assemble, validate, safely extract, and atomically publish host readiness."""
+def _validation_attempt_token(task_id: str, attempt: int) -> str:
+    try:
+        normalized_task = str(UUID(str(task_id)))
+        normalized_attempt = int(attempt)
+    except (TypeError, ValueError) as exc:
+        raise RestoreValidationError("Restore validation attempt is invalid") from exc
+    if normalized_task != str(task_id) or normalized_attempt < 1:
+        raise RestoreValidationError("Restore validation attempt is invalid")
+    return f"{normalized_task}.attempt-{normalized_attempt}"
+
+
+_VALIDATION_ATTEMPT_TOKEN_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"\.attempt-[1-9][0-9]*"
+)
+
+
+def _validation_candidate_token(name: str) -> str | None:
+    core = name
+    if core.startswith(".") and core.endswith(".tmp"):
+        core = core[1:-4]
+    if core.startswith("archive.") and core.endswith(".tar.gz"):
+        token = core[len("archive.") : -len(".tar.gz")]
+    elif core.startswith("payload."):
+        token = core[len("payload.") :]
+    else:
+        return None
+    return token if _VALIDATION_ATTEMPT_TOKEN_RE.fullmatch(token) else None
+
+
+def _remove_validation_candidate(path: Path) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _clear_validation_attempt_candidates(
+    session: Path,
+    *,
+    keep_token: str | None = None,
+) -> None:
+    """Bound retry staging to the current attempt while holding session lock."""
+
+    for candidate in session.iterdir():
+        token = _validation_candidate_token(candidate.name)
+        if token is not None and token != keep_token:
+            _remove_validation_candidate(candidate)
+
+
+def validate_upload(
+    *,
+    root: Path,
+    upload_id: str,
+    task_id: str,
+    attempt: int | None = None,
+    publish_ready: bool = True,
+) -> dict[str, Any]:
+    """Assemble and validate an upload, optionally staging an attempt only.
+
+    A registered worker uses ``publish_ready=False`` so cancellation of its
+    ``to_thread`` await cannot let the still-running thread authorize a host
+    restore.  Its caller publishes readiness only after an exact TaskRun fence.
+    """
+
+    if not publish_ready and attempt is None:
+        raise RestoreValidationError("Registered restore validation needs an attempt")
+    attempt_token = (
+        _validation_attempt_token(task_id, int(attempt))
+        if attempt is not None
+        else None
+    )
 
     root = Path(root)
     session = _session_dir(root, upload_id)
@@ -586,18 +665,32 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
         _reconcile_durable_chunks(session, metadata)
         if metadata["state"] == "ready" and (session / "ready-request.json").is_file():
             ready = json.loads((session / "ready-request.json").read_text())
-            return {
-                "state": "ready",
-                "request_id": ready["request_id"],
-                "manifest": ready["manifest"],
-                "host_command": ready["host_command"],
-                "message": "Restore request is ready for offline host execution",
-            }
-        if metadata["state"] not in {"uploaded", "validating", "validation_failed"}:
+            if publish_ready or (
+                ready.get("task_id") == str(task_id)
+                and ready.get("attempt") == attempt
+            ):
+                return {
+                    "state": "ready",
+                    "request_id": ready["request_id"],
+                    "manifest": ready["manifest"],
+                    "host_command": ready["host_command"],
+                    "message": "Restore request is ready for offline host execution",
+                    "_already_published": True,
+                }
+        allowed_states = {"uploaded", "validating", "validation_failed"}
+        if not publish_ready:
+            allowed_states.add("ready")
+        if metadata["state"] not in allowed_states:
             raise RestoreConflict("Restore upload is not complete")
         attached_task = metadata.get("validation_task_id")
         if attached_task is not None and attached_task != str(task_id):
             raise RestoreForbidden("Restore validation TaskRun does not own this upload")
+        if not publish_ready:
+            # A new attempt invalidates the prior host handoff in the staging
+            # directory. The host independently rechecks this attempt against
+            # the durable TaskRun before any destructive work.
+            (session / "ready-request.json").unlink(missing_ok=True)
+            _clear_validation_attempt_candidates(session)
         chunks = list(metadata.get("chunks") or [])
         if len(chunks) != int(metadata["total_chunks"]):
             raise RestoreConflict("Restore upload is incomplete")
@@ -606,11 +699,24 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
         metadata["updated_at"] = _now()
         _atomic_json(session / "metadata.json", metadata)
 
-        archive_temp = session / "archive.tar.gz.tmp"
-        archive_path = session / "archive.tar.gz"
-        payload_temp = session / "payload.tmp"
-        payload = session / "payload"
+        archive_name = (
+            f"archive.{attempt_token}.tar.gz"
+            if attempt_token is not None
+            else "archive.tar.gz"
+        )
+        payload_name = (
+            f"payload.{attempt_token}" if attempt_token is not None else "payload"
+        )
+        archive_path = session / archive_name
+        archive_temp = session / f".{archive_name}.tmp"
+        payload = session / payload_name
+        payload_temp = session / f".{payload_name}.tmp"
         try:
+            archive_temp.unlink(missing_ok=True)
+            if not publish_ready:
+                archive_path.unlink(missing_ok=True)
+                if payload.exists():
+                    shutil.rmtree(payload)
             digest = hashlib.sha256()
             assembled_size = 0
             with open(archive_temp, "xb") as output:
@@ -715,8 +821,9 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                 "request_id": upload_id,
                 "upload_id": upload_id,
                 "task_id": str(task_id),
-                "archive": "archive.tar.gz",
-                "payload": "payload",
+                "attempt": attempt,
+                "archive": archive_name,
+                "payload": payload_name,
                 "archive_size": assembled_size,
                 "archive_sha256": archive_hash,
                 "manifest": manifest,
@@ -724,6 +831,15 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                 "validated_at": _now(),
                 "host_command": host_command,
             }
+            if not publish_ready:
+                return {
+                    "state": "validated",
+                    "request_id": upload_id,
+                    "manifest": manifest,
+                    "host_command": host_command,
+                    "message": "Restore archive validated; awaiting attempt fence",
+                    "_ready": ready,
+                }
             ready_path = session / "ready-request.json"
             _atomic_json(ready_path, ready, mode=0o444)
             metadata["state"] = "ready"
@@ -743,11 +859,73 @@ def validate_upload(*, root: Path, upload_id: str, task_id: str) -> dict[str, An
                     temporary.unlink()
             if payload_temp.exists():
                 shutil.rmtree(payload_temp)
+            if not publish_ready:
+                _remove_validation_candidate(archive_path)
+                _remove_validation_candidate(payload)
             failed = _read_metadata(session)
             failed["state"] = "validation_failed"
             failed["updated_at"] = _now()
             _atomic_json(session / "metadata.json", failed)
             raise
+
+
+def publish_validated_upload(
+    *,
+    root: Path,
+    upload_id: str,
+    task_id: str,
+    attempt: int,
+    staged: dict[str, Any],
+) -> dict[str, Any]:
+    """Publish a staged host handoff for exactly the supplied attempt.
+
+    The registered async handler must call this synchronously, without an await,
+    immediately after locking and fencing its TaskRun row.
+    """
+
+    token = _validation_attempt_token(task_id, attempt)
+    ready = staged.get("_ready")
+    if staged.get("_already_published"):
+        return {
+            key: value for key, value in staged.items() if not key.startswith("_")
+        }
+    if not isinstance(ready, dict):
+        raise RestoreValidationError("Restore validation candidate is missing")
+    archive_name = f"archive.{token}.tar.gz"
+    payload_name = f"payload.{token}"
+    if (
+        ready.get("task_id") != str(task_id)
+        or ready.get("attempt") != int(attempt)
+        or ready.get("archive") != archive_name
+        or ready.get("payload") != payload_name
+    ):
+        raise RestoreForbidden("Restore validation candidate attempt is stale")
+
+    session = _session_dir(Path(root), upload_id)
+    with _session_lock(session):
+        metadata = _read_metadata(session)
+        if metadata.get("validation_task_id") != str(task_id):
+            raise RestoreForbidden("Restore validation TaskRun does not own this upload")
+        archive = session / archive_name
+        payload = session / payload_name
+        if archive.is_symlink() or not archive.is_file():
+            raise RestoreValidationError("Validated restore archive is missing")
+        if payload.is_symlink() or not payload.is_dir():
+            raise RestoreValidationError("Validated restore payload is missing")
+        _atomic_json(session / "ready-request.json", ready, mode=0o444)
+        metadata["state"] = "ready"
+        metadata["request_id"] = upload_id
+        metadata["validation_attempt"] = int(attempt)
+        metadata["updated_at"] = _now()
+        _atomic_json(session / "metadata.json", metadata)
+        _clear_validation_attempt_candidates(session, keep_token=token)
+    return {
+        "state": "ready",
+        "request_id": upload_id,
+        "manifest": ready["manifest"],
+        "host_command": ready["host_command"],
+        "message": "Restore request is ready for offline host execution",
+    }
 
 
 def read_restore_receipt(*, staging: Path, receipts: Path, request_id: str, token: str) -> dict[str, Any]:

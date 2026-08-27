@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,6 +32,8 @@ ADMIN_DISPATCH_PENDING = "pending"
 ADMIN_DISPATCH_PUBLISHED = "published"
 ADMIN_DISPATCH_FAILED = "failed"
 ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS = 30
+ADMIN_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 10
+ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS = 90
 ADMIN_DISPATCH_RECOVERY_LIMIT = 25
 ADMIN_DISPATCH_GRACE_SECONDS = 15
 ADMIN_DISPATCH_RETRY_MIN_SECONDS = 30
@@ -937,6 +939,106 @@ async def _lock_scope(db: AsyncSession, scope_key: str) -> None:
     await db.execute(select(sql_func.pg_advisory_xact_lock(_advisory_lock_id(scope_key))))
 
 
+def _admin_execution_lock_id(scope_key: str) -> int:
+    return _advisory_lock_id(f"admin-execution:{scope_key}")
+
+
+async def _try_acquire_admin_execution_lease(
+    db: AsyncSession,
+    scope_key: str,
+) -> bool:
+    """Acquire the session lock proving no prior attempt can still execute."""
+
+    return bool(
+        (
+            await db.execute(
+                select(
+                    sql_func.pg_try_advisory_lock(
+                        _admin_execution_lock_id(scope_key)
+                    )
+                )
+            )
+        ).scalar_one()
+    )
+
+
+async def _release_admin_execution_lease(
+    db: AsyncSession,
+    scope_key: str,
+) -> None:
+    """Release a session lock without masking a business-path exception."""
+
+    try:
+        await db.rollback()
+    except Exception:
+        logger.warning(
+            "Unable to roll back administrator execution lease session task=%s",
+            scope_key,
+            exc_info=True,
+        )
+    try:
+        await db.execute(
+            select(sql_func.pg_advisory_unlock(_admin_execution_lock_id(scope_key)))
+        )
+        await db.commit()
+    except Exception:
+        # A dead connection has already released every session advisory lock.
+        logger.warning(
+            "Unable to explicitly release administrator execution lease task=%s",
+            scope_key,
+            exc_info=True,
+        )
+
+
+@asynccontextmanager
+async def _admin_execution_lease_on_session(
+    db: AsyncSession,
+    scope_key: str,
+):
+    acquired = await _try_acquire_admin_execution_lease(db, scope_key)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            await _release_admin_execution_lease(db, scope_key)
+        else:
+            await db.rollback()
+
+
+@asynccontextmanager
+async def admin_operation_execution_lease(task_id: UUID | str):
+    """Hold one PostgreSQL session lease for the complete worker execution."""
+
+    from app.database import engine
+    from app.models.task_run import TaskRun
+
+    task_uuid = UUID(str(task_id))
+    async with engine.connect() as lease_connection:
+        async with AsyncSession(
+            bind=lease_connection,
+            expire_on_commit=False,
+        ) as lease_db:
+            task = await lease_db.get(TaskRun, task_uuid)
+            scope_key = _scope_for_task(task) if task is not None else None
+            if task is None or task.kind != "admin" or not scope_key:
+                raise AdminOperationAttemptRejected(
+                    "Administrator operation has no registered execution scope"
+                )
+            await lease_db.rollback()
+            async with _admin_execution_lease_on_session(
+                lease_db,
+                scope_key,
+            ) as acquired:
+                if not acquired:
+                    raise AdminOperationAttemptRejected(
+                        "Administrator operation already has a live execution lease"
+                    )
+                # Binding the session to the explicit connection keeps the
+                # session-level lock checked out across heartbeat commits.
+                await lease_db.commit()
+                yield lease_db
+
+
 async def _active_scope_owner(db: AsyncSession, scope_key: str, *, exclude=None):
     from app.models.task_run import TaskRun
 
@@ -1060,83 +1162,168 @@ async def prepare_admin_operation_retry(
 ) -> PreparedAdminDispatch:
     """Commit one replacement attempt before its transport handoff."""
 
-    from app.database import async_session
+    from app.database import engine
+
+    task_uuid = UUID(str(task_id))
+    async with engine.connect() as connection:
+        async with AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+        ) as db:
+            return await _prepare_admin_operation_retry_session(db, task_uuid)
+
+
+async def _prepare_admin_operation_retry_session(
+    db: AsyncSession,
+    task_uuid: UUID,
+) -> PreparedAdminDispatch:
     from app.models.task_run import TaskRun
     from app.services.tasks import TaskService
 
-    task_uuid = UUID(str(task_id))
-    async with async_session() as db:
-        initial = await db.get(TaskRun, task_uuid)
-        if initial is None or initial.kind != "admin":
-            raise HTTPException(status_code=404, detail="Task not found")
-        current_dispatch = _admin_dispatch(initial)
-        if current_dispatch is None:
+    initial = await db.get(TaskRun, task_uuid)
+    if initial is None or initial.kind != "admin":
+        raise HTTPException(status_code=404, detail="Task not found")
+    current_dispatch = _admin_dispatch(initial)
+    if current_dispatch is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This legacy admin operation cannot be durably retried",
+        )
+    scope_key = str(current_dispatch.get("scope_key") or "")
+    await _lock_scope(db, scope_key)
+    async with _admin_execution_lease_on_session(
+        db,
+        scope_key,
+    ) as acquired:
+        if not acquired:
             raise HTTPException(
-                status_code=400,
-                detail="This legacy admin operation cannot be durably retried",
+                status_code=409,
+                detail="Previous administrator operation attempt is still executing",
             )
-        scope_key = str(current_dispatch.get("scope_key") or "")
-        await _lock_scope(db, scope_key)
-        task = (
+        return await _prepare_admin_operation_retry_locked(
+            db,
+            task_uuid=task_uuid,
+            initial=initial,
+            current_dispatch=current_dispatch,
+            scope_key=scope_key,
+            task_model=TaskRun,
+            task_service=TaskService(db),
+        )
+
+
+async def _prepare_admin_operation_retry_locked(
+    db: AsyncSession,
+    *,
+    task_uuid: UUID,
+    initial,
+    current_dispatch: dict[str, Any],
+    scope_key: str,
+    task_model,
+    task_service,
+) -> PreparedAdminDispatch:
+    """Rotate a failed attempt while its scope and execution leases are held."""
+
+    dedup_scan = None
+    if initial.operation_type == "asset-dedup-scan":
+        from app.models.asset_dedup import AssetDedupScan
+
+        scan_id = (current_dispatch.get("options") or {}).get("scan_id")
+        try:
+            scan_uuid = UUID(str(scan_id))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Asset dedup retry has no valid scan",
+            ) from exc
+        dedup_scan = (
             await db.execute(
-                select(TaskRun)
-                .where(TaskRun.id == task_uuid)
-                .with_for_update(of=TaskRun)
+                select(AssetDedupScan)
+                .where(AssetDedupScan.id == scan_uuid)
+                .with_for_update(of=AssetDedupScan)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if task.status not in {"failed", "stale", "cancelled"}:
+        if dedup_scan is None:
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "code": "invalid_task_action",
-                    "action": "retry",
-                    "status": task.status,
-                    "message": f"Task is {task.status}; retry is only available after failure",
-                },
+                detail="Asset dedup scan no longer exists",
             )
-        owner = await _active_scope_owner(db, scope_key, exclude=task.id)
-        if owner is not None:
+    task = (
+        await db.execute(
+            select(task_model)
+            .where(task_model.id == task_uuid)
+            .with_for_update(of=task_model)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status not in {"failed", "stale", "cancelled"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invalid_task_action",
+                "action": "retry",
+                "status": task.status,
+                "message": f"Task is {task.status}; retry is only available after failure",
+            },
+        )
+    owner = await _active_scope_owner(db, scope_key, exclude=task.id)
+    if owner is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Operation already running", "task_id": str(owner.id)},
+        )
+    dispatch = _admin_dispatch(task) or {}
+    next_options = _validated_options(dispatch.get("options") or {})
+    if dedup_scan is not None:
+        if dedup_scan.status not in {"pending", "running", "failed"}:
             raise HTTPException(
                 status_code=409,
-                detail={"message": "Operation already running", "task_id": str(owner.id)},
+                detail=f"Asset dedup scan is {dedup_scan.status}; retry is unavailable",
             )
-        dispatch = _admin_dispatch(task) or {}
-        attempt = max(int(task.attempts or 0), int(dispatch.get("attempt") or 0)) + 1
-        next_dispatch = _new_dispatch(
-            task_id=task.id,
-            attempt=attempt,
-            operation_type=str(task.operation_type),
-            scope_key=scope_key,
-            queue_name=str(dispatch.get("queue_name") or task.queue_name or "maintenance"),
-            options=_validated_options(dispatch.get("options") or {}),
-            job_timeout=int(dispatch.get("job_timeout") or 14400),
-        )
-        checkpoints = dispatch.get("checkpoints")
-        if isinstance(checkpoints, dict) and checkpoints:
-            next_dispatch["checkpoints"] = _validated_options(checkpoints)
-        meta = dict(task.meta or {})
-        meta[ADMIN_DISPATCH_META_KEY] = next_dispatch
-        task.attempts = attempt
-        await TaskService(db).update_task(
-            task,
-            status="enqueued",
-            progress={"phase": "enqueued", "label": f"{task.title or 'Operation'} queued"},
-            result={},
-            error="",
-            meta=meta,
-            rq_job_id=next_dispatch["rq_job_id"],
-        )
-        await db.commit()
-        return PreparedAdminDispatch(
-            task,
-            next_dispatch["rq_job_id"],
-            attempt,
-            next_dispatch["queue_name"],
-            next_dispatch["job_timeout"],
-        )
+        scan_options = dict(dedup_scan.options or {})
+        try:
+            scan_generation = max(0, int(scan_options.get("_rq_generation", 0)))
+        except (TypeError, ValueError):
+            scan_generation = 0
+        dedup_scan.status = "pending"
+        dedup_scan.error = None
+        next_options["scan_id"] = str(dedup_scan.id)
+        next_options["_scan_generation"] = scan_generation
+    attempt = max(int(task.attempts or 0), int(dispatch.get("attempt") or 0)) + 1
+    next_dispatch = _new_dispatch(
+        task_id=task.id,
+        attempt=attempt,
+        operation_type=str(task.operation_type),
+        scope_key=scope_key,
+        queue_name=str(dispatch.get("queue_name") or task.queue_name or "maintenance"),
+        options=next_options,
+        job_timeout=int(dispatch.get("job_timeout") or 14400),
+    )
+    checkpoints = dispatch.get("checkpoints")
+    if isinstance(checkpoints, dict) and checkpoints:
+        next_dispatch["checkpoints"] = _validated_options(checkpoints)
+    meta = dict(task.meta or {})
+    meta[ADMIN_DISPATCH_META_KEY] = next_dispatch
+    task.attempts = attempt
+    await task_service.update_task(
+        task,
+        status="enqueued",
+        progress={"phase": "enqueued", "label": f"{task.title or 'Operation'} queued"},
+        result={},
+        error="",
+        meta=meta,
+        rq_job_id=next_dispatch["rq_job_id"],
+    )
+    await db.commit()
+    return PreparedAdminDispatch(
+        task,
+        next_dispatch["rq_job_id"],
+        attempt,
+        next_dispatch["queue_name"],
+        next_dispatch["job_timeout"],
+    )
 
 
 async def prepare_admin_operation_handoff(
@@ -1203,6 +1390,140 @@ async def prepare_admin_operation_handoff(
     task.attempts = next_attempt
     task.rq_job_id = next_dispatch["rq_job_id"]
     await db.flush()
+    return PreparedAdminDispatch(
+        task,
+        next_dispatch["rq_job_id"],
+        next_attempt,
+        next_dispatch["queue_name"],
+        next_dispatch["job_timeout"],
+    )
+
+
+async def prepare_admin_operation_recovery(
+    task_id: UUID | str,
+    attempt: int,
+    *,
+    now: datetime | None = None,
+) -> PreparedAdminDispatch | None:
+    """Fence a stale running delivery before publishing its replacement."""
+
+    from app.database import engine
+
+    task_uuid = UUID(str(task_id))
+    checked_at = now or _utcnow()
+    async with engine.connect() as connection:
+        async with AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+        ) as db:
+            return await _prepare_admin_operation_recovery_session(
+                db,
+                task_uuid=task_uuid,
+                attempt=int(attempt),
+                checked_at=checked_at,
+            )
+
+
+async def _prepare_admin_operation_recovery_session(
+    db: AsyncSession,
+    *,
+    task_uuid: UUID,
+    attempt: int,
+    checked_at: datetime,
+) -> PreparedAdminDispatch | None:
+    from app.models.task_run import TaskRun
+    from app.services.tasks import TaskService
+
+    initial = await db.get(TaskRun, task_uuid)
+    initial_dispatch = _admin_dispatch(initial) if initial is not None else None
+    if initial_dispatch is None:
+        return None
+    scope_key = str(initial_dispatch.get("scope_key") or "")
+    await _lock_scope(db, scope_key)
+    async with _admin_execution_lease_on_session(
+        db,
+        scope_key,
+    ) as acquired:
+        if not acquired:
+            return None
+        return await _prepare_admin_operation_recovery_locked(
+            db,
+            task_uuid=task_uuid,
+            attempt=attempt,
+            checked_at=checked_at,
+            scope_key=scope_key,
+            task_model=TaskRun,
+            task_service=TaskService(db),
+        )
+
+
+async def _prepare_admin_operation_recovery_locked(
+    db: AsyncSession,
+    *,
+    task_uuid: UUID,
+    attempt: int,
+    checked_at: datetime,
+    scope_key: str,
+    task_model,
+    task_service,
+) -> PreparedAdminDispatch | None:
+    task = (
+        await db.execute(
+            select(task_model)
+            .where(task_model.id == task_uuid)
+            .with_for_update(of=task_model)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    dispatch = _admin_dispatch(task) if task is not None else None
+    if (
+        task is None
+        or task.kind != "admin"
+        or task.status != "running"
+        or dispatch is None
+        or int(dispatch.get("attempt") or 0) != attempt
+    ):
+        await db.rollback()
+        return None
+    heartbeat_at = task.last_heartbeat_at
+    if (
+        heartbeat_at is not None
+        and heartbeat_at
+        > checked_at - timedelta(seconds=ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS)
+    ):
+        await db.rollback()
+        return None
+
+    next_attempt = attempt + 1
+    next_dispatch = _new_dispatch(
+        task_id=task.id,
+        attempt=next_attempt,
+        operation_type=str(task.operation_type),
+        scope_key=scope_key,
+        queue_name=str(dispatch.get("queue_name") or task.queue_name or "maintenance"),
+        options=_validated_options(dispatch.get("options") or {}),
+        job_timeout=int(dispatch.get("job_timeout") or 14400),
+    )
+    checkpoints = dispatch.get("checkpoints")
+    if isinstance(checkpoints, dict) and checkpoints:
+        next_dispatch["checkpoints"] = _validated_options(checkpoints)
+    next_dispatch["recovered_from_attempt"] = attempt
+    meta = dict(task.meta or {})
+    meta[ADMIN_DISPATCH_META_KEY] = next_dispatch
+    task.attempts = next_attempt
+    task.last_heartbeat_at = None
+    await task_service.update_task(
+        task,
+        status="enqueued",
+        progress={
+            "phase": "enqueued",
+            "label": f"{task.title or 'Operation'} recovered",
+        },
+        error="",
+        meta=meta,
+        rq_job_id=next_dispatch["rq_job_id"],
+    )
+    await db.commit()
     return PreparedAdminDispatch(
         task,
         next_dispatch["rq_job_id"],
@@ -1323,15 +1644,43 @@ async def publish_admin_operation(
                     meta[ADMIN_DISPATCH_META_KEY] = dispatch
                     await TaskService(db).update_task(
                         task,
-                        status=("complete" if status == "finished" else "failed"),
-                        result=(existing.result if status == "finished" else task.result_data),
-                        error=(None if status == "finished" else message),
+                        status="failed",
+                        result=task.result_data,
+                        error=message,
                         meta=meta,
                         reason_code="rq_terminal_without_callback",
                     )
                     await db.commit()
                     return "failed"
                 outcome = "existing"
+            elif (
+                dispatch.get("publication_state") == ADMIN_DISPATCH_PUBLISHED
+                and task.status in {"running", "paused"}
+            ):
+                now_value = _utcnow()
+                is_paused = task.status == "paused"
+                heartbeat_at = task.last_heartbeat_at
+                heartbeat_fresh = bool(
+                    heartbeat_at is not None
+                    and heartbeat_at
+                    > now_value
+                    - timedelta(seconds=ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS)
+                )
+                dispatch.update(
+                    {
+                        "next_probe_at": (
+                            now_value
+                            + timedelta(seconds=ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS)
+                        ).isoformat(),
+                        "last_error": "RQ record missing while durable attempt is active",
+                        "updated_at": now_value.isoformat(),
+                    }
+                )
+                meta = dict(task.meta or {})
+                meta[ADMIN_DISPATCH_META_KEY] = dispatch
+                task.meta = meta
+                await db.commit()
+                return "active" if is_paused or heartbeat_fresh else "missing"
             else:
                 await asyncio.to_thread(
                     _enqueue_admin_rq,
@@ -1637,6 +1986,20 @@ async def recover_admin_operation_dispatches(
             attempt,
             redis_client=redis_client,
         )
+        if outcome == "missing":
+            recovered = await prepare_admin_operation_recovery(
+                candidate_id,
+                attempt,
+                now=current,
+            )
+            if recovered is not None:
+                outcome = await publish_admin_operation(
+                    candidate_id,
+                    recovered.attempt,
+                    redis_client=redis_client,
+                )
+            else:
+                outcome = "active"
         if outcome in {"published", "existing"}:
             report["published"] += 1
         elif outcome == "deferred":
@@ -1694,6 +2057,51 @@ async def update_admin_task(
         await TaskService(db).update_task(task, **changes)
         await db.commit()
         return True
+
+
+async def heartbeat_admin_operation(
+    task_id: UUID | str,
+    attempt: int | str,
+    *,
+    db: AsyncSession | None = None,
+) -> bool:
+    """Renew the PostgreSQL execution lease for exactly one running attempt."""
+
+    from app.database import async_session
+    from app.models.task_run import TaskRun
+
+    try:
+        task_uuid = UUID(str(task_id))
+        captured_attempt = int(attempt)
+    except (TypeError, ValueError):
+        return False
+    async def renew(session: AsyncSession) -> bool:
+        task = (
+            await session.execute(
+                select(TaskRun)
+                .where(TaskRun.id == task_uuid)
+                .with_for_update(of=TaskRun)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        dispatch = _admin_dispatch(task) if task is not None else None
+        if (
+            task is None
+            or task.kind != "admin"
+            or task.status != "running"
+            or dispatch is None
+            or int(dispatch.get("attempt") or 0) != captured_attempt
+        ):
+            await session.rollback()
+            return False
+        task.last_heartbeat_at = _utcnow()
+        await session.commit()
+        return True
+
+    if db is not None:
+        return await renew(db)
+    async with async_session() as heartbeat_db:
+        return await renew(heartbeat_db)
 
 
 async def update_current_admin_operation_progress(
@@ -1852,10 +2260,11 @@ async def claim_admin_operation(
         ):
             await db.rollback()
             raise RuntimeError("Administrator operation attempt is no longer current")
-        if task.status not in {"enqueued", "running", "paused", "recovering"}:
+        if task.status not in {"enqueued", "recovering"}:
+            current_status = str(task.status)
             await db.rollback()
             raise RuntimeError(
-                f"Administrator operation attempt cannot run from {task.status}"
+                f"Administrator operation attempt cannot run from {current_status}"
             )
         operation_type = str(task.operation_type or dispatch.get("operation_type") or "")
         options = _validated_options(dispatch.get("options") or {})
@@ -1872,6 +2281,7 @@ async def claim_admin_operation(
             status="running",
             progress={"phase": "running", "label": f"{task.title or 'Operation'} running"},
         )
+        task.last_heartbeat_at = _utcnow()
         await db.commit()
         return operation_type, options
 

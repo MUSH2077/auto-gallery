@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 from collections.abc import Iterable
+from contextlib import suppress
 from uuid import UUID
 
 from app.database import async_session
@@ -23,6 +24,63 @@ from app.services.heavy_io import run_heavy_io_operation
 from app.services.redis_pubsub import PublisherFenceError
 
 logger = logging.getLogger(__name__)
+
+
+async def _await_admin_file_finalizer(finalizer):
+    """Delay outer cancellation until a fenced file/TaskRun commit settles."""
+
+    finalizer_task = asyncio.create_task(finalizer)
+    try:
+        return await asyncio.shield(finalizer_task)
+    except asyncio.CancelledError:
+        try:
+            await finalizer_task
+        except Exception:
+            logger.exception("Fenced administrator file finalizer failed during cancellation")
+        raise
+
+
+async def _finalize_registered_file_result(
+    task_id: str,
+    *,
+    publish,
+    after_commit=None,
+) -> dict:
+    """Publish a file result and terminal TaskRun under one exact-attempt lock."""
+
+    from app.services.operations import fence_current_admin_operation_transaction
+    from app.services.tasks import TaskService
+
+    async def finalize() -> dict:
+        async with async_session() as publish_db:
+            task = await fence_current_admin_operation_transaction(
+                publish_db,
+                task_id=task_id,
+            )
+            result = publish()
+            await TaskService(publish_db).update_task(
+                task,
+                status="complete",
+                progress={
+                    "phase": "complete",
+                    "label": str(result.get("message") or "Complete"),
+                },
+                result=result,
+                error=None,
+                reason_code=None,
+            )
+            await publish_db.commit()
+        if after_commit is not None:
+            try:
+                after_commit(result)
+            except Exception:
+                logger.warning(
+                    "Unable to prune files after durable administrator completion",
+                    exc_info=True,
+                )
+        return {**result, "_admin_handoff": True}
+
+    return await _await_admin_file_finalizer(finalize())
 
 
 class _DiskImportPublisherGuard:
@@ -261,57 +319,134 @@ def run_registered_admin_operation(task_id: str, attempt: int) -> dict:
     return asyncio.run(_run_registered_admin_operation(task_id, int(attempt)))
 
 
+async def _heartbeat_registered_admin_operation(
+    task_id: str,
+    attempt: int,
+    stop: asyncio.Event,
+    lease_db=None,
+) -> str | None:
+    from app.services.operations import (
+        ADMIN_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
+        heartbeat_admin_operation,
+    )
+
+    while True:
+        try:
+            await asyncio.wait_for(
+                stop.wait(),
+                timeout=ADMIN_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
+            )
+            return
+        except TimeoutError:
+            try:
+                current = await heartbeat_admin_operation(
+                    task_id,
+                    attempt,
+                    db=lease_db,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Administrator execution lease heartbeat failed task=%s attempt=%s",
+                    task_id,
+                    attempt,
+                    exc_info=True,
+                )
+                return f"PostgreSQL execution lease heartbeat failed: {type(exc).__name__}"
+            if not current:
+                return "PostgreSQL execution lease was lost"
+
+
 async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
     from app.services.operations import (
+        AdminOperationAttemptRejected,
+        admin_operation_execution_lease,
         admin_operation_attempt_context,
         claim_admin_operation,
         update_admin_task,
     )
 
-    operation_type, options = await claim_admin_operation(task_id, attempt)
-    try:
-        with admin_operation_attempt_context(task_id, attempt):
-            result = await _execute_registered_admin_operation(
-                operation_type,
+    async with admin_operation_execution_lease(task_id) as lease_db:
+        operation_type, options = await claim_admin_operation(task_id, attempt)
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            _heartbeat_registered_admin_operation(
                 task_id,
                 attempt,
-                options,
+                heartbeat_stop,
+                lease_db,
             )
-        if result.get("_admin_handoff"):
+        )
+
+        async def execute() -> dict:
+            with admin_operation_attempt_context(task_id, attempt):
+                return await _execute_registered_admin_operation(
+                    operation_type,
+                    task_id,
+                    attempt,
+                    options,
+                )
+
+        operation_task = asyncio.create_task(execute())
+        try:
+            completed, _pending = await asyncio.wait(
+                {operation_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in completed:
+                lost_reason = heartbeat_task.result()
+                if lost_reason:
+                    operation_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await operation_task
+                    raise AdminOperationAttemptRejected(lost_reason)
+            result = await operation_task
+            if result.get("_admin_handoff"):
+                return result
+            terminal_status, terminal_error, reason_code = _registered_terminal_outcome(
+                operation_type,
+                result,
+            )
+            if not await update_admin_task(
+                task_id,
+                attempt,
+                allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
+                status=terminal_status,
+                progress={
+                    "phase": terminal_status,
+                    "label": str(
+                        result.get("message")
+                        or terminal_error
+                        or (
+                            "Complete"
+                            if terminal_status == "complete"
+                            else "Operation failed"
+                        )
+                    ),
+                },
+                result=result,
+                error=terminal_error,
+                reason_code=reason_code,
+            ):
+                raise RuntimeError("Administrator operation attempt is no longer current")
             return result
-        terminal_status, terminal_error, reason_code = _registered_terminal_outcome(
-            operation_type,
-            result,
-        )
-        if not await update_admin_task(
-            task_id,
-            attempt,
-            allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
-            status=terminal_status,
-            progress={
-                "phase": terminal_status,
-                "label": str(
-                    result.get("message")
-                    or terminal_error
-                    or ("Complete" if terminal_status == "complete" else "Operation failed")
-                ),
-            },
-            result=result,
-            error=terminal_error,
-            reason_code=reason_code,
-        ):
-            raise RuntimeError("Administrator operation attempt is no longer current")
-        return result
-    except Exception as exc:
-        await update_admin_task(
-            task_id,
-            attempt,
-            allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
-            status="failed",
-            progress={"phase": "failed", "label": "Operation failed"},
-            error=str(exc),
-        )
-        raise
+        except Exception as exc:
+            await update_admin_task(
+                task_id,
+                attempt,
+                allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
+                status="failed",
+                progress={"phase": "failed", "label": "Operation failed"},
+                error=str(exc),
+            )
+            raise
+        finally:
+            heartbeat_stop.set()
+            if not heartbeat_task.done():
+                await heartbeat_task
+            if not operation_task.done():
+                operation_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await operation_task
 
 
 async def _execute_registered_admin_operation(
@@ -401,33 +536,60 @@ async def _execute_registered_admin_operation(
             "message": "Backup estimate complete",
         }
     if operation_type == "admin-backup-create":
-        from app.api.admin.backup import _create_backup_sync
+        from app.api.admin.backup import (
+            _create_backup_sync,
+            prune_published_backup,
+            publish_backup_candidate,
+        )
 
         await update_current_admin_operation_progress(
             task_id,
             {"phase": "creating", "label": "Creating backup archive"},
         )
-        result = await asyncio.to_thread(_create_backup_sync, options)
-        return {**result, "message": "Backup created"}
+        staged = await asyncio.to_thread(
+            _create_backup_sync,
+            options,
+            publish=False,
+            candidate_token=f"{task_id}-attempt-{attempt}",
+        )
+        return await _finalize_registered_file_result(
+            task_id,
+            publish=lambda: {
+                **publish_backup_candidate(staged, prune=False),
+                "message": "Backup created",
+            },
+            after_commit=lambda result: prune_published_backup(result["filename"]),
+        )
     if operation_type == "admin-restore-validate":
-        from app.services.offline_restore import staging_root, validate_upload
+        from app.services.offline_restore import (
+            publish_validated_upload,
+            staging_root,
+            validate_upload,
+        )
 
         upload_id = str(options.get("upload_id") or "")
         await update_current_admin_operation_progress(
             task_id,
             {"phase": "validating", "label": "Validating restore archive"},
         )
-        result = await asyncio.to_thread(
+        staged = await asyncio.to_thread(
             validate_upload,
             root=staging_root(),
             upload_id=upload_id,
             task_id=task_id,
+            attempt=attempt,
+            publish_ready=False,
         )
-        await update_current_admin_operation_progress(
+        return await _finalize_registered_file_result(
             task_id,
-            {"phase": "ready", "label": "Ready for offline host execution"},
+            publish=lambda: publish_validated_upload(
+                root=staging_root(),
+                upload_id=upload_id,
+                task_id=task_id,
+                attempt=attempt,
+                staged=staged,
+            ),
         )
-        return result
     if operation_type == "admin-proxy-test":
         from app.api.admin.settings import _run_proxy_connectivity_test
 

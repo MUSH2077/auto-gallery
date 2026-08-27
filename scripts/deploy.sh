@@ -433,7 +433,8 @@ case "\$current_revision" in
   "$CANDIDATE_REVISION")
     docker image inspect "$CANDIDATE_BACKEND_IMAGE" >/dev/null
     docker image tag "$CANDIDATE_BACKEND_IMAGE" auto-gallery-backend:latest
-    docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+    BACKEND_IMAGE="$candidate_backend_id" ADMIN_IMAGE="$candidate_admin_id" \
+      docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
       --env-file "$ROLLBACK_DIR/.env.predeploy" \
       -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
       run --rm --no-deps migrate alembic downgrade $PREDEPLOY_REVISION
@@ -446,15 +447,18 @@ esac
 
 docker image tag "auto-gallery-backend:rollback-$DEPLOYMENT_ID" auto-gallery-backend:latest
 docker image tag "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID" auto-gallery-admin-web:latest
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
+  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
   --env-file "$ROLLBACK_DIR/.env.predeploy" \
   -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
   up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
+  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
   --env-file "$ROLLBACK_DIR/.env.predeploy" \
   -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
   up --force-recreate --no-deps --no-build migrate
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
+  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
   --env-file "$ROLLBACK_DIR/.env.predeploy" \
   -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
   up -d --force-recreate --no-deps --no-build --wait --wait-timeout 180 \

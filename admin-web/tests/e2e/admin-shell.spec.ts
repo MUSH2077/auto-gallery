@@ -2044,6 +2044,7 @@ test("settings no longer duplicates data management or language controls", async
 test("subscription list uses one authoritative latest state and page-scoped summary ids", async ({ page }) => {
   const subscriptionId = "11111111-1111-4111-8111-111111111111";
   let requestedIds = "";
+  let runtimeScheduleRule: unknown = { frequency: "daily", times: ["22:00:00"] };
   await page.route("**/api/v1/search**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname !== "/api/v1/search" || url.searchParams.get("scope") !== "subscriptions") {
@@ -2100,10 +2101,11 @@ test("subscription list uses one authoritative latest state and page-scoped summ
         enabled_source_count: 1,
         schedule: {
           configured_mode: "inherit",
-          effective_mode: "fixed_time",
+          effective_mode: "calendar",
           inherited: true,
           timezone: "Asia/Shanghai",
-          scheduled_times: "22:00",
+          scheduled_times: null,
+          schedule_rule: runtimeScheduleRule,
           sync_interval_hours: 6,
           next_due_at: "2026-08-14T14:00:00Z",
           oldest_due_at: null,
@@ -2125,7 +2127,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Sync successful · No new works")).toBeVisible();
     await expect(page.getByText("1 failed")).toHaveCount(0);
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("System default · Daily at 22:00")).toBeVisible();
+    await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
     const results = await new AxeBuilder({ page })
       .include("#main-content")
@@ -2138,6 +2140,16 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     });
   }
   expect(requestedIds).toBe(subscriptionId);
+
+  runtimeScheduleRule = { frequency: "weekly", times: "22:00:00" };
+  await page.goto("/admin/subscriptions");
+  await expect(page.getByText("System default · Calendar · Schedule at 22:00")).toBeVisible();
+  await expect(page.getByText("Application error")).toHaveCount(0);
+
+  runtimeScheduleRule = { frequency: "daily", times: {} };
+  await page.goto("/admin/subscriptions");
+  await expect(page.getByText("System default · Calendar · Daily at —")).toBeVisible();
+  await expect(page.getByText("System default · Calendar · Daily at 22:00")).toHaveCount(0);
 });
 
 test("saving inherit sends the typed strategy and survives authoritative reload", async ({ page }) => {
@@ -2159,7 +2171,8 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
     running_job_count: 0,
     failed_job_count: 0,
     configured_mode: inherited ? "inherit" : "manual",
-    effective_mode: inherited ? "fixed_time" : "manual",
+    effective_mode: inherited ? "calendar" : "manual",
+    schedule_rule: inherited ? { frequency: "daily", times: ["22:00:00"] } : null,
     auto_enabled_source: inherited
       ? { id: "fixture-source", source: "pixiv", source_url: "https://www.pixiv.net/users/1" }
       : null,
@@ -2200,10 +2213,11 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
         enabled_source_count: inherited ? 1 : 0,
         schedule: {
           configured_mode: inherited ? "inherit" : "manual",
-          effective_mode: inherited ? "fixed_time" : "manual",
+          effective_mode: inherited ? "calendar" : "manual",
           inherited,
           timezone: "Asia/Shanghai",
-          scheduled_times: inherited ? "22:00" : null,
+          scheduled_times: null,
+          schedule_rule: inherited ? { frequency: "daily", times: ["22:00:00"] } : null,
           sync_interval_hours: 6,
           next_due_at: inherited ? "2026-08-14T14:00:00Z" : null,
           oldest_due_at: null,
@@ -2224,10 +2238,10 @@ test("saving inherit sends the typed strategy and survives authoritative reload"
   await expect.poll(() => updatePayload).not.toBeNull();
   expect(updatePayload).toMatchObject({ schedule_mode: "inherit" });
   expect(updatePayload).not.toHaveProperty("sync_enabled");
-  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+  await expect(page.locator("dl").getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
   await expect(page.locator("dl").getByText("Manual Only", { exact: true })).toHaveCount(0);
   await page.reload();
-  await expect(page.locator("dl").getByText("System default · Fixed time · Daily at 22:00")).toBeVisible();
+  await expect(page.locator("dl").getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
 });
 
 test("compact scheduler omits healthy auth details and storage chart footers are removed", async ({ page }) => {
@@ -2421,6 +2435,10 @@ test("subscription and repository details use clickable hierarchy breadcrumbs", 
 test("slow administrator integrity flow starts once, polls one task, and renders its snapshot", async ({ page }) => {
   let starts = 0;
   let polls = 0;
+  let releaseCompletion!: () => void;
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
   await page.route("**/api/v1/admin/integrity-check/latest", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     await route.fulfill({ json: { snapshot: null } });
@@ -2442,6 +2460,7 @@ test("slow administrator integrity flow starts once, polls one task, and renders
   await page.route("**/api/v1/admin/operations/integrity-task", async (route) => {
     polls += 1;
     const complete = polls >= 2;
+    if (complete) await completionGate;
     await route.fulfill({
       json: {
         task_id: "integrity-task",
@@ -2469,6 +2488,7 @@ test("slow administrator integrity flow starts once, polls one task, and renders
   await expect(page.getByRole("link", { name: "Task detail" }).first())
     .toHaveAttribute("href", "/admin/jobs?tab=admin&task=integrity-task");
   await expect(page.getByText("Scanning data integrity")).toBeVisible();
+  releaseCompletion();
   await expect(page.getByText("All Clear")).toBeVisible({ timeout: 10_000 });
   expect(starts).toBe(1);
   expect(polls).toBeGreaterThanOrEqual(2);
@@ -2941,6 +2961,224 @@ test("gallery-dl connectivity saves then starts one asynchronous source test", a
     .include("[data-admin-operation='admin-gallerydl-connectivity-test']")
     .analyze();
   expect(results.violations).toEqual([]);
+});
+
+test("gallery-dl connectivity never carries a completed task across source tabs", async ({ page }) => {
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", (route) => route.fulfill({
+    status: 202,
+    json: {
+      task_id: "pixiv-gallery-task",
+      job_id: "admin-pixiv-gallery-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/pixiv-gallery-task", (route) => route.fulfill({ json: {
+    task_id: "pixiv-gallery-task",
+    job_id: "admin-pixiv-gallery-task-attempt-1",
+    status: "complete",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "complete", label: "Pixiv connection complete" },
+    result: { source: "pixiv", success: true, message: "Pixiv-only result", details: "ok" },
+    error: null,
+  } }));
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  await expect(page.getByText("Pixiv-only result")).toBeVisible();
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  await expect(page.getByText("Pixiv-only result")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Task detail" })).toHaveCount(0);
+  await expect(page.getByText("No successful result yet.")).toBeVisible();
+});
+
+test("gallery-dl connectivity serializes cross-scope retry and preserves both tasks", async ({ page }) => {
+  let pixivRetried = false;
+  let retryRequested = false;
+  let releaseRetry!: () => void;
+  const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve; });
+
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    const taskId = body.source === "twitter" ? "twitter-scope-task" : "pixiv-scope-task";
+    await route.fulfill({ status: 202, json: {
+      task_id: taskId,
+      job_id: `admin-${taskId}-attempt-1`,
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/pixiv-scope-task", (route) => route.fulfill({ json: {
+    task_id: "pixiv-scope-task",
+    job_id: pixivRetried
+      ? "admin-pixiv-scope-task-attempt-2"
+      : "admin-pixiv-scope-task-attempt-1",
+    status: pixivRetried ? "running" : "failed",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: pixivRetried
+      ? { phase: "testing", label: "Retrying Pixiv" }
+      : { phase: "failed", label: "Pixiv failed" },
+    result: null,
+    error: pixivRetried ? null : "Pixiv unavailable",
+  } }));
+  await page.route("**/api/v1/admin/operations/twitter-scope-task", (route) => route.fulfill({ json: {
+    task_id: "twitter-scope-task",
+    job_id: "admin-twitter-scope-task-attempt-1",
+    status: "running",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "testing", label: "Testing Twitter" },
+    result: null,
+    error: null,
+  } }));
+  await page.route("**/api/v1/admin/operations/pixiv-scope-task/retry", async (route) => {
+    retryRequested = true;
+    await retryGate;
+    pixivRetried = true;
+    await route.fulfill({ status: 202, json: {
+      task_id: "pixiv-scope-task",
+      job_id: "admin-pixiv-scope-task-attempt-2",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  const operation = page.locator("[data-admin-operation='admin-gallerydl-connectivity-test']");
+  await expect(operation.getByRole("alert")).toContainText("Pixiv unavailable");
+  await operation.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => retryRequested).toBe(true);
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  const testConnection = page.getByRole("button", { name: "Test Connection" });
+  await expect(testConnection).toBeDisabled();
+  releaseRetry();
+  await expect(testConnection).toBeEnabled();
+  await testConnection.click();
+  await expect(operation.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=twitter-scope-task");
+
+  await page.getByRole("tab", { name: "Pixiv" }).click();
+  await expect(operation.getByRole("link", { name: "Task detail" }))
+    .toHaveAttribute("href", "/admin/jobs?tab=admin&task=pixiv-scope-task");
+  await expect(page.getByText("Retrying Pixiv")).toBeVisible();
+});
+
+test("gallery-dl connectivity blocks cross-scope retry while a start is pending", async ({ page }) => {
+  let startRequested = false;
+  let retryRequested = false;
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", (route) => route.fulfill({
+    json: { snapshot: null, current: null },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter", (route) => route.fulfill({
+    json: {
+      snapshot: null,
+      current: {
+        task_id: "twitter-failed-task",
+        job_id: "admin-twitter-failed-task-attempt-1",
+        status: "failed",
+        operation_type: "admin-gallerydl-connectivity-test",
+      },
+    },
+  }));
+  await page.route("**/api/v1/admin/gallerydl-config/test-connection", async (route) => {
+    startRequested = true;
+    await startGate;
+    await route.fulfill({ status: 202, json: {
+      task_id: "pixiv-start-task",
+      job_id: "admin-pixiv-start-task-attempt-1",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+  await page.route("**/api/v1/admin/gallerydl-config", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { status: "ok", message: "saved", path: "/config/gallery-dl.conf" } });
+      return;
+    }
+    await route.fulfill({ json: {
+      pixiv: {}, twitter: {}, iwara: {}, danbooru: {}, pinterest: {}, lofter: {}, weibo: {}, bilibili: {},
+      sources: {
+        pixiv: { name: "Pixiv", supported: true, description: "Pixiv source" },
+        twitter: { name: "X / Twitter", supported: true, description: "Twitter source" },
+      },
+    } });
+  });
+  await page.route("**/api/v1/admin/operations/twitter-failed-task", (route) => route.fulfill({ json: {
+    task_id: "twitter-failed-task",
+    job_id: "admin-twitter-failed-task-attempt-1",
+    status: "failed",
+    operation_type: "admin-gallerydl-connectivity-test",
+    progress: { phase: "failed", label: "Twitter failed" },
+    result: null,
+    error: "Twitter unavailable",
+  } }));
+  await page.route("**/api/v1/admin/operations/twitter-failed-task/retry", async (route) => {
+    retryRequested = true;
+    await route.fulfill({ status: 202, json: {
+      task_id: "twitter-failed-task",
+      job_id: "admin-twitter-failed-task-attempt-2",
+      status: "enqueued",
+      operation_type: "admin-gallerydl-connectivity-test",
+    } });
+  });
+
+  await page.goto("/admin/settings/gallerydl");
+  await page.getByRole("button", { name: "Test Connection" }).click();
+  await expect.poll(() => startRequested).toBe(true);
+
+  await page.getByRole("tab", { name: "X / Twitter" }).click();
+  const retry = page.locator("[data-admin-operation='admin-gallerydl-connectivity-test']")
+    .getByRole("button", { name: "Retry" });
+  await expect(retry).toBeDisabled();
+  expect(retryRequested).toBe(false);
+
+  releaseStart();
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect.poll(() => retryRequested).toBe(true);
 });
 
 test("proxy operation discovery starts with settings and reattaches across reload", async ({ page }) => {

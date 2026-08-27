@@ -91,7 +91,7 @@ export function AdminOperationStatus<TResult, TVariables>({
               <button
                 type="button"
                 className="btn-ghost mt-2 text-danger"
-                disabled={controller.isRetrying}
+                disabled={!controller.canRetry}
                 onClick={controller.retry}
               >
                 {controller.isRetrying ? t("admin_operation.retrying") : t("common.retry")}

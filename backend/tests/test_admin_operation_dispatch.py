@@ -33,6 +33,33 @@ def _clear_rq_task(redis_client, *task_ids) -> None:
         redis_client.delete(*set(keys))
 
 
+@pytest.mark.asyncio
+async def test_file_publication_finalizer_survives_outer_cancellation():
+    """Lease-loss cancellation must wait for the fenced final commit to settle."""
+    from app.jobs.admin_operations import _await_admin_file_finalizer
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    completed = False
+
+    async def finalize():
+        nonlocal completed
+        entered.set()
+        await release.wait()
+        completed = True
+        return {"status": "complete"}
+
+    waiter = asyncio.create_task(_await_admin_file_finalizer(finalize()))
+    await entered.wait()
+    waiter.cancel()
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert completed is True
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_committed_admin_intent_recovers_without_redis_authority():
@@ -544,6 +571,424 @@ async def test_terminal_rq_record_repairs_worker_finally_crash():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_finished_rq_record_cannot_authorize_taskrun_success(monkeypatch):
+    """Redis transport completion is not a business terminal callback."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+
+    class FinishedJob:
+        result = {"status": "failed", "message": "semantic failure"}
+
+        @staticmethod
+        def get_status(refresh=True):
+            assert refresh is True
+            return "finished"
+
+    task_id = None
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_a, **_k: FinishedJob())
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "running"
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch["publication_state"] = operations.ADMIN_DISPATCH_PUBLISHED
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        assert await operations.publish_admin_operation(task_id, 1) == "failed"
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            assert task.status == "failed"
+            assert task.reason_code == "rq_terminal_without_callback"
+            assert task.result_data == {}
+            assert "without a current TaskRun callback" in task.error_log
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_running_attempt_cannot_be_claimed_twice():
+    """A duplicate delivery of one deterministic RQ id is fenced before work."""
+    from app.database import async_session, engine
+    from app.services import operations
+
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        assert await operations.claim_admin_operation(task_id, 1) == (
+            "admin-search-reindex",
+            {},
+        )
+        with pytest.raises(RuntimeError, match="cannot run from running"):
+            await operations.claim_admin_operation(task_id, 1)
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_missing_rq_record_never_republishes_a_running_attempt(monkeypatch):
+    """Redis record loss cannot create a concurrent executor for one attempt."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+
+    enqueued: list[str] = []
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        operations,
+        "_enqueue_admin_rq",
+        lambda *_a, rq_job_id, **_k: enqueued.append(rq_job_id),
+    )
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "running"
+            prepared.task.last_heartbeat_at = datetime.now(timezone.utc)
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch["publication_state"] = operations.ADMIN_DISPATCH_PUBLISHED
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        assert await operations.publish_admin_operation(task_id, 1) == "active"
+        assert enqueued == []
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            assert task.status == "running"
+            assert task.attempts == 1
+            assert task.rq_job_id == f"admin-{task_id}-attempt-1"
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_running_attempt_rotates_before_missing_rq_is_republished(
+    monkeypatch,
+):
+    """Recovery publishes a new attempt only after the PostgreSQL lease expires."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+
+    enqueued: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_a, **_k: None)
+
+    def record_enqueue(task_id, attempt, *, rq_job_id, **_kwargs):
+        enqueued.append((str(task_id), int(attempt), rq_job_id))
+        return SimpleNamespace(id=rq_job_id)
+
+    monkeypatch.setattr(operations, "_enqueue_admin_rq", record_enqueue)
+    task_id = None
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "running"
+            prepared.task.last_heartbeat_at = now - timedelta(minutes=5)
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch.update(
+                {
+                    "publication_state": operations.ADMIN_DISPATCH_PUBLISHED,
+                    "prepared_at": (now - timedelta(minutes=10)).isoformat(),
+                    "next_probe_at": (now - timedelta(seconds=1)).isoformat(),
+                }
+            )
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        report = await operations.recover_admin_operation_dispatches(
+            now=now,
+            grace_seconds=0,
+            include_published=True,
+        )
+        assert report == {
+            "scanned": 1,
+            "published": 1,
+            "deferred": 0,
+            "failed": 0,
+        }
+        assert enqueued == [
+            (str(task_id), 2, f"admin-{task_id}-attempt-2"),
+        ]
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            dispatch = task.meta[operations.ADMIN_DISPATCH_META_KEY]
+            assert task.status == "enqueued"
+            assert task.attempts == 2
+            assert task.last_heartbeat_at is None
+            assert dispatch["attempt"] == 2
+            assert dispatch["recovered_from_attempt"] == 1
+            assert dispatch["publication_state"] == operations.ADMIN_DISPATCH_PUBLISHED
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_recovery_waits_for_postgresql_execution_lease(monkeypatch):
+    """A live executor cannot be replaced merely because its RQ record vanished."""
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services import operations
+
+    enqueued: list[str] = []
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        operations,
+        "_enqueue_admin_rq",
+        lambda *_a, rq_job_id, **_k: enqueued.append(rq_job_id),
+    )
+    task_id = None
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "running"
+            prepared.task.last_heartbeat_at = now - timedelta(minutes=5)
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch.update(
+                {
+                    "publication_state": operations.ADMIN_DISPATCH_PUBLISHED,
+                    "next_probe_at": (now - timedelta(seconds=1)).isoformat(),
+                }
+            )
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        async with operations.admin_operation_execution_lease(task_id):
+            report = await operations.recover_admin_operation_dispatches(
+                now=now + timedelta(seconds=10),
+                grace_seconds=0,
+                include_published=True,
+            )
+            assert report == {
+                "scanned": 1,
+                "published": 0,
+                "deferred": 0,
+                "failed": 0,
+            }
+            assert enqueued == []
+            async with async_session() as verify_db:
+                task = await verify_db.get(TaskRun, task_id)
+                assert task.status == "running"
+                assert task.attempts == 1
+
+        recovered = await operations.recover_admin_operation_dispatches(
+            now=now + timedelta(minutes=1),
+            grace_seconds=0,
+            include_published=True,
+        )
+        assert recovered["published"] == 1
+        assert enqueued == [f"admin-{task_id}-attempt-2"]
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_execution_lease_fences_replacement_task_in_same_scope():
+    """Cancelling a TaskRun cannot admit a concurrent worker for its scope."""
+    from app.database import async_session, engine
+    from app.services import operations
+
+    first_id = None
+    second_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            first = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="First search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            first_id = first.task.id
+            first.task.status = "cancelled"
+            await db.commit()
+
+        async with async_session() as db:
+            second = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Replacement search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            second_id = second.task.id
+            await db.commit()
+
+        async with operations.admin_operation_execution_lease(first_id):
+            with pytest.raises(
+                operations.AdminOperationAttemptRejected,
+                match="live execution lease",
+            ):
+                async with operations.admin_operation_execution_lease(second_id):
+                    pytest.fail("replacement acquired a concurrently held scope")
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_worker_cancels_handler_when_execution_lease_heartbeat_is_lost(
+    monkeypatch,
+):
+    """Losing the PostgreSQL execution lease stops the old business handler."""
+    from app.database import async_session, engine
+    from app.jobs import admin_operations
+    from app.services import operations
+
+    handler_started = asyncio.Event()
+    handler_cancelled = asyncio.Event()
+
+    async def blocking_handler(*_args, **_kwargs):
+        handler_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            handler_cancelled.set()
+
+    async def lose_lease(_task_id, _attempt, _stop, _lease_db=None):
+        await handler_started.wait()
+        return "PostgreSQL execution lease was lost"
+
+    monkeypatch.setattr(
+        admin_operations,
+        "_execute_registered_admin_operation",
+        blocking_handler,
+    )
+    monkeypatch.setattr(
+        admin_operations,
+        "_heartbeat_registered_admin_operation",
+        lose_lease,
+    )
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-search-reindex",
+                scope_key="library:search-reindex:active",
+                title="Search reindex",
+                entity="search-reindex",
+                options={},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            await db.commit()
+
+        with pytest.raises(
+            operations.AdminOperationAttemptRejected,
+            match="execution lease was lost",
+        ):
+            await asyncio.wait_for(
+                admin_operations._run_registered_admin_operation(str(task_id), 1),
+                timeout=2,
+            )
+        assert handler_cancelled.is_set()
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_operation_reads_are_postgresql_first_when_redis_is_down(monkeypatch):
     """Current operation detail and list remain available without Redis."""
     from app.api.admin import data as data_api
@@ -904,6 +1349,65 @@ async def test_registered_clear_preserves_current_and_other_active_authorities(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_registered_clear_rolls_back_when_attempt_is_superseded(monkeypatch):
+    """Destructive clear commits are fenced by the current TaskRun attempt."""
+    from app.database import async_session, engine
+    from app.models import Tag
+    from app.services import admin_data, operations
+
+    monkeypatch.setattr(admin_data, "invalidate_api_caches", lambda *_domains: {})
+    task_id = None
+    tag_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            tag = Tag(normalized_name=f"fenced-clear-{uuid4()}", category="general")
+            db.add(tag)
+            await db.flush()
+            tag_id = tag.id
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="admin-clear",
+                scope_key="library:clear:tags",
+                title="Clear tags",
+                entity="tags",
+                options={"entity": "tags"},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch["attempt"] = 2
+            prepared.task.attempts = 2
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        with operations.admin_operation_attempt_context(task_id, 1):
+            async with async_session() as db:
+                with pytest.raises(
+                    operations.AdminOperationAttemptRejected,
+                    match="no longer current",
+                ):
+                    await admin_data.clear_entity_data("tags", db)
+
+        async with async_session() as verify_db:
+            assert await verify_db.get(Tag, tag_id) is not None
+    finally:
+        async with async_session() as db:
+            if tag_id is not None:
+                tag = await db.get(Tag, tag_id)
+                if tag is not None:
+                    await db.delete(tag)
+                    await db.commit()
+            await _clear_dispatch_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_registered_rebuild_persists_awaited_progress_without_redis(
     monkeypatch,
 ):
@@ -1042,8 +1546,10 @@ async def test_registered_curation_backfill_leaves_terminal_write_to_outer(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rebuild_progress_callback_rejects_attempt_after_retry(monkeypatch):
-    """A rebuild callback from attempt 1 cannot overwrite attempt 2 progress."""
+async def test_rebuild_retry_waits_for_running_worker_execution_lease(monkeypatch):
+    """Retry cannot replace a worker until its PostgreSQL lease is released."""
+    from fastapi import HTTPException
+
     from app.database import async_session, engine
     from app.jobs import admin_operations
     from app.models import TaskRun
@@ -1051,19 +1557,11 @@ async def test_rebuild_progress_callback_rejects_attempt_after_retry(monkeypatch
 
     entered = threading.Event()
     resume = threading.Event()
-    rejected_in_progress_callback = threading.Event()
 
-    async def rebuild(_db, _options, progress_callback):
+    async def rebuild(_db, _options, _progress_callback):
         entered.set()
         assert await asyncio.to_thread(resume.wait, 5)
-        try:
-            await progress_callback(
-                {"phase": "running", "scanned": 99, "total": 100}
-            )
-        except operations.AdminOperationAttemptRejected:
-            rejected_in_progress_callback.set()
-            raise
-        return {"status": "ok", "message": "wrong attempt completed"}
+        return {"status": "ok", "message": "attempt one completed"}
 
     monkeypatch.setattr(admin_data, "rebuild_library_index", rebuild)
     task_id = None
@@ -1096,13 +1594,23 @@ async def test_rebuild_progress_callback_rejects_attempt_after_retry(monkeypatch
             task = await db.get(TaskRun, task_id)
             task.status = "failed"
             await db.commit()
+
+        with pytest.raises(HTTPException) as conflict:
+            await operations.prepare_admin_operation_retry(task_id)
+        assert conflict.value.status_code == 409
+        assert "still executing" in str(conflict.value.detail)
+
+        async with async_session() as verify_db:
+            current = await verify_db.get(TaskRun, task_id)
+            assert current.attempts == 1
+            assert current.status == "failed"
+
+        resume.set()
+        with pytest.raises(RuntimeError, match="no longer current"):
+            await worker
+
         retry = await operations.prepare_admin_operation_retry(task_id)
         assert retry.attempt == 2
-        resume.set()
-
-        with pytest.raises(operations.AdminOperationAttemptRejected):
-            await worker
-        assert rejected_in_progress_callback.is_set()
         async with async_session() as verify_db:
             current = await verify_db.get(TaskRun, task_id)
             assert current.attempts == 2
@@ -1326,10 +1834,10 @@ async def test_registered_dedup_failed_result_is_one_retryable_terminal_transiti
     """A semantic dedup failure must never be overwritten by outer completion."""
     from app.database import async_session, engine
     from app.jobs import admin_operations, asset_dedup
-    from app.models import TaskEvent, TaskRun
+    from app.models import AssetDedupScan, TaskEvent, TaskRun
     from app.services import operations
 
-    scan_id = uuid4()
+    scan_id = None
     failure_result = {
         "scan_id": str(scan_id),
         "status": "failed",
@@ -1359,6 +1867,15 @@ async def test_registered_dedup_failed_result_is_one_retryable_terminal_transiti
     try:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            scan = AssetDedupScan(
+                status="failed",
+                options={"auto_apply": False, "batch_size": 1},
+                error="asset dedup scan failed",
+            )
+            db.add(scan)
+            await db.flush()
+            scan_id = scan.id
+            failure_result["scan_id"] = str(scan_id)
             prepared = await operations.prepare_admin_operation(
                 db,
                 operation_type="asset-dedup-scan",
@@ -1421,6 +1938,144 @@ async def test_registered_dedup_failed_result_is_one_retryable_terminal_transiti
     finally:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            if scan_id is not None:
+                scan = await db.get(AssetDedupScan, scan_id)
+                if scan is not None:
+                    await db.delete(scan)
+                    await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_registered_dedup_retry_resets_failed_scan_before_new_attempt():
+    """Retry rotates TaskRun and restores the dedup domain cursor atomically."""
+    from app.database import async_session, engine
+    from app.models import AssetDedupScan, TaskRun
+    from app.services import operations
+
+    task_id = None
+    scan_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            scan = AssetDedupScan(
+                status="failed",
+                options={
+                    "auto_apply": False,
+                    "batch_size": 1,
+                    "_rq_generation": 3,
+                },
+                error="image derive failed",
+            )
+            db.add(scan)
+            await db.flush()
+            scan_id = scan.id
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                title="Asset dedup scan",
+                entity="assets",
+                options={"scan_id": str(scan.id), "_scan_generation": 3},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "failed"
+            prepared.task.error_log = "image derive failed"
+            await db.commit()
+
+        retry = await operations.prepare_admin_operation_retry(task_id)
+        assert retry.attempt == 2
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            scan = await verify_db.get(AssetDedupScan, scan_id)
+            dispatch = task.meta[operations.ADMIN_DISPATCH_META_KEY]
+            assert task.status == "enqueued"
+            assert scan.status == "pending"
+            assert scan.error is None
+            assert dispatch["options"]["scan_id"] == str(scan_id)
+            assert dispatch["options"]["_scan_generation"] == 3
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            if scan_id is not None:
+                scan = await db.get(AssetDedupScan, scan_id)
+                if scan is not None:
+                    await db.delete(scan)
+                    await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_registered_dedup_retry_recovers_running_scan_after_worker_crash(
+    monkeypatch,
+):
+    """RQ terminal repair leaves a running cursor resumable by the next attempt."""
+    from app.database import async_session, engine
+    from app.models import AssetDedupScan, TaskRun
+    from app.services import operations
+
+    class FailedJob:
+        @staticmethod
+        def get_status(refresh=True):
+            assert refresh is True
+            return "failed"
+
+    monkeypatch.setattr(operations, "_fetch_admin_rq", lambda *_a, **_k: FailedJob())
+    task_id = None
+    scan_id = None
+    try:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            scan = AssetDedupScan(
+                status="running",
+                options={"_rq_generation": 4, "_operation_job_id": "old-attempt"},
+            )
+            db.add(scan)
+            await db.flush()
+            scan_id = scan.id
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                title="Asset dedup scan",
+                entity="assets",
+                options={"scan_id": str(scan.id), "_scan_generation": 4},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            task_id = prepared.task.id
+            prepared.task.status = "running"
+            dispatch = dict(prepared.task.meta[operations.ADMIN_DISPATCH_META_KEY])
+            dispatch["publication_state"] = operations.ADMIN_DISPATCH_PUBLISHED
+            prepared.task.meta = {
+                **prepared.task.meta,
+                operations.ADMIN_DISPATCH_META_KEY: dispatch,
+            }
+            await db.commit()
+
+        assert await operations.publish_admin_operation(task_id, 1) == "failed"
+        retry = await operations.prepare_admin_operation_retry(task_id)
+        assert retry.attempt == 2
+        async with async_session() as verify_db:
+            task = await verify_db.get(TaskRun, task_id)
+            scan = await verify_db.get(AssetDedupScan, scan_id)
+            dispatch = task.meta[operations.ADMIN_DISPATCH_META_KEY]
+            assert task.status == "enqueued"
+            assert scan.status == "pending"
+            assert scan.error is None
+            assert dispatch["options"]["_scan_generation"] == 4
+    finally:
+        async with async_session() as db:
+            await _clear_dispatch_rows(db)
+            if scan_id is not None:
+                scan = await db.get(AssetDedupScan, scan_id)
+                if scan is not None:
+                    await db.delete(scan)
+                    await db.commit()
         await engine.dispose()
 
 

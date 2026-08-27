@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -238,22 +239,111 @@ async def latest_backup(db: AsyncSession = Depends(get_db)):
     )
 
 
-def _create_backup_sync(data: dict | None = None):
+_BACKUP_CANDIDATE_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+
+
+def _backup_directory_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _open_backup_root_fd() -> int:
+    return os.open(BACKUP_DIR, _backup_directory_flags())
+
+
+def _open_pending_backup_fd(root_fd: int, *, create: bool) -> int:
+    if create:
+        try:
+            os.mkdir(".pending", mode=0o700, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+    return os.open(".pending", _backup_directory_flags(), dir_fd=root_fd)
+
+
+def _clear_pending_backup_candidates(pending_fd: int) -> None:
+    """Unlink prior attempt files without following unexpected entries."""
+
+    with os.scandir(pending_fd) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".pending"):
+                continue
+            if entry.is_symlink() or entry.is_file(follow_symlinks=False):
+                try:
+                    os.unlink(entry.name, dir_fd=pending_fd)
+                except FileNotFoundError:
+                    pass
+    os.fsync(pending_fd)
+
+
+def _create_backup_sync(
+    data: dict | None = None,
+    *,
+    publish: bool = True,
+    candidate_token: str | None = None,
+):
+    """Build a backup archive, optionally leaving it invisible for fencing.
+
+    Registered TaskRun workers always build an attempt-specific candidate.
+    Only the async caller may publish that candidate after its PostgreSQL
+    attempt fence succeeds.  The default preserves the local maintenance/test
+    helper's historical synchronous behavior.
+    """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"auto-gallery-backup_{ts}.tar.gz"
-    filepath = BACKUP_DIR / filename
+    candidate_handle = None
+    candidate_pending_fd = None
+    candidate_root_fd = None
+    candidate_name = None
+    if publish:
+        filepath = BACKUP_DIR / filename
+    else:
+        if not candidate_token or not _BACKUP_CANDIDATE_TOKEN_RE.fullmatch(
+            candidate_token
+        ):
+            raise ValueError("Backup candidate token is invalid")
+        candidate_name = f"{filename}.{candidate_token}.pending"
+        filepath = BACKUP_DIR / ".pending" / candidate_name
+        candidate_root_fd = _open_backup_root_fd()
+        try:
+            candidate_pending_fd = _open_pending_backup_fd(
+                candidate_root_fd,
+                create=True,
+            )
+            _clear_pending_backup_candidates(candidate_pending_fd)
+            candidate_fd = os.open(
+                candidate_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=candidate_pending_fd,
+            )
+            os.fsync(candidate_pending_fd)
+        except Exception:
+            if candidate_pending_fd is not None:
+                os.close(candidate_pending_fd)
+            os.close(candidate_root_fd)
+            raise
+        candidate_handle = os.fdopen(candidate_fd, "w+b")
 
-    selected = (data or {}).get("contents", list(ALL_BACKUP_CONTENTS))
-    selected = [c for c in selected if c in ALL_BACKUP_CONTENTS]
-    if not selected:
-        selected = list(ALL_BACKUP_CONTENTS)
-
-    db_info = _parse_db_url(settings.database_url)
-    tmpdir = tempfile.mkdtemp(prefix="ag-backup-")
+    tmpdir = None
     sizes: dict[str, int] = {}
+    candidate_returned = False
 
     try:
+        selected = (data or {}).get("contents", list(ALL_BACKUP_CONTENTS))
+        selected = [c for c in selected if c in ALL_BACKUP_CONTENTS]
+        if not selected:
+            selected = list(ALL_BACKUP_CONTENTS)
+
+        db_info = _parse_db_url(settings.database_url)
+        tmpdir = tempfile.mkdtemp(prefix="ag-backup-")
+
         # 1. PostgreSQL dump
         if "database" in selected:
             dump_path = os.path.join(tmpdir, "database.dump")
@@ -335,19 +425,21 @@ def _create_backup_sync(data: dict | None = None):
             json.dump(manifest, f, indent=2)
 
         # Create tar.gz
-        with tarfile.open(filepath, "w:gz") as tar:
-            for item in os.listdir(tmpdir):
-                tar.add(os.path.join(tmpdir, item), arcname=item)
-
-        file_size = os.path.getsize(filepath)
+        if candidate_handle is None:
+            with tarfile.open(filepath, "w:gz") as tar:
+                for item in os.listdir(tmpdir):
+                    tar.add(os.path.join(tmpdir, item), arcname=item)
+            file_size = os.path.getsize(filepath)
+        else:
+            with tarfile.open(fileobj=candidate_handle, mode="w:gz") as tar:
+                for item in os.listdir(tmpdir):
+                    tar.add(os.path.join(tmpdir, item), arcname=item)
+            candidate_handle.flush()
+            os.fsync(candidate_handle.fileno())
+            file_size = os.fstat(candidate_handle.fileno()).st_size
         logger.info("Backup created: %s (%.1f MB) contents=%s", filename, file_size / 1024 / 1024, selected)
 
-        # Keep last 10 backups
-        existing = _list_backup_files()
-        for old in existing[:-10]:
-            old.unlink()
-
-        return {
+        result = {
             "status": "ok",
             "filename": filename,
             "size_bytes": file_size,
@@ -356,9 +448,91 @@ def _create_backup_sync(data: dict | None = None):
             "restorable": "database" in selected,
             "component_sizes": {k: round(v / 1024, 1) for k, v in sizes.items()},
         }
+        if publish:
+            # Keep last 10 visible backups. Candidate archives never prune.
+            _prune_backup_files(preserve=filepath)
+            return result
+        candidate_returned = True
+        return {**result, "_candidate_path": str(filepath)}
 
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if candidate_handle is not None:
+            candidate_handle.close()
+        if (
+            not candidate_returned
+            and candidate_pending_fd is not None
+            and candidate_name is not None
+        ):
+            try:
+                os.unlink(candidate_name, dir_fd=candidate_pending_fd)
+            except FileNotFoundError:
+                pass
+            os.fsync(candidate_pending_fd)
+        if candidate_pending_fd is not None:
+            os.close(candidate_pending_fd)
+        if candidate_root_fd is not None:
+            os.close(candidate_root_fd)
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def publish_backup_candidate(staged: dict, *, prune: bool = True) -> dict:
+    """Atomically expose one already-built candidate and then prune history."""
+
+    candidate_value = staged.get("_candidate_path")
+    filename = str(staged.get("filename") or "")
+    if not isinstance(candidate_value, str) or not BACKUP_NAME_PATTERN.fullmatch(
+        filename
+    ):
+        raise ValueError("Backup candidate metadata is invalid")
+    candidate = Path(candidate_value)
+    candidate_name = candidate.name
+    expected_prefix = f"{filename}."
+    if (
+        candidate != BACKUP_DIR / ".pending" / candidate_name
+        or not candidate_name.startswith(expected_prefix)
+        or not candidate_name.endswith(".pending")
+        or not _BACKUP_CANDIDATE_TOKEN_RE.fullmatch(
+            candidate_name[len(expected_prefix) : -len(".pending")]
+        )
+    ):
+        raise ValueError("Backup candidate escaped its pending directory")
+    root_fd = _open_backup_root_fd()
+    try:
+        pending_fd = _open_pending_backup_fd(root_fd, create=False)
+        try:
+            candidate_stat = os.stat(
+                candidate_name,
+                dir_fd=pending_fd,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISREG(candidate_stat.st_mode):
+                raise RuntimeError("Backup candidate is missing")
+            os.replace(
+                candidate_name,
+                filename,
+                src_dir_fd=pending_fd,
+                dst_dir_fd=root_fd,
+            )
+            os.fsync(pending_fd)
+            os.fsync(root_fd)
+        finally:
+            os.close(pending_fd)
+    finally:
+        os.close(root_fd)
+    target = BACKUP_DIR / filename
+
+    if prune:
+        _prune_backup_files(preserve=target)
+    return {key: value for key, value in staged.items() if not key.startswith("_")}
+
+
+def prune_published_backup(filename: str) -> None:
+    """Prune only after the publishing TaskRun is durably complete."""
+
+    if not BACKUP_NAME_PATTERN.fullmatch(filename):
+        raise ValueError("Published backup filename is invalid")
+    _prune_backup_files(preserve=BACKUP_DIR.resolve() / filename)
 
 
 BACKUP_NAME_PATTERN = re.compile(r"auto-gallery-backup_[0-9]{8}_[0-9]{6}\.tar\.gz")
@@ -379,6 +553,16 @@ def _list_backup_files() -> list[Path]:
         if BACKUP_NAME_PATTERN.fullmatch(resolved.name):
             files.append(resolved)
     return sorted(files)
+
+
+def _prune_backup_files(*, preserve: Path, keep: int = 10) -> None:
+    """Prune history without ever deleting the archive just published."""
+
+    existing = _list_backup_files()
+    excess = max(0, len(existing) - keep)
+    preserved = preserve.resolve(strict=False)
+    for old in [path for path in existing if path != preserved][:excess]:
+        old.unlink()
 
 
 def _validate_backup_filename(filename: str) -> Path:
@@ -697,7 +881,10 @@ async def validate_restore_upload(
             await publish_admin_operation(response["task_id"], attempt)
             return response
 
-        if session["state"] not in {"uploaded", "validating", "validation_failed"}:
+        recoverable_states = {"uploaded", "validating", "validation_failed"}
+        if attached_id and attached is None:
+            recoverable_states.add("ready")
+        if session["state"] not in recoverable_states:
             raise RestoreConflict("Restore upload is not complete")
         prepared = await prepare_admin_operation(
             db,

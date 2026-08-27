@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CalendarScheduleRule, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
 import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
-import { scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
+import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
 import { adminRoutes } from "@/lib/adminRoutes";
@@ -215,8 +215,9 @@ export default function SubscriptionDetailPage() {
   if (!sub.data) return null;
   const s = sub.data;
   const schedule = summaries.data?.items[0]?.schedule;
-  const effectiveScheduleText = schedule?.effective_mode === "calendar"
-    ? `${scheduleModeLabel(t, "calendar")} · ${t(`subdefaults.${schedule.schedule_rule?.frequency || "daily"}`)}`
+  const calendarMode = schedule?.effective_mode === "calendar" || schedule?.effective_mode === "fixed_time";
+  const effectiveScheduleText = calendarMode
+    ? `${scheduleModeLabel(t, schedule?.effective_mode)} · ${calendarScheduleRuleLabel(t, schedule?.schedule_rule, schedule?.scheduled_times)}`
     : schedule?.effective_mode === "manual"
       ? t("subscriptions.manual")
       : `${scheduleModeLabel(t, "interval")} · ${t("subscriptions.schedule_interval", { hours: schedule?.sync_interval_hours || s.sync_interval_hours })}`;

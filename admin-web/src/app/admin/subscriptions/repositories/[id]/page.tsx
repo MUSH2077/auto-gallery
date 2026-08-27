@@ -498,7 +498,7 @@ export default function RepositoryDetailPage() {
         {tabs.map((item) => (
           <button key={item.key} onClick={() => setTab(item.key)}
             className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
-            {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-muted">{item.count}</span>}
+            {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-fg">{item.count}</span>}
           </button>
         ))}
       </nav>

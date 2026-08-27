@@ -279,9 +279,6 @@ class RestoreRunner:
             preflight_payload,
         )
         self.receipt_path = self.receipts / f"{self.request_id}.json"
-        self.rollback_dir = self.receipts / "rollbacks" / self.request_id
-        self.rollback_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-        self.journal_path = self.rollback_dir / "journal.json"
         self.phase = "validate_request"
         self.started_at = now()
         suffix = self.request_id.replace("-", "")[:12]
@@ -291,9 +288,16 @@ class RestoreRunner:
         if not self.compose_command:
             raise RestoreHostError("RESTORE_COMPOSE_COMMAND is empty")
         self.postgres_user, self.live_database = self._discover_postgres_identity()
+        # This is a read-only, retryable preflight. It must happen before a
+        # rollback directory or immutable receipt can make this request
+        # identity one-shot.
+        self._validate_taskrun_authority()
         self.temp_database = f"ag_restore_{suffix}"
         self.rollback_database = f"ag_rollback_{suffix}"
         self.failed_database = f"ag_failed_{suffix}"
+        self.rollback_dir = self.receipts / "rollbacks" / self.request_id
+        self.rollback_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+        self.journal_path = self.rollback_dir / "journal.json"
         self.payload = self.session
         self.archive = self.session
         self.manifest: dict[str, Any] = {}
@@ -313,8 +317,8 @@ class RestoreRunner:
             "rollback_components": {},
             "created_at": self.started_at,
         }
-        self._write_rollback_point()
         self._save_journal()
+        self._write_rollback_point()
 
     @staticmethod
     def _require_database_payload(manifest: Any, payload: Path) -> str:
@@ -533,6 +537,49 @@ class RestoreRunner:
         self._fault_boundary(
             f"{swap['kind']}:{swap['component']}:{boundary}"
         )
+
+    def _validate_taskrun_authority(self) -> None:
+        """Reject a ready file unless its exact TaskRun attempt is complete."""
+
+        try:
+            task_id = str(UUID(str(self.request.get("task_id"))))
+        except (TypeError, ValueError) as exc:
+            raise RestoreHostError("ready request TaskRun identity is invalid") from exc
+        if task_id != self.request.get("task_id"):
+            raise RestoreHostError("ready request TaskRun identity is invalid")
+        attempt = self.request.get("attempt")
+        if type(attempt) is not int or attempt < 1:
+            raise RestoreHostError("ready request TaskRun attempt is invalid")
+        statement = (
+            "SELECT status || '|' || "
+            "COALESCE(meta->'admin_dispatch'->>'attempt', '') "
+            "FROM task_runs "
+            f"WHERE id = '{task_id}'::uuid "
+            "AND kind = 'admin' "
+            "AND operation_type = 'admin-restore-validate';"
+        )
+        result = self.compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "--username",
+            self.postgres_user,
+            "--dbname",
+            self.live_database,
+            "--tuples-only",
+            "--no-align",
+            "--set",
+            "ON_ERROR_STOP=1",
+            "--set=offline_restore_phase=task-authority",
+            "--command",
+            statement,
+        )
+        authority = (result.stdout or b"").decode("utf-8").strip()
+        if authority != f"complete|{attempt}":
+            raise RestoreHostError(
+                "Restore TaskRun attempt is not complete and current"
+            )
 
     def validate_request(self) -> None:
         self.enter("validate_request")

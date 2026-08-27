@@ -56,6 +56,40 @@ CONFIRMATION_PHRASES = {
 }
 
 
+async def _fence_registered_admin_commit(db: AsyncSession) -> None:
+    """Validate the exact TaskRun attempt immediately before a domain commit."""
+
+    from app.services.operations import fence_current_admin_operation_transaction
+
+    await fence_current_admin_operation_transaction(db)
+
+
+async def _lock_pipeline_rows_for_clear(entity: str, db: AsyncSession) -> None:
+    """Lock destructive-clear pipeline rows in the system-wide order.
+
+    Deletes still run in foreign-key-safe order after these locks.  Acquiring
+    every affected domain row first prevents clear jobs from forming the
+    TaskRun/DownloadJob inversion guarded against by reconciliation and
+    compaction.
+    """
+
+    from app.models import DownloadJob, ImportJob, StorageArtifact, TaskRun
+
+    models = []
+    # Removing download/import rows fires StorageArtifact ON DELETE SET NULL,
+    # so every job-owning clear must lock those affected ledger rows first.
+    if entity in {"all", "works", "jobs", "subscriptions", "creators"}:
+        models.append(StorageArtifact)
+    if entity in {"all", "jobs", "subscriptions", "creators"}:
+        models.extend((DownloadJob, ImportJob, TaskRun))
+    for model in models:
+        await db.execute(
+            select(model.id)
+            .order_by(model.id)
+            .with_for_update(of=model)
+        )
+
+
 async def preview_clear_entity_data(entity: str, db: AsyncSession) -> dict:
     """Return a read-only, domain-scoped impact preview."""
 
@@ -140,6 +174,7 @@ async def _clear_subscriptions(db: AsyncSession) -> dict[str, int]:
 
 async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     """Clear one data area and return the legacy response shape."""
+    await _lock_pipeline_rows_for_clear(entity, db)
     if entity == "all":
         # Clear self-referencing FKs on curation_commits before delete
         await db.execute(text(
@@ -158,6 +193,7 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
             "creator_links", "creators", "tags",
         ]
         results = await _delete_tables(order, db)
+        await _fence_registered_admin_commit(db)
         await db.commit()
         _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
@@ -189,6 +225,7 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     if entity == "works":
         storage_result = await db.execute(text("DELETE FROM storage_artifacts"))
         results["storage_artifacts"] = storage_result.rowcount or 0
+    await _fence_registered_admin_commit(db)
     await db.commit()
 
     if entity == "works":
@@ -471,7 +508,10 @@ async def _delete_tables(tables: list[str], db: AsyncSession) -> dict[str, int]:
 
             r = await db.execute(
                 TaskRun.__table__.delete().where(
-                    TaskRun.status.not_in(NONTERMINAL_STATUSES)
+                    TaskRun.status.not_in(NONTERMINAL_STATUSES),
+                    # A ready offline restore handoff is authorized by this
+                    # durable completed row until the host consumes it.
+                    TaskRun.operation_type != "admin-restore-validate",
                 )
             )
         else:
@@ -485,6 +525,7 @@ async def _reset_settings(db: AsyncSession) -> int:
     rows = result.scalars().all()
     for row in rows:
         await db.delete(row)
+    await _fence_registered_admin_commit(db)
     await db.commit()
     return len(rows)
 

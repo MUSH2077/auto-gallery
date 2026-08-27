@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import type { CalendarScheduleRule } from "@/lib/api";
 import { TFunction, useI18n } from "@/lib/i18n";
 
 const STATUS_KEYS = new Set([
@@ -106,6 +107,67 @@ export function scheduleModeLabel(t: TFunction, mode?: string | null): string {
   return SCHEDULE_MODE_KEYS.has(normalized)
     ? t(`scheduler.mode.${normalized}`)
     : t("scheduler.mode.interval");
+}
+
+function compactClock(value: string): string {
+  const parts = value.split(":");
+  return parts.length === 3 && parts[2] === "00" ? parts.slice(0, 2).join(":") : value;
+}
+
+function normalizedClockValues(value: unknown): string[] {
+  const candidates = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+  return candidates
+    .filter((candidate): candidate is string => typeof candidate === "string")
+    .map((candidate) => candidate.trim())
+    .filter((candidate) => /^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(candidate))
+    .map(compactClock);
+}
+
+function normalizedScheduleDays(value: unknown, maximum: number): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter(
+    (candidate): candidate is number => Number.isInteger(candidate)
+      && candidate >= 1
+      && candidate <= maximum,
+  ))];
+}
+
+export function calendarScheduleRuleLabel(
+  t: TFunction,
+  rule?: CalendarScheduleRule | Record<string, unknown> | null,
+  legacyTimes?: string | null,
+): string {
+  const runtimeRule = rule && typeof rule === "object"
+    ? rule as Record<string, unknown>
+    : null;
+  const ruleTimes = normalizedClockValues(runtimeRule?.times);
+  const times = (runtimeRule ? ruleTimes : normalizedClockValues(legacyTimes)).join(", ");
+  const displayedTimes = times || "—";
+  const frequency = typeof runtimeRule?.frequency === "string"
+    ? runtimeRule.frequency.toLowerCase()
+    : null;
+  if (!runtimeRule || frequency === "daily") {
+    return t("schedule.rule.daily", { times: displayedTimes });
+  }
+  if (frequency === "weekly") {
+    const weekdays = normalizedScheduleDays(runtimeRule.weekdays, 7);
+    if (weekdays.length === 0) return t("schedule.rule.unknown", { times: displayedTimes });
+    const days = weekdays.map((day) => t(`subdefaults.weekday.${day}`)).join(", ");
+    return t("schedule.rule.weekly", { days, times: displayedTimes });
+  }
+  if (frequency === "monthly") {
+    const monthDays = normalizedScheduleDays(runtimeRule.month_days, 31);
+    if (monthDays.length === 0) return t("schedule.rule.unknown", { times: displayedTimes });
+    return t("schedule.rule.monthly", {
+      days: monthDays.join(", "),
+      times: displayedTimes,
+    });
+  }
+  return t("schedule.rule.unknown", { times: displayedTimes });
 }
 
 export function userModuleLabel(t: TFunction, module: string): string {
