@@ -504,8 +504,8 @@ class RestoreRunner:
         root: Path,
         relative: str,
         existed: bool,
-        original_identity: dict[str, int] | None,
-        candidate_identity: dict[str, int],
+        original_identity: dict[str, int | str] | None,
+        candidate_identity: dict[str, int | str],
     ) -> dict[str, Any]:
         swap = {
             "kind": kind,
@@ -1965,15 +1965,19 @@ END
         *,
         label: str,
         expected_mode: int | None = None,
-    ) -> dict[str, int]:
+    ) -> dict[str, int | str]:
         if not isinstance(value, dict):
             raise RestoreHostError(f"Rollback {label} identity is missing")
-        identity: dict[str, int] = {}
+        identity: dict[str, int | str] = {}
         for field in ("device", "inode", "mode"):
             member = value.get(field)
             if type(member) is not int or member < 0:
                 raise RestoreHostError(f"Rollback {label} identity is invalid")
             identity[field] = member
+        fingerprint = value.get("fingerprint")
+        if not isinstance(fingerprint, str) or SHA256.fullmatch(fingerprint) is None:
+            raise RestoreHostError(f"Rollback {label} fingerprint is invalid")
+        identity["fingerprint"] = fingerprint
         if expected_mode is not None and identity["mode"] != expected_mode:
             raise RestoreHostError(f"Rollback {label} identity type is invalid")
         if expected_mode is None and identity["mode"] not in {
@@ -2031,7 +2035,106 @@ END
         self._rollback_fault_boundary(swap, boundary)
 
     @staticmethod
-    def _entry_identity(parent_fd: int, name: str) -> dict[str, int] | None:
+    def _entry_fingerprint(
+        parent_fd: int,
+        name: str,
+        expected: os.stat_result,
+    ) -> str:
+        """Bind an entry identity to content that survives a same-FS rename."""
+
+        digest = hashlib.sha256()
+
+        def frame(label: bytes, value: bytes) -> None:
+            digest.update(len(label).to_bytes(2, "big"))
+            digest.update(label)
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+
+        def require_same(opened: os.stat_result, recorded: os.stat_result) -> None:
+            if (
+                opened.st_dev,
+                opened.st_ino,
+                stat.S_IFMT(opened.st_mode),
+            ) != (
+                recorded.st_dev,
+                recorded.st_ino,
+                stat.S_IFMT(recorded.st_mode),
+            ):
+                raise RestoreHostError(
+                    "Restore entry changed while its identity was measured"
+                )
+
+        def visit(
+            directory_fd: int,
+            entry_name: str,
+            recorded: os.stat_result,
+            relative: bytes,
+        ) -> None:
+            mode = stat.S_IFMT(recorded.st_mode)
+            frame(b"entry", relative)
+            frame(b"mode", int(mode).to_bytes(4, "big"))
+            if mode == stat.S_IFREG:
+                descriptor = os.open(
+                    entry_name,
+                    os.O_RDONLY | NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    require_same(opened, recorded)
+                    frame(b"size", int(opened.st_size).to_bytes(8, "big"))
+                    while block := os.read(descriptor, 1024 * 1024):
+                        digest.update(block)
+                finally:
+                    os.close(descriptor)
+                return
+            if mode == stat.S_IFLNK:
+                target = os.readlink(entry_name, dir_fd=directory_fd)
+                frame(b"link", os.fsencode(target))
+                return
+            if mode != stat.S_IFDIR:
+                raise RestoreHostError(
+                    "Restore entry identity has an unsupported file type"
+                )
+
+            child_fd = os.open(
+                entry_name,
+                os.O_RDONLY | DIRECTORY | NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            try:
+                require_same(os.fstat(child_fd), recorded)
+                children = sorted(os.listdir(child_fd), key=os.fsencode)
+                frame(b"children", len(children).to_bytes(8, "big"))
+                for child in children:
+                    child_stat = os.stat(
+                        child,
+                        dir_fd=child_fd,
+                        follow_symlinks=False,
+                    )
+                    child_relative = (
+                        relative + b"/" + os.fsencode(child)
+                        if relative
+                        else os.fsencode(child)
+                    )
+                    visit(child_fd, child, child_stat, child_relative)
+            finally:
+                os.close(child_fd)
+
+        try:
+            visit(parent_fd, name, expected, b"")
+        except OSError as exc:
+            raise RestoreHostError(
+                f"Unable to measure restore entry identity: {name}"
+            ) from exc
+        return digest.hexdigest()
+
+    @classmethod
+    def _entry_identity(
+        cls,
+        parent_fd: int,
+        name: str,
+    ) -> dict[str, int | str] | None:
         try:
             entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -2040,21 +2143,32 @@ END
             "device": int(entry.st_dev),
             "inode": int(entry.st_ino),
             "mode": int(stat.S_IFMT(entry.st_mode)),
+            "fingerprint": cls._entry_fingerprint(parent_fd, name, entry),
         }
 
     @staticmethod
     def _require_rollback_identity(
-        actual: dict[str, int] | None,
+        actual: dict[str, int | str] | None,
         expected: Any,
         *,
         name: str,
     ) -> None:
         if actual is None:
             raise RestoreHostError(f"Rollback mutation source is missing: {name}")
-        if not isinstance(expected, dict) or any(
+        numeric_changed = not isinstance(expected, dict) or any(
             type(expected.get(field)) is not int
             or expected[field] != actual.get(field)
             for field in ("device", "inode", "mode")
+        )
+        fingerprint = expected.get("fingerprint") if isinstance(expected, dict) else None
+        if (
+            numeric_changed
+            or not isinstance(fingerprint, str)
+            or SHA256.fullmatch(fingerprint) is None
+            or not hmac.compare_digest(
+                fingerprint,
+                str(actual.get("fingerprint") or ""),
+            )
         ):
             raise RestoreHostError(f"Rollback mutation source changed: {name}")
 
@@ -2063,7 +2177,7 @@ END
         swap: dict[str, Any],
         *,
         action: str,
-        identity: dict[str, int],
+        identity: dict[str, int | str],
         state: str,
         boundary: str,
     ) -> None:

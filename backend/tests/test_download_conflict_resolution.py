@@ -130,6 +130,23 @@ def test_rollback_resumes_after_atomic_switch_interruption(tmp_path, monkeypatch
     assert quarantine.read_bytes() == b"staged"
 
 
+def test_managed_conflict_reader_rejects_symlinked_parent(tmp_path):
+    from app.services.download_conflicts import (
+        DownloadConflictError,
+        _open_managed_regular,
+    )
+
+    root = tmp_path / "downloads"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "work.jpg").write_bytes(b"outside")
+    (root / "pixiv").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(DownloadConflictError, match="unsafe"):
+        _open_managed_regular(root, "pixiv/work.jpg")
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evidence_backed_resolution_updates_asset_and_rollback_restores_it(

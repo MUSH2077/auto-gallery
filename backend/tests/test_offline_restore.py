@@ -853,6 +853,45 @@ def test_registered_backup_exception_cleanup_uses_original_pending_directory(
 API_PREFIX = "offline_restore_"
 
 
+def test_restore_receipt_reader_rejects_symlink(tmp_path):
+    from app.services.offline_restore import (
+        RestoreValidationError,
+        _atomic_json,
+        _token_hash,
+        read_restore_receipt,
+    )
+
+    request_id = "00000000-0000-0000-0000-000000000091"
+    token = "receipt-capability"
+    staging = tmp_path / "staging"
+    receipts = tmp_path / "receipts"
+    session = staging / request_id
+    session.mkdir(parents=True)
+    receipts.mkdir()
+    _atomic_json(
+        session / "metadata.json",
+        {
+            "upload_id": request_id,
+            "state": "ready",
+            "token_hash": _token_hash(token),
+        },
+    )
+    outside = tmp_path / "outside.json"
+    outside.write_text(
+        json.dumps({"request_id": request_id, "status": "success"}),
+        encoding="utf-8",
+    )
+    (receipts / f"{request_id}.json").symlink_to(outside)
+
+    with pytest.raises(RestoreValidationError, match="invalid"):
+        read_restore_receipt(
+            staging=staging,
+            receipts=receipts,
+            request_id=request_id,
+            token=token,
+        )
+
+
 async def _seed_api_user(db, username: str, permissions: list[str]) -> None:
     from app.auth import hash_password
     from app.models.user import User

@@ -9,8 +9,8 @@ import os
 import re
 import stat
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, BinaryIO
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -48,6 +48,64 @@ class DownloadConflictError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 409):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _managed_relative_parts(relative: str) -> tuple[str, ...]:
+    """Return a portable, relative component list for an openat traversal."""
+
+    if not relative or "\\" in relative or "\x00" in relative:
+        raise DownloadConflictError("Conflict path is unsafe", status_code=422)
+    parsed = PurePosixPath(relative)
+    if parsed.is_absolute() or any(part in {"", ".", ".."} for part in parsed.parts):
+        raise DownloadConflictError("Conflict path is unsafe", status_code=422)
+    return tuple(parsed.parts)
+
+
+def _open_managed_regular(root: Path, relative: str) -> BinaryIO:
+    """Open a managed file without following a replaceable path component."""
+
+    parts = _managed_relative_parts(relative)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    file_fd = -1
+    try:
+        resolved_root = Path(root).resolve(strict=True)
+        current_fd = os.open(
+            resolved_root,
+            os.O_RDONLY | directory_flag | nofollow_flag,
+        )
+        descriptors.append(current_fd)
+        for component in parts[:-1]:
+            current_fd = os.open(
+                component,
+                os.O_RDONLY | directory_flag | nofollow_flag,
+                dir_fd=current_fd,
+            )
+            descriptors.append(current_fd)
+        file_fd = os.open(
+            parts[-1],
+            os.O_RDONLY | nofollow_flag,
+            dir_fd=current_fd,
+        )
+        info = os.fstat(file_fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise DownloadConflictError("Conflict file is unsafe", status_code=404)
+        handle = os.fdopen(file_fd, "rb")
+        file_fd = -1
+        return handle
+    except DownloadConflictError:
+        raise
+    except (FileNotFoundError, NotADirectoryError, OSError) as exc:
+        raise DownloadConflictError(
+            "Conflict file is missing or unsafe",
+            status_code=404,
+        ) from exc
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _equal_nonempty(*values: Any) -> bool:
@@ -352,26 +410,30 @@ class DownloadConflictService:
             "items": items,
         }
 
-    async def media_path(self, task_id: UUID, relative_path: str, side: str) -> Path:
+    async def open_media(
+        self,
+        task_id: UUID,
+        relative_path: str,
+        side: str,
+    ) -> tuple[BinaryIO, str]:
         _task, _job, stage = await self._load(task_id)
-        conflicts = set(stage._manifest.get("conflicts") or [])
-        if relative_path not in conflicts:
+        stored_relative = next(
+            (
+                str(candidate)
+                for candidate in stage._manifest.get("conflicts") or []
+                if str(candidate) == relative_path
+            ),
+            None,
+        )
+        if stored_relative is None:
             raise DownloadConflictError("Conflict file not found", status_code=404)
         if side == "staged":
-            path = (stage.root / relative_path).resolve()
             root = stage.root.resolve()
         elif side == "canonical":
-            path = (self.download_root / relative_path).resolve()
             root = self.download_root
         else:
             raise DownloadConflictError("side must be canonical or staged", status_code=422)
-        try:
-            path.relative_to(root)
-        except ValueError as exc:
-            raise DownloadConflictError("Conflict path escapes managed storage", status_code=422) from exc
-        if path.is_symlink() or not path.is_file():
-            raise DownloadConflictError("Conflict file not found", status_code=404)
-        return path
+        return _open_managed_regular(root, stored_relative), stored_relative
 
     async def resolve(
         self,
@@ -534,9 +596,10 @@ class DownloadConflictService:
         relative = str(entry["relative_path"])
         target = (self.download_root / relative).resolve()
         quarantine = (self.download_root / str(entry["quarantine_path"])).resolve()
-        temporary = quarantine.with_name(
-            f".{quarantine.name}.rollback-{resolution_id}"
-        )
+        rollback_token = hashlib.sha256(
+            str(resolution_id).encode("utf-8", "surrogatepass")
+        ).hexdigest()[:32]
+        temporary = quarantine.with_name(f".{quarantine.name}.rollback-{rollback_token}")
         for path in (target, quarantine, temporary):
             try:
                 path.relative_to(self.download_root)
@@ -633,6 +696,9 @@ class DownloadConflictService:
         if audit is None or str((audit.summary or {}).get("task_id")) != str(task_id):
             raise DownloadConflictError("Conflict resolution not found", status_code=404)
         summary = dict(audit.summary or {})
+        stored_resolution_id = str(summary.get("resolution_id") or "")
+        if stored_resolution_id != resolution_id:
+            raise DownloadConflictError("Conflict resolution identity mismatch")
         if summary.get("state") != "applied":
             raise DownloadConflictError("Conflict resolution has already been rolled back")
         expires_at = datetime.fromisoformat(str(summary["expires_at"]))
@@ -644,7 +710,7 @@ class DownloadConflictService:
         for entry in summary.get("entries") or []:
             target_stat = self._rollback_files(
                 entry,
-                resolution_id=resolution_id,
+                resolution_id=stored_resolution_id,
             )
 
             for asset_info in entry.get("assets") or []:

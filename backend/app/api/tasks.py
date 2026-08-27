@@ -1,9 +1,12 @@
+import logging
+import mimetypes
+import os
 from datetime import datetime
 from uuid import UUID
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +37,15 @@ from app.services.operation_attention import (
 
 _require_tasks = RequirePermission("tasks")
 router = APIRouter(dependencies=[_require_tasks])
+logger = logging.getLogger(__name__)
+
+
+def _stream_conflict_media(handle):
+    try:
+        while chunk := handle.read(1024 * 1024):
+            yield chunk
+    finally:
+        handle.close()
 
 
 class ReconcileTasksRequest(BaseModel):
@@ -202,10 +214,20 @@ async def get_download_conflict_media(
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
-        path = await DownloadConflictService(db).media_path(task_id, relative_path, side)
+        handle, stored_relative = await DownloadConflictService(db).open_media(
+            task_id,
+            relative_path,
+            side,
+        )
     except DownloadConflictError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return FileResponse(path)
+    size = os.fstat(handle.fileno()).st_size
+    media_type = mimetypes.guess_type(stored_relative)[0] or "application/octet-stream"
+    return StreamingResponse(
+        _stream_conflict_media(handle),
+        media_type=media_type,
+        headers={"Content-Length": str(size)},
+    )
 
 
 @router.post("/{task_id}/conflicts/resolve")
@@ -241,9 +263,16 @@ async def resolve_download_conflicts(
             result["retry"] = retry
         except Exception as retry_exc:
             await db.rollback()
+            logger.exception(
+                "Conflict resolution saved but download retry scheduling failed",
+                extra={"task_id": str(task_id)},
+            )
             result["retry"] = {
                 "status": "needs_retry",
-                "message": str(retry_exc),
+                "message": (
+                    "Conflict resolution was saved, but the download retry "
+                    "could not be scheduled"
+                ),
             }
         return result
     except DownloadConflictError as exc:

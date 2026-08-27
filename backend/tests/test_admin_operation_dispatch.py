@@ -1769,6 +1769,7 @@ async def test_nested_worker_progress_write_rechecks_current_attempt():
 @pytest.mark.asyncio
 async def test_registered_dedup_worker_uses_postgresql_scope_without_redis_lock(
     monkeypatch,
+    tmp_path,
 ):
     """A registry-owned dedup scan does not depend on the removed Redis lock."""
     from app.database import async_session, engine
@@ -1782,6 +1783,10 @@ async def test_registered_dedup_worker_uses_postgresql_scope_without_redis_lock(
 
     task_id = None
     try:
+        monkeypatch.setenv(
+            "HEAVY_IO_LOCK_PATH",
+            str(tmp_path / "locks" / "heavy-io.lock"),
+        )
         async with async_session() as db:
             await _clear_dispatch_rows(db)
             cursor_asset_id = (

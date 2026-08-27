@@ -458,9 +458,12 @@ class DownloadStage:
                         f"canonical conflict changed before resolution: {relative}"
                     )
                 loser = "canonical" if decisions[relative] == "staged" else "staged"
+                quarantine_namespace = hashlib.sha256(
+                    resolution_id.encode("utf-8", "surrogatepass")
+                ).hexdigest()[:32]
                 quarantine_relative = (
                     Path(".conflict-quarantine")
-                    / resolution_id
+                    / quarantine_namespace
                     / loser
                     / Path(PurePosixPath(relative))
                 )

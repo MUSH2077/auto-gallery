@@ -937,21 +937,56 @@ def read_restore_receipt(*, staging: Path, receipts: Path, request_id: str, toke
         _authorize(metadata, token)
         if metadata.get("state") != "ready":
             raise RestoreConflict("Restore request is not ready")
-    receipt_root = Path(receipts).resolve()
-    receipt_path = (receipt_root / f"{request_id}.json").resolve(strict=False)
     try:
-        receipt_path.relative_to(receipt_root)
-    except ValueError as exc:
-        raise RestoreValidationError("Restore receipt path escaped its root") from exc
-    if not receipt_path.exists():
-        return {"request_id": request_id, "status": "pending", "phase": "handoff"}
-    if receipt_path.is_symlink() or not receipt_path.is_file():
-        raise RestoreValidationError("Restore receipt is invalid")
+        normalized_request_id = str(UUID(str(request_id)))
+    except (TypeError, ValueError) as exc:
+        raise RestoreValidationError("Restore receipt identity is invalid") from exc
+    if normalized_request_id != str(request_id):
+        raise RestoreValidationError("Restore receipt identity is invalid")
+
+    root_fd = -1
+    receipt_fd = -1
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        try:
+            receipt_root = Path(receipts).resolve(strict=True)
+            root_fd = os.open(
+                receipt_root,
+                os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
+            )
+        except FileNotFoundError:
+            return {
+                "request_id": normalized_request_id,
+                "status": "pending",
+                "phase": "handoff",
+            }
+        try:
+            receipt_fd = os.open(
+                f"{normalized_request_id}.json",
+                os.O_RDONLY | _NOFOLLOW,
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            return {
+                "request_id": normalized_request_id,
+                "status": "pending",
+                "phase": "handoff",
+            }
+        receipt_stat = os.fstat(receipt_fd)
+        if not stat.S_ISREG(receipt_stat.st_mode):
+            raise RestoreValidationError("Restore receipt is invalid")
+        with os.fdopen(receipt_fd, "r", encoding="utf-8") as handle:
+            receipt_fd = -1
+            receipt = json.load(handle)
+    except RestoreValidationError:
+        raise
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
         raise RestoreValidationError("Restore receipt is invalid") from exc
-    if not isinstance(receipt, dict) or receipt.get("request_id") != request_id:
+    finally:
+        if receipt_fd >= 0:
+            os.close(receipt_fd)
+        if root_fd >= 0:
+            os.close(root_fd)
+    if not isinstance(receipt, dict) or receipt.get("request_id") != normalized_request_id:
         raise RestoreValidationError("Restore receipt identity is invalid")
     allowed = {
         "request_id",
