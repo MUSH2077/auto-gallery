@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     meili_search_timeout_seconds: float = 3.0
 
     secret_key: str = ""
+    # Separate from SECRET_KEY so rotating sessions cannot destroy stored
+    # remote-account credentials. Empty keeps discovery disabled until used.
+    remote_credential_key: str = ""
     admin_password: str = ""
     access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
     media_playback_ttl_seconds: int = 7200
@@ -137,6 +140,13 @@ class Settings(BaseSettings):
 
         if not self.secret_key or _is_placeholder(self.secret_key):
             errors.append("SECRET_KEY is not set or is still a factory placeholder.")
+        if self.remote_credential_key:
+            try:
+                from app.services.remote_credentials import validate_configured_remote_credential_key
+
+                validate_configured_remote_credential_key(self.remote_credential_key)
+            except ValueError as exc:
+                errors.append(str(exc))
         if not self.admin_password or self.admin_password.strip().lower() == "changeme":
             errors.append(
                 f"ADMIN_PASSWORD is not set. Use {DEFAULT_ADMIN_PASSWORD!r} for first login "

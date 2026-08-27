@@ -17,6 +17,7 @@ imagehash==4.3.2
 Pillow==12.3.0
 python-multipart==0.0.32
 PyJWT[crypto]==2.13.0
+cryptography==50.0.0
 bcrypt==5.0.0
 structlog==26.1.0
 meilisearch-python-sdk==7.5.0
