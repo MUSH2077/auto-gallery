@@ -911,6 +911,286 @@ async def test_concurrent_users_import_same_remote_identity_converges_shared_row
         await engine.dispose()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_cross_site_imports_converge_on_one_creator_subscription():
+    """Different remote identities matched to one Creator share one canonical subscription."""
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import (
+        Creator,
+        DiscoveryCandidate,
+        RemoteAccount,
+        SourceCreator,
+        Subscription,
+        SubscriptionSource,
+        UserSubscription,
+    )
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    adapters = Registry(adapter)
+    arrivals = 0
+    arrival_lock = asyncio.Lock()
+    both_ready = asyncio.Event()
+
+    class RacingCrossSiteImportService(RemoteDiscoveryService):
+        async def _owned_account(self, *args, **kwargs):
+            nonlocal arrivals
+            account = await super()._owned_account(*args, **kwargs)
+            async with arrival_lock:
+                arrivals += 1
+                if arrivals == 2:
+                    both_ready.set()
+            await asyncio.wait_for(both_ready.wait(), timeout=5)
+            return account
+
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            first = await _seed_user(db, "cross_site_first")
+            second = await _seed_user(db, "cross_site_second")
+            creator = Creator(name=f"{PREFIX}Cross Site Shared Creator")
+            db.add(creator)
+            await db.flush()
+            pixiv_account = RemoteAccount(
+                user_id=first.id,
+                source="pixiv",
+                auth_method="refresh_token",
+                auth_status="healthy",
+            )
+            bilibili_account = RemoteAccount(
+                user_id=second.id,
+                source="bilibili",
+                auth_method="sessdata",
+                auth_status="healthy",
+            )
+            db.add_all([pixiv_account, bilibili_account])
+            await db.flush()
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            pixiv_candidate = await service.upsert_candidate(
+                pixiv_account,
+                RemoteCandidateIdentity(
+                    source="pixiv",
+                    source_creator_id="cross-site-pixiv",
+                    profile_url="https://www.pixiv.net/users/83001",
+                    display_name="Cross Site Pixiv",
+                    metadata={"has_illustration_preview": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+                additional_creator_ids={creator.id},
+            )
+            bilibili_candidate = await service.upsert_candidate(
+                bilibili_account,
+                RemoteCandidateIdentity(
+                    source="bilibili",
+                    source_creator_id="cross-site-bilibili",
+                    profile_url="https://space.bilibili.com/83002",
+                    display_name="Cross Site Bilibili",
+                    metadata={"has_art_bio": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+                additional_creator_ids={creator.id},
+            )
+            await db.commit()
+            creator_id = creator.id
+            identifiers = (
+                (first.id, pixiv_candidate.id),
+                (second.id, bilibili_candidate.id),
+            )
+
+        async def import_one(user_id, candidate_id):
+            async with async_session() as worker_db:
+                candidate = await RacingCrossSiteImportService(
+                    worker_db, vault=_vault(), adapters=adapters
+                ).import_candidate(user_id, candidate_id)
+                await worker_db.commit()
+                return candidate.subscription_id
+
+        subscription_ids = await asyncio.wait_for(
+            asyncio.gather(*(import_one(*item) for item in identifiers)), timeout=15
+        )
+        assert subscription_ids[0] == subscription_ids[1]
+
+        async with async_session() as db:
+            subscription_id = subscription_ids[0]
+            assert (
+                await db.execute(
+                    select(func.count(Subscription.id)).where(
+                        Subscription.creator_id == creator_id
+                    )
+                )
+            ).scalar_one() == 1
+            assert (
+                await db.execute(
+                    select(func.count(SourceCreator.id)).where(
+                        SourceCreator.creator_id == creator_id,
+                        SourceCreator.source.in_({"pixiv", "bilibili"}),
+                    )
+                )
+            ).scalar_one() == 2
+            assert set(
+                (
+                    await db.execute(
+                        select(SubscriptionSource.source).where(
+                            SubscriptionSource.subscription_id == subscription_id
+                        )
+                    )
+                ).scalars()
+            ) == {"pixiv", "bilibili"}
+            assert (
+                await db.execute(
+                    select(func.count(UserSubscription.id)).where(
+                        UserSubscription.subscription_id == subscription_id
+                    )
+                )
+            ).scalar_one() == 2
+            assert (
+                await db.execute(
+                    select(func.count(DiscoveryCandidate.id)).where(
+                        DiscoveryCandidate.subscription_id == subscription_id,
+                        DiscoveryCandidate.state == "imported",
+                    )
+                )
+            ).scalar_one() == 2
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_conflict_resolutions_reject_incompatible_identity_mapping():
+    """One remote identity cannot be concurrently resolved to two different Creators."""
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import Creator, DiscoveryCandidate, RemoteAccount, SourceCreator
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    adapters = Registry(adapter)
+    arrivals = 0
+    arrival_lock = asyncio.Lock()
+    both_ready = asyncio.Event()
+
+    class RacingResolveService(RemoteDiscoveryService):
+        async def _owned_account(self, *args, **kwargs):
+            nonlocal arrivals
+            account = await super()._owned_account(*args, **kwargs)
+            async with arrival_lock:
+                arrivals += 1
+                if arrivals == 2:
+                    both_ready.set()
+            await asyncio.wait_for(both_ready.wait(), timeout=5)
+            return account
+
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            first = await _seed_user(db, "resolve_race_first")
+            second = await _seed_user(db, "resolve_race_second")
+            first_creator = Creator(name=f"{PREFIX}Resolve Target A")
+            second_creator = Creator(name=f"{PREFIX}Resolve Target B")
+            db.add_all([first_creator, second_creator])
+            await db.flush()
+            first_account = RemoteAccount(
+                user_id=first.id,
+                source="pixiv",
+                auth_method="refresh_token",
+                auth_status="healthy",
+            )
+            second_account = RemoteAccount(
+                user_id=second.id,
+                source="pixiv",
+                auth_method="refresh_token",
+                auth_status="healthy",
+            )
+            db.add_all([first_account, second_account])
+            await db.flush()
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+
+            async def conflict_candidate(account, suffix):
+                return await service.upsert_candidate(
+                    account,
+                    RemoteCandidateIdentity(
+                        source="pixiv",
+                        source_creator_id="concurrent-resolution-identity",
+                        profile_url="https://www.pixiv.net/users/84001",
+                        display_name=f"Concurrent Resolve {suffix}",
+                    ),
+                    seen_at=datetime.now(timezone.utc),
+                    additional_creator_ids={first_creator.id, second_creator.id},
+                )
+
+            first_candidate = await conflict_candidate(first_account, "A")
+            second_candidate = await conflict_candidate(second_account, "B")
+            assert first_candidate.state == second_candidate.state == "conflict"
+            await db.commit()
+            attempts = (
+                (first.id, first_candidate.id, first_creator.id),
+                (second.id, second_candidate.id, second_creator.id),
+            )
+
+        async def resolve_one(user_id, candidate_id, creator_id):
+            async with async_session() as worker_db:
+                try:
+                    await RacingResolveService(
+                        worker_db, vault=_vault(), adapters=adapters
+                    ).resolve_candidate(user_id, candidate_id, creator_id=creator_id)
+                    await worker_db.commit()
+                    return ("resolved", creator_id)
+                except Exception as exc:
+                    await worker_db.rollback()
+                    return exc
+
+        results = await asyncio.wait_for(
+            asyncio.gather(*(resolve_one(*attempt) for attempt in attempts)), timeout=15
+        )
+        successes = [item for item in results if isinstance(item, tuple)]
+        failures = [item for item in results if isinstance(item, Exception)]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert isinstance(failures[0], ValueError)
+        assert "already resolved" in str(failures[0]).lower()
+
+        async with async_session() as db:
+            source_creator = (
+                await db.execute(
+                    select(SourceCreator).where(
+                        SourceCreator.source == "pixiv",
+                        SourceCreator.source_creator_id == "concurrent-resolution-identity",
+                    )
+                )
+            ).scalar_one()
+            winning_creator_id = successes[0][1]
+            assert source_creator.creator_id == winning_creator_id
+            candidates = list(
+                (
+                    await db.execute(
+                        select(DiscoveryCandidate).where(
+                            DiscoveryCandidate.id.in_(
+                                [attempts[0][1], attempts[1][1]]
+                            )
+                        )
+                    )
+                ).scalars()
+            )
+            assert {candidate.state for candidate in candidates} == {"pending", "conflict"}
+            resolved = next(candidate for candidate in candidates if candidate.state == "pending")
+            assert resolved.candidate_metadata["resolved_creator_id"] == str(
+                winning_creator_id
+            )
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
 def _headers(username: str) -> dict[str, str]:
     from app.auth import create_access_token
 

@@ -51,11 +51,20 @@ def _json_value(value: Any) -> Any:
     return value
 
 
-def _shared_identity_lock_key(source: str, source_creator_id: str) -> int:
-    """Return a stable signed bigint key for a PostgreSQL transaction lock."""
+def _advisory_lock_key(namespace: str, *parts: object) -> int:
+    """Return a stable, namespaced signed bigint transaction-lock key."""
 
-    digest = hashlib.sha256(f"{source}\0{source_creator_id}".encode()).digest()
+    encoded = "\0".join([namespace, *(str(part) for part in parts)])
+    digest = hashlib.sha256(encoded.encode()).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def _shared_identity_lock_key(source: str, source_creator_id: str) -> int:
+    return _advisory_lock_key("remote-identity", source, source_creator_id)
+
+
+def _creator_lock_key(creator_id: UUID) -> int:
+    return _advisory_lock_key("creator", creator_id)
 
 
 class DiscoveryScanInProgress(ValueError):
@@ -75,6 +84,20 @@ class RemoteDiscoveryService:
         self.db = db
         self.vault = vault or configured_credential_vault()
         self.adapters = adapters or registry
+
+    async def _lock_remote_identity(self, source: str, source_creator_id: str) -> None:
+        await self.db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    _shared_identity_lock_key(source, source_creator_id)
+                )
+            )
+        )
+
+    async def _lock_creator(self, creator_id: UUID) -> None:
+        await self.db.execute(
+            select(func.pg_advisory_xact_lock(_creator_lock_key(creator_id)))
+        )
 
     async def _owned_account(self, user_id: int, account_id: UUID, *, lock: bool = False) -> RemoteAccount:
         stmt = select(RemoteAccount).where(
@@ -599,14 +622,11 @@ class RemoteDiscoveryService:
         # All shared rows derived from one remote identity must converge even
         # when two users import it in separate transactions at the same time.
         # The lock is released automatically at transaction end.
-        await self.db.execute(
-            select(
-                func.pg_advisory_xact_lock(
-                    _shared_identity_lock_key(account.source, candidate.source_creator_id)
-                )
-            )
-        )
+        # Lock order is always remote identity, then Creator.  No path in this
+        # service takes these locks in the reverse order.
+        await self._lock_remote_identity(account.source, candidate.source_creator_id)
         creator = await self._resolved_creator(candidate)
+        await self._lock_creator(creator.id)
         source_creator = (
             await self.db.execute(
                 select(SourceCreator).where(
@@ -726,22 +746,10 @@ class RemoteDiscoveryService:
         candidate = await self._candidate(user_id, candidate_id, lock=True)
         if candidate.state != "conflict":
             raise ValueError("Discovery candidate is not in conflict")
-        if creator_id is None:
-            creator = Creator(name=creator_name or candidate.display_name or candidate.source_creator_id)
-            self.db.add(creator)
-            await self.db.flush()
-            creator_id = creator.id
-        elif await self.db.get(Creator, creator_id) is None:
-            raise ValueError("Creator not found")
-        metadata = dict(candidate.candidate_metadata or {})
-        metadata["resolved_creator_id"] = str(creator_id)
-        metadata["local_creator_ids"] = [str(creator_id)]
-        metadata["identity_conflict"] = False
-        candidate.candidate_metadata = metadata
-        candidate.state = "pending"
-        candidate.confidence = "high"
-        candidate.confidence_reasons = ["manually_resolved_identity"]
         account = await self._owned_account(user_id, candidate.remote_account_id)
+        # Identity is always acquired before Creator, matching import_candidate
+        # and preventing two resolutions from installing incompatible mappings.
+        await self._lock_remote_identity(account.source, candidate.source_creator_id)
         source_creator = (
             await self.db.execute(
                 select(SourceCreator).where(
@@ -750,6 +758,28 @@ class RemoteDiscoveryService:
                 )
             )
         ).scalar_one_or_none()
+        if creator_id is None:
+            if source_creator is not None and source_creator.creator_id is not None:
+                raise ValueError("Remote identity was already resolved to a creator")
+            creator = Creator(
+                name=creator_name or candidate.display_name or candidate.source_creator_id
+            )
+            self.db.add(creator)
+            await self.db.flush()
+            creator_id = creator.id
+        elif await self.db.get(Creator, creator_id) is None:
+            raise ValueError("Creator not found")
+        await self._lock_creator(creator_id)
+        if (
+            source_creator is not None
+            and source_creator.creator_id is not None
+            and source_creator.creator_id != creator_id
+        ):
+            raise ValueError("Remote identity was already resolved to a different creator")
+        metadata = dict(candidate.candidate_metadata or {})
+        metadata["resolved_creator_id"] = str(creator_id)
+        metadata["local_creator_ids"] = [str(creator_id)]
+        metadata["identity_conflict"] = False
         if source_creator is None:
             self.db.add(
                 SourceCreator(
@@ -763,6 +793,10 @@ class RemoteDiscoveryService:
             )
         else:
             source_creator.creator_id = creator_id
+        candidate.candidate_metadata = metadata
+        candidate.state = "pending"
+        candidate.confidence = "high"
+        candidate.confidence_reasons = ["manually_resolved_identity"]
         await self.db.flush()
         return candidate
 
