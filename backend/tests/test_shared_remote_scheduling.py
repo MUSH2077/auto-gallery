@@ -605,7 +605,13 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
     from app.services import job_progress, proxy
     from app.services.remote_credentials import CredentialVault
 
-    canary = "task4-worker-output-secret-canary"
+    auth_token_canary = "task4-x-auth-token-child-canary"
+    csrf_canary = "task4-x-ct0-child-canary"
+    raw_cookie_canary = (
+        f'auth_token="{auth_token_canary}"; ct0={csrf_canary}; '
+        "guest_id=task4-x-cookie-guest-canary"
+    )
+    canaries = (raw_cookie_canary, auth_token_canary, csrf_canary)
     vault = CredentialVault(base64.urlsafe_b64encode(b"w" * 32).decode())
     redis_payloads: list[str] = []
     materialized_paths: list[str] = []
@@ -623,9 +629,14 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
             personal_path = command[config_index + 1]
             materialized_paths.append(personal_path)
             assert os.stat(personal_path).st_mode & 0o777 == 0o600
-            assert canary in Path(personal_path).read_text(encoding="utf-8")
+            private_config = Path(personal_path).read_text(encoding="utf-8")
+            assert auth_token_canary in private_config
+            assert csrf_canary in private_config
             self.stdout = StringIO("")
-            self.stderr = StringIO(f"401 Unauthorized {canary}\n")
+            self.stderr = StringIO(
+                f"[1/2] 401 Unauthorized {raw_cookie_canary} "
+                f"{auth_token_canary} {csrf_canary}\n"
+            )
 
         def poll(self):
             return self.returncode
@@ -715,9 +726,14 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
                 _bindings,
                 _dues,
             ) = await _seed_shared_source(db, now=now)
+            source.source = "x"
+            source.source_url = "https://x.com/task4_artist"
+            for seeded_account in accounts:
+                seeded_account.source = "x"
+                seeded_account.auth_method = "cookie"
             account = accounts[1]
             account.credential_ciphertext = vault.encrypt(
-                {"refresh_token": canary},
+                {"cookie": raw_cookie_canary},
                 user_id=account.user_id,
                 source=account.source,
                 account_id=account.id,
@@ -727,7 +743,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[1].id,
                 triggering_remote_account_id=account.id,
-                source="pixiv",
+                source="x",
                 source_url=source.source_url,
                 status="enqueued",
             )
@@ -762,9 +778,11 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
             )
             assert stored.status == "failed"
             assert stored.gallerydl_config_path is None
-            assert canary not in durable
-            assert not any(canary in payload for payload in redis_payloads)
-            assert canary not in caplog.text
+            for canary in canaries:
+                assert canary not in durable
+                assert not any(canary in payload for payload in redis_payloads)
+                assert canary not in caplog.text
+            assert not any(path.is_file() for path in (tmp_path / "gallerydl").rglob("*"))
     finally:
         async with async_session() as db:
             await _cleanup_shared_test_rows(db)

@@ -205,7 +205,14 @@ async def _materialize_personal_download_config(
     override = adapter.build_download_auth(credentials)
     override_values = override.materialize() if override is not None else {}
     effective = _auth_config_merge(base_config, override_values)
-    secrets = _credential_secret_values(credentials.materialize())
+    secrets = tuple(
+        dict.fromkeys(
+            (
+                *_credential_secret_values(credentials.materialize()),
+                *_credential_secret_values(override_values),
+            )
+        )
+    )
 
     jobs_dir = Path(config_root or settings.gallerydl_config_root) / "jobs"
     jobs_dir.mkdir(parents=True, exist_ok=True)
