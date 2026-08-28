@@ -20,6 +20,8 @@ from app.models import (
     Subscription,
     SubscriptionSource,
     TaskRun,
+    UserSubscription,
+    UserSubscriptionSource,
 )
 from app.remote_discovery.classifier import IdentityMatchSignals, classify_identity
 from app.remote_discovery.common import RemoteReauthenticationRequired
@@ -688,44 +690,59 @@ class RemoteDiscoveryService:
             self.db.add(canonical_source)
             await self.db.flush()
         membership_service = SubscriptionMembershipService(self.db, user_id)
-        defaults = await get_subscription_defaults(self.db)
-        member = await membership_service.ensure_membership(
-            subscription,
-            name=creator.display_name or creator.name,
-            **defaults,
-        )
-        # Import (including an explicit re-import) creates a fresh, usable
-        # private policy.  Canonical flags are only aggregate caches and may be
-        # false after the last previous member was removed.
-        member.name = creator.display_name or creator.name
-        member.is_active = True
-        member.sync_enabled = bool(defaults["sync_enabled"])
-        member.sync_interval_hours = int(defaults["sync_interval_hours"])
-        member.schedule_mode = defaults.get("schedule_mode")
-        member.schedule_rule = defaults.get("schedule_rule")
-        member.scheduled_times = defaults.get("scheduled_times")
-        binding = await membership_service.ensure_source_binding(
-            member,
-            canonical_source,
-            remote_account_id=account.id,
-            is_enabled=True,
-        )
-        binding.is_enabled = True
-        binding.auth_healthy = True
-        binding.auth_status = account.auth_status
-        binding.auth_error_reason = None
-        if member.sync_enabled:
-            from app.jobs.subscription_sync import next_subscription_check_at
-
-            binding.next_sync_at = next_subscription_check_at(
-                member,
-                await get_scheduler_config(self.db),
-                binding.last_synced_at,
-                binding.last_attempted_at,
-                _now(),
+        member = (
+            await self.db.execute(
+                select(UserSubscription)
+                .where(
+                    UserSubscription.user_id == user_id,
+                    UserSubscription.subscription_id == subscription.id,
+                )
+                .with_for_update(of=UserSubscription)
             )
-        else:
-            binding.next_sync_at = None
+        ).scalar_one_or_none()
+        if member is None:
+            defaults = await get_subscription_defaults(self.db)
+            member = await membership_service.ensure_membership(
+                subscription,
+                name=creator.display_name or creator.name,
+                **defaults,
+            )
+        binding = (
+            await self.db.execute(
+                select(UserSubscriptionSource)
+                .where(
+                    UserSubscriptionSource.user_subscription_id == member.id,
+                    UserSubscriptionSource.subscription_source_id == canonical_source.id,
+                )
+                .with_for_update(of=UserSubscriptionSource)
+            )
+        ).scalar_one_or_none()
+        if binding is None:
+            binding = await membership_service.ensure_source_binding(
+                member,
+                canonical_source,
+                remote_account_id=account.id,
+                is_enabled=True,
+            )
+            binding.auth_healthy = True
+            binding.auth_status = account.auth_status
+            binding.auth_error_reason = None
+            if member.sync_enabled:
+                from app.jobs.subscription_sync import next_subscription_check_at
+
+                binding.next_sync_at = next_subscription_check_at(
+                    member,
+                    await get_scheduler_config(self.db),
+                    binding.last_synced_at,
+                    binding.last_attempted_at,
+                    _now(),
+                )
+            else:
+                binding.next_sync_at = None
+        elif binding.remote_account_id is None:
+            # Account provenance/auth availability may be attached to an
+            # existing local binding without changing any private policy.
+            binding.remote_account_id = account.id
         candidate.state = "imported"
         candidate.subscription_id = subscription.id
         candidate.user_subscription_id = member.id

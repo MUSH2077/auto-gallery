@@ -680,17 +680,27 @@ async def test_reimport_after_last_member_reactivates_default_schedule_and_sourc
                     )
                 )
             ).scalar_one()
-            binding.is_enabled = False
-            binding.next_sync_at = None
+            original_binding_id = binding.id
+            await SubscriptionMembershipService(db, user.id).remove_source(
+                subscription_id, binding.subscription_source_id
+            )
             await db.commit()
 
-            # Re-import is an explicit request and repairs a disabled source
-            # policy even when canonical rows already exist.
-            await service.import_candidate(user.id, candidate.id)
+            # Re-import recreates a missing binding but retains the intact
+            # membership row and applies a fresh due marker to the new source.
+            rebound = await service.import_candidate(user.id, candidate.id)
             await db.commit()
-            await db.refresh(binding)
-            assert binding.is_enabled is True
-            assert binding.next_sync_at is not None
+            assert rebound.user_subscription_id == membership_id
+            rebound_binding = (
+                await db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == membership_id
+                    )
+                )
+            ).scalar_one()
+            assert rebound_binding.id != original_binding_id
+            assert rebound_binding.is_enabled is True
+            assert rebound_binding.next_sync_at is not None
 
             await SubscriptionMembershipService(db, user.id).remove(subscription_id)
             await db.commit()
@@ -762,6 +772,85 @@ async def test_reimport_after_last_member_reactivates_default_schedule_and_sourc
                 else:
                     defaults.value = original_defaults or {}
                 await db.commit()
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_duplicate_import_preserves_intact_private_membership_and_source_policy():
+    """An already imported intact binding is a private-policy no-op."""
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, UserSubscription, UserSubscriptionSource
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    fixed_due = datetime(2032, 4, 5, 6, 7, tzinfo=timezone.utc)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "duplicate_policy")
+            account = await _account(db, user, adapter)
+            await db.commit()
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=Registry(adapter))
+            candidate = await service.upsert_candidate(
+                await db.get(RemoteAccount, account.id),
+                RemoteCandidateIdentity(
+                    source="pixiv",
+                    source_creator_id="duplicate-policy-creator",
+                    profile_url="https://www.pixiv.net/users/85001",
+                    display_name=f"{PREFIX}Duplicate Policy Artist",
+                    metadata={"has_illustration_preview": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+            )
+            imported = await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            member = await db.get(UserSubscription, imported.user_subscription_id)
+            binding = (
+                await db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == member.id
+                    )
+                )
+            ).scalar_one()
+            membership_id = member.id
+            binding_id = binding.id
+            member.name = "My private artist label"
+            member.is_active = False
+            member.sync_enabled = False
+            member.sync_interval_hours = 41
+            member.schedule_mode = "manual"
+            member.schedule_rule = None
+            member.scheduled_times = "04:15"
+            binding.is_enabled = False
+            binding.auth_healthy = False
+            binding.auth_status = "reauth_required"
+            binding.auth_error_reason = "expired_session"
+            binding.next_sync_at = fixed_due
+            await db.commit()
+
+            repeated = await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            assert repeated.user_subscription_id == membership_id
+            stored_member = await db.get(UserSubscription, membership_id)
+            stored_binding = await db.get(UserSubscriptionSource, binding_id)
+            assert stored_member.name == "My private artist label"
+            assert stored_member.is_active is False
+            assert stored_member.sync_enabled is False
+            assert stored_member.sync_interval_hours == 41
+            assert stored_member.schedule_mode == "manual"
+            assert stored_member.schedule_rule is None
+            assert stored_member.scheduled_times == "04:15"
+            assert stored_binding.is_enabled is False
+            assert stored_binding.auth_healthy is False
+            assert stored_binding.auth_status == "reauth_required"
+            assert stored_binding.auth_error_reason == "expired_session"
+            assert stored_binding.next_sync_at == fixed_due
+            assert stored_binding.remote_account_id == account.id
+    finally:
+        async with async_session() as db:
             await _cleanup(db)
         await engine.dispose()
 
