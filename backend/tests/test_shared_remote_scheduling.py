@@ -300,7 +300,7 @@ async def test_legacy_null_account_binding_remains_eligible_for_global_config():
     try:
         async with async_session() as db:
             (
-                users,
+                _users,
                 _creator,
                 subscription,
                 source,
@@ -345,7 +345,7 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
                 source,
                 _members,
                 accounts,
-                bindings,
+                _bindings,
                 _dues,
             ) = await _seed_shared_source(db, now=now)
             accounts[1].auth_status = "unhealthy"
@@ -1764,6 +1764,16 @@ async def test_owned_manual_membership_can_sync_when_automatic_cache_is_disabled
             await db.execute(delete(DownloadJob).where(DownloadJob.id == job.id))
             await db.commit()
 
+            denied = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source.id,
+                trigger="manual_subscription",
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[1].id,
+            )
+            assert denied["status"] == "skipped"
+            assert denied["skip_reason"] == "no_eligible_member_source"
+
             from app.services.subscription_membership import (
                 SubscriptionMembershipService,
             )
@@ -1783,16 +1793,6 @@ async def test_owned_manual_membership_can_sync_when_automatic_cache_is_disabled
             )
             assert disabled["status"] == "skipped"
             assert disabled["skip_reason"] == "no_eligible_member_source"
-
-            denied = await subscription_enqueue.enqueue_subscription_source_sync(
-                db,
-                source.id,
-                trigger="manual_subscription",
-                triggering_user_subscription_id=members[0].id,
-                triggering_remote_account_id=accounts[1].id,
-            )
-            assert denied["status"] == "skipped"
-            assert denied["skip_reason"] == "no_eligible_member_source"
     finally:
         async with async_session() as db:
             await _cleanup_shared_test_rows(db)
