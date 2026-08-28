@@ -1,0 +1,701 @@
+"""Persistent account-private discovery scans and idempotent imports."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import (
+    Creator,
+    CreatorLink,
+    DiscoveryCandidate,
+    RemoteAccount,
+    SourceCreator,
+    Subscription,
+    SubscriptionSource,
+    TaskRun,
+)
+from app.remote_discovery.classifier import IdentityMatchSignals, classify_identity
+from app.remote_discovery.common import RemoteReauthenticationRequired
+from app.remote_discovery.contract import RemoteCandidateIdentity
+from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
+from app.services.remote_accounts import RemoteAccountService, configured_credential_vault
+from app.services.remote_credentials import CredentialVault
+from app.services.subscription_membership import (
+    SubscriptionMembershipService,
+    recompute_subscription_membership_cache,
+)
+from app.services.tasks import NONTERMINAL_STATUSES, TaskService
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(child) for key, child in value.items()}
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return [_json_value(child) for child in value]
+    return value
+
+
+class DiscoveryScanInProgress(ValueError):
+    def __init__(self, task_id: UUID):
+        self.task_id = task_id
+        super().__init__(f"Discovery scan already running: {task_id}")
+
+
+class RemoteDiscoveryService:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        vault: CredentialVault | None = None,
+        adapters: DiscoveryAdapterRegistry | None = None,
+    ):
+        self.db = db
+        self.vault = vault or configured_credential_vault()
+        self.adapters = adapters or registry
+
+    async def _owned_account(self, user_id: int, account_id: UUID, *, lock: bool = False) -> RemoteAccount:
+        stmt = select(RemoteAccount).where(
+            RemoteAccount.id == account_id,
+            RemoteAccount.user_id == user_id,
+        )
+        if lock:
+            stmt = stmt.with_for_update(of=RemoteAccount)
+        account = (await self.db.execute(stmt)).scalar_one_or_none()
+        if account is None:
+            raise ValueError("Remote account not found")
+        return account
+
+    async def create_scan(self, user_id: int, account_id: UUID) -> TaskRun:
+        account = await self._owned_account(user_id, account_id, lock=True)
+        active = (
+            await self.db.execute(
+                select(TaskRun)
+                .where(
+                    TaskRun.triggering_remote_account_id == account.id,
+                    TaskRun.operation_type == "remote-discovery-scan",
+                    TaskRun.status.in_(NONTERMINAL_STATUSES),
+                )
+                .with_for_update(of=TaskRun)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if active is not None:
+            raise DiscoveryScanInProgress(active.id)
+
+        selectors = account.collection_selectors or [{}]
+        resume = account.scan_cursor if isinstance(account.scan_cursor, dict) else None
+        started_at = (
+            datetime.fromisoformat(str(resume["started_at"]))
+            if resume and resume.get("started_at")
+            else _now()
+        )
+        selector_index = int((resume or {}).get("selector_index") or 0)
+        cursor = (resume or {}).get("cursor")
+        progress = {
+            "phase": "queued",
+            "selector_index": selector_index,
+            "selector_count": len(selectors),
+            "cursor": _json_value(cursor) if cursor else None,
+            "pages_completed": int((resume or {}).get("pages_completed") or 0),
+            "candidates_seen": int((resume or {}).get("candidates_seen") or 0),
+            "scan_started_at": _utc(started_at).isoformat(),
+        }
+        task = await TaskService(self.db).create_task(
+            kind="discovery",
+            operation_type="remote-discovery-scan",
+            title=f"Discover {account.source} followings",
+            status="enqueued",
+            queue_name="discovery",
+            source=account.source,
+            progress=progress,
+            meta={"account_id": str(account.id), "scope": "remote_account"},
+            triggering_remote_account_id=account.id,
+        )
+        account.last_scan_started_at = _utc(started_at)
+        return task
+
+    async def list_scans(
+        self,
+        user_id: int,
+        *,
+        account_id: UUID | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[int, list[TaskRun]]:
+        stmt = (
+            select(TaskRun)
+            .join(RemoteAccount, RemoteAccount.id == TaskRun.triggering_remote_account_id)
+            .where(
+                RemoteAccount.user_id == user_id,
+                TaskRun.operation_type == "remote-discovery-scan",
+            )
+        )
+        count_stmt = (
+            select(func.count(TaskRun.id))
+            .join(RemoteAccount, RemoteAccount.id == TaskRun.triggering_remote_account_id)
+            .where(
+                RemoteAccount.user_id == user_id,
+                TaskRun.operation_type == "remote-discovery-scan",
+            )
+        )
+        if account_id is not None:
+            stmt = stmt.where(TaskRun.triggering_remote_account_id == account_id)
+            count_stmt = count_stmt.where(TaskRun.triggering_remote_account_id == account_id)
+        total = (await self.db.execute(count_stmt)).scalar_one()
+        tasks = (
+            await self.db.execute(
+                stmt.order_by(TaskRun.created_at.desc(), TaskRun.id)
+                .offset(max(0, offset))
+                .limit(max(1, min(limit, 200)))
+            )
+        ).scalars().all()
+        return int(total), list(tasks)
+
+    async def _local_creator_matches(
+        self,
+        account: RemoteAccount,
+        identity: RemoteCandidateIdentity,
+        *,
+        additional_creator_ids: set[UUID] | None = None,
+    ) -> tuple[set[UUID], bool, bool]:
+        creator_ids = set(additional_creator_ids or ())
+        exact = (
+            await self.db.execute(
+                select(SourceCreator.creator_id).where(
+                    SourceCreator.source == account.source,
+                    SourceCreator.source_creator_id == identity.source_creator_id,
+                    SourceCreator.creator_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+        creator_ids.update(creator_id for creator_id in exact if creator_id is not None)
+
+        metadata = _json_value(identity.metadata)
+        links = [identity.profile_url] if identity.profile_url else []
+        for key in ("supported_links", "links", "profile_links"):
+            value = metadata.get(key)
+            if isinstance(value, list):
+                links.extend(str(item) for item in value if item)
+        verified_cross_site = False
+        if links:
+            verified = (
+                await self.db.execute(
+                    select(CreatorLink.creator_id).where(
+                        CreatorLink.is_verified.is_(True),
+                        CreatorLink.url.in_(links),
+                    )
+                )
+            ).scalars().all()
+            verified_cross_site = bool(verified)
+            creator_ids.update(verified)
+
+        danbooru_match = False
+        danbooru_artist_id = metadata.get("danbooru_artist_id")
+        if danbooru_artist_id is not None:
+            try:
+                danbooru_artist_id = int(danbooru_artist_id)
+            except (TypeError, ValueError):
+                danbooru_artist_id = None
+            if danbooru_artist_id is not None:
+                danbooru_ids = (
+                    await self.db.execute(
+                        select(Creator.id).where(Creator.danbooru_artist_id == danbooru_artist_id)
+                    )
+                ).scalars().all()
+                danbooru_match = bool(danbooru_ids)
+                creator_ids.update(danbooru_ids)
+        return creator_ids, verified_cross_site, danbooru_match
+
+    async def upsert_candidate(
+        self,
+        account: RemoteAccount,
+        identity: RemoteCandidateIdentity,
+        *,
+        seen_at: datetime,
+        additional_creator_ids: set[UUID] | None = None,
+    ) -> DiscoveryCandidate:
+        if identity.source != account.source:
+            raise ValueError("Discovery candidate source does not match remote account")
+        creator_ids, verified_link, danbooru_match = await self._local_creator_matches(
+            account,
+            identity,
+            additional_creator_ids=additional_creator_ids,
+        )
+        metadata = _json_value(identity.metadata)
+        signals = IdentityMatchSignals(
+            source=account.source,
+            local_identity_match_count=len(creator_ids),
+            danbooru_verified_link=danbooru_match,
+            verified_cross_site_link=verified_link,
+            pixiv_illustration_preview=bool(
+                metadata.get("has_illustration_preview")
+                or metadata.get("illustration_preview")
+                or metadata.get("illusts")
+            ),
+            art_focused_bio=bool(metadata.get("art_focused_bio")),
+            recent_visual_post=bool(
+                metadata.get("recent_visual_post")
+                or metadata.get("has_recent_visual_content")
+            ),
+            supported_site_link=bool(
+                metadata.get("supported_site_link")
+                or metadata.get("supported_links")
+            ),
+        )
+        classification = classify_identity(signals)
+        candidate = (
+            await self.db.execute(
+                select(DiscoveryCandidate)
+                .where(
+                    DiscoveryCandidate.remote_account_id == account.id,
+                    DiscoveryCandidate.source_creator_id == identity.source_creator_id,
+                )
+                .with_for_update(of=DiscoveryCandidate)
+            )
+        ).scalar_one_or_none()
+        state = "conflict" if classification.identity_conflict else "pending"
+        snapshot = {
+            **metadata,
+            "username": identity.username,
+            "local_creator_ids": sorted(str(item) for item in creator_ids),
+            "identity_conflict": classification.identity_conflict,
+        }
+        if candidate is None:
+            candidate = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=account.user_id,
+                source_creator_id=identity.source_creator_id,
+                remote_url=identity.profile_url,
+                display_name=identity.display_name,
+                candidate_metadata=snapshot,
+                confidence=classification.confidence,
+                confidence_reasons=list(classification.reasons),
+                state=state,
+                last_seen_at=seen_at,
+                is_following=True,
+            )
+            self.db.add(candidate)
+        else:
+            candidate.remote_url = identity.profile_url
+            candidate.display_name = identity.display_name
+            candidate.candidate_metadata = snapshot
+            candidate.confidence = classification.confidence
+            candidate.confidence_reasons = list(classification.reasons)
+            candidate.last_seen_at = seen_at
+            candidate.is_following = True
+            if candidate.state not in {"dismissed", "imported"}:
+                candidate.state = state
+        await self.db.flush()
+        return candidate
+
+    async def run_scan(self, task_id: UUID) -> TaskRun:
+        task = await self.db.get(TaskRun, task_id)
+        if task is None or task.operation_type != "remote-discovery-scan":
+            raise ValueError("Discovery scan task not found")
+        if task.status == "complete":
+            return task
+        if not task.triggering_remote_account_id:
+            raise ValueError("Discovery scan task has no account")
+        account = await self.db.get(RemoteAccount, task.triggering_remote_account_id)
+        if account is None:
+            raise ValueError("Remote account not found")
+        progress = dict(task.progress_data or {})
+        selectors = account.collection_selectors or [{}]
+        selector_index = int(progress.get("selector_index") or 0)
+        cursor = progress.get("cursor")
+        started_at = datetime.fromisoformat(str(progress["scan_started_at"]))
+        pages_completed = int(progress.get("pages_completed") or 0)
+        seen_count = int(progress.get("candidates_seen") or 0)
+        task_service = TaskService(self.db)
+        await task_service.update_task(
+            task,
+            status="running",
+            progress={**progress, "phase": "fetching"},
+            resource_state="running",
+        )
+        await self.db.commit()
+
+        account_service = RemoteAccountService(
+            self.db,
+            account.user_id,
+            vault=self.vault,
+            adapters=self.adapters,
+        )
+        try:
+            while selector_index < len(selectors):
+                account = await self.db.get(RemoteAccount, account.id)
+                credentials = account_service.credentials_for_adapter(account)
+                page = await self.adapters.get(account.source).fetch_page(
+                    credentials,
+                    selector=selectors[selector_index],
+                    cursor=cursor,
+                    page_size=100,
+                )
+                seen_at = _now()
+                for identity in page.items:
+                    await self.upsert_candidate(account, identity, seen_at=seen_at)
+                seen_count += len(page.items)
+                pages_completed += 1
+                if page.done:
+                    selector_index += 1
+                    cursor = None
+                else:
+                    cursor = _json_value(page.next_cursor)
+                checkpoint = {
+                    "selector_index": selector_index,
+                    "cursor": cursor,
+                    "pages_completed": pages_completed,
+                    "candidates_seen": seen_count,
+                    "started_at": _utc(started_at).isoformat(),
+                }
+                progress = {
+                    "phase": "fetching" if selector_index < len(selectors) else "finalizing",
+                    "selector_index": selector_index,
+                    "selector_count": len(selectors),
+                    "cursor": cursor,
+                    "pages_completed": pages_completed,
+                    "candidates_seen": seen_count,
+                    "scan_started_at": _utc(started_at).isoformat(),
+                }
+                account.scan_cursor = checkpoint if selector_index < len(selectors) else None
+                task = await self.db.get(TaskRun, task_id)
+                await task_service.update_task(task, progress=progress)
+                # Candidate snapshots and their cursor are one page transaction.
+                await self.db.commit()
+
+            await self.db.execute(
+                update(DiscoveryCandidate)
+                .where(
+                    DiscoveryCandidate.remote_account_id == account.id,
+                    or_(
+                        DiscoveryCandidate.last_seen_at.is_(None),
+                        DiscoveryCandidate.last_seen_at < _utc(started_at),
+                    ),
+                )
+                .values(is_following=False)
+            )
+            account = await self.db.get(RemoteAccount, account.id)
+            account.scan_cursor = None
+            account.last_scan_completed_at = _now()
+            account.next_scan_at = account.last_scan_completed_at + timedelta(
+                hours=account.scan_interval_hours
+            )
+            auto_imported = []
+            if account.auto_import_enabled:
+                auto_imported = await self.auto_import(account)
+            task = await self.db.get(TaskRun, task_id)
+            await task_service.update_task(
+                task,
+                status="complete",
+                progress={**progress, "phase": "complete", "cursor": None},
+                result={
+                    "candidates_seen": seen_count,
+                    "pages_completed": pages_completed,
+                    "auto_imported_count": len(auto_imported),
+                },
+            )
+            await self.db.commit()
+            return task
+        except Exception as exc:
+            await self.db.rollback()
+            task = await self.db.get(TaskRun, task_id)
+            account = await self.db.get(RemoteAccount, task.triggering_remote_account_id)
+            if isinstance(exc, RemoteReauthenticationRequired) and account is not None:
+                account.auth_status = "unhealthy"
+                account.auth_error_reason = "reauthentication_required"
+            await TaskService(self.db).update_task(
+                task,
+                status="failed",
+                progress=dict(task.progress_data or progress),
+                error=f"Discovery scan failed ({type(exc).__name__})",
+                reason_code="remote_discovery_failed",
+            )
+            await self.db.commit()
+            raise
+
+    async def list_candidates(
+        self,
+        user_id: int,
+        *,
+        account_id: UUID | None = None,
+        state: str | None = None,
+        confidence: str | None = None,
+        is_following: bool | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[int, list[DiscoveryCandidate]]:
+        filters = [DiscoveryCandidate.user_id == user_id]
+        if account_id is not None:
+            filters.append(DiscoveryCandidate.remote_account_id == account_id)
+        if state:
+            filters.append(DiscoveryCandidate.state == state)
+        if confidence:
+            filters.append(DiscoveryCandidate.confidence == confidence)
+        if is_following is not None:
+            filters.append(DiscoveryCandidate.is_following.is_(is_following))
+        total = (
+            await self.db.execute(select(func.count(DiscoveryCandidate.id)).where(*filters))
+        ).scalar_one()
+        candidates = (
+            await self.db.execute(
+                select(DiscoveryCandidate)
+                .where(*filters)
+                .order_by(DiscoveryCandidate.updated_at.desc(), DiscoveryCandidate.id)
+                .offset(max(0, offset))
+                .limit(max(1, min(limit, 200)))
+            )
+        ).scalars().all()
+        return int(total), list(candidates)
+
+    async def _candidate(self, user_id: int, candidate_id: UUID, *, lock: bool = False) -> DiscoveryCandidate:
+        stmt = select(DiscoveryCandidate).where(
+            DiscoveryCandidate.id == candidate_id,
+            DiscoveryCandidate.user_id == user_id,
+        )
+        if lock:
+            stmt = stmt.with_for_update(of=DiscoveryCandidate)
+        candidate = (await self.db.execute(stmt)).scalar_one_or_none()
+        if candidate is None:
+            raise ValueError("Discovery candidate not found")
+        return candidate
+
+    async def batch_action(
+        self,
+        user_id: int,
+        candidate_ids: list[UUID],
+        *,
+        action: str,
+    ) -> list[DiscoveryCandidate]:
+        if not candidate_ids or len(candidate_ids) > 200:
+            raise ValueError("Candidate batch must contain between 1 and 200 IDs")
+        results = []
+        for candidate_id in dict.fromkeys(candidate_ids):
+            candidate = await self._candidate(user_id, candidate_id, lock=True)
+            if action == "dismiss":
+                if candidate.state != "imported":
+                    candidate.state = "dismissed"
+                    candidate.dismissed_at = _now()
+            elif action == "restore":
+                if candidate.state == "dismissed":
+                    metadata = candidate.candidate_metadata or {}
+                    candidate.state = "conflict" if metadata.get("identity_conflict") else "pending"
+                    candidate.dismissed_at = None
+            elif action == "import":
+                candidate = await self.import_candidate(user_id, candidate.id)
+            else:
+                raise ValueError("Unknown candidate batch action")
+            results.append(candidate)
+        await self.db.flush()
+        return results
+
+    async def _resolved_creator(self, candidate: DiscoveryCandidate) -> Creator:
+        metadata = candidate.candidate_metadata or {}
+        local_ids = []
+        for value in metadata.get("local_creator_ids") or []:
+            try:
+                local_ids.append(UUID(str(value)))
+            except ValueError:
+                continue
+        resolved = metadata.get("resolved_creator_id")
+        if resolved:
+            local_ids = [UUID(str(resolved))]
+        source_creator = (
+            await self.db.execute(
+                select(SourceCreator).where(
+                    SourceCreator.source == (
+                        await self.db.get(RemoteAccount, candidate.remote_account_id)
+                    ).source,
+                    SourceCreator.source_creator_id == candidate.source_creator_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if source_creator and source_creator.creator_id:
+            local_ids = [source_creator.creator_id]
+        local_ids = list(dict.fromkeys(local_ids))
+        if len(local_ids) > 1:
+            raise ValueError("Discovery candidate has an unresolved identity conflict")
+        if local_ids:
+            creator = await self.db.get(Creator, local_ids[0])
+            if creator is not None:
+                return creator
+        creator = Creator(name=candidate.display_name or candidate.source_creator_id)
+        self.db.add(creator)
+        await self.db.flush()
+        return creator
+
+    async def import_candidate(self, user_id: int, candidate_id: UUID) -> DiscoveryCandidate:
+        candidate = await self._candidate(user_id, candidate_id, lock=True)
+        if candidate.state == "dismissed":
+            raise ValueError("Dismissed candidate must be restored before import")
+        if candidate.state == "conflict" or (candidate.candidate_metadata or {}).get("identity_conflict"):
+            raise ValueError("Discovery candidate has an unresolved conflict")
+        account = await self._owned_account(user_id, candidate.remote_account_id)
+        creator = await self._resolved_creator(candidate)
+        source_creator = (
+            await self.db.execute(
+                select(SourceCreator).where(
+                    SourceCreator.source == account.source,
+                    SourceCreator.source_creator_id == candidate.source_creator_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if source_creator is None:
+            source_creator = SourceCreator(
+                creator_id=creator.id,
+                source=account.source,
+                source_creator_id=candidate.source_creator_id,
+                source_url=candidate.remote_url,
+                display_name=candidate.display_name,
+                raw_metadata=candidate.candidate_metadata,
+            )
+            self.db.add(source_creator)
+        elif source_creator.creator_id is None:
+            source_creator.creator_id = creator.id
+        await self.db.flush()
+        subscription = (
+            await self.db.execute(
+                select(Subscription).where(Subscription.creator_id == creator.id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if subscription is None:
+            subscription = Subscription(
+                creator_id=creator.id,
+                name=creator.display_name or creator.name,
+                is_active=True,
+                sync_enabled=True,
+                sync_interval_hours=6,
+            )
+            self.db.add(subscription)
+            await self.db.flush()
+        source_identity = [
+            SubscriptionSource.source_creator_id == candidate.source_creator_id
+        ]
+        if candidate.remote_url:
+            source_identity.append(SubscriptionSource.source_url == candidate.remote_url)
+        canonical_source = (
+            await self.db.execute(
+                select(SubscriptionSource).where(
+                    SubscriptionSource.subscription_id == subscription.id,
+                    SubscriptionSource.source == account.source,
+                    or_(*source_identity),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if canonical_source is None:
+            canonical_source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source=account.source,
+                source_creator_id=candidate.source_creator_id,
+                source_url=candidate.remote_url,
+                is_enabled=True,
+            )
+            self.db.add(canonical_source)
+            await self.db.flush()
+        membership_service = SubscriptionMembershipService(self.db, user_id)
+        member = await membership_service.ensure_membership(
+            subscription,
+            name=creator.display_name or creator.name,
+        )
+        await membership_service.ensure_source_binding(
+            member,
+            canonical_source,
+            remote_account_id=account.id,
+            is_enabled=True,
+        )
+        candidate.state = "imported"
+        candidate.subscription_id = subscription.id
+        candidate.user_subscription_id = member.id
+        candidate.imported_at = candidate.imported_at or _now()
+        candidate.dismissed_at = None
+        await recompute_subscription_membership_cache(self.db, subscription.id)
+        await self.db.flush()
+        return candidate
+
+    async def resolve_candidate(
+        self,
+        user_id: int,
+        candidate_id: UUID,
+        *,
+        creator_id: UUID | None = None,
+        creator_name: str | None = None,
+    ) -> DiscoveryCandidate:
+        candidate = await self._candidate(user_id, candidate_id, lock=True)
+        if candidate.state != "conflict":
+            raise ValueError("Discovery candidate is not in conflict")
+        if creator_id is None:
+            creator = Creator(name=creator_name or candidate.display_name or candidate.source_creator_id)
+            self.db.add(creator)
+            await self.db.flush()
+            creator_id = creator.id
+        elif await self.db.get(Creator, creator_id) is None:
+            raise ValueError("Creator not found")
+        metadata = dict(candidate.candidate_metadata or {})
+        metadata["resolved_creator_id"] = str(creator_id)
+        metadata["local_creator_ids"] = [str(creator_id)]
+        metadata["identity_conflict"] = False
+        candidate.candidate_metadata = metadata
+        candidate.state = "pending"
+        candidate.confidence = "high"
+        candidate.confidence_reasons = ["manually_resolved_identity"]
+        account = await self._owned_account(user_id, candidate.remote_account_id)
+        source_creator = (
+            await self.db.execute(
+                select(SourceCreator).where(
+                    SourceCreator.source == account.source,
+                    SourceCreator.source_creator_id == candidate.source_creator_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if source_creator is None:
+            self.db.add(
+                SourceCreator(
+                    creator_id=creator_id,
+                    source=account.source,
+                    source_creator_id=candidate.source_creator_id,
+                    source_url=candidate.remote_url,
+                    display_name=candidate.display_name,
+                    raw_metadata=metadata,
+                )
+            )
+        else:
+            source_creator.creator_id = creator_id
+        await self.db.flush()
+        return candidate
+
+    async def auto_import(self, account: RemoteAccount) -> list[DiscoveryCandidate]:
+        allowed = {
+            "high": {"high"},
+            "medium": {"high", "medium"},
+            "low": {"high", "medium", "low"},
+        }[account.auto_import_min_confidence]
+        candidates = (
+            await self.db.execute(
+                select(DiscoveryCandidate)
+                .where(
+                    DiscoveryCandidate.remote_account_id == account.id,
+                    DiscoveryCandidate.state == "pending",
+                    DiscoveryCandidate.is_following.is_(True),
+                    DiscoveryCandidate.confidence.in_(allowed),
+                )
+                .order_by(DiscoveryCandidate.created_at, DiscoveryCandidate.id)
+                .limit(account.auto_import_limit)
+            )
+        ).scalars().all()
+        imported = []
+        for candidate in candidates:
+            imported.append(await self.import_candidate(account.user_id, candidate.id))
+        return imported

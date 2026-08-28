@@ -126,6 +126,7 @@ class RemoteAccountCreate(BaseModel):
     auto_import_enabled: bool = False
     auto_import_min_confidence: Confidence = "high"
     auto_import_limit: int = Field(default=25, ge=1, le=200)
+    credentials: dict[str, str] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_auth_method_for_source(self):
@@ -150,6 +151,7 @@ class RemoteAccountUpdate(BaseModel):
     auto_import_enabled: bool | None = None
     auto_import_min_confidence: Confidence | None = None
     auto_import_limit: int | None = Field(default=None, ge=1, le=200)
+    credentials: dict[str, str] | None = Field(default=None, min_length=1)
 
 
 class RemoteAccountRead(BaseModel):
@@ -172,6 +174,8 @@ class RemoteAccountRead(BaseModel):
     auto_import_enabled: bool
     auto_import_min_confidence: Confidence
     auto_import_limit: int
+    has_credentials: bool = False
+    credential_mask: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -199,3 +203,25 @@ class DiscoveryCandidateRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DiscoveryScanCreate(BaseModel):
+    remote_account_id: UUID
+
+
+class DiscoveryCandidateBatchAction(BaseModel):
+    ids: list[UUID] = Field(min_length=1, max_length=200)
+    action: Literal["import", "dismiss", "restore"]
+    immediate_sync: bool = False
+
+
+class DiscoveryCandidateResolve(BaseModel):
+    creator_id: UUID | None = None
+    creator_name: str | None = Field(default=None, min_length=1, max_length=500)
+    immediate_sync: bool = False
+
+    @model_validator(mode="after")
+    def require_one_resolution_target(self):
+        if self.creator_id is not None and self.creator_name is not None:
+            raise ValueError("Specify creator_id or creator_name, not both")
+        return self

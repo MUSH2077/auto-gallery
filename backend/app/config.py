@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # Separate from SECRET_KEY so rotating sessions cannot destroy stored
     # remote-account credentials. Empty keeps discovery disabled until used.
     remote_credential_key: str = ""
+    x_oauth_client_id: str = ""
+    x_oauth_redirect_uri: str = ""
     admin_password: str = ""
     access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
     media_playback_ttl_seconds: int = 7200
