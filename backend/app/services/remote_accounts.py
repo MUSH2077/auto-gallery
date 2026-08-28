@@ -708,12 +708,14 @@ class RemoteAccountService:
             )
         except RemoteCredentialGenerationChanged:
             raise
-        except RemoteReauthenticationRequired:
+        except Exception as exc:
             account = await self._relock_provider_result(
                 account_id,
                 pinned_identity=pinned_identity,
                 pinned_generation=pinned_generation,
             )
+            if not isinstance(exc, RemoteReauthenticationRequired):
+                raise
             account.auth_status = "unhealthy"
             account.auth_error_reason = "reauthentication_required"
             await self._set_binding_health(

@@ -133,9 +133,12 @@ def _redact_validation_errors(errors, *, oauth_callback: bool):
     for error in errors:
         safe_error = _redact_validation_value(error, oauth_callback=oauth_callback)
         location = error.get("loc", ()) if isinstance(error, dict) else ()
-        if isinstance(safe_error, dict) and any(
-            _validation_field_is_sensitive(field, oauth_callback=oauth_callback)
-            for field in location
+        if isinstance(safe_error, dict) and (
+            oauth_callback
+            or any(
+                _validation_field_is_sensitive(field, oauth_callback=oauth_callback)
+                for field in location
+            )
         ):
             safe_error["input"] = _VALIDATION_REDACTED
         redacted.append(safe_error)
@@ -540,9 +543,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         import json as _json
 
         data = _json.loads(raw[:2000])
-        safe_body = str(
-            _redact_validation_value(data, oauth_callback=oauth_callback)
-        )
+        if oauth_callback and not isinstance(data, dict):
+            safe_body = "<redacted>"
+        else:
+            safe_body = str(
+                _redact_validation_value(data, oauth_callback=oauth_callback)
+            )
     except Exception:
         safe_body = f"<{len(raw)} bytes, parse error>"
     safe_errors = _redact_validation_errors(

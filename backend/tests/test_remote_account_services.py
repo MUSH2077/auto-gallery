@@ -1793,3 +1793,115 @@ async def test_x_oauth_callback_validation_redacts_nested_state_and_code(caplog)
             )
             await db.commit()
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_x_oauth_callback_validation_redacts_every_root_input_shape(caplog):
+    """Root scalar, array, form, and invalid JSON callback inputs stay secret."""
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import User
+
+    marker = f"x_oauth_root_validation_{uuid4().hex}"
+    root_string_canary = "r3-root-string-input-x"
+    root_array_canary = "r3-root-array-input-x"
+    form_state_canary = "r3-form-state-input-x"
+    form_code_canary = "r3-form-code-input-x"
+    invalid_json_canary = "r3-invalid-json-input-x"
+    other_api_canary = "r3-non-oauth-diagnostic-x"
+    try:
+        async with async_session() as db:
+            db.add(
+                User(
+                    username=marker,
+                    password_hash="test-only",
+                    is_active=True,
+                    permissions=["subscriptions"],
+                )
+            )
+            await db.commit()
+
+        caplog.clear()
+        callback_path = "/api/v1/remote-accounts/x/oauth/callback"
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            responses = [
+                await client.post(
+                    callback_path,
+                    json=root_string_canary,
+                    headers=_headers(marker),
+                ),
+                await client.post(
+                    callback_path,
+                    json=[root_array_canary, {"state": "nested-is-redacted"}],
+                    headers=_headers(marker),
+                ),
+                await client.post(
+                    callback_path,
+                    content=(
+                        f"state={form_state_canary}&code={form_code_canary}"
+                    ),
+                    headers={
+                        **_headers(marker),
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                ),
+                await client.post(
+                    callback_path,
+                    content=f'{{"state":"{invalid_json_canary}",',
+                    headers={
+                        **_headers(marker),
+                        "Content-Type": "application/json",
+                    },
+                ),
+            ]
+            other_api = await client.post(
+                "/api/v1/remote-accounts",
+                json=other_api_canary,
+                headers=_headers(marker),
+            )
+
+        assert all(response.status_code == 422 for response in responses)
+        for response in responses:
+            errors = response.json()["detail"]
+            assert errors
+            assert all(
+                {"type", "loc", "msg"} <= set(error)
+                and error.get("input") == "***REDACTED***"
+                for error in errors
+            )
+
+        evidence = "\n".join(
+            [
+                *(record.getMessage() for record in caplog.records),
+                *(response.text for response in responses),
+            ]
+        )
+        for secret in (
+            root_string_canary,
+            root_array_canary,
+            form_state_canary,
+            form_code_canary,
+            invalid_json_canary,
+        ):
+            assert secret not in evidence
+        assert other_api.status_code == 422
+        assert other_api_canary in other_api.text
+        assert other_api_canary in "\n".join(
+            record.getMessage() for record in caplog.records
+        )
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                text("DELETE FROM users WHERE username = :marker"),
+                {"marker": marker},
+            )
+            await db.commit()
+        await engine.dispose()

@@ -840,6 +840,9 @@ async def test_concurrent_sessions_preserve_single_rotated_refresh_token(monkeyp
         ("test", "failure", "delete"),
         ("collections", "success", "delete"),
         ("collections", "failure", "replace"),
+        ("collections", "rate_limited", "replace"),
+        ("collections", "malformed", "delete"),
+        ("collections", "transport", "delete"),
     ),
 )
 async def test_post_refresh_provider_window_rejects_concurrent_account_change(
@@ -878,6 +881,12 @@ async def test_post_refresh_provider_window_rejects_concurrent_account_change(
             await self.release_retry.wait()
             if outcome == "failure":
                 return RemoteHTTPResponse(401, {"title": "stale unauthorized"})
+            if outcome == "rate_limited":
+                return RemoteHTTPResponse(429, {}, {"Retry-After": "19"})
+            if outcome == "malformed":
+                return RemoteHTTPResponse(200, [])
+            if outcome == "transport":
+                raise OSError("deterministic provider transport failure")
             return RemoteHTTPResponse(200, success_payload)
 
         async def request(self, method, url, **kwargs):
@@ -1032,6 +1041,123 @@ async def test_post_refresh_provider_window_rejects_concurrent_account_change(
         await engine.dispose()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_exception"),
+    (
+        ("rate_limited", "RemoteRateLimited"),
+        ("malformed", "MalformedRemoteResponse"),
+        ("transport", "OSError"),
+    ),
+)
+async def test_current_post_refresh_collections_error_preserves_health_and_type(
+    monkeypatch,
+    failure_kind,
+    expected_exception,
+):
+    """A current non-reauth provider error propagates without poisoning health."""
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, UserSubscriptionSource
+    from app.remote_discovery.common import (
+        MalformedRemoteResponse,
+        RemoteHTTPResponse,
+        RemoteRateLimited,
+    )
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+    from app.services.remote_accounts import RemoteAccountService
+
+    class CurrentFailureTransport:
+        def __init__(self, failure):
+            self.responses = deque(
+                (
+                    RemoteHTTPResponse(401, {"title": "expired"}),
+                    RemoteHTTPResponse(
+                        200,
+                        {
+                            "access_token": "current-rotated-access",
+                            "refresh_token": "current-rotated-refresh",
+                        },
+                    ),
+                    RemoteHTTPResponse(200, {"data": {"id": "42"}}),
+                    failure,
+                )
+            )
+
+        async def request(self, _method, _url, **_kwargs):
+            response = self.responses.popleft()
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    failures = {
+        "rate_limited": RemoteHTTPResponse(429, {}, {"Retry-After": "23"}),
+        "malformed": RemoteHTTPResponse(200, []),
+        "transport": OSError("current deterministic provider transport failure"),
+    }
+    exception_types = {
+        "RemoteRateLimited": RemoteRateLimited,
+        "MalformedRemoteResponse": MalformedRemoteResponse,
+        "OSError": OSError,
+    }
+    transport = CurrentFailureTransport(failures[failure_kind])
+    adapter = XRemoteDiscoveryAdapter(transport)
+    monkeypatch.setattr(settings, "remote_discovery_private_members_enabled", True)
+    monkeypatch.setattr(settings, "remote_discovery_x_enabled", True)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user, account, _ = await _create_x_account(
+                db,
+                adapter,
+                suffix=f"current_{failure_kind[:4]}",
+                credentials={
+                    "access_token": "current-old-access",
+                    "refresh_token": "current-old-refresh",
+                    "client_id": "current-client",
+                },
+            )
+            binding = await _bind_account(
+                db,
+                user,
+                account,
+                suffix=f"current_{failure_kind[:4]}",
+            )
+            await db.commit()
+            account_id = account.id
+            binding_id = binding.id
+            user_id = user.id
+
+        async with async_session() as request_db:
+            service = RemoteAccountService(
+                request_db,
+                user_id,
+                vault=_vault(),
+                adapters=Registry(adapter),
+            )
+            with pytest.raises(exception_types[expected_exception]) as raised:
+                await service.collections(account_id)
+            if failure_kind == "rate_limited":
+                assert raised.value.retry_after_seconds == 23
+            await request_db.rollback()
+
+        async with async_session() as db:
+            stored = await db.get(RemoteAccount, account_id)
+            stored_binding = await db.get(UserSubscriptionSource, binding_id)
+            assert stored.credential_generation == 2
+            assert stored.auth_status == "untested"
+            assert stored.auth_error_reason is None
+            assert stored_binding.auth_healthy is True
+            assert stored_binding.auth_status == "healthy"
+            assert stored_binding.auth_error_reason is None
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ("test", "collections"))
 async def test_remote_account_api_maps_stale_provider_result_to_conflict(
@@ -1084,3 +1210,40 @@ async def test_remote_account_api_maps_stale_provider_result_to_conflict(
     }
     assert db.rollbacks == 1
     assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_collections_api_keeps_current_rate_limit_as_provider_failure(monkeypatch):
+    """A current provider 429 keeps its service type and existing API 502."""
+
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.api import remote_accounts as accounts_api
+    from app.remote_discovery.common import RemoteRateLimited
+
+    rate_limit = RemoteRateLimited(29)
+
+    class RateLimitedService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def collections(self, _account_id):
+            raise rate_limit
+
+    class RecordingDB:
+        async def rollback(self):
+            raise AssertionError("current provider failure is not a stale rollback")
+
+    monkeypatch.setattr(accounts_api, "RemoteAccountService", RateLimitedService)
+    with pytest.raises(HTTPException) as failure:
+        await accounts_api.list_remote_account_collections(
+            uuid4(),
+            db=RecordingDB(),
+            user=SimpleNamespace(id=1),
+        )
+    assert failure.value.status_code == 502
+    assert failure.value.detail == "Remote collections request failed"
+    assert failure.value.__cause__ is rate_limit
+    assert rate_limit.retry_after_seconds == 29
