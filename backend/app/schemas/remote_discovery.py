@@ -126,7 +126,9 @@ class RemoteAccountCreate(BaseModel):
     auto_import_enabled: bool = False
     auto_import_min_confidence: Confidence = "high"
     auto_import_limit: int = Field(default=25, ge=1, le=200)
-    credentials: dict[str, str] = Field(min_length=1)
+    # OAuth accounts can be initiated before the callback supplies tokens.  The
+    # service boundary still requires credential material for direct creates.
+    credentials: dict[str, str] | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_auth_method_for_source(self):

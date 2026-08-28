@@ -63,22 +63,30 @@ async def search(
         raise HTTPException(status_code=422, detail={"code": "invalid_scope", "message": f"Unknown search scope: {scope}"})
     svc = SearchService(db)
     try:
-        memberships = list(
-            (
-                await db.execute(
-                    select(UserSubscription).where(UserSubscription.user_id == user.id)
-                )
-            ).scalars()
-        )
-        bindings = list(
-            (
-                await db.execute(
-                    select(UserSubscriptionSource).where(
-                        UserSubscriptionSource.user_id == user.id
+        memberships = []
+        bindings = []
+        user_id = getattr(user, "id", None)
+        # A few API-contract tests intentionally replace the database
+        # dependency with ``None`` while mocking SearchService.  Real requests
+        # always have both a session and authenticated user id; retaining this
+        # narrow seam keeps those request-shape tests independent of storage.
+        if db is not None and user_id is not None:
+            memberships = list(
+                (
+                    await db.execute(
+                        select(UserSubscription).where(UserSubscription.user_id == user_id)
                     )
-                )
-            ).scalars()
-        )
+                ).scalars()
+            )
+            bindings = list(
+                (
+                    await db.execute(
+                        select(UserSubscriptionSource).where(
+                            UserSubscriptionSource.user_id == user_id
+                        )
+                    )
+                ).scalars()
+            )
         memberships_by_subscription = {
             membership.subscription_id: membership for membership in memberships
         }
@@ -95,7 +103,7 @@ async def search(
             cursor=cursor,
             allowed_subscription_ids=set(memberships_by_subscription),
             allowed_repository_ids=set(bindings_by_repository),
-            user_id=user.id,
+            user_id=user_id,
         )
         for item in result.get("groups", {}).get("subscriptions", {}).get("items", []):
             if not isinstance(item, dict) or not item.get("id"):
