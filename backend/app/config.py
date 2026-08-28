@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     remote_credential_key: str = ""
     x_oauth_client_id: str = ""
     x_oauth_redirect_uri: str = ""
+    # Independently reversible remote-follow rollout stages. Effective
+    # auto-import additionally depends on its provider preview gate and the
+    # private-members foundation. Every gate defaults closed.
+    remote_discovery_private_members_enabled: bool = False
+    remote_discovery_pixiv_preview_enabled: bool = False
+    remote_discovery_pixiv_auto_import_enabled: bool = False
+    remote_discovery_x_enabled: bool = False
+    remote_discovery_x_auto_import_enabled: bool = False
+    remote_discovery_bilibili_enabled: bool = False
+    remote_discovery_bilibili_auto_import_enabled: bool = False
     admin_password: str = ""
     access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
     media_playback_ttl_seconds: int = 7200

@@ -55,6 +55,19 @@ os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
 # Never let tests create or mutate the runtime gallery-dl config mount.
 os.environ["GALLERYDL_CONFIG_ROOT"] = "/tmp/auto-gallery-test-gallerydl-config"
+# Remote discovery feature tests exercise the implemented provider slices.
+# Production defaults remain fail-closed; tests that verify closed rollout
+# behavior override the live Settings object explicitly.
+for _rollout_flag in (
+    "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED",
+    "REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED",
+    "REMOTE_DISCOVERY_PIXIV_AUTO_IMPORT_ENABLED",
+    "REMOTE_DISCOVERY_X_ENABLED",
+    "REMOTE_DISCOVERY_X_AUTO_IMPORT_ENABLED",
+    "REMOTE_DISCOVERY_BILIBILI_ENABLED",
+    "REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED",
+):
+    os.environ.setdefault(_rollout_flag, "true")
 
 
 def _provision_main_test_database() -> None:

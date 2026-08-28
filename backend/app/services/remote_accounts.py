@@ -16,6 +16,7 @@ from app.models import DiscoveryCandidate, RemoteAccount, UserSubscriptionSource
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.schemas.remote_discovery import RemoteAccountRead
 from app.services.remote_credentials import CredentialVault, RedactedCredentials
+from app.services.remote_discovery_rollout import require_auto_import, require_preview
 
 
 _ACCOUNT_UPDATE_FIELDS = {
@@ -155,8 +156,17 @@ class RemoteAccountService:
     ):
         self.db = db
         self.user_id = user_id
-        self.vault = vault or configured_credential_vault()
+        # Metadata reads and account deletion must remain available while a
+        # rollout gate is closed, including recovery from a missing key. Only
+        # credential-bearing operations resolve the configured vault.
+        self._vault = vault
         self.adapters = adapters or registry
+
+    @property
+    def vault(self) -> CredentialVault:
+        if self._vault is None:
+            self._vault = configured_credential_vault()
+        return self._vault
 
     async def _account(self, account_id: UUID, *, lock: bool = False) -> RemoteAccount:
         stmt = select(RemoteAccount).where(
@@ -326,6 +336,9 @@ class RemoteAccountService:
         if not isinstance(credentials, dict) or not credentials:
             raise ValueError("Credentials are required")
         source = str(payload["source"])
+        require_preview(source)
+        if payload.get("auto_import_enabled"):
+            require_auto_import(source)
         auth_method = str(payload.get("auth_method") or _DEFAULT_AUTH_METHOD[source])
         self._validate_auth_method(source, auth_method)
         self._validate_credentials(source, auth_method, credentials)
@@ -402,6 +415,9 @@ class RemoteAccountService:
 
     async def update(self, account_id: UUID, data: dict[str, Any]) -> RemoteAccountRead:
         account = await self._account(account_id, lock=True)
+        require_preview(account.source)
+        if data.get("auto_import_enabled"):
+            require_auto_import(account.source)
         was_enabled = account.is_enabled
         credentials = data.get("credentials")
         requested_auth_method = data.get("auth_method") or account.auth_method or ""
@@ -442,6 +458,7 @@ class RemoteAccountService:
 
     async def test(self, account_id: UUID) -> RemoteAccountRead:
         account = await self._account(account_id, lock=True)
+        require_preview(account.source)
         adapter = self.adapters.get(account.source)
         try:
             identity = await adapter.validate_account(self.credentials_for_adapter(account))
@@ -466,6 +483,7 @@ class RemoteAccountService:
 
     async def collections(self, account_id: UUID):
         account = await self._account(account_id)
+        require_preview(account.source)
         return await self.adapters.get(account.source).list_collections(
             self.credentials_for_adapter(account)
         )

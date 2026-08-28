@@ -21,6 +21,7 @@ from app.services.remote_discovery import (
     prepare_discovery_scan_task,
     publish_discovery_scan,
 )
+from app.services.remote_discovery_rollout import RemoteDiscoveryUnavailable
 from app.services.tasks import TaskService
 from app.services.subscription import SubscriptionService
 from app.services.tasks import task_payload
@@ -48,6 +49,15 @@ async def create_discovery_scan(
         ) from exc
     except (ValueError, RuntimeError) as exc:
         await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
         status = 404 if "not found" in str(exc).casefold() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     try:
@@ -132,6 +142,15 @@ async def batch_discovery_candidates(
         await db.commit()
     except (ValueError, RuntimeError) as exc:
         await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
         status = 404 if "not found" in str(exc).casefold() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     sync_results = []
@@ -169,6 +188,15 @@ async def resolve_discovery_candidate(
         await db.commit()
     except (ValueError, RuntimeError) as exc:
         await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
         status = 404 if "not found" in str(exc).casefold() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     sync_result = None

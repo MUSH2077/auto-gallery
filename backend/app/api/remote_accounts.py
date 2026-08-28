@@ -13,13 +13,26 @@ from app.database import get_db
 from app.schemas.remote_discovery import RemoteAccountCreate, RemoteAccountRead, RemoteAccountUpdate
 from app.services.redis_client import get_redis
 from app.services.remote_accounts import RemoteAccountService
+from app.services.remote_discovery_rollout import (
+    RemoteDiscoveryUnavailable,
+    require_preview,
+)
 from app.services.x_oauth import XOAuthPKCEState, get_x_oauth_exchange, validate_x_oauth_scopes
 
 
 router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
-def _not_found_or_bad_request(exc: ValueError) -> HTTPException:
+def _not_found_or_bad_request(exc: Exception) -> HTTPException:
+    if isinstance(exc, RemoteDiscoveryUnavailable):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "remote_discovery_unavailable",
+                "reason": exc.code,
+                "source": exc.source,
+            },
+        )
     status = 404 if "not found" in str(exc).casefold() else 400
     return HTTPException(status_code=status, detail=str(exc))
 
@@ -56,6 +69,7 @@ async def authorize_x_oauth(
     redis=Depends(get_redis),
 ):
     try:
+        require_preview("x")
         if account_id is not None:
             account = await RemoteAccountService(db, user.id).get(account_id)
             if account.source != "x":
@@ -65,9 +79,8 @@ async def authorize_x_oauth(
             client_id=settings.x_oauth_client_id,
             redirect_uri=settings.x_oauth_redirect_uri,
         ).authorize(user_id=user.id, account_id=str(account_id) if account_id else None)
-    except ValueError as exc:
-        status = 404 if "not found" in str(exc).casefold() else 400
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except (ValueError, RemoteDiscoveryUnavailable) as exc:
+        raise _not_found_or_bad_request(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"authorization_url": result.url, "state": result.state, "expires_in": 600}
@@ -83,6 +96,7 @@ async def x_oauth_callback(
     exchange=Depends(get_x_oauth_exchange),
 ):
     try:
+        require_preview("x")
         payload = XOAuthPKCEState(
             redis,
             client_id=settings.x_oauth_client_id,
@@ -128,6 +142,9 @@ async def x_oauth_callback(
                 )
         await db.commit()
         return result
+    except RemoteDiscoveryUnavailable as exc:
+        await db.rollback()
+        raise _not_found_or_bad_request(exc) from exc
     except (ValueError, RuntimeError) as exc:
         await db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -29,6 +29,12 @@ from app.remote_discovery.contract import RemoteCandidateIdentity
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.services.remote_accounts import RemoteAccountService, configured_credential_vault
 from app.services.remote_credentials import CredentialVault
+from app.services.remote_discovery_rollout import (
+    RemoteDiscoveryUnavailable,
+    auto_import_enabled,
+    enabled_preview_sources,
+    require_preview,
+)
 from app.services.settings import get_scheduler_config, get_subscription_defaults
 from app.services.subscription_membership import (
     SubscriptionMembershipService,
@@ -88,6 +94,9 @@ async def admit_due_remote_accounts(
     """Claim due accounts, persist single-flight TaskRuns, then publish them."""
 
     now = now or _now()
+    enabled_sources = enabled_preview_sources()
+    if not enabled_sources:
+        return {"created": 0, "published": 0, "task_ids": []}
     accounts = list(
         (
             await db.execute(
@@ -96,6 +105,7 @@ async def admit_due_remote_accounts(
                     RemoteAccount.is_enabled.is_(True),
                     RemoteAccount.auth_status == "healthy",
                     RemoteAccount.credential_ciphertext.is_not(None),
+                    RemoteAccount.source.in_(enabled_sources),
                     or_(
                         RemoteAccount.next_scan_at.is_(None),
                         RemoteAccount.next_scan_at <= now,
@@ -226,6 +236,7 @@ class RemoteDiscoveryService:
 
     async def create_scan(self, user_id: int, account_id: UUID) -> TaskRun:
         account = await self._owned_account(user_id, account_id, lock=True)
+        require_preview(account.source)
         active = (
             await self.db.execute(
                 select(TaskRun)
@@ -448,6 +459,32 @@ class RemoteDiscoveryService:
         return candidate
 
     async def run_scan(self, task_id: UUID) -> TaskRun:
+        queued_source = (
+            await self.db.execute(
+                select(RemoteAccount.source)
+                .join(TaskRun, TaskRun.triggering_remote_account_id == RemoteAccount.id)
+                .where(
+                    TaskRun.id == task_id,
+                    TaskRun.operation_type == "remote-discovery-scan",
+                )
+            )
+        ).scalar_one_or_none()
+        if queued_source is not None:
+            try:
+                require_preview(queued_source)
+            except RemoteDiscoveryUnavailable as exc:
+                task = await self.db.get(TaskRun, task_id)
+                if task is None:
+                    raise ValueError("Discovery scan task not found") from exc
+                if task.status in NONTERMINAL_STATUSES:
+                    await TaskService(self.db).update_task(
+                        task,
+                        status="failed",
+                        error="Discovery scan disabled by rollout",
+                        reason_code=exc.code,
+                    )
+                    await self.db.commit()
+                return task
         claimed_at = _now()
         claimed = (
             await self.db.execute(
@@ -741,6 +778,7 @@ class RemoteDiscoveryService:
         snapshot_state = candidate_snapshot.state
         account_snapshot = await self._owned_account(user_id, snapshot_account_id)
         snapshot_source = account_snapshot.source
+        require_preview(snapshot_source)
         snapshot_generation = account_snapshot.credential_generation
 
         membership_service = SubscriptionMembershipService(self.db, user_id)
@@ -878,6 +916,7 @@ class RemoteDiscoveryService:
         if candidate.state != "conflict":
             raise ValueError("Discovery candidate is not in conflict")
         account = await self._owned_account(user_id, candidate.remote_account_id)
+        require_preview(account.source)
         # Identity is always acquired before Creator, matching import_candidate
         # and preventing two resolutions from installing incompatible mappings.
         await self._lock_remote_identity(account.source, candidate.source_creator_id)
@@ -932,6 +971,8 @@ class RemoteDiscoveryService:
         return candidate
 
     async def auto_import(self, account: RemoteAccount) -> list[DiscoveryCandidate]:
+        if not auto_import_enabled(account.source):
+            return []
         allowed = {
             "high": {"high"},
             "medium": {"high", "medium"},

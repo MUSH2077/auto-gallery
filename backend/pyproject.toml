@@ -18,6 +18,7 @@ packages = ["gitllery_cli", "gitllery_format"]
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that require a real PostgreSQL database (run inside Docker)",
+    "live_provider: explicitly opted-in tests that contact real remote providers",
 ]
 asyncio_mode = "auto"
 cache_dir = "/tmp/auto-gallery-pytest-cache"
