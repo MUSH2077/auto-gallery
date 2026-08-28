@@ -300,7 +300,7 @@ async def test_legacy_null_account_binding_remains_eligible_for_global_config():
     try:
         async with async_session() as db:
             (
-                _users,
+                users,
                 _creator,
                 subscription,
                 source,
@@ -345,7 +345,7 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
                 source,
                 _members,
                 accounts,
-                _bindings,
+                bindings,
                 _dues,
             ) = await _seed_shared_source(db, now=now)
             accounts[1].auth_status = "unhealthy"
@@ -1729,13 +1729,13 @@ async def test_owned_manual_membership_can_sync_when_automatic_cache_is_disabled
     try:
         async with async_session() as db:
             (
-                _users,
+                users,
                 _creator,
                 subscription,
                 source,
                 members,
                 accounts,
-                _bindings,
+                bindings,
                 _dues,
             ) = await _seed_shared_source(db, now=now)
             for member in members:
@@ -1763,6 +1763,26 @@ async def test_owned_manual_membership_can_sync_when_automatic_cache_is_disabled
             assert job.triggering_remote_account_id == accounts[0].id
             await db.execute(delete(DownloadJob).where(DownloadJob.id == job.id))
             await db.commit()
+
+            from app.services.subscription_membership import (
+                SubscriptionMembershipService,
+            )
+
+            await SubscriptionMembershipService(db, users[0].id).update_source(
+                subscription.id,
+                source.id,
+                {"is_enabled": False},
+            )
+            assert bindings[0].is_enabled is False
+            disabled = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source.id,
+                trigger="manual_subscription",
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[0].id,
+            )
+            assert disabled["status"] == "skipped"
+            assert disabled["skip_reason"] == "no_eligible_member_source"
 
             denied = await subscription_enqueue.enqueue_subscription_source_sync(
                 db,
@@ -2508,6 +2528,276 @@ async def test_publication_failure_restores_original_private_demand(monkeypatch)
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_publication_restore_preserves_concurrent_binding_disable_policy():
+    """A failed publish cannot restore demand across a binding policy edit."""
+
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.models import SubscriptionSource, UserSubscriptionSource
+    from app.services import subscription_enqueue
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    claimed_next = now + timedelta(minutes=5)
+    barrier = _FirstRowLockBarrier()
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                _subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            selected = bindings[0]
+            previous_source_attempted_at = source.last_attempted_at
+            previous_binding_attempted_at = selected.last_attempted_at
+            previous_binding_next_sync_at = selected.next_sync_at
+            source.last_attempted_at = now
+            selected.last_attempted_at = now
+            selected.next_sync_at = claimed_next
+            await db.commit()
+            await db.refresh(selected)
+            await db.refresh(accounts[0])
+            claimed_binding_updated_at = selected.updated_at
+            claimed_binding_is_enabled = selected.is_enabled
+            claimed_binding_auth_healthy = selected.auth_healthy
+            claimed_binding_auth_status = selected.auth_status
+            claimed_account_auth_status = accounts[0].auth_status
+            source_id = source.id
+            subscription_id = source.subscription_id
+            binding_id = selected.id
+            membership_id = selected.user_subscription_id
+            remote_account_id = selected.remote_account_id
+            credential_generation = accounts[0].credential_generation
+            user_id = users[0].id
+
+        async def restore_failed_publication():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await subscription_enqueue._restore_failed_publication_demand(
+                    db,
+                    source_id=source_id,
+                    binding_id=binding_id,
+                    membership_id=membership_id,
+                    remote_account_id=remote_account_id,
+                    credential_generation=credential_generation,
+                    claimed_at=now,
+                    claimed_next_sync_at=claimed_next,
+                    claimed_binding_updated_at=claimed_binding_updated_at,
+                    claimed_binding_is_enabled=claimed_binding_is_enabled,
+                    claimed_binding_auth_healthy=claimed_binding_auth_healthy,
+                    claimed_binding_auth_status=claimed_binding_auth_status,
+                    claimed_account_auth_status=claimed_account_auth_status,
+                    previous_source_attempted_at=previous_source_attempted_at,
+                    previous_binding_attempted_at=previous_binding_attempted_at,
+                    previous_binding_next_sync_at=previous_binding_next_sync_at,
+                )
+
+        async def edit_binding_policy():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                service = SubscriptionMembershipService(db, user_id)
+                await service.update_source(
+                    subscription_id,
+                    source_id,
+                    {"is_enabled": False},
+                )
+                await raw_db.commit()
+
+        restore_task = asyncio.create_task(restore_failed_publication())
+        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        edit_task = asyncio.create_task(edit_binding_policy())
+        await asyncio.wait_for(asyncio.gather(restore_task, edit_task), timeout=6)
+
+        async with async_session() as db:
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            stored_source = await db.get(SubscriptionSource, source_id)
+            assert binding.remote_account_id == remote_account_id
+            assert binding.is_enabled is False
+            assert binding.next_sync_at is None
+            assert binding.next_sync_at != dues[0]
+            assert stored_source.next_sync_at != dues[0]
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_publication_restore_does_not_cross_disable_reenable_transition():
+    """A completed policy cycle invalidates the old claim even if due matches."""
+
+    from app.database import async_session, engine
+    from app.models import UserSubscriptionSource
+    from app.services import subscription_enqueue
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    claimed_next = now + timedelta(minutes=5)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                _subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            selected = bindings[0]
+            previous_source_attempted_at = source.last_attempted_at
+            previous_binding_attempted_at = selected.last_attempted_at
+            previous_binding_next_sync_at = selected.next_sync_at
+            source.last_attempted_at = now
+            selected.last_attempted_at = now
+            selected.next_sync_at = claimed_next
+            await db.commit()
+            await db.refresh(selected)
+            await db.refresh(accounts[0])
+            claimed_binding_updated_at = selected.updated_at
+            claimed_binding_is_enabled = selected.is_enabled
+            claimed_binding_auth_healthy = selected.auth_healthy
+            claimed_binding_auth_status = selected.auth_status
+            claimed_account_auth_status = accounts[0].auth_status
+            source_id = source.id
+            subscription_id = source.subscription_id
+            binding_id = selected.id
+            membership_id = selected.user_subscription_id
+            remote_account_id = selected.remote_account_id
+            credential_generation = accounts[0].credential_generation
+            user_id = users[0].id
+
+        async with async_session() as db:
+            service = SubscriptionMembershipService(db, user_id)
+            await service.update_source(
+                subscription_id,
+                source_id,
+                {"is_enabled": False},
+            )
+            await service.update_source(
+                subscription_id,
+                source_id,
+                {"is_enabled": True},
+            )
+            rebound = await db.get(UserSubscriptionSource, binding_id)
+            replanned_next = rebound.next_sync_at
+            await db.commit()
+
+        async with async_session() as db:
+            await subscription_enqueue._restore_failed_publication_demand(
+                db,
+                source_id=source_id,
+                binding_id=binding_id,
+                membership_id=membership_id,
+                remote_account_id=remote_account_id,
+                credential_generation=credential_generation,
+                claimed_at=now,
+                claimed_next_sync_at=claimed_next,
+                claimed_binding_updated_at=claimed_binding_updated_at,
+                claimed_binding_is_enabled=claimed_binding_is_enabled,
+                claimed_binding_auth_healthy=claimed_binding_auth_healthy,
+                claimed_binding_auth_status=claimed_binding_auth_status,
+                claimed_account_auth_status=claimed_account_auth_status,
+                previous_source_attempted_at=previous_source_attempted_at,
+                previous_binding_attempted_at=previous_binding_attempted_at,
+                previous_binding_next_sync_at=previous_binding_next_sync_at,
+            )
+
+        async with async_session() as db:
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            assert binding.is_enabled is True
+            assert binding.next_sync_at == replanned_next
+            assert binding.next_sync_at != previous_binding_next_sync_at
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_binding_disable_then_enable_replans_current_member_schedule():
+    """Re-enabling creates fresh demand instead of reviving an overdue slot."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import (
+        SubscriptionMembershipService,
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            bindings[0].last_synced_at = now
+            bindings[0].next_sync_at = now - timedelta(days=1)
+            bindings[1].is_enabled = False
+            bindings[1].next_sync_at = None
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+
+            service = SubscriptionMembershipService(db, users[0].id)
+            await service.update_source(
+                subscription.id,
+                source.id,
+                {"is_enabled": False},
+            )
+            assert bindings[0].next_sync_at is None
+            assert source.is_enabled is False
+            assert (
+                await select_eligible_membership_source(
+                    db,
+                    source,
+                    now=now,
+                    preferred_membership_id=members[0].id,
+                    preferred_account_id=accounts[0].id,
+                    require_due=False,
+                    require_sync_enabled=False,
+                )
+                is None
+            )
+
+            enabled_at = datetime.now(timezone.utc)
+            await service.update_source(
+                subscription.id,
+                source.id,
+                {"is_enabled": True},
+            )
+            assert bindings[0].next_sync_at > enabled_at
+            assert bindings[0].next_sync_at >= enabled_at + timedelta(hours=1)
+            assert source.is_enabled is True
+            assert source.next_sync_at == bindings[0].next_sync_at
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_publication_restore_and_member_rebind_share_lifecycle_lock_order():
     """Restore must not hold canonical rows while waiting for a member edit."""
 
@@ -2541,6 +2831,13 @@ async def test_publication_restore_and_member_rebind_share_lifecycle_lock_order(
             selected.last_attempted_at = now
             selected.next_sync_at = claimed_next
             await db.commit()
+            await db.refresh(selected)
+            await db.refresh(accounts[0])
+            claimed_binding_updated_at = selected.updated_at
+            claimed_binding_is_enabled = selected.is_enabled
+            claimed_binding_auth_healthy = selected.auth_healthy
+            claimed_binding_auth_status = selected.auth_status
+            claimed_account_auth_status = accounts[0].auth_status
             source_id = source.id
             subscription_id = source.subscription_id
             binding_id = selected.id
@@ -2562,6 +2859,11 @@ async def test_publication_restore_and_member_rebind_share_lifecycle_lock_order(
                     credential_generation=credential_generation,
                     claimed_at=now,
                     claimed_next_sync_at=claimed_next,
+                    claimed_binding_updated_at=claimed_binding_updated_at,
+                    claimed_binding_is_enabled=claimed_binding_is_enabled,
+                    claimed_binding_auth_healthy=claimed_binding_auth_healthy,
+                    claimed_binding_auth_status=claimed_binding_auth_status,
+                    claimed_account_auth_status=claimed_account_auth_status,
                     previous_source_attempted_at=previous_source_attempted_at,
                     previous_binding_attempted_at=previous_binding_attempted_at,
                     previous_binding_next_sync_at=previous_binding_next_sync_at,
@@ -2587,8 +2889,229 @@ async def test_publication_restore_and_member_rebind_share_lifecycle_lock_order(
             binding = await db.get(type(bindings[0]), binding_id)
             assert binding.remote_account_id is None
             assert binding.is_enabled is False
-            assert binding.next_sync_at == claimed_next
+            assert binding.next_sync_at is None
             assert binding.next_sync_at != dues[0]
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_account_delete_and_member_rebind_lock_remote_account_first():
+    """Delete and rebind serialize at RemoteAccount without a USS lock cycle."""
+
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, SubscriptionSource, UserSubscriptionSource
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    delete_locked_account = asyncio.Event()
+    allow_delete = asyncio.Event()
+    rebind_locked_binding = asyncio.Event()
+    vault = CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode())
+
+    class DeletePauseSession:
+        def __init__(self, db):
+            self._db = db
+            self._paused = False
+
+        async def execute(self, statement, *args, **kwargs):
+            result = await self._db.execute(statement, *args, **kwargs)
+            if not self._paused and getattr(statement, "_for_update_arg", None) is not None:
+                self._paused = True
+                delete_locked_account.set()
+                await allow_delete.wait()
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._db, name)
+
+    class RebindWatchSession:
+        def __init__(self, db):
+            self._db = db
+
+        async def execute(self, statement, *args, **kwargs):
+            result = await self._db.execute(statement, *args, **kwargs)
+            entities = {
+                item.get("entity")
+                for item in getattr(statement, "column_descriptions", ())
+            }
+            if (
+                getattr(statement, "_for_update_arg", None) is not None
+                and UserSubscriptionSource in entities
+            ):
+                rebind_locked_binding.set()
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._db, name)
+
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[0]
+            account.auth_status = "healthy"
+            await db.commit()
+            user_id = users[0].id
+            subscription_id = subscription.id
+            source_id = source.id
+            binding_id = bindings[0].id
+            account_id = account.id
+
+        async def delete_account():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = DeletePauseSession(raw_db)
+                await RemoteAccountService(db, user_id, vault=vault).delete(account_id)
+                await raw_db.commit()
+
+        async def rebind_same_account():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = RebindWatchSession(raw_db)
+                try:
+                    await SubscriptionMembershipService(db, user_id).update_source(
+                        subscription_id,
+                        source_id,
+                        {"remote_account_id": account_id},
+                    )
+                except ValueError as exc:
+                    await raw_db.rollback()
+                    return str(exc)
+                await raw_db.commit()
+                return None
+
+        delete_task = asyncio.create_task(delete_account())
+        await asyncio.wait_for(delete_locked_account.wait(), timeout=2)
+        rebind_task = asyncio.create_task(rebind_same_account())
+        try:
+            await asyncio.wait_for(rebind_locked_binding.wait(), timeout=0.25)
+            binding_locked_before_account_release = True
+        except TimeoutError:
+            binding_locked_before_account_release = False
+        allow_delete.set()
+        _, rebind_error = await asyncio.wait_for(
+            asyncio.gather(delete_task, rebind_task), timeout=6
+        )
+        assert binding_locked_before_account_release is False
+        assert rebind_error == "Remote account not found"
+
+        async with async_session() as db:
+            assert await db.get(RemoteAccount, account_id) is None
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            canonical = await db.get(SubscriptionSource, source_id)
+            assert binding.remote_account_id is None
+            assert binding.auth_status == "deleted"
+            assert binding.next_sync_at is None
+            assert canonical.is_enabled is True
+    finally:
+        allow_delete.set()
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_member_attach_accepts_only_owned_current_provider_account():
+    """Attach rejects cross-owner/source, tombstoned, and credential-less accounts."""
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            valid_id = accounts[0].id
+            binding = bindings[0]
+            binding.remote_account_id = None
+            wrong_source = RemoteAccount(
+                user_id=users[0].id,
+                source="x",
+                auth_method="cookie",
+                credential_ciphertext="test-wrong-source-ciphertext",
+                credential_key_version=1,
+                credential_generation=1,
+                is_enabled=True,
+                auth_status="healthy",
+            )
+            db.add(wrong_source)
+            await db.commit()
+
+            service = SubscriptionMembershipService(db, users[0].id)
+            await service.update_source(
+                subscription.id,
+                source.id,
+                {"remote_account_id": valid_id},
+            )
+            assert binding.remote_account_id == valid_id
+
+            with pytest.raises(ValueError, match="Remote account not found"):
+                await SubscriptionMembershipService(db, users[1].id).update_source(
+                    subscription.id,
+                    source.id,
+                    {"remote_account_id": valid_id},
+                )
+            with pytest.raises(ValueError, match="source does not match"):
+                await service.update_source(
+                    subscription.id,
+                    source.id,
+                    {"remote_account_id": wrong_source.id},
+                )
+            await service.update_source(
+                subscription.id,
+                source.id,
+                {"remote_account_id": None},
+            )
+            accounts[0].is_enabled = False
+            accounts[0].auth_status = "deleted"
+            accounts[0].credential_ciphertext = None
+            accounts[0].credential_generation += 1
+            await db.commit()
+            with pytest.raises(ValueError, match="Remote account is not usable"):
+                await service.update_source(
+                    subscription.id,
+                    source.id,
+                    {"remote_account_id": valid_id},
+                )
+
+            accounts[0].is_enabled = True
+            accounts[0].auth_status = "healthy"
+            await db.commit()
+            with pytest.raises(ValueError, match="Remote account is not usable"):
+                await service.update_source(
+                    subscription.id,
+                    source.id,
+                    {"remote_account_id": valid_id},
+                )
+            assert binding.remote_account_id is None
     finally:
         async with async_session() as db:
             await _cleanup_shared_test_rows(db)

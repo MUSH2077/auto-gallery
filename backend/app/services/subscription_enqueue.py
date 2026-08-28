@@ -340,6 +340,11 @@ async def _restore_failed_publication_demand(
     credential_generation: int | None,
     claimed_at: datetime,
     claimed_next_sync_at: datetime | None,
+    claimed_binding_updated_at: datetime,
+    claimed_binding_is_enabled: bool,
+    claimed_binding_auth_healthy: bool,
+    claimed_binding_auth_status: str | None,
+    claimed_account_auth_status: str | None,
     previous_source_attempted_at: datetime | None,
     previous_binding_attempted_at: datetime | None,
     previous_binding_next_sync_at: datetime | None,
@@ -359,7 +364,7 @@ async def _restore_failed_publication_demand(
         if not _private_account_can_accept_outcome(
             account,
             triggering_credential_generation=credential_generation,
-        ):
+        ) or account.auth_status != claimed_account_auth_status:
             await db.rollback()
             return
     binding = (
@@ -374,6 +379,10 @@ async def _restore_failed_publication_demand(
         or binding.subscription_source_id != source_id
         or binding.user_subscription_id != membership_id
         or binding.remote_account_id != remote_account_id
+        or _as_utc(binding.updated_at) != _as_utc(claimed_binding_updated_at)
+        or binding.is_enabled != claimed_binding_is_enabled
+        or binding.auth_healthy != claimed_binding_auth_healthy
+        or binding.auth_status != claimed_binding_auth_status
         or (remote_account_id is None and binding.auth_status == "deleted")
         or (remote_account_id is None and credential_generation is not None)
     ):
@@ -638,6 +647,17 @@ async def enqueue_subscription_source_sync(
         selection.binding.last_attempted_at = now
         selection.binding.next_sync_at = next_sync_at
         await recompute_subscription_membership_cache(db, sub.id)
+        # ``updated_at`` is a server-side onupdate value and SQLAlchemy expires
+        # it after the claim flush. Load it explicitly inside the async path so
+        # the CAS snapshot never triggers implicit synchronous IO.
+        await db.refresh(selection.binding, attribute_names=["updated_at"])
+        claimed_binding_updated_at = selection.binding.updated_at
+        claimed_binding_is_enabled = selection.binding.is_enabled
+        claimed_binding_auth_healthy = selection.binding.auth_healthy
+        claimed_binding_auth_status = selection.binding.auth_status
+        claimed_account_auth_status = (
+            selection.account.auth_status if selection.account is not None else None
+        )
         try:
             await publish_prepared_download(
                 db,
@@ -659,6 +679,11 @@ async def enqueue_subscription_source_sync(
                 credential_generation=triggering_credential_generation,
                 claimed_at=now,
                 claimed_next_sync_at=next_sync_at,
+                claimed_binding_updated_at=claimed_binding_updated_at,
+                claimed_binding_is_enabled=claimed_binding_is_enabled,
+                claimed_binding_auth_healthy=claimed_binding_auth_healthy,
+                claimed_binding_auth_status=claimed_binding_auth_status,
+                claimed_account_auth_status=claimed_account_auth_status,
                 previous_source_attempted_at=previous_source_attempted_at,
                 previous_binding_attempted_at=previous_binding_attempted_at,
                 previous_binding_next_sync_at=previous_binding_next_sync_at,

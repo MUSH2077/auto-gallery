@@ -616,6 +616,39 @@ class SubscriptionMembershipService:
 
     async def update_source(self, subscription_id: UUID, source_id: UUID, data: dict[str, Any]) -> SubscriptionSourceRead:
         member = await self.require_membership(subscription_id)
+        source = await self.db.get(SubscriptionSource, source_id)
+        if source is None or source.subscription_id != subscription_id:
+            raise ValueError("Subscription source not found")
+
+        # A non-NULL attach follows the same lifecycle lock prefix as account
+        # delete and credential outcomes: RemoteAccount -> member binding ->
+        # canonical aggregate.  Resolve the target before taking the USS lock
+        # so delete cannot hold the account while waiting on this binding.
+        account_id = (
+            data.get("remote_account_id") if "remote_account_id" in data else None
+        )
+        if "remote_account_id" in data and account_id is not None:
+            account = (
+                await self.db.execute(
+                    select(RemoteAccount)
+                    .where(
+                        RemoteAccount.id == account_id,
+                        RemoteAccount.user_id == self.user_id,
+                    )
+                    .with_for_update(of=RemoteAccount)
+                )
+            ).scalar_one_or_none()
+            if account is None:
+                raise ValueError("Remote account not found")
+            if account.source != source.source:
+                raise ValueError("Remote account source does not match subscription source")
+            if (
+                not account.is_enabled
+                or account.auth_status == "deleted"
+                or not account.credential_ciphertext
+            ):
+                raise ValueError("Remote account is not usable")
+
         binding = (
             await self.db.execute(
                 select(UserSubscriptionSource)
@@ -628,26 +661,29 @@ class SubscriptionMembershipService:
         ).scalar_one_or_none()
         if binding is None:
             raise ValueError("Subscription source not found")
+        was_enabled = binding.is_enabled
         if "is_enabled" in data and data["is_enabled"] is not None:
             binding.is_enabled = data["is_enabled"]
         if "remote_account_id" in data:
-            account_id = data["remote_account_id"]
-            if account_id is not None:
-                account = (
-                    await self.db.execute(
-                        select(RemoteAccount).where(
-                            RemoteAccount.id == account_id,
-                            RemoteAccount.user_id == self.user_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if account is None:
-                    raise ValueError("Remote account not found")
-                source = await self.db.get(SubscriptionSource, source_id)
-                if source is None or account.source != source.source:
-                    raise ValueError("Remote account source does not match subscription source")
             binding.remote_account_id = account_id
-        await recompute_subscription_membership_cache(self.db, subscription_id)
+        if was_enabled and not binding.is_enabled:
+            # Disabled bindings carry no automatic demand. Their last receipt
+            # and attempt remain audit history, while due is authoritative.
+            binding.next_sync_at = None
+            await recompute_subscription_membership_cache(self.db, subscription_id)
+        elif not was_enabled and binding.is_enabled:
+            from app.services.subscription_replan import (
+                replan_user_subscription_sources,
+            )
+
+            await replan_user_subscription_sources(
+                self.db,
+                member,
+                await get_scheduler_config(self.db),
+                bindings=[binding],
+            )
+        else:
+            await recompute_subscription_membership_cache(self.db, subscription_id)
         await self.db.flush()
         return next(item for item in await self.list_sources(subscription_id) if item.id == source_id)
 
