@@ -1201,6 +1201,140 @@ async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped()
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_falsey_meta_locators_do_not_create_global_subscription_batches():
+    """Every non-NULL legacy locator blocks global system/admin task access."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import delete
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import TaskEvent, TaskRun
+
+    task_ids = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            ordinary = await _seed_user(db, "falsey_locator_ordinary")
+            system_user = await _seed_user(db, "falsey_locator_system")
+            system_user.permissions = [*system_user.permissions, "system"]
+            admin = await _seed_user(db, "falsey_locator_admin", admin=True)
+            falsey_tasks = [
+                TaskRun(
+                    kind="admin",
+                    operation_type="subscription-sync-batch",
+                    status="failed",
+                    attention_state="open",
+                    title=f"Falsey Locator Batch {locator}",
+                    meta={locator: value},
+                )
+                for locator, value in (
+                    ("subscription_id", ""),
+                    ("subscription_source_id", 0),
+                    ("user_subscription_id", False),
+                    ("remote_account_id", ""),
+                )
+            ]
+            json_null_global = TaskRun(
+                kind="admin",
+                operation_type="subscription-sync-batch",
+                status="failed",
+                attention_state="open",
+                title="JSON Null Locator Global Batch",
+                meta={
+                    "subscription_id": None,
+                    "subscription_source_id": None,
+                    "user_subscription_id": None,
+                    "remote_account_id": None,
+                },
+            )
+            db.add_all([*falsey_tasks, json_null_global])
+            await db.commit()
+            task_ids = [task.id for task in falsey_tasks] + [json_null_global.id]
+            ordinary_name = ordinary.username
+            privileged_names = (system_user.username, admin.username)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            for username in (ordinary_name, *privileged_names):
+                headers = _headers(username)
+                falsey_list = await client.get(
+                    "/api/v1/tasks",
+                    params={"q": "Falsey Locator Batch"},
+                    headers=headers,
+                )
+                assert falsey_list.status_code == 200, falsey_list.text
+                assert falsey_list.json()["items"] == []
+                for task in falsey_tasks:
+                    assert (
+                        await client.get(f"/api/v1/tasks/{task.id}", headers=headers)
+                    ).status_code == 404
+                    assert (
+                        await client.post(
+                            f"/api/v1/tasks/{task.id}/acknowledge", headers=headers
+                        )
+                    ).status_code == 404
+                    assert (
+                        await client.post(
+                            f"/api/v1/tasks/{task.id}/retry", headers=headers
+                        )
+                    ).status_code == 404
+
+            ordinary_headers = _headers(ordinary_name)
+            assert (
+                await client.get(
+                    f"/api/v1/tasks/{json_null_global.id}", headers=ordinary_headers
+                )
+            ).status_code == 403
+            assert (
+                await client.post(
+                    f"/api/v1/tasks/{json_null_global.id}/acknowledge",
+                    headers=ordinary_headers,
+                )
+            ).status_code == 403
+            assert (
+                await client.post(
+                    f"/api/v1/tasks/{json_null_global.id}/retry",
+                    headers=ordinary_headers,
+                )
+            ).status_code == 403
+
+            system_headers = _headers(privileged_names[0])
+            global_list = await client.get(
+                "/api/v1/tasks",
+                params={"q": "JSON Null Locator Global Batch"},
+                headers=system_headers,
+            )
+            assert global_list.status_code == 200, global_list.text
+            assert [item["id"] for item in global_list.json()["items"]] == [
+                str(json_null_global.id)
+            ]
+            assert (
+                await client.get(
+                    f"/api/v1/tasks/{json_null_global.id}", headers=system_headers
+                )
+            ).status_code == 200
+            assert (
+                await client.post(
+                    f"/api/v1/tasks/{json_null_global.id}/acknowledge",
+                    headers=system_headers,
+                )
+            ).status_code == 200
+            control = await client.post(
+                f"/api/v1/tasks/{json_null_global.id}/retry", headers=system_headers
+            )
+            assert control.status_code == 409, control.text
+            assert control.json()["detail"]["code"] == "invalid_task_action"
+    finally:
+        async with async_session() as db:
+            if task_ids:
+                await db.execute(delete(TaskEvent).where(TaskEvent.task_run_id.in_(task_ids)))
+                await db.execute(delete(TaskRun).where(TaskRun.id.in_(task_ids)))
+                await db.commit()
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
     """A tasks-only user cannot read/control peer imports or run global scans."""
     from httpx import ASGITransport, AsyncClient

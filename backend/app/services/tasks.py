@@ -23,6 +23,12 @@ from app.models.task_run import TaskEvent, TaskRun
 NONTERMINAL_STATUSES = {"enqueued", "running", "paused", "recovering"}
 TERMINAL_STATUSES = {"complete", "failed", "cancelled", "stale"}
 _UNSET = object()
+_SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS = (
+    "subscription_id",
+    "subscription_source_id",
+    "user_subscription_id",
+    "remote_account_id",
+)
 
 
 def download_job_visibility_condition(user_id: int, job_model=DownloadJob):
@@ -68,8 +74,10 @@ def import_job_visibility_condition(user_id: int):
 def _subscription_membership_locator_condition():
     return or_(
         TaskRun.subject_type.in_({"subscription", "subscription_source"}).is_(True),
-        TaskRun.meta["subscription_id"].astext.is_not(None),
-        TaskRun.meta["subscription_source_id"].astext.is_not(None),
+        *(
+            TaskRun.meta[key].astext.is_not(None)
+            for key in _SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS
+        ),
     )
 
 
@@ -98,8 +106,9 @@ def is_global_subscription_batch(task: TaskRun) -> bool:
         and task.triggering_user_subscription_id is None
         and task.triggering_remote_account_id is None
         and task.subject_type not in {"subscription", "subscription_source"}
-        and not meta.get("subscription_id")
-        and not meta.get("subscription_source_id")
+        and all(
+            meta.get(key) is None for key in _SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS
+        )
     )
 
 
