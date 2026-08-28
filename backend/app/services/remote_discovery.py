@@ -22,7 +22,6 @@ from app.models import (
     SubscriptionSource,
     TaskRun,
     UserSubscription,
-    UserSubscriptionSource,
 )
 from app.remote_discovery.classifier import IdentityMatchSignals, classify_identity
 from app.remote_discovery.common import RemoteReauthenticationRequired
@@ -657,7 +656,9 @@ class RemoteDiscoveryService:
             DiscoveryCandidate.user_id == user_id,
         )
         if lock:
-            stmt = stmt.with_for_update(of=DiscoveryCandidate)
+            stmt = stmt.with_for_update(of=DiscoveryCandidate).execution_options(
+                populate_existing=True
+            )
         candidate = (await self.db.execute(stmt)).scalar_one_or_none()
         if candidate is None:
             raise ValueError("Discovery candidate not found")
@@ -674,6 +675,11 @@ class RemoteDiscoveryService:
             raise ValueError("Candidate batch must contain between 1 and 200 IDs")
         results = []
         for candidate_id in dict.fromkeys(candidate_ids):
+            if action == "import":
+                # Import has its own RemoteAccount -> Candidate lock prefix.
+                # Taking Candidate here would invert account deletion's order.
+                results.append(await self.import_candidate(user_id, candidate_id))
+                continue
             candidate = await self._candidate(user_id, candidate_id, lock=True)
             if action == "dismiss":
                 if candidate.state != "imported":
@@ -684,8 +690,6 @@ class RemoteDiscoveryService:
                     metadata = candidate.candidate_metadata or {}
                     candidate.state = "conflict" if metadata.get("identity_conflict") else "pending"
                     candidate.dismissed_at = None
-            elif action == "import":
-                candidate = await self.import_candidate(user_id, candidate.id)
             else:
                 raise ValueError("Unknown candidate batch action")
             results.append(candidate)
@@ -728,12 +732,34 @@ class RemoteDiscoveryService:
         return creator
 
     async def import_candidate(self, user_id: int, candidate_id: UUID) -> DiscoveryCandidate:
+        # Snapshot only immutable identifiers before locking. Account lifecycle
+        # paths serialize on RemoteAccount first, so import must wait there
+        # before taking Candidate or member-source locks.
+        candidate_snapshot = await self._candidate(user_id, candidate_id)
+        snapshot_account_id = candidate_snapshot.remote_account_id
+        snapshot_source_creator_id = candidate_snapshot.source_creator_id
+        snapshot_state = candidate_snapshot.state
+        account_snapshot = await self._owned_account(user_id, snapshot_account_id)
+        snapshot_source = account_snapshot.source
+        snapshot_generation = account_snapshot.credential_generation
+
+        membership_service = SubscriptionMembershipService(self.db, user_id)
+        account = await membership_service._lock_remote_account_for_source(
+            snapshot_account_id,
+            snapshot_source,
+            expected_generation=snapshot_generation,
+        )
         candidate = await self._candidate(user_id, candidate_id, lock=True)
+        if (
+            candidate.remote_account_id != snapshot_account_id
+            or candidate.source_creator_id != snapshot_source_creator_id
+            or candidate.state != snapshot_state
+        ):
+            raise ValueError("Discovery candidate changed during import")
         if candidate.state == "dismissed":
             raise ValueError("Dismissed candidate must be restored before import")
         if candidate.state == "conflict" or (candidate.candidate_metadata or {}).get("identity_conflict"):
             raise ValueError("Discovery candidate has an unresolved conflict")
-        account = await self._owned_account(user_id, candidate.remote_account_id)
         # All shared rows derived from one remote identity must converge even
         # when two users import it in separate transactions at the same time.
         # The lock is released automatically at transaction end.
@@ -802,7 +828,6 @@ class RemoteDiscoveryService:
             )
             self.db.add(canonical_source)
             await self.db.flush()
-        membership_service = SubscriptionMembershipService(self.db, user_id)
         member = (
             await self.db.execute(
                 select(UserSubscription)
@@ -820,44 +845,18 @@ class RemoteDiscoveryService:
                 name=creator.display_name or creator.name,
                 **defaults,
             )
-        binding = (
-            await self.db.execute(
-                select(UserSubscriptionSource)
-                .where(
-                    UserSubscriptionSource.user_subscription_id == member.id,
-                    UserSubscriptionSource.subscription_source_id == canonical_source.id,
-                )
-                .with_for_update(of=UserSubscriptionSource)
-            )
-        ).scalar_one_or_none()
-        if binding is None:
-            binding = await membership_service.ensure_source_binding(
-                member,
-                canonical_source,
-                remote_account_id=account.id,
-                is_enabled=True,
-            )
-            binding.auth_healthy = True
+        binding, created = await membership_service._ensure_source_binding(
+            member,
+            canonical_source,
+            remote_account_id=account.id,
+            remote_account_generation=account.credential_generation,
+            locked_remote_account=account,
+            is_enabled=None,
+        )
+        if created:
+            binding.auth_healthy = account.auth_status == "healthy"
             binding.auth_status = account.auth_status
             binding.auth_error_reason = None
-            if member.sync_enabled:
-                from app.services.subscription_replan import (
-                    next_user_subscription_check_at,
-                )
-
-                binding.next_sync_at = next_user_subscription_check_at(
-                    member,
-                    await get_scheduler_config(self.db),
-                    binding.last_synced_at,
-                    binding.last_attempted_at,
-                    _now(),
-                )
-            else:
-                binding.next_sync_at = None
-        elif binding.remote_account_id is None:
-            # Account provenance/auth availability may be attached to an
-            # existing local binding without changing any private policy.
-            binding.remote_account_id = account.id
         candidate.state = "imported"
         candidate.subscription_id = subscription.id
         candidate.user_subscription_id = member.id

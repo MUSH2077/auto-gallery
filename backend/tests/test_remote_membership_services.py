@@ -381,6 +381,192 @@ async def test_public_subscription_routes_use_current_membership_and_canonical_i
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_post_existing_source_uses_authoritative_enable_transition():
+    """POST and PATCH share disable clearing and schedule-aware re-enable."""
+
+    from datetime import datetime, timedelta, timezone
+
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import (
+        Creator,
+        Subscription,
+        SubscriptionSource,
+        UserSubscriptionSource,
+    )
+    from app.services.subscription_membership import (
+        SubscriptionMembershipService,
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    expected_interval_due = now + timedelta(hours=4)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "source_transition")
+            creator = Creator(name="Source Transition Artist")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Transition")
+            db.add(subscription)
+            await db.flush()
+            source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="source-transition",
+                source_url="https://www.pixiv.net/users/77331",
+            )
+            db.add(source)
+            await db.flush()
+            service = SubscriptionMembershipService(db, user.id)
+            member = await service.ensure_membership(
+                subscription,
+                sync_enabled=True,
+                sync_interval_hours=4,
+                schedule_mode="interval",
+            )
+            binding = await service.ensure_source_binding(
+                member,
+                source,
+                is_enabled=True,
+            )
+            binding.last_synced_at = now
+            binding.next_sync_at = expected_interval_due
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+            user_name = user.username
+            user_id = user.id
+            subscription_id = subscription.id
+            source_id = source.id
+            member_id = member.id
+            binding_id = binding.id
+
+        payload = {
+            "source": "pixiv",
+            "source_creator_id": "source-transition",
+            "source_url": "https://www.pixiv.net/users/77331",
+        }
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = _headers(user_name)
+            unchanged_enabled = await client.post(
+                f"/api/v1/subscriptions/{subscription_id}/sources",
+                json={**payload, "is_enabled": True},
+                headers=headers,
+            )
+            assert unchanged_enabled.status_code == 201, unchanged_enabled.text
+            assert datetime.fromisoformat(
+                unchanged_enabled.json()["next_sync_at"]
+            ) == expected_interval_due
+
+            post_disabled = await client.post(
+                f"/api/v1/subscriptions/{subscription_id}/sources",
+                json={**payload, "is_enabled": False},
+                headers=headers,
+            )
+            assert post_disabled.status_code == 201, post_disabled.text
+            assert post_disabled.json()["is_enabled"] is False
+            assert post_disabled.json()["next_sync_at"] is None
+
+            async with async_session() as db:
+                stored_source = await db.get(SubscriptionSource, source_id)
+                stored_binding = await db.get(UserSubscriptionSource, binding_id)
+                assert stored_binding.next_sync_at is None
+                assert stored_source.is_enabled is False
+                assert await select_eligible_membership_source(
+                    db,
+                    stored_source,
+                    now=now,
+                    preferred_membership_id=member_id,
+                    require_due=False,
+                    require_sync_enabled=False,
+                ) is None
+
+            post_enabled = await client.post(
+                f"/api/v1/subscriptions/{subscription_id}/sources",
+                json={**payload, "is_enabled": True},
+                headers=headers,
+            )
+            assert post_enabled.status_code == 201, post_enabled.text
+            assert datetime.fromisoformat(
+                post_enabled.json()["next_sync_at"]
+            ) == expected_interval_due
+
+            patched_disabled = await client.patch(
+                f"/api/v1/subscriptions/{subscription_id}/sources/{source_id}",
+                json={"is_enabled": False},
+                headers=headers,
+            )
+            assert patched_disabled.status_code == 200, patched_disabled.text
+            assert patched_disabled.json()["next_sync_at"] is None
+
+            post_reenabled = await client.post(
+                f"/api/v1/subscriptions/{subscription_id}/sources",
+                json={**payload, "is_enabled": True},
+                headers=headers,
+            )
+            assert post_reenabled.status_code == 201, post_reenabled.text
+            assert datetime.fromisoformat(
+                post_reenabled.json()["next_sync_at"]
+            ) == expected_interval_due
+
+            async with async_session() as db:
+                await SubscriptionMembershipService(db, user_id).update(
+                    subscription_id,
+                    {"schedule_mode": "manual"},
+                )
+                await db.commit()
+
+            await client.patch(
+                f"/api/v1/subscriptions/{subscription_id}/sources/{source_id}",
+                json={"is_enabled": False},
+                headers=headers,
+            )
+            manual_enabled = await client.post(
+                f"/api/v1/subscriptions/{subscription_id}/sources",
+                json={**payload, "is_enabled": True},
+                headers=headers,
+            )
+            assert manual_enabled.status_code == 201, manual_enabled.text
+            assert manual_enabled.json()["next_sync_at"] is None
+
+        async with async_session() as db:
+            stored_source = await db.get(SubscriptionSource, source_id)
+            stored_binding = await db.get(UserSubscriptionSource, binding_id)
+            assert stored_binding.is_enabled is True
+            assert stored_binding.next_sync_at is None
+            assert stored_source.is_enabled is False
+            assert await select_eligible_membership_source(
+                db,
+                stored_source,
+                now=now,
+                preferred_membership_id=member_id,
+                require_due=False,
+                require_sync_enabled=True,
+            ) is None
+            manual_selection = await select_eligible_membership_source(
+                db,
+                stored_source,
+                now=now,
+                preferred_membership_id=member_id,
+                require_due=False,
+                require_sync_enabled=False,
+            )
+            assert manual_selection is not None
+            assert manual_selection.binding.id == binding_id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_subscription_search_intersects_membership_before_pagination(monkeypatch):
     """Global search pages cannot crowd out or disclose the user's private page."""
     from httpx import ASGITransport, AsyncClient

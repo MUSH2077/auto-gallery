@@ -494,6 +494,7 @@ async def test_candidate_state_machine_conflict_and_import_reuse_shared_canonica
 
             service = RemoteDiscoveryService(db, vault=_vault(), adapters=Registry(adapter))
             stored_account = await db.get(RemoteAccount, account.id)
+            stored_account.credential_generation = 7
             unique = await service.upsert_candidate(
                 stored_account,
                 RemoteCandidateIdentity(
@@ -542,6 +543,7 @@ async def test_candidate_state_machine_conflict_and_import_reuse_shared_canonica
             assert imported[0].user_subscription_id != second_member.id
             await db.refresh(first_binding)
             assert first_binding.remote_account_id == account.id
+            assert stored_account.credential_generation == 7
             assert (
                 await db.execute(
                     select(func.count(Subscription.id)).where(
@@ -1049,12 +1051,16 @@ async def test_concurrent_cross_site_imports_converge_on_one_creator_subscriptio
                 source="pixiv",
                 auth_method="refresh_token",
                 auth_status="healthy",
+                credential_ciphertext="test-only-pixiv-ciphertext",
+                credential_generation=1,
             )
             bilibili_account = RemoteAccount(
                 user_id=second.id,
                 source="bilibili",
                 auth_method="sessdata",
                 auth_status="healthy",
+                credential_ciphertext="test-only-bilibili-ciphertext",
+                credential_generation=1,
             )
             db.add_all([pixiv_account, bilibili_account])
             await db.flush()

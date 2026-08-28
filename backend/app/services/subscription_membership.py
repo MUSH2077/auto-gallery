@@ -232,6 +232,36 @@ async def recompute_subscription_membership_cache(
     await db.flush()
 
 
+async def apply_binding_enable_transition(
+    db: AsyncSession,
+    membership: UserSubscription,
+    binding: UserSubscriptionSource,
+    is_enabled: bool,
+    *,
+    initialize: bool = False,
+) -> bool:
+    """Apply the sole authoritative private source enable transition."""
+
+    desired = bool(is_enabled)
+    if not initialize and binding.is_enabled == desired:
+        return False
+    binding.is_enabled = desired
+    if not desired:
+        binding.next_sync_at = None
+        await recompute_subscription_membership_cache(db, membership.subscription_id)
+        return True
+
+    from app.services.subscription_replan import replan_user_subscription_sources
+
+    await replan_user_subscription_sources(
+        db,
+        membership,
+        await get_scheduler_config(db),
+        bindings=[binding],
+    )
+    return True
+
+
 class SubscriptionMembershipService:
     """Operate on one user's membership without mutating private policy globally."""
 
@@ -392,40 +422,130 @@ class SubscriptionMembershipService:
         remote_account_id: UUID | None = None,
         is_enabled: bool | None = None,
     ) -> UserSubscriptionSource:
-        if remote_account_id is not None:
-            account = (
-                await self.db.execute(
-                    select(RemoteAccount).where(
-                        RemoteAccount.id == remote_account_id,
-                        RemoteAccount.user_id == self.user_id,
-                        RemoteAccount.source == source.source,
-                    )
+        binding, _created = await self._ensure_source_binding(
+            membership,
+            source,
+            remote_account_id=remote_account_id,
+            is_enabled=is_enabled,
+        )
+        return binding
+
+    async def _lock_remote_account_for_source(
+        self,
+        account_id: UUID,
+        source: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> RemoteAccount:
+        account = (
+            await self.db.execute(
+                select(RemoteAccount)
+                .where(
+                    RemoteAccount.id == account_id,
+                    RemoteAccount.user_id == self.user_id,
                 )
-            ).scalar_one_or_none()
-            if account is None:
-                raise ValueError("Remote account not found for this subscription source")
+                .with_for_update(of=RemoteAccount)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return self._validate_remote_account_for_source(
+            account,
+            account_id,
+            source,
+            expected_generation=expected_generation,
+        )
+
+    def _validate_remote_account_for_source(
+        self,
+        account: RemoteAccount | None,
+        account_id: UUID,
+        source: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> RemoteAccount:
+        if account is None or account.id != account_id or account.user_id != self.user_id:
+            raise ValueError("Remote account not found")
+        if account.source != source:
+            raise ValueError("Remote account source does not match subscription source")
+        if (
+            not account.is_enabled
+            or account.auth_status == "deleted"
+            or not account.credential_ciphertext
+        ):
+            raise ValueError("Remote account is not usable")
+        if (
+            expected_generation is not None
+            and account.credential_generation != expected_generation
+        ):
+            raise ValueError("Remote account credentials changed")
+        return account
+
+    async def _ensure_source_binding(
+        self,
+        membership: UserSubscription,
+        source: SubscriptionSource,
+        *,
+        remote_account_id: UUID | None = None,
+        remote_account_generation: int | None = None,
+        locked_remote_account: RemoteAccount | None = None,
+        is_enabled: bool | None = None,
+    ) -> tuple[UserSubscriptionSource, bool]:
+        if remote_account_id is not None:
+            if locked_remote_account is None:
+                await self._lock_remote_account_for_source(
+                    remote_account_id,
+                    source.source,
+                    expected_generation=remote_account_generation,
+                )
+            else:
+                self._validate_remote_account_for_source(
+                    locked_remote_account,
+                    remote_account_id,
+                    source.source,
+                    expected_generation=remote_account_generation,
+                )
         binding = (
             await self.db.execute(
-                select(UserSubscriptionSource).where(
+                select(UserSubscriptionSource)
+                .where(
                     UserSubscriptionSource.user_subscription_id == membership.id,
                     UserSubscriptionSource.subscription_source_id == source.id,
                 )
+                .with_for_update(of=UserSubscriptionSource)
             )
         ).scalar_one_or_none()
         if binding is not None:
+            account_changed = False
             if remote_account_id is not None:
+                account_changed = binding.remote_account_id != remote_account_id
                 binding.remote_account_id = remote_account_id
             if is_enabled is not None:
-                binding.is_enabled = is_enabled
+                transitioned = await apply_binding_enable_transition(
+                    self.db,
+                    membership,
+                    binding,
+                    is_enabled,
+                )
+            else:
+                transitioned = False
+            if account_changed and not transitioned:
+                await recompute_subscription_membership_cache(
+                    self.db, membership.subscription_id
+                )
             await self.db.flush()
-            return binding
+            return binding, False
+        # Canonical ``source.is_enabled`` is only an aggregate cache. A new
+        # private binding starts enabled unless its caller explicitly opts
+        # out; otherwise the first member (or a re-import after the last
+        # member removed its binding) would inherit a stale disabled cache.
+        desired_enabled = True if is_enabled is None else bool(is_enabled)
         binding = UserSubscriptionSource(
             user_id=self.user_id,
             subscription_id=membership.subscription_id,
             user_subscription_id=membership.id,
             subscription_source_id=source.id,
             remote_account_id=remote_account_id,
-            is_enabled=source.is_enabled if is_enabled is None else is_enabled,
+            is_enabled=desired_enabled,
             auth_healthy=True,
             last_successful_auth=source.last_successful_auth,
             last_synced_at=source.last_synced_at,
@@ -437,7 +557,15 @@ class SubscriptionMembershipService:
         )
         self.db.add(binding)
         await self.db.flush()
-        return binding
+        await apply_binding_enable_transition(
+            self.db,
+            membership,
+            binding,
+            desired_enabled,
+            initialize=True,
+        )
+        await self.db.flush()
+        return binding, True
 
     async def _subscription_view(
         self,
@@ -628,26 +756,7 @@ class SubscriptionMembershipService:
             data.get("remote_account_id") if "remote_account_id" in data else None
         )
         if "remote_account_id" in data and account_id is not None:
-            account = (
-                await self.db.execute(
-                    select(RemoteAccount)
-                    .where(
-                        RemoteAccount.id == account_id,
-                        RemoteAccount.user_id == self.user_id,
-                    )
-                    .with_for_update(of=RemoteAccount)
-                )
-            ).scalar_one_or_none()
-            if account is None:
-                raise ValueError("Remote account not found")
-            if account.source != source.source:
-                raise ValueError("Remote account source does not match subscription source")
-            if (
-                not account.is_enabled
-                or account.auth_status == "deleted"
-                or not account.credential_ciphertext
-            ):
-                raise ValueError("Remote account is not usable")
+            await self._lock_remote_account_for_source(account_id, source.source)
 
         binding = (
             await self.db.execute(
@@ -661,28 +770,19 @@ class SubscriptionMembershipService:
         ).scalar_one_or_none()
         if binding is None:
             raise ValueError("Subscription source not found")
-        was_enabled = binding.is_enabled
-        if "is_enabled" in data and data["is_enabled"] is not None:
-            binding.is_enabled = data["is_enabled"]
+        account_changed = False
         if "remote_account_id" in data:
+            account_changed = binding.remote_account_id != account_id
             binding.remote_account_id = account_id
-        if was_enabled and not binding.is_enabled:
-            # Disabled bindings carry no automatic demand. Their last receipt
-            # and attempt remain audit history, while due is authoritative.
-            binding.next_sync_at = None
-            await recompute_subscription_membership_cache(self.db, subscription_id)
-        elif not was_enabled and binding.is_enabled:
-            from app.services.subscription_replan import (
-                replan_user_subscription_sources,
-            )
-
-            await replan_user_subscription_sources(
+        transitioned = False
+        if "is_enabled" in data and data["is_enabled"] is not None:
+            transitioned = await apply_binding_enable_transition(
                 self.db,
                 member,
-                await get_scheduler_config(self.db),
-                bindings=[binding],
+                binding,
+                bool(data["is_enabled"]),
             )
-        else:
+        if account_changed and not transitioned:
             await recompute_subscription_membership_cache(self.db, subscription_id)
         await self.db.flush()
         return next(item for item in await self.list_sources(subscription_id) if item.id == source_id)

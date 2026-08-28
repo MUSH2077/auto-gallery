@@ -2913,6 +2913,7 @@ async def test_account_delete_and_member_rebind_lock_remote_account_first():
     now = datetime.now(timezone.utc).replace(microsecond=0)
     delete_locked_account = asyncio.Event()
     allow_delete = asyncio.Event()
+    rebind_attempted_account = asyncio.Event()
     rebind_locked_binding = asyncio.Event()
     vault = CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode())
 
@@ -2937,11 +2938,16 @@ async def test_account_delete_and_member_rebind_lock_remote_account_first():
             self._db = db
 
         async def execute(self, statement, *args, **kwargs):
-            result = await self._db.execute(statement, *args, **kwargs)
             entities = {
                 item.get("entity")
                 for item in getattr(statement, "column_descriptions", ())
             }
+            if (
+                getattr(statement, "_for_update_arg", None) is not None
+                and RemoteAccount in entities
+            ):
+                rebind_attempted_account.set()
+            result = await self._db.execute(statement, *args, **kwargs)
             if (
                 getattr(statement, "_for_update_arg", None) is not None
                 and UserSubscriptionSource in entities
@@ -2999,11 +3005,8 @@ async def test_account_delete_and_member_rebind_lock_remote_account_first():
         delete_task = asyncio.create_task(delete_account())
         await asyncio.wait_for(delete_locked_account.wait(), timeout=2)
         rebind_task = asyncio.create_task(rebind_same_account())
-        try:
-            await asyncio.wait_for(rebind_locked_binding.wait(), timeout=0.25)
-            binding_locked_before_account_release = True
-        except TimeoutError:
-            binding_locked_before_account_release = False
+        await asyncio.wait_for(rebind_attempted_account.wait(), timeout=2)
+        binding_locked_before_account_release = rebind_locked_binding.is_set()
         allow_delete.set()
         _, rebind_error = await asyncio.wait_for(
             asyncio.gather(delete_task, rebind_task), timeout=6
@@ -3121,19 +3124,63 @@ async def test_member_attach_accepts_only_owned_current_provider_account():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_candidate_import_and_account_delete_serialize_without_inversion():
-    """An import/delete race ends as one coherent imported tombstone."""
+    """Import waits on RemoteAccount before Candidate or a new/NULL binding."""
 
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
     from app.database import async_session, engine
-    from app.models import DiscoveryCandidate, RemoteAccount, SourceCreator
+    from app.models import (
+        DiscoveryCandidate,
+        RemoteAccount,
+        SourceCreator,
+        UserSubscriptionSource,
+    )
     from app.services.remote_accounts import RemoteAccountService
     from app.services.remote_credentials import CredentialVault
     from app.services.remote_discovery import RemoteDiscoveryService
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     marker = f"candidate-delete-lock-{uuid4().hex}"
-    barrier = _FirstRowLockBarrier()
+    delete_locked_account = asyncio.Event()
+    allow_delete = asyncio.Event()
+    import_attempted_account = asyncio.Event()
+    import_attempted_later_lock = asyncio.Event()
+
+    class DeletePauseSession:
+        def __init__(self, db):
+            self._db = db
+            self._paused = False
+
+        async def execute(self, statement, *args, **kwargs):
+            result = await self._db.execute(statement, *args, **kwargs)
+            if not self._paused and getattr(statement, "_for_update_arg", None) is not None:
+                self._paused = True
+                delete_locked_account.set()
+                await allow_delete.wait()
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._db, name)
+
+    class ImportOrderSession:
+        def __init__(self, db):
+            self._db = db
+
+        async def execute(self, statement, *args, **kwargs):
+            entities = {
+                item.get("entity")
+                for item in getattr(statement, "column_descriptions", ())
+            }
+            if getattr(statement, "_for_update_arg", None) is not None:
+                if RemoteAccount in entities:
+                    import_attempted_account.set()
+                elif DiscoveryCandidate in entities or UserSubscriptionSource in entities:
+                    import_attempted_later_lock.set()
+            return await self._db.execute(statement, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._db, name)
+
     try:
         async with async_session() as db:
             (
@@ -3148,6 +3195,7 @@ async def test_candidate_import_and_account_delete_serialize_without_inversion()
             ) = await _seed_shared_source(db, now=now)
             account = accounts[0]
             account.auth_status = "healthy"
+            bindings[0].remote_account_id = None
             source.source_creator_id = marker
             db.add(
                 SourceCreator(
@@ -3180,42 +3228,56 @@ async def test_candidate_import_and_account_delete_serialize_without_inversion()
         async def delete_account():
             async with async_session() as raw_db:
                 await raw_db.execute(text("SET lock_timeout = '3s'"))
-                db = _FirstForUpdateSession(raw_db, barrier)
+                db = DeletePauseSession(raw_db)
                 await RemoteAccountService(db, user_id, vault=vault).delete(account_id)
                 await raw_db.commit()
 
         async def import_candidate():
             async with async_session() as raw_db:
                 await raw_db.execute(text("SET lock_timeout = '3s'"))
-                db = _FirstForUpdateSession(raw_db, barrier)
-                await RemoteDiscoveryService(db).import_candidate(user_id, candidate_id)
+                db = ImportOrderSession(raw_db)
+                try:
+                    await RemoteDiscoveryService(db).import_candidate(user_id, candidate_id)
+                except ValueError as exc:
+                    await raw_db.rollback()
+                    return str(exc)
                 await raw_db.commit()
+                return None
 
         delete_task = asyncio.create_task(delete_account())
-        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        await asyncio.wait_for(delete_locked_account.wait(), timeout=2)
         import_task = asyncio.create_task(import_candidate())
-        await asyncio.wait_for(asyncio.gather(delete_task, import_task), timeout=6)
+        account_wait = asyncio.create_task(import_attempted_account.wait())
+        later_wait = asyncio.create_task(import_attempted_later_lock.wait())
+        await asyncio.wait_for(
+            asyncio.wait(
+                {account_wait, later_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            ),
+            timeout=2,
+        )
+        account_was_first = (
+            import_attempted_account.is_set()
+            and not import_attempted_later_lock.is_set()
+        )
+        for waiter in (account_wait, later_wait):
+            if not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(account_wait, later_wait, return_exceptions=True)
+        allow_delete.set()
+        _, import_error = await asyncio.wait_for(
+            asyncio.gather(delete_task, import_task), timeout=6
+        )
+        assert account_was_first is True
+        assert import_error == "Remote account not found"
 
         async with async_session() as db:
-            account = await db.get(RemoteAccount, account_id)
-            candidate = await db.get(DiscoveryCandidate, candidate_id)
-            binding = await db.get(type(bindings[0]), binding_id)
-            assert account is not None
-            assert account.auth_status == "deleted"
-            assert account.credential_ciphertext is None
-            assert candidate.state == "imported"
-            assert candidate.remote_account_id == account_id
-            assert binding.remote_account_id == account_id
-            assert binding.auth_status == "deleted"
-            assert (
-                await db.execute(
-                    select(RemoteAccount).where(
-                        RemoteAccount.id == account_id,
-                        RemoteAccount.auth_status != "deleted",
-                    )
-                )
-            ).scalar_one_or_none() is None
+            assert await db.get(RemoteAccount, account_id) is None
+            assert await db.get(DiscoveryCandidate, candidate_id) is None
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            assert binding.remote_account_id is None
     finally:
+        allow_delete.set()
         async with async_session() as db:
             await _cleanup_shared_test_rows(db)
         await engine.dispose()
