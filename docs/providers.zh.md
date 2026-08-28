@@ -64,7 +64,14 @@ class ProviderCapabilities:
     supports_gallerydl: bool
     supports_tags: bool
     is_reference_only: bool
+    supports_download_cursor: bool
+    supports_remote_discovery: bool
+    discovery_auth_methods: tuple[str, ...]
+    supports_collection_selectors: bool
 ```
+
+Provider API 响应中的 rollout 对象是后端计算的有效能力覆盖层，并非静态
+`ProviderCapabilities` dataclass 字段。
 
 所有 8 个可下载 provider（Pixiv、X、Iwara、Danbooru、微博、Bilibili、Pinterest、Lofter）均已完整实现 `build_gallerydl_config()`。
 

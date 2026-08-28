@@ -49,17 +49,18 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 （跨用户共享）
 creator ──< source_creator
 creator ──< creator_link
+creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 
-（用户隔离）
-user ──< subscription ──< subscription_source
+（用户隔离意图）
+user ──< user_subscription >── subscription
+user_subscription ──< user_subscription_source >── subscription_source
+user ──< remote_account ──< discovery_candidate
 user ──< album ──< album_work ── work
-user ──< download_job
-import_job（通过 subscription 继承隔离）
 
 （运维 / 横切）
 task_run ──< task_event        # 统一任务信封 —— 见"统一任务系统"
@@ -76,8 +77,11 @@ storage_artifact               # 下载 → 导入账本 —— 见"任务队列
 - **work_source**：来源特定的作品记录，保留原始元数据
 - **asset**：本地文件
 - **asset_source**：来源特定的文件记录
-- **subscription**：用户追踪创作者的意图
-- **subscription_source**：每个订阅的逐来源开关
+- **subscription**：每位创作者唯一、跨用户共享的规范仓库
+- **subscription_source**：跨用户共享的规范来源；启用/到期字段是兼容性汇总缓存
+- **user_subscription**：当前用户对规范订阅的私有名称、启停与调度设置
+- **user_subscription_source**：当前用户的来源启用、到期、认证健康度和可选远端账号绑定
+- **remote_account** / **discovery_candidate**：账号私有的发现配置与扫描候选
 - **album**：用户创建的作品收藏集（Phase 6+）
 - **album_work**：album 与 work 的多对多关联
 
@@ -87,8 +91,12 @@ storage_artifact               # 下载 → 导入账本 —— 见"任务队列
 - `(source, source_work_id)` 在 work_sources 表
 - `(source, source_asset_id)` 在 asset_sources 表
 - `(normalized_name)` 在 tags 表
-- `(user_id, creator_id)` 在 subscriptions 表（多用户可订阅同一创作者）
-- `(subscription_id, source)` 在 subscription_sources 表
+- `(creator_id)` 在 subscriptions 表
+- `(subscription_id, source_url)` 在 subscription_sources 表
+- `(user_id, subscription_id)` 在 user_subscriptions 表
+- `(user_subscription_id, subscription_source_id)` 在 user_subscription_sources 表
+- `(user_id, source)` 在 remote_accounts 表
+- `(remote_account_id, source_creator_id)` 在 discovery_candidates 表
 - `(username)` 在 users 表
 - `(album_id, work_id)` 在 album_works 表
 

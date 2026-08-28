@@ -64,7 +64,14 @@ class ProviderCapabilities:
     supports_gallerydl: bool
     supports_tags: bool
     is_reference_only: bool
+    supports_download_cursor: bool
+    supports_remote_discovery: bool
+    discovery_auth_methods: tuple[str, ...]
+    supports_collection_selectors: bool
 ```
+
+The rollout object in the provider API response is a backend-computed effective
+overlay; it is not a static `ProviderCapabilities` dataclass field.
 
 All 8 downloadable providers (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinterest, Lofter) have full `build_gallerydl_config()` implementations.
 

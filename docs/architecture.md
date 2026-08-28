@@ -49,17 +49,18 @@ All models use source-agnostic naming. Shared data vs user-scoped data:
 (shared across users)
 creator ──< source_creator
 creator ──< creator_link
+creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 
-(user-scoped)
-user ──< subscription ──< subscription_source
+(user-scoped intent)
+user ──< user_subscription >── subscription
+user_subscription ──< user_subscription_source >── subscription_source
+user ──< remote_account ──< discovery_candidate
 user ──< album ──< album_work ── work
-user ──< download_job
-import_job (inherits scope via subscription)
 
 (operational / cross-cutting)
 task_run ──< task_event        # unified task envelope — see "Unified Task System"
@@ -76,8 +77,15 @@ storage_artifact               # download → import ledger — see "Job Queue"
 - **work_source**: A source-specific work record with original metadata
 - **asset**: A local file
 - **asset_source**: A source-specific file record
-- **subscription**: A user's intent to follow a creator
-- **subscription_source**: Per-source toggle for a subscription
+- **subscription**: The canonical, globally shared repository for one creator
+- **subscription_source**: A globally shared source identity whose enabled/due
+  fields are aggregate compatibility caches
+- **user_subscription**: One user's private name, enabled state, and schedule
+  for a canonical subscription
+- **user_subscription_source**: One user's private source enablement, due time,
+  authentication health, and optional remote-account binding
+- **remote_account** / **discovery_candidate**: Account-private discovery
+  configuration and scan results
 - **album**: A user-created collection of works (Phase 6+)
 - **album_work**: Many-to-many join between album and work
 
@@ -87,8 +95,12 @@ storage_artifact               # download → import ledger — see "Job Queue"
 - `(source, source_work_id)` on work_sources
 - `(source, source_asset_id)` on asset_sources
 - `(normalized_name)` on tags
-- `(user_id, creator_id)` on subscriptions (multiple users may subscribe to same creator)
-- `(subscription_id, source)` on subscription_sources
+- `(creator_id)` on subscriptions
+- `(subscription_id, source_url)` on subscription_sources
+- `(user_id, subscription_id)` on user_subscriptions
+- `(user_subscription_id, subscription_source_id)` on user_subscription_sources
+- `(user_id, source)` on remote_accounts
+- `(remote_account_id, source_creator_id)` on discovery_candidates
 - `(username)` on users
 - `(album_id, work_id)` on album_works
 
