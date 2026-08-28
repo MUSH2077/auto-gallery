@@ -610,6 +610,162 @@ async def test_candidate_state_machine_conflict_and_import_reuse_shared_canonica
         await engine.dispose()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reimport_after_last_member_reactivates_default_schedule_and_source_due():
+    """An imported candidate must not inherit a disabled aggregate cache."""
+    from app.database import async_session, engine
+    from app.models import (
+        DiscoveryCandidate,
+        RemoteAccount,
+        Subscription,
+        SubscriptionSource,
+        SystemSetting,
+        UserSubscription,
+        UserSubscriptionSource,
+    )
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    adapter = PagedPixivAdapter()
+    original_defaults = None
+    created_defaults = False
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            defaults = (
+                await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+                )
+            ).scalar_one_or_none()
+            if defaults is None:
+                defaults = SystemSetting(key="subscription_defaults", value={})
+                db.add(defaults)
+                created_defaults = True
+            else:
+                original_defaults = dict(defaults.value or {})
+            defaults.value = {
+                **(defaults.value or {}),
+                "schedule_mode": "interval",
+                "default_sync_interval_hours": 13,
+            }
+            user = await _seed_user(db, "reactivate")
+            account = await _account(db, user, adapter)
+            await db.commit()
+
+            service = RemoteDiscoveryService(
+                db, vault=_vault(), adapters=Registry(adapter)
+            )
+            stored_account = await db.get(RemoteAccount, account.id)
+            candidate = await service.upsert_candidate(
+                stored_account,
+                RemoteCandidateIdentity(
+                    source="pixiv",
+                    source_creator_id="reactivate-creator",
+                    profile_url="https://www.pixiv.net/users/66331",
+                    display_name="Reactivate Creator",
+                    metadata={"has_illustration_preview": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+            )
+            imported = await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            subscription_id = imported.subscription_id
+            membership_id = imported.user_subscription_id
+            binding = (
+                await db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == membership_id
+                    )
+                )
+            ).scalar_one()
+            binding.is_enabled = False
+            binding.next_sync_at = None
+            await db.commit()
+
+            # Re-import is an explicit request and repairs a disabled source
+            # policy even when canonical rows already exist.
+            await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            await db.refresh(binding)
+            assert binding.is_enabled is True
+            assert binding.next_sync_at is not None
+
+            await SubscriptionMembershipService(db, user.id).remove(subscription_id)
+            await db.commit()
+            canonical = await db.get(Subscription, subscription_id)
+            canonical_source = (
+                await db.execute(
+                    select(SubscriptionSource).where(
+                        SubscriptionSource.subscription_id == subscription_id
+                    )
+                )
+            ).scalar_one()
+            assert canonical.is_active is False
+            assert canonical.sync_enabled is False
+            assert canonical_source.is_enabled is False
+
+            repaired = await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            repaired_member = await db.get(UserSubscription, repaired.user_subscription_id)
+            repaired_binding = (
+                await db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == repaired_member.id
+                    )
+                )
+            ).scalar_one()
+            assert repaired_member.is_active is True
+            assert repaired_member.sync_enabled is True
+            assert repaired_member.schedule_mode == "interval"
+            assert repaired_member.sync_interval_hours == 13
+            assert repaired_binding.is_enabled is True
+            assert repaired_binding.next_sync_at is not None
+            assert repaired.user_subscription_id == repaired_member.id
+
+            # A manual system default remains active but intentionally has no
+            # automatic due time.
+            await SubscriptionMembershipService(db, user.id).remove(subscription_id)
+            defaults = (
+                await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+                )
+            ).scalar_one()
+            defaults.value = {**(defaults.value or {}), "schedule_mode": "manual"}
+            await db.commit()
+            manual = await service.import_candidate(user.id, candidate.id)
+            await db.commit()
+            manual_member = await db.get(UserSubscription, manual.user_subscription_id)
+            manual_binding = (
+                await db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == manual_member.id
+                    )
+                )
+            ).scalar_one()
+            assert manual_member.is_active is True
+            assert manual_member.sync_enabled is False
+            assert manual_member.schedule_mode == "manual"
+            assert manual_binding.is_enabled is True
+            assert manual_binding.next_sync_at is None
+    finally:
+        async with async_session() as db:
+            defaults = (
+                await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == "subscription_defaults")
+                )
+            ).scalar_one_or_none()
+            if defaults is not None:
+                if created_defaults:
+                    await db.delete(defaults)
+                else:
+                    defaults.value = original_defaults or {}
+                await db.commit()
+            await _cleanup(db)
+        await engine.dispose()
+
+
 def _headers(username: str) -> dict[str, str]:
     from app.auth import create_access_token
 

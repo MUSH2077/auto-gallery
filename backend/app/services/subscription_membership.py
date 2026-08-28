@@ -280,7 +280,9 @@ class SubscriptionMembershipService:
         if binding is not None:
             if remote_account_id is not None:
                 binding.remote_account_id = remote_account_id
-                await self.db.flush()
+            if is_enabled is not None:
+                binding.is_enabled = is_enabled
+            await self.db.flush()
             return binding
         binding = UserSubscriptionSource(
             user_id=self.user_id,

@@ -128,12 +128,20 @@ async def get_system_setting(db: AsyncSession, key: str, default: dict | None = 
 
 async def get_subscription_defaults(db: AsyncSession) -> dict:
     defaults = await get_system_setting(db, "subscription_defaults")
+    schedule_mode = defaults.get("schedule_mode")
+    if schedule_mode not in {"interval", "calendar", "manual"}:
+        schedule_mode = None
+    sync_enabled = schedule_mode != "manual"
     return {
-        "sync_interval_hours": int(defaults.get("default_sync_interval_hours", DEFAULT_SYNC_INTERVAL_HOURS)),
-        "sync_enabled": True,
+        "sync_interval_hours": max(
+            1,
+            int(defaults.get("default_sync_interval_hours", DEFAULT_SYNC_INTERVAL_HOURS)),
+        ),
+        "sync_enabled": sync_enabled,
         "is_active": True,
-        "schedule_mode": None,
-        "scheduled_times": None,
+        "schedule_mode": "manual" if not sync_enabled else schedule_mode,
+        "schedule_rule": defaults.get("schedule_rule") if schedule_mode == "calendar" else None,
+        "scheduled_times": defaults.get("scheduled_times") or None,
     }
 
 
