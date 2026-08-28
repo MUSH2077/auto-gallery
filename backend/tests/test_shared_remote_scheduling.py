@@ -937,6 +937,26 @@ def test_private_error_sanitizer_removes_secret_and_temp_path(tmp_path):
     assert str(private.path) not in safe
 
 
+def test_private_secret_collection_covers_flat_and_structured_auth_leaves():
+    """Adapter auth fragments may use provider-specific keys such as flat ct0."""
+
+    from app.jobs.download import _credential_secret_values
+
+    flat_csrf = "task4-flat-ct0-secret-canary"
+    custom_header = "task4-custom-header-secret-canary"
+    nested_value = "task4-structured-auth-secret-canary"
+
+    collected = _credential_secret_values(
+        {
+            "ct0": flat_csrf,
+            "headers": {"X-CSRF": custom_header},
+            "structured": [{"value": nested_value}],
+        }
+    )
+
+    assert {flat_csrf, custom_header, nested_value} <= set(collected)
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_failure(

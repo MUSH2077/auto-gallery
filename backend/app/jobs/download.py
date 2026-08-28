@@ -88,19 +88,17 @@ def _auth_config_merge(base: Mapping, override: Mapping) -> dict:
     return merged
 
 
-def _credential_secret_values(value, path: tuple[str, ...] = ()) -> tuple[str, ...]:
+def _credential_secret_values(value) -> tuple[str, ...]:
+    """Treat every auth-fragment leaf as sensitive, regardless of provider key."""
+
     values: list[str] = []
     if isinstance(value, Mapping):
-        for key, child in value.items():
-            values.extend(_credential_secret_values(child, (*path, str(key).casefold())))
+        for child in value.values():
+            values.extend(_credential_secret_values(child))
     elif isinstance(value, (list, tuple)):
         for child in value:
-            values.extend(_credential_secret_values(child, path))
-    elif isinstance(value, str) and value and any(
-        marker in segment
-        for segment in path
-        for marker in ("token", "secret", "password", "cookie", "sessdata")
-    ):
+            values.extend(_credential_secret_values(child))
+    elif isinstance(value, str) and value:
         values.append(value)
     return tuple(dict.fromkeys(values))
 
