@@ -1720,6 +1720,194 @@ def _headers(username: str) -> dict[str, str]:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_candidate_local_match_filter_applies_before_count_and_pagination():
+    """Matches from an unfiltered second page become the filtered first page."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, DiscoveryCandidate, Subscription
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "local_match")
+            account = await _account(db, user, adapter)
+            creator = Creator(name=f"{PREFIX}local_match_creator")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(
+                creator_id=creator.id,
+                name=f"{PREFIX}local_match_subscription",
+            )
+            db.add(subscription)
+            await db.flush()
+            newest = datetime.now(timezone.utc)
+            unmatched = [
+                DiscoveryCandidate(
+                    remote_account_id=account.id,
+                    user_id=user.id,
+                    source_creator_id=f"local-unmatched-{index:02d}",
+                    candidate_metadata={"local_creator_ids": []},
+                    confidence="high",
+                    state="pending",
+                    updated_at=newest - timedelta(seconds=index),
+                )
+                for index in range(25)
+            ]
+            malformed = [
+                DiscoveryCandidate(
+                    remote_account_id=account.id,
+                    user_id=user.id,
+                    source_creator_id=f"local-malformed-{shape}",
+                    candidate_metadata=metadata,
+                    confidence="high",
+                    state="pending",
+                    updated_at=newest - timedelta(seconds=100 + index),
+                )
+                for index, (shape, metadata) in enumerate(
+                    (
+                        ("object", {"local_creator_ids": {"unexpected": True}}),
+                        ("scalar", {"local_creator_ids": "unexpected"}),
+                        ("null", {"local_creator_ids": None}),
+                        ("missing", {}),
+                    )
+                )
+            ]
+            metadata_match = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=user.id,
+                source_creator_id="local-metadata-match",
+                candidate_metadata={"local_creator_ids": [str(creator.id)]},
+                confidence="high",
+                state="pending",
+                updated_at=newest - timedelta(seconds=110),
+            )
+            conflict_match = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=user.id,
+                source_creator_id="local-conflict-match",
+                candidate_metadata={"local_creator_ids": [str(creator.id), str(uuid4())]},
+                confidence="high",
+                state="conflict",
+                updated_at=newest - timedelta(seconds=111),
+            )
+            subscription_match = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=user.id,
+                source_creator_id="local-subscription-match",
+                candidate_metadata=None,
+                confidence="high",
+                state="imported",
+                subscription_id=subscription.id,
+                updated_at=newest - timedelta(seconds=112),
+            )
+            db.add_all(
+                [
+                    *unmatched,
+                    *malformed,
+                    metadata_match,
+                    conflict_match,
+                    subscription_match,
+                ]
+            )
+            await db.commit()
+            username = user.username
+
+            service = RemoteDiscoveryService(db)
+            unfiltered_total, second_page = await service.list_candidates(
+                user.id,
+                offset=25,
+                limit=25,
+            )
+            assert unfiltered_total == 32
+            assert {item.id for item in second_page} >= {
+                metadata_match.id,
+                conflict_match.id,
+                subscription_match.id,
+            }
+            matched_total, matched = await service.list_candidates(
+                user.id,
+                local_match=True,
+                offset=0,
+                limit=25,
+            )
+            assert matched_total == 3
+            assert {item.id for item in matched} == {
+                metadata_match.id,
+                conflict_match.id,
+                subscription_match.id,
+            }
+            unmatched_total, unmatched_page_two = await service.list_candidates(
+                user.id,
+                local_match=False,
+                offset=25,
+                limit=25,
+            )
+            assert unmatched_total == 29
+            assert {item.id for item in unmatched_page_two} == {
+                item.id for item in malformed
+            }
+            empty_total, empty_page = await service.list_candidates(
+                user.id,
+                local_match=True,
+                offset=25,
+                limit=25,
+            )
+            assert empty_total == 3
+            assert empty_page == []
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = _headers(username)
+            matched_response = await client.get(
+                "/api/v1/discovery/candidates",
+                params={"local_match": "true", "offset": 0, "limit": 25},
+                headers=headers,
+            )
+            assert matched_response.status_code == 200, matched_response.text
+            assert matched_response.json()["total"] == 3
+            assert {
+                item["source_creator_id"] for item in matched_response.json()["items"]
+            } == {
+                "local-metadata-match",
+                "local-conflict-match",
+                "local-subscription-match",
+            }
+            conflict_response = await client.get(
+                "/api/v1/discovery/candidates",
+                params={"local_match": "true", "state": "conflict"},
+                headers=headers,
+            )
+            assert conflict_response.status_code == 200
+            assert conflict_response.json()["total"] == 1
+            assert conflict_response.json()["items"][0]["source_creator_id"] == (
+                "local-conflict-match"
+            )
+            unmatched_conflict = await client.get(
+                "/api/v1/discovery/candidates",
+                params={"local_match": "false", "state": "conflict"},
+                headers=headers,
+            )
+            assert unmatched_conflict.status_code == 200
+            assert unmatched_conflict.json() == {"total": 0, "items": []}
+            invalid = await client.get(
+                "/api/v1/discovery/candidates",
+                params={"local_match": "not-a-boolean"},
+                headers=headers,
+            )
+            assert invalid.status_code == 422
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_discovery_apis_isolate_scans_candidates_and_manual_import_defaults_no_sync():
     """Public discovery endpoints expose only owned rows and do not sync unless requested."""
     from httpx import ASGITransport, AsyncClient

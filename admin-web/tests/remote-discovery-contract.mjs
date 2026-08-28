@@ -52,6 +52,8 @@ assert.match(apiIndex, /all:\s*\(userId:\s*number\)\s*=>\s*\["remote-discovery-p
   "remote account keys must include the authenticated user ID");
 assert.match(apiIndex, /candidates:\s*\(userId:\s*number,\s*filters\?/,
   "candidate keys must include the authenticated user ID");
+assert.match(apiIndex, /filters\?\.localMatch === undefined \? "all" : filters\.localMatch/,
+  "matched and unmatched pages must have distinct private query-cache keys");
 assert.ok(fs.existsSync(privateCachePath), "private discovery cache must have an explicit cleanup boundary");
 assert.doesNotMatch(page, /useSearchParams/, "OAuth callback secrets must not enter reactive search-param state");
 assert.doesNotMatch(page, /oauthCallback\s*=\s*useMutation/, "OAuth callback secrets must not enter mutation variables");
@@ -86,5 +88,11 @@ assert.match(accounts, /auto_import_summary_paused/,
   "the account card must distinguish a configured policy from effective automatic import");
 assert.match(candidates, /previewEnabledAccountIds/,
   "candidate import and conflict actions must honor provider preview rollout");
+assert.match(endpoint, /filters\.localMatch !== undefined[\s\S]{0,120}local_match/,
+  "the typed client must send local-match filtering to the paginated backend");
+assert.match(candidates, /localMatch:\s*local === "matched" \? true : local === "unmatched" \? false : undefined/,
+  "the workbench must map only matched/unmatched to the server predicate");
+assert.doesNotMatch(candidates, /candidates\.data\?\.items \|\| \[\]\)\.filter/,
+  "the workbench must not filter only the current server page");
 
 console.log("Remote discovery frontend API contract passed.");

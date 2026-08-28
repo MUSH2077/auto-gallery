@@ -978,6 +978,7 @@ export const queryKeys = {
       filters?.state || "all",
       filters?.confidence || "all",
       filters?.isFollowing === undefined ? "all" : filters.isFollowing,
+      filters?.localMatch === undefined ? "all" : filters.localMatch,
       filters?.offset || 0,
       filters?.limit || 25,
     ] as const,

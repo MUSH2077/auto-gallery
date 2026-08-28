@@ -13124,6 +13124,7 @@ export interface operations {
                 state?: string | null;
                 confidence?: string | null;
                 is_following?: boolean | null;
+                local_match?: boolean | null;
                 offset?: number;
                 limit?: number;
             };

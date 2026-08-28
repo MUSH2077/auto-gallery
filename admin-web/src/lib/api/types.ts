@@ -544,6 +544,7 @@ export interface DiscoveryCandidateFilters {
   state?: DiscoveryCandidateState;
   confidence?: DiscoveryConfidence;
   isFollowing?: boolean;
+  localMatch?: boolean;
   offset?: number;
   limit?: number;
 }

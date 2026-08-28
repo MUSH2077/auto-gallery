@@ -221,6 +221,7 @@ export default function CandidateWorkbench({
     state: effectiveState || undefined,
     confidence: confidence || undefined,
     isFollowing: following === "" ? undefined : following === "true",
+    localMatch: local === "matched" ? true : local === "unmatched" ? false : undefined,
     offset: (page - 1) * PAGE_SIZE,
     limit: PAGE_SIZE,
   };
@@ -239,13 +240,10 @@ export default function CandidateWorkbench({
   }, [candidates.error, onPrivateAccessError]);
 
   const rowsInert = candidates.isFetching || candidates.isPlaceholderData || !!candidates.error;
-  const visible = useMemo(() => (candidates.error ? [] : candidates.data?.items || []).filter((candidate) => {
-    if (provider && candidate.remote_account_id !== accountId) return false;
-    const matches = localCreatorIds(candidate).length > 0 || !!candidate.subscription_id;
-    if (local === "matched" && !matches) return false;
-    if (local === "unmatched" && matches) return false;
-    return true;
-  }), [accountId, candidates.data?.items, candidates.error, local, provider]);
+  const visible = useMemo(
+    () => candidates.error ? [] : candidates.data?.items || [],
+    [candidates.data?.items, candidates.error],
+  );
   const visibleIds = useMemo(() => new Set(visible.map((candidate) => candidate.id)), [visible]);
 
   useEffect(() => {
@@ -385,8 +383,8 @@ export default function CandidateWorkbench({
         ) : null}
         {!candidates.isLoading && !candidates.error && visible.length === 0 ? (
           <EmptyState
-            title={t((candidates.data?.items.length || 0) > 0 ? "discovery.no_candidates_page" : "discovery.no_candidates")}
-            description={t((candidates.data?.items.length || 0) > 0 ? "discovery.no_candidates_page_desc" : "discovery.no_candidates_desc")}
+            title={t("discovery.no_candidates")}
+            description={t("discovery.no_candidates_desc")}
           />
         ) : null}
 

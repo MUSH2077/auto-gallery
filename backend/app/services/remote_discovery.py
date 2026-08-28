@@ -9,7 +9,7 @@ from inspect import isawaitable
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -856,6 +856,7 @@ class RemoteDiscoveryService:
         state: str | None = None,
         confidence: str | None = None,
         is_following: bool | None = None,
+        local_match: bool | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[int, list[DiscoveryCandidate]]:
@@ -868,6 +869,20 @@ class RemoteDiscoveryService:
             filters.append(DiscoveryCandidate.confidence == confidence)
         if is_following is not None:
             filters.append(DiscoveryCandidate.is_following.is_(is_following))
+        if local_match is not None:
+            local_creator_ids = DiscoveryCandidate.candidate_metadata["local_creator_ids"]
+            has_local_creator_ids = case(
+                (
+                    func.jsonb_typeof(local_creator_ids) == "array",
+                    func.jsonb_array_length(local_creator_ids) > 0,
+                ),
+                else_=false(),
+            )
+            matched = or_(
+                DiscoveryCandidate.subscription_id.is_not(None),
+                has_local_creator_ids,
+            )
+            filters.append(matched if local_match else ~matched)
         total = (
             await self.db.execute(select(func.count(DiscoveryCandidate.id)).where(*filters))
         ).scalar_one()

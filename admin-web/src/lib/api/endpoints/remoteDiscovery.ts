@@ -21,6 +21,7 @@ function candidateParams(filters: DiscoveryCandidateFilters = {}) {
   if (filters.state) params.set("state", filters.state);
   if (filters.confidence) params.set("confidence", filters.confidence);
   if (filters.isFollowing !== undefined) params.set("is_following", String(filters.isFollowing));
+  if (filters.localMatch !== undefined) params.set("local_match", String(filters.localMatch));
   params.set("offset", String(filters.offset ?? 0));
   params.set("limit", String(filters.limit ?? 25));
   return params;

@@ -99,6 +99,7 @@ async def list_discovery_candidates(
     state: str | None = None,
     confidence: str | None = None,
     is_following: bool | None = None,
+    local_match: bool | None = None,
     offset: int = 0,
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -110,6 +111,7 @@ async def list_discovery_candidates(
         state=state,
         confidence=confidence,
         is_following=is_following,
+        local_match=local_match,
         offset=offset,
         limit=limit,
     )

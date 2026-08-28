@@ -227,6 +227,7 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       const state = url.searchParams.get("state");
       const confidence = url.searchParams.get("confidence");
       const following = url.searchParams.get("is_following");
+      const localMatch = url.searchParams.get("local_match");
       const accountId = url.searchParams.get("remote_account_id");
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 25);
@@ -235,6 +236,11 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
         && (!confidence || item.confidence === confidence)
         && (!accountId || item.remote_account_id === accountId)
         && (following === null || String(item.is_following) === following)
+        && (localMatch === null || String(
+          Boolean(item.subscription_id)
+          || (Array.isArray((item.metadata as { local_creator_ids?: unknown } | undefined)?.local_creator_ids)
+            && ((item.metadata as { local_creator_ids: unknown[] }).local_creator_ids.length > 0)),
+        ) === localMatch)
       );
       return json(route, { total: filtered.length, items: filtered.slice(offset, offset + limit) });
     }
@@ -577,18 +583,44 @@ test("clears selection and makes placeholder rows inert while a server filter ch
   await expect(table).toHaveAttribute("aria-busy", "false");
 });
 
-test("keeps server pagination available when local filtering empties the current page", async ({ context, page }) => {
-  const candidates = Array.from({ length: 27 }, (_, index) => candidate(`local-page-${index}`));
+test("filters local matches before server pagination and keeps conflict independent", async ({ context, page }) => {
+  const candidates = Array.from({ length: 28 }, (_, index) => candidate(`local-page-${index}`));
   candidates[25] = candidate("local-page-25", { metadata: { username: "matched_page_two", local_creator_ids: ["creator-one"] } });
+  candidates[26] = candidate("local-page-26", { subscription_id: "subscription-one" });
+  candidates[27] = candidate("local-page-conflict", {
+    state: "conflict",
+    metadata: { identity_conflict: true, local_creator_ids: ["creator-one", "creator-two"] },
+  });
+  const candidateRequests: URL[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/discovery/candidates") candidateRequests.push(url);
+  });
   await installFixtures(context, { accounts: [account()], candidates });
   await page.goto("/admin/discovery");
 
+  await page.getByRole("table").getByRole("checkbox", { name: "Select Artist local-page-0" }).check();
+  await expect(page.getByText("1 selected")).toBeVisible();
   await page.getByLabel("Local match filter").selectOption("matched");
-  await expect(page.getByText("No matching candidates on this page")).toBeVisible();
-  const pagination = page.getByRole("navigation", { name: "Pagination" });
-  await expect(pagination).toBeVisible();
-  await pagination.getByRole("button", { name: "Next" }).click();
+  await expect(page.getByText("1 selected")).toHaveCount(0);
   await expect(page.getByRole("table").getByText("Artist local-page-25")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Artist local-page-26")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Artist local-page-conflict")).toBeVisible();
+  await expect(page.getByText("Total: 3")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Pagination" })).toHaveCount(0);
+  expect(candidateRequests.at(-1)?.searchParams.get("local_match")).toBe("true");
+
+  await page.getByLabel("Local match filter").selectOption("unmatched");
+  await expect(page.getByRole("table").getByText("Artist local-page-0")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Artist local-page-25")).toHaveCount(0);
+  await expect(page.getByText("Total: 25")).toBeVisible();
+  expect(candidateRequests.at(-1)?.searchParams.get("local_match")).toBe("false");
+
+  await page.getByLabel("Local match filter").selectOption("conflict");
+  await expect(page.getByRole("table").getByText("Artist local-page-conflict")).toBeVisible();
+  await expect(page.getByText("Total: 1")).toBeVisible();
+  expect(candidateRequests.at(-1)?.searchParams.get("state")).toBe("conflict");
+  expect(candidateRequests.at(-1)?.searchParams.has("local_match")).toBe(false);
 });
 
 for (const callbackStatus of [200, 400]) {
