@@ -519,3 +519,79 @@ Implementation commit:
 No schema or public API change was needed in Round 5. No live provider request
 or real credential was used, and the pre-existing untracked
 `admin-web/node_modules` symlink remains untouched.
+
+## Final Acceptance Remediation (2026-08-28)
+
+Acceptance remediation started from `6df0c94` and closes the two integration
+blockers left after the formal review rounds.
+
+Implementation and tests:
+
+- `921981d fix: unify binding transitions and discovery lock order`
+
+### One authoritative private-source enable transition
+
+- `apply_binding_enable_transition()` is now the sole enable-policy seam for
+  both PATCH `update_source()` and POST `add_or_bind_source()` through
+  `ensure_source_binding()`. A disable clears automatic demand; a re-enable
+  replans from the member's current interval/calendar/manual/inherited policy.
+  An unchanged preference leaves due, authentication, and policy state intact.
+- New bindings default to an enabled private preference unless explicitly
+  disabled. They do not copy `SubscriptionSource.is_enabled`, because that row
+  is only the aggregate cache and can be false after the previous last member
+  removed a binding. This preserves first-member and re-import semantics while
+  the existing aggregate helper remains the only canonical writer.
+- The API regression exercises POST disable, POST re-enable after PATCH
+  disable, unchanged POST enable, interval due calculation, manual-mode
+  automatic exclusion, and owned explicit-manual selection.
+
+### RemoteAccount-first attachment and candidate import
+
+- Every non-NULL account attach in `ensure_source_binding()` and
+  `update_source()` locks and revalidates the owned RemoteAccount before a
+  UserSubscriptionSource lookup or insert. The account must still match the
+  provider, be enabled/non-deleted, retain ciphertext, and match the expected
+  credential generation when a generation snapshot is supplied.
+- Candidate import now takes a nonlocking identity snapshot, locks and
+  generation-validates `RemoteAccount`, then locks and refreshes the
+  `DiscoveryCandidate`. It rejects any account, identity, or candidate-state
+  drift before resolving shared canonical data or attaching the private
+  binding. Batch import no longer pre-locks Candidate.
+- The intersecting lifecycle prefix is therefore
+  `RemoteAccount -> DiscoveryCandidate -> UserSubscriptionSource -> canonical
+  aggregate`; ordinary attach/rebind uses
+  `RemoteAccount -> UserSubscriptionSource -> canonical aggregate`.
+- The real-PostgreSQL delete/import barrier uses an existing NULL binding.
+  Delete pauses while holding RemoteAccount; instrumentation proves import
+  attempts that account lock before either Candidate or USS. Delete then hard
+  deletes the unused account/candidate and import safely revalidates not-found,
+  with the NULL legacy binding left coherent. The API rebind/delete barrier now
+  uses the same statement-level event instrumentation instead of a scheduling
+  delay.
+
+### TDD and final verification
+
+- Focused real-PostgreSQL RED before production edits: `2 failed, 2 passed in
+  4.92s`. POST left the old due value intact and candidate-first import raised
+  PostgreSQL `DeadlockDetected` against account deletion.
+- Exact focused GREEN after the implementation: `4 passed in 6.96s`.
+- A complete core-file run exposed two follow-up invariants: a re-imported new
+  binding copied a stale disabled canonical cache, and an older cross-site
+  concurrency fixture used credential-less accounts. After making new private
+  binding defaults independent of the cache and correcting the fixture to the
+  reviewed credential-bearing contract, the core files passed `67 passed in
+  58.72s`.
+- Fresh final affected regression over membership, remote account, discovery
+  service/persistence/adapters/provider contracts, shared scheduling, manual
+  scheduling, reliable/persistent scheduling, queue routing, download dispatch,
+  and job context: `197 passed in 153.49s`.
+- Ruff over all changed Python files, `python -m compileall`,
+  `git diff --check 6df0c94..HEAD`, Docker Compose config validation, and secret
+  pattern/API-generation/log scans all exited cleanly. `alembic heads` reports
+  the single head `f7c9e1a3b5d7`.
+
+Exact `git diff 6df0c94..HEAD` was self-reviewed. No schema/public API change,
+live provider call, real credential, or secret-derived provenance was added.
+The principal residual risk is contention on one account during a large batch
+import; serialization is intentional and bounded by the existing batch limit.
+The pre-existing untracked `admin-web/node_modules` symlink remains untouched.
