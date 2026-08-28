@@ -18,6 +18,13 @@ const me = {
   must_change_password: false,
 };
 
+const meB = {
+  ...me,
+  id: 52,
+  username: "discovery-viewer-b",
+  display_name: "Discovery Viewer B",
+};
+
 function account(overrides: Record<string, unknown> = {}) {
   return {
     id: "acc-pixiv",
@@ -79,6 +86,13 @@ type FixtureOptions = {
   accounts?: Record<string, unknown>[];
   candidates?: Record<string, unknown>[];
   candidatesStatus?: number;
+  userBPrivateStatus?: number;
+  collectionsFailures?: number;
+  collectionsShouldFail?: () => boolean;
+  candidateDelay?: (url: URL) => number;
+  oauthCallbackStatus?: number;
+  oauthCallbackDelayMs?: number;
+  onPrivateRequest?: (user: "a" | "b", path: string) => void;
   onMutation?: (path: string, body: Record<string, unknown>) => void;
 };
 
@@ -89,9 +103,10 @@ async function json(route: Route, value: unknown, status = 200) {
 async function installFixtures(context: BrowserContext, options: FixtureOptions = {}) {
   let accounts = [...(options.accounts || [])];
   let candidates = [...(options.candidates || [])];
-  await context.addCookies([{ name: "ag_token", value: "fixture-token", domain: host, path: "/" }]);
+  let collectionsAttempts = 0;
+  await context.addCookies([{ name: "ag_token", value: "fixture-token-a", domain: host, path: "/" }]);
   await context.addInitScript(() => {
-    localStorage.setItem("ag_token", "fixture-token");
+    localStorage.setItem("ag_token", "fixture-token-a");
     localStorage.setItem("auto-gallery-lang", "en");
     localStorage.setItem("auto-gallery-theme", "light");
   });
@@ -107,13 +122,21 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     const url = new URL(request.url());
     const path = url.pathname;
     const body = request.postDataJSON?.() as Record<string, unknown> | null;
-    if (path === "/api/v1/auth/me") return json(route, me);
+    const actingUser = request.headers().authorization?.includes("fixture-token-b") ? "b" : "a";
+    if (path === "/api/v1/auth/login") return json(route, { access_token: "fixture-token-b" });
+    if (path === "/api/v1/auth/me") return json(route, actingUser === "b" ? meB : me);
     if (path === "/api/v1/sources") {
       return json(route, { sources: [
         { source_name: "pixiv", display_name: "Pixiv", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["refresh_token"], supports_collection_selectors: true } },
         { source_name: "x", display_name: "X", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["oauth2", "cookie"], supports_collection_selectors: true } },
         { source_name: "bilibili", display_name: "Bilibili", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["sessdata"], supports_collection_selectors: true } },
       ] });
+    }
+    if (path.startsWith("/api/v1/remote-accounts") || path.startsWith("/api/v1/discovery")) {
+      options.onPrivateRequest?.(actingUser, path);
+      if (actingUser === "b" && options.userBPrivateStatus) {
+        return json(route, { detail: "not available" }, options.userBPrivateStatus);
+      }
     }
     if (path === "/api/v1/remote-accounts" && request.method() === "GET") return json(route, accounts);
     if (path === "/api/v1/remote-accounts" && request.method() === "POST") {
@@ -137,6 +160,8 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, created, 201);
     }
     if (path === "/api/v1/remote-accounts/x/oauth/callback") {
+      if (options.oauthCallbackDelayMs) await new Promise((resolve) => setTimeout(resolve, options.oauthCallbackDelayMs));
+      if (options.oauthCallbackStatus) return json(route, { detail: "oauth failed" }, options.oauthCallbackStatus);
       const connected = account({
         id: "acc-x",
         source: "x",
@@ -169,6 +194,10 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, healthy);
     }
     if (/\/api\/v1\/remote-accounts\/[^/]+\/collections$/.test(path)) {
+      collectionsAttempts += 1;
+      if (options.collectionsShouldFail?.() || collectionsAttempts <= (options.collectionsFailures || 0)) {
+        return json(route, { detail: "collections unavailable" }, 502);
+      }
       return json(route, [
         { id: "public", name: "Public follows", selector: { restrict: "public" } },
         { id: "private", name: "Private follows", selector: { restrict: "private" } },
@@ -182,6 +211,8 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, { total: 1, items: [{ id: "scan-task", kind: "discovery", operation_type: "remote-discovery-scan", status: "complete", progress_data: { stage: "complete", current: 1, total: 1 }, created_at: now, updated_at: now }] });
     }
     if (path === "/api/v1/discovery/candidates" && request.method() === "GET") {
+      const delay = options.candidateDelay?.(url) || 0;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       if (options.candidatesStatus) return json(route, { detail: "not available" }, options.candidatesStatus);
       const state = url.searchParams.get("state");
       const confidence = url.searchParams.get("confidence");
@@ -222,6 +253,51 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
   });
 }
 
+async function mutationCacheText(page: Page) {
+  return page.evaluate(() => {
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
+      if (!fiberKey) continue;
+      let fiber = (element as unknown as Record<string, unknown>)[fiberKey] as {
+        return?: unknown;
+        memoizedProps?: { client?: { getMutationCache?: () => { getAll: () => Array<{ state: { variables?: unknown } }> } } };
+      } | null;
+      while (fiber) {
+        const client = fiber.memoizedProps?.client;
+        if (client?.getMutationCache) {
+          return JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables ?? null));
+        }
+        fiber = fiber.return as typeof fiber;
+      }
+    }
+    throw new Error("QueryClient not found in React tree");
+  });
+}
+
+async function privateQueryCacheText(page: Page) {
+  return page.evaluate(() => {
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
+      if (!fiberKey) continue;
+      let fiber = (element as unknown as Record<string, unknown>)[fiberKey] as {
+        return?: unknown;
+        memoizedProps?: { client?: { getQueryCache?: () => { getAll: () => Array<{ queryKey: unknown; state: { data?: unknown } }> } } };
+      } | null;
+      while (fiber) {
+        const client = fiber.memoizedProps?.client;
+        if (client?.getQueryCache) {
+          const queries = client.getQueryCache().getAll()
+            .filter((query) => Array.isArray(query.queryKey) && query.queryKey[0] === "remote-discovery-private")
+            .map((query) => ({ queryKey: query.queryKey, data: query.state.data }));
+          return JSON.stringify(queries);
+        }
+        fiber = fiber.return as typeof fiber;
+      }
+    }
+    throw new Error("QueryClient not found in React tree");
+  });
+}
+
 test("connects Pixiv, saves collections and never re-renders the refresh token", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   await installFixtures(context, { onMutation: (path, body) => mutations.push({ path, body }) });
@@ -258,6 +334,30 @@ test("connects Pixiv, saves collections and never re-renders the refresh token",
 
   await page.getByRole("button", { name: "Reconnect Pixiv" }).click();
   await expect(page.getByLabel("Pixiv refresh token")).toHaveValue("");
+});
+
+test("never clears selectors when collection enumeration fails, then saves after retry", async ({ context, page }) => {
+  const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  let collectionsAvailable = false;
+  await installFixtures(context, {
+    accounts: [account({ collection_selectors: [{ restrict: "public" }] })],
+    collectionsShouldFail: () => !collectionsAvailable,
+    onMutation: (path, body) => mutations.push({ path, body }),
+  });
+  await page.goto("/admin/discovery");
+  await page.getByRole("button", { name: "Configure Pixiv" }).click();
+
+  await expect(page.getByText("Could not load follow collections.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save settings" })).toBeDisabled();
+  expect(mutations.filter((mutation) => mutation.path.includes("remote-accounts/acc-pixiv"))).toEqual([]);
+
+  collectionsAvailable = true;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("checkbox", { name: "Private follows" }).check();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  expect(mutations.at(-1)?.body).toMatchObject({
+    collection_selectors: [{ restrict: "public" }, { restrict: "private" }],
+  });
 });
 
 test("scans, filters, imports without immediate sync, dismisses and restores visible candidates", async ({ context, page }) => {
@@ -340,6 +440,29 @@ test("resolves a conflict by attaching an existing creator and by creating a new
   expect(mutations.at(-1)?.body).toMatchObject({ creator_name: "Resolved Artist", immediate_sync: false });
 });
 
+test("dismisses conflict candidates individually and through visible batch selection", async ({ context, page }) => {
+  const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  await installFixtures(context, {
+    accounts: [account()],
+    candidates: [
+      candidate("conflict-one", { state: "conflict", metadata: { identity_conflict: true, local_creator_ids: ["creator-one", "creator-two"] } }),
+      candidate("conflict-two", { state: "conflict", metadata: { identity_conflict: true, local_creator_ids: ["creator-one", "creator-two"] } }),
+      candidate("conflict-three", { state: "conflict", metadata: { identity_conflict: true, local_creator_ids: ["creator-one", "creator-two"] } }),
+    ],
+    onMutation: (path, body) => mutations.push({ path, body }),
+  });
+  await page.goto("/admin/discovery");
+  const table = page.getByRole("table");
+
+  await table.getByRole("button", { name: "Ignore Artist conflict-one" }).click();
+  expect(mutations.at(-1)?.body).toMatchObject({ action: "dismiss", ids: ["conflict-one"] });
+
+  await table.getByRole("checkbox", { name: "Select Artist conflict-two" }).check();
+  await table.getByRole("checkbox", { name: "Select Artist conflict-three" }).check();
+  await page.getByRole("button", { name: "Ignore selected" }).click();
+  expect(mutations.at(-1)?.body).toMatchObject({ action: "dismiss", ids: ["conflict-two", "conflict-three"] });
+});
+
 test("paginates candidates without carrying selection across pages", async ({ context, page }) => {
   await installFixtures(context, {
     accounts: [account()],
@@ -354,19 +477,132 @@ test("paginates candidates without carrying selection across pages", async ({ co
   await expect(page.getByText("1 selected")).toHaveCount(0);
 });
 
-test("finishes an X OAuth callback and removes authorization parameters from the page URL", async ({ context, page }) => {
-  await installFixtures(context);
-  await page.goto("/admin/discovery?state=fixture-state-value-long-enough&code=fixture-code");
-  await expect(page.getByText("X OAuth account connected.")).toBeVisible();
-  await expect(page).toHaveURL(/\/admin\/discovery$/);
-  await expect(page.getByText("x_artist")).toBeVisible();
+test("clears selection and makes placeholder rows inert while a server filter changes", async ({ context, page }) => {
+  const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  await installFixtures(context, {
+    accounts: [account()],
+    candidates: [
+      candidate("stale-high"),
+      candidate("fresh-medium", { confidence: "medium", confidence_reasons: ["single_creator_evidence"] }),
+    ],
+    candidateDelay: (url) => url.searchParams.get("confidence") === "medium" ? 800 : 0,
+    onMutation: (path, body) => mutations.push({ path, body }),
+  });
+  await page.goto("/admin/discovery");
+  const table = page.getByRole("table");
+  await table.getByRole("checkbox", { name: "Select Artist stale-high" }).check();
+  await expect(page.getByText("1 selected")).toBeVisible();
+
+  await page.getByLabel("Confidence filter").selectOption("medium");
+  await expect(page.getByText("1 selected")).toHaveCount(0);
+  await expect(table).toHaveAttribute("aria-busy", "true");
+  await expect(table.getByRole("button", { name: "Import Artist stale-high" })).toBeDisabled();
+  expect(mutations.filter((mutation) => mutation.path.endsWith("batch-actions"))).toEqual([]);
+
+  await expect(table.getByText("Artist fresh-medium")).toBeVisible();
+  await expect(table.getByText("Artist stale-high")).toHaveCount(0);
+  await expect(table).toHaveAttribute("aria-busy", "false");
 });
+
+test("keeps server pagination available when local filtering empties the current page", async ({ context, page }) => {
+  const candidates = Array.from({ length: 27 }, (_, index) => candidate(`local-page-${index}`));
+  candidates[25] = candidate("local-page-25", { metadata: { username: "matched_page_two", local_creator_ids: ["creator-one"] } });
+  await installFixtures(context, { accounts: [account()], candidates });
+  await page.goto("/admin/discovery");
+
+  await page.getByLabel("Local match filter").selectOption("matched");
+  await expect(page.getByText("No matching candidates on this page")).toBeVisible();
+  const pagination = page.getByRole("navigation", { name: "Pagination" });
+  await expect(pagination).toBeVisible();
+  await pagination.getByRole("button", { name: "Next" }).click();
+  await expect(page.getByRole("table").getByText("Artist local-page-25")).toBeVisible();
+});
+
+for (const callbackStatus of [200, 400]) {
+  test(`consumes X OAuth secrets once and leaves no cached canaries after ${callbackStatus}`, async ({ context, page }) => {
+    const stateCanary = `state-canary-${callbackStatus}-long-enough`;
+    const codeCanary = `code-canary-${callbackStatus}`;
+    const consoleText: string[] = [];
+    page.on("console", (message) => consoleText.push(message.text()));
+    await installFixtures(context, {
+      oauthCallbackStatus: callbackStatus === 200 ? undefined : callbackStatus,
+      oauthCallbackDelayMs: 500,
+    });
+    await page.goto(`/admin/discovery?state=${stateCanary}&code=${codeCanary}`);
+
+    await expect(page).toHaveURL(/\/admin\/discovery$/);
+    expect(await mutationCacheText(page)).not.toContain(stateCanary);
+    expect(await mutationCacheText(page)).not.toContain(codeCanary);
+    await expect(page.getByText(callbackStatus === 200 ? "X OAuth account connected." : "X OAuth authorization did not complete.")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => JSON.stringify(window.history.state))).not.toContain(stateCanary);
+    await expect.poll(() => page.evaluate(() => JSON.stringify(window.history.state))).not.toContain(codeCanary);
+
+    const retained = await page.evaluate(() => JSON.stringify({
+      url: window.location.href,
+      history: window.history.state,
+      localStorage: { ...window.localStorage },
+      sessionStorage: { ...window.sessionStorage },
+      text: document.body.textContent,
+      html: document.body.innerHTML,
+    }));
+    expect(retained).not.toContain(stateCanary);
+    expect(retained).not.toContain(codeCanary);
+    expect(consoleText.join("\n")).not.toContain(stateCanary);
+    expect(consoleText.join("\n")).not.toContain(codeCanary);
+  });
+}
 
 test("renders a private 403 state without leaking discovery rows", async ({ context, page }) => {
   await installFixtures(context, { accounts: [account()], candidatesStatus: 403 });
   await page.goto("/admin/discovery");
-  await expect(page.getByText("You do not have access to this discovery data.")).toBeVisible();
+  await expect(page.getByText("You do not have access to this discovery data.").first()).toBeVisible();
   await expect(page.getByRole("table")).toHaveCount(0);
+});
+
+test("switches users in one session without flashing or reusing private discovery data", async ({ context, page }) => {
+  const privateRequests: Array<{ user: "a" | "b"; path: string }> = [];
+  await installFixtures(context, {
+    accounts: [account({ remote_username: "private_account_a" })],
+    candidates: [candidate("private-a", { display_name: "Private Artist A" })],
+    userBPrivateStatus: 403,
+    onPrivateRequest: (user, path) => privateRequests.push({ user, path }),
+  });
+  await page.goto("/admin/discovery");
+  await expect(page.getByText("private_account_a")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Private Artist A")).toBeVisible();
+  expect(await privateQueryCacheText(page)).toContain("private_account_a");
+
+  await page.getByRole("button", { name: "User menu" }).click();
+  await page.getByRole("menuitem", { name: "Sign Out" }).click();
+  await expect(page.getByRole("heading", { name: "auto-gallery" })).toBeVisible();
+  await page.getByLabel("Username").fill("discovery-viewer-b");
+  await page.getByLabel("Password").fill("fixture-password");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page.getByRole("button", { name: "User menu" })).toHaveAttribute("title", "Discovery Viewer B");
+
+  await page.evaluate(() => {
+    const target = window as typeof window & { __privateDiscoveryLeaks?: string[] };
+    target.__privateDiscoveryLeaks = [];
+    new MutationObserver(() => {
+      const isUserB = document.querySelector('button[aria-label="User menu"]')?.getAttribute("title") === "Discovery Viewer B";
+      const body = document.body.textContent || "";
+      if (isUserB && (body.includes("private_account_a") || body.includes("Private Artist A"))) {
+        target.__privateDiscoveryLeaks?.push(body);
+      }
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  await page.getByRole("link", { name: "Remote Discovery" }).click();
+
+  await expect(page.getByText("You do not have access to this discovery data.").first()).toBeVisible();
+  await expect(page.getByText("private_account_a")).toHaveCount(0);
+  await expect(page.getByText("Private Artist A")).toHaveCount(0);
+  expect(await privateQueryCacheText(page)).not.toContain("private_account_a");
+  expect(await privateQueryCacheText(page)).not.toContain("Private Artist A");
+  await expect.poll(() => privateRequests.filter((request) => request.user === "b").map((request) => request.path)).toEqual(expect.arrayContaining([
+    "/api/v1/remote-accounts",
+    "/api/v1/discovery/candidates",
+  ]));
+  expect(await page.evaluate(() => (window as typeof window & { __privateDiscoveryLeaks?: string[] }).__privateDiscoveryLeaks)).toEqual([]);
 });
 
 test("keeps the account and candidate workbench usable on mobile", async ({ context, page }) => {

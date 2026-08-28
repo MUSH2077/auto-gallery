@@ -960,13 +960,18 @@ export const queryKeys = {
     summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
   },
   remoteAccounts: {
-    all: ["remote-accounts"] as const,
-    collections: (id: string) => ["remote-accounts", id, "collections"] as const,
+    all: (userId: number) => ["remote-discovery-private", userId, "remote-accounts"] as const,
+    detail: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id] as const,
+    collections: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id, "collections"] as const,
   },
   discovery: {
-    all: ["discovery"] as const,
-    scans: (accountId?: string) => ["discovery", "scans", accountId || "all"] as const,
-    candidates: (filters?: T.DiscoveryCandidateFilters) => [
+    privateScope: (userId: number) => ["remote-discovery-private", userId] as const,
+    all: (userId: number) => ["remote-discovery-private", userId, "discovery"] as const,
+    mutation: (userId: number, operation: string) => ["remote-discovery-private", userId, "mutation", operation] as const,
+    scans: (userId: number, accountId?: string) => ["remote-discovery-private", userId, "discovery", "scans", accountId || "all"] as const,
+    candidates: (userId: number, filters?: T.DiscoveryCandidateFilters) => [
+      "remote-discovery-private",
+      userId,
       "discovery",
       "candidates",
       filters?.accountId || "all",

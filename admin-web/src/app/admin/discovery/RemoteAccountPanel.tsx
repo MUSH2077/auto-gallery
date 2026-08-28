@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FlaskConical, KeyRound, Radar, Settings2, ShieldCheck, Trash2 } from "lucide-react";
 
-import { ConfirmDialog, Modal, SectionPanel, StatusBadge, useToast } from "@/components";
+import { ConfirmDialog, ErrorState, Modal, SectionPanel, StatusBadge, useToast } from "@/components";
 import {
   api,
   queryKeys,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { runPrivateDiscoveryRequest } from "@/lib/remoteDiscoveryPrivateCache";
 import { DISCOVERY_SOURCES, providerLabel, safeDiscoveryError } from "./discoveryPresentation";
 
 type DialogKind = "connect" | "reconnect" | "settings" | null;
@@ -34,11 +35,15 @@ function CredentialsDialog({
   open,
   source,
   account,
+  userId,
+  onPrivateAccessError,
   onClose,
 }: {
   open: boolean;
   source: RemoteDiscoverySource;
   account?: RemoteAccountRead;
+  userId: number;
+  onPrivateAccessError: (error: unknown) => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -49,6 +54,7 @@ function CredentialsDialog({
   const [credential, setCredential] = useState("");
   const [xMethod, setXMethod] = useState<"oauth2" | "cookie">("oauth2");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [oauthPending, setOAuthPending] = useState(false);
   const reconnecting = !!account;
 
   useEffect(() => {
@@ -63,6 +69,7 @@ function CredentialsDialog({
   }, [account?.auth_method, open]);
 
   const connect = useMutation({
+    mutationKey: queryKeys.discovery.mutation(userId, "account-connect"),
     mutationFn: async () => {
       const authMethod: RemoteAuthMethod = source === "pixiv"
         ? "refresh_token"
@@ -75,31 +82,43 @@ function CredentialsDialog({
           ? { SESSDATA: credential }
           : { cookie: credential };
       if (account) {
-        return api.updateRemoteAccount(account.id, { auth_method: authMethod, credentials });
+        return runPrivateDiscoveryRequest(userId, (signal) => api.updateRemoteAccount(account.id, { auth_method: authMethod, credentials }, signal));
       }
-      return api.createRemoteAccount({ source, auth_method: authMethod, credentials });
+      return runPrivateDiscoveryRequest(userId, (signal) => api.createRemoteAccount({ source, auth_method: authMethod, credentials }, signal));
     },
     onSuccess: async () => {
       setCredential("");
-      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all });
+      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
       toast.success(t("discovery.account_connected"));
       onClose();
     },
-    onError: (error) => setFeedback(safeDiscoveryError(t, error, t("discovery.connection_failed"))),
+    onError: (error) => {
+      onPrivateAccessError(error);
+      setFeedback(safeDiscoveryError(t, error, t("discovery.connection_failed")));
+    },
   });
 
-  const oauth = useMutation({
-    mutationFn: () => api.authorizeXOAuth(account?.id),
-    onSuccess: (result) => {
-      if (!validXAuthorizationUrl(result.authorization_url)) {
+  const authorizeOAuth = async () => {
+    if (oauthPending) return;
+    setOAuthPending(true);
+    setFeedback(null);
+    try {
+      const result = await runPrivateDiscoveryRequest(userId, (signal) => api.authorizeXOAuth(account?.id, signal));
+      const authorizationUrl = result.authorization_url;
+      if (!validXAuthorizationUrl(authorizationUrl)) {
         setFeedback(t("discovery.invalid_oauth_redirect"));
         return;
       }
       setCredential("");
-      window.location.assign(result.authorization_url);
-    },
-    onError: (error) => setFeedback(safeDiscoveryError(t, error, t("discovery.oauth_failed"))),
-  });
+      window.location.assign(authorizationUrl);
+    } catch (error) {
+      // OAuth responses may carry provider details. Keep them out of rendered errors.
+      onPrivateAccessError(error);
+      setFeedback(t("discovery.oauth_failed"));
+    } finally {
+      setOAuthPending(false);
+    }
+  };
 
   const provider = providerLabel(t, source);
   const isOAuth = source === "x" && xMethod === "oauth2";
@@ -145,8 +164,8 @@ function CredentialsDialog({
             <button
               type="button"
               className="btn-primary mt-4 w-full justify-center"
-              onClick={() => oauth.mutate()}
-              disabled={oauth.isPending}
+              onClick={() => void authorizeOAuth()}
+              disabled={oauthPending}
             >
               <ExternalLink aria-hidden="true" className="h-4 w-4" />
               {t("discovery.start_oauth")}
@@ -202,10 +221,16 @@ function collectionLabel(t: ReturnType<typeof useT>, collection: RemoteCollectio
 function AccountSettingsDialog({
   open,
   account,
+  userId,
+  supportsCollectionSelectors,
+  onPrivateAccessError,
   onClose,
 }: {
   open: boolean;
   account: RemoteAccountRead;
+  userId: number;
+  supportsCollectionSelectors: boolean;
+  onPrivateAccessError: (error: unknown) => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -219,11 +244,15 @@ function AccountSettingsDialog({
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const collections = useQuery({
-    queryKey: queryKeys.remoteAccounts.collections(account.id),
-    queryFn: () => api.listRemoteCollections(account.id),
-    enabled: open && account.has_credentials,
+    queryKey: queryKeys.remoteAccounts.collections(userId, account.id),
+    queryFn: ({ signal }) => api.listRemoteCollections(account.id, signal),
+    enabled: supportsCollectionSelectors && open && account.has_credentials,
     retry: false,
   });
+
+  useEffect(() => {
+    if (collections.error) onPrivateAccessError(collections.error);
+  }, [collections.error, onPrivateAccessError]);
 
   useEffect(() => {
     if (!open) return;
@@ -242,31 +271,40 @@ function AccountSettingsDialog({
   }, [account.collection_selectors, collections.data, open]);
 
   const save = useMutation({
-    mutationFn: () => api.updateRemoteAccount(account.id, {
-      collection_selectors: (collections.data || [])
-        .filter((collection) => selectedCollections.has(collection.id))
-        .map((collection) => collection.selector),
+    mutationKey: queryKeys.discovery.mutation(userId, "account-settings"),
+    mutationFn: () => runPrivateDiscoveryRequest(userId, (signal) => api.updateRemoteAccount(account.id, {
+      ...(supportsCollectionSelectors && collections.data ? {
+        collection_selectors: collections.data
+          .filter((collection) => selectedCollections.has(collection.id))
+          .map((collection) => collection.selector),
+      } : {}),
       scan_interval_hours: Math.max(1, Math.floor(interval)),
       auto_import_enabled: autoImport,
       auto_import_min_confidence: threshold,
       auto_import_limit: Math.min(200, Math.max(1, Math.floor(limit))),
-    }),
+    }, signal)),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all });
+      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
       toast.success(t("discovery.settings_saved"));
       onClose();
     },
-    onError: (error) => setFeedback(safeDiscoveryError(t, error, t("discovery.settings_failed"))),
+    onError: (error) => {
+      onPrivateAccessError(error);
+      setFeedback(safeDiscoveryError(t, error, t("discovery.settings_failed")));
+    },
   });
 
   const provider = providerLabel(t, account.source);
   return (
     <Modal open={open} onClose={onClose} title={t("discovery.settings_title", { provider })}>
       <div className="space-y-5">
-        <fieldset>
+        {supportsCollectionSelectors ? <fieldset>
           <legend className="mb-2 text-sm font-medium text-fg">{t("discovery.collections")}</legend>
           {collections.isLoading ? <p className="text-sm text-muted">{t("discovery.collections_loading")}</p> : null}
-          {!collections.isLoading && (collections.data?.length || 0) === 0 ? (
+          {collections.error ? (
+            <ErrorState message={t("discovery.collections_failed")} onRetry={() => collections.refetch()} />
+          ) : null}
+          {!collections.isLoading && !collections.error && (collections.data?.length || 0) === 0 ? (
             <p className="text-sm text-muted">{t("discovery.collections_empty")}</p>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-2">
@@ -286,7 +324,7 @@ function AccountSettingsDialog({
               </label>
             ))}
           </div>
-        </fieldset>
+        </fieldset> : null}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="text-sm font-medium text-fg">
@@ -313,7 +351,7 @@ function AccountSettingsDialog({
         {feedback ? <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">{feedback}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>{t("common.cancel")}</button>
-          <button type="button" className="btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>
+          <button type="button" className="btn-primary" disabled={save.isPending || (supportsCollectionSelectors && (collections.isLoading || !!collections.error || !collections.data))} onClick={() => save.mutate()}>
             {t("discovery.save_settings")}
           </button>
         </div>
@@ -488,16 +526,20 @@ function AccountCard({
 
 export default function RemoteAccountPanel({
   accounts,
+  userId,
   providers,
   scans,
   onScan,
   scanPending,
+  onPrivateAccessError,
 }: {
   accounts: RemoteAccountRead[];
+  userId: number;
   providers: ProviderInfo[];
   scans: TaskRun[];
   onScan: (account: RemoteAccountRead) => void;
   scanPending: boolean;
+  onPrivateAccessError: (error: unknown) => void;
 }) {
   const t = useT();
   const toast = useToast();
@@ -516,24 +558,32 @@ export default function RemoteAccountPanel({
   }, [scans]);
 
   const testAccount = useMutation({
-    mutationFn: (account: RemoteAccountRead) => api.testRemoteAccount(account.id),
+    mutationKey: queryKeys.discovery.mutation(userId, "account-test"),
+    mutationFn: (account: RemoteAccountRead) => runPrivateDiscoveryRequest(userId, (signal) => api.testRemoteAccount(account.id, signal)),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all });
+      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
       toast.success(t("discovery.test_succeeded"));
     },
-    onError: (error) => toast.error(safeDiscoveryError(t, error, t("discovery.test_failed"))),
+    onError: (error) => {
+      onPrivateAccessError(error);
+      toast.error(safeDiscoveryError(t, error, t("discovery.test_failed")));
+    },
   });
   const removeAccount = useMutation({
-    mutationFn: (account: RemoteAccountRead) => api.deleteRemoteAccount(account.id),
+    mutationKey: queryKeys.discovery.mutation(userId, "account-delete"),
+    mutationFn: (account: RemoteAccountRead) => runPrivateDiscoveryRequest(userId, (signal) => api.deleteRemoteAccount(account.id, signal)),
     onSuccess: async () => {
       setDeleteAccount(null);
       await Promise.all([
-        qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all }),
-        qc.invalidateQueries({ queryKey: queryKeys.discovery.all }),
+        qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) }),
+        qc.invalidateQueries({ queryKey: queryKeys.discovery.all(userId) }),
       ]);
       toast.success(t("discovery.account_deleted"));
     },
-    onError: (error) => toast.error(safeDiscoveryError(t, error, t("discovery.delete_failed"))),
+    onError: (error) => {
+      onPrivateAccessError(error);
+      toast.error(safeDiscoveryError(t, error, t("discovery.delete_failed")));
+    },
   });
 
   const activeSource = dialog?.source;
@@ -567,11 +617,20 @@ export default function RemoteAccountPanel({
           open
           source={activeSource}
           account={dialog.kind === "reconnect" ? activeAccount : undefined}
+          userId={userId}
+          onPrivateAccessError={onPrivateAccessError}
           onClose={() => setDialog(null)}
         />
       ) : null}
       {activeAccount && dialog?.kind === "settings" ? (
-        <AccountSettingsDialog open account={activeAccount} onClose={() => setDialog(null)} />
+        <AccountSettingsDialog
+          open
+          account={activeAccount}
+          userId={userId}
+          supportsCollectionSelectors={!!providersBySource.get(activeAccount.source)?.capabilities.supports_collection_selectors}
+          onPrivateAccessError={onPrivateAccessError}
+          onClose={() => setDialog(null)}
+        />
       ) : null}
       <ConfirmDialog
         open={!!deleteAccount}

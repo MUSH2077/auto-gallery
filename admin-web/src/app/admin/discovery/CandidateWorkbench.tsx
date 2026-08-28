@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, CircleAlert, ExternalLink, RotateCcw, UserRound, XCircle } from "lucide-react";
 
 import { EmptyState, ErrorState, FilterBar, Modal, Pagination, SectionPanel, SelectionBar, StatusBadge, TableSkeleton, useToast } from "@/components";
 import {
+  ApiError,
   api,
   queryKeys,
   type DiscoveryCandidate,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { runPrivateDiscoveryRequest } from "@/lib/remoteDiscoveryPrivateCache";
 import ConflictResolutionDialog, { type ConflictResolutionValue } from "./ConflictResolutionDialog";
 import {
   candidateAvatar,
@@ -114,10 +116,15 @@ function RowActions({
   const name = candidate.display_name || candidate.source_creator_id;
   if (candidate.state === "conflict") {
     return (
-      <button type="button" className="btn-primary whitespace-nowrap" disabled={pending} onClick={onResolve} aria-label={t("discovery.resolve_candidate", { name })}>
-        <CircleAlert aria-hidden="true" className="h-4 w-4" />
-        {t("discovery.resolve_conflict")}
-      </button>
+      <div className="flex flex-wrap gap-1">
+        <button type="button" className="btn-primary whitespace-nowrap" disabled={pending} onClick={onResolve} aria-label={t("discovery.resolve_candidate", { name })}>
+          <CircleAlert aria-hidden="true" className="h-4 w-4" />
+          {t("discovery.resolve_conflict")}
+        </button>
+        <button type="button" className="btn-ghost" disabled={pending} onClick={onDismiss} aria-label={t("discovery.dismiss_candidate", { name })}>
+          <XCircle aria-hidden="true" className="h-4 w-4" />
+        </button>
+      </div>
     );
   }
   if (candidate.state === "dismissed") {
@@ -177,7 +184,17 @@ function ImportDialog({
   );
 }
 
-export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccountRead[] }) {
+export default function CandidateWorkbench({
+  accounts,
+  userId,
+  enabled = true,
+  onPrivateAccessError,
+}: {
+  accounts: RemoteAccountRead[];
+  userId: number;
+  enabled?: boolean;
+  onPrivateAccessError?: (error: unknown) => void;
+}) {
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
@@ -204,75 +221,102 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
     limit: PAGE_SIZE,
   };
   const candidates = useQuery({
-    queryKey: queryKeys.discovery.candidates(filters),
-    queryFn: () => api.listDiscoveryCandidates(filters),
+    queryKey: queryKeys.discovery.candidates(userId, filters),
+    queryFn: ({ signal }) => api.listDiscoveryCandidates(filters, signal),
+    enabled: userId > 0 && enabled,
     placeholderData: (previous) => previous,
     retry: false,
   });
 
-  const visible = useMemo(() => (candidates.data?.items || []).filter((candidate) => {
+  useLayoutEffect(() => {
+    if (candidates.error instanceof ApiError && [401, 403].includes(candidates.error.status)) {
+      onPrivateAccessError?.(candidates.error);
+    }
+  }, [candidates.error, onPrivateAccessError]);
+
+  const rowsInert = candidates.isFetching || candidates.isPlaceholderData || !!candidates.error;
+  const visible = useMemo(() => (candidates.error ? [] : candidates.data?.items || []).filter((candidate) => {
     if (provider && candidate.remote_account_id !== accountId) return false;
     const matches = localCreatorIds(candidate).length > 0 || !!candidate.subscription_id;
     if (local === "matched" && !matches) return false;
     if (local === "unmatched" && matches) return false;
     return true;
-  }), [accountId, candidates.data?.items, local, provider]);
+  }), [accountId, candidates.data?.items, candidates.error, local, provider]);
   const visibleIds = useMemo(() => new Set(visible.map((candidate) => candidate.id)), [visible]);
 
   useEffect(() => {
     setSelected((current) => new Set([...current].filter((id) => visibleIds.has(id))));
   }, [visibleIds]);
 
-  const resetPage = () => setPage(1);
+  const resetFilters = () => {
+    setPage(1);
+    setSelected(new Set());
+  };
   const refresh = async () => {
     await Promise.all([
-      qc.invalidateQueries({ queryKey: queryKeys.discovery.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.discovery.all(userId) }),
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }),
     ]);
   };
   const batch = useMutation({
-    mutationFn: (input: { ids: string[]; action: "import" | "dismiss" | "restore"; syncNow?: boolean }) => api.batchDiscoveryCandidates(input),
+    mutationKey: queryKeys.discovery.mutation(userId, "candidate-batch"),
+    mutationFn: (input: { ids: string[]; action: "import" | "dismiss" | "restore"; syncNow?: boolean }) => (
+      runPrivateDiscoveryRequest(userId, (signal) => api.batchDiscoveryCandidates(input, signal))
+    ),
     onSuccess: async () => {
       setSelected(new Set());
       setImportIds([]);
       await refresh();
       toast.success(t("discovery.batch_succeeded"));
     },
-    onError: (error) => toast.error(safeDiscoveryError(t, error, t("discovery.batch_failed"))),
+    onError: (error) => {
+      onPrivateAccessError?.(error);
+      toast.error(safeDiscoveryError(t, error, t("discovery.batch_failed")));
+    },
   });
   const resolve = useMutation({
-    mutationFn: (value: ConflictResolutionValue) => api.resolveDiscoveryCandidate(resolveCandidate!.id, value),
+    mutationKey: queryKeys.discovery.mutation(userId, "candidate-resolve"),
+    mutationFn: (value: ConflictResolutionValue) => runPrivateDiscoveryRequest(
+      userId,
+      (signal) => api.resolveDiscoveryCandidate(resolveCandidate!.id, value, signal),
+    ),
     onSuccess: async () => {
       setResolveCandidate(null);
       setResolveError(null);
       await refresh();
       toast.success(t("discovery.resolve_succeeded"));
     },
-    onError: (error) => setResolveError(safeDiscoveryError(t, error, t("discovery.resolve_failed"))),
+    onError: (error) => {
+      onPrivateAccessError?.(error);
+      setResolveError(safeDiscoveryError(t, error, t("discovery.resolve_failed")));
+    },
   });
 
   const allVisibleSelected = visible.length > 0 && visible.every((candidate) => selected.has(candidate.id));
   const selectedRows = visible.filter((candidate) => selected.has(candidate.id));
   const selectedPending = selectedRows.filter((candidate) => candidate.state === "pending").map((candidate) => candidate.id);
+  const selectedDismissable = selectedRows.filter((candidate) => candidate.state === "pending" || candidate.state === "conflict").map((candidate) => candidate.id);
   const selectedDismissed = selectedRows.filter((candidate) => candidate.state === "dismissed").map((candidate) => candidate.id);
+
+  if (!enabled) return null;
 
   return (
     <>
       <SectionPanel title={t("discovery.workbench_title")} description={t("discovery.workbench_desc")} className="mt-5">
         <FilterBar
           className="flex-col items-stretch sm:flex-row sm:items-center"
-          meta={candidates.data ? <span className="block w-full text-right text-xs tabular-nums text-muted">{t("common.total")}: {fmt.number(candidates.data.total)}</span> : undefined}
+          meta={candidates.data && !candidates.error ? <span className="block w-full text-right text-xs tabular-nums text-muted">{t("common.total")}: {fmt.number(candidates.data.total)}</span> : undefined}
         >
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
             <span>{t("discovery.filter_provider")}</span>
-            <select className="select w-full sm:min-w-36" value={provider} onChange={(event) => { setProvider(event.target.value as typeof provider); resetPage(); }}>
+            <select className="select w-full sm:min-w-36" value={provider} onChange={(event) => { setProvider(event.target.value as typeof provider); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               {accounts.map((account) => <option key={account.id} value={account.source}>{providerLabel(t, account.source)}</option>)}
             </select>
           </label>
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
             <span>{t("discovery.filter_confidence")}</span>
-            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_confidence")} value={confidence} onChange={(event) => { setConfidence(event.target.value as typeof confidence); resetPage(); }}>
+            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_confidence")} value={confidence} onChange={(event) => { setConfidence(event.target.value as typeof confidence); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               <option value="high">{t("discovery.confidence_high")}</option>
               <option value="medium">{t("discovery.confidence_medium")}</option>
@@ -281,7 +325,7 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
           </label>
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
             <span>{t("discovery.filter_status")}</span>
-            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_status")} value={status} onChange={(event) => { setStatus(event.target.value as typeof status); resetPage(); }}>
+            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_status")} value={status} onChange={(event) => { setStatus(event.target.value as typeof status); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               <option value="pending">{t("discovery.status_pending")}</option>
               <option value="imported">{t("discovery.status_imported")}</option>
@@ -291,7 +335,7 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
           </label>
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
             <span>{t("discovery.filter_following")}</span>
-            <select className="select w-full sm:min-w-36" value={following} onChange={(event) => { setFollowing(event.target.value as typeof following); resetPage(); }}>
+            <select className="select w-full sm:min-w-36" value={following} onChange={(event) => { setFollowing(event.target.value as typeof following); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               <option value="true">{t("discovery.filter_following_yes")}</option>
               <option value="false">{t("discovery.filter_following_no")}</option>
@@ -299,7 +343,7 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
           </label>
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
             <span>{t("discovery.filter_local")}</span>
-            <select className="select w-full sm:min-w-36" value={local} onChange={(event) => { setLocal(event.target.value as LocalFilter); resetPage(); }}>
+            <select className="select w-full sm:min-w-36" value={local} onChange={(event) => { setLocal(event.target.value as LocalFilter); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               <option value="matched">{t("discovery.filter_local_matched")}</option>
               <option value="unmatched">{t("discovery.filter_local_unmatched")}</option>
@@ -316,12 +360,15 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
         >
           {selectedPending.length ? (
             <>
-              <button type="button" className="btn-primary" onClick={() => setImportIds(selectedPending)}>{t("discovery.import_selected")}</button>
-              <button type="button" className="btn-ghost" disabled={batch.isPending} onClick={() => batch.mutate({ ids: selectedPending, action: "dismiss" })}>{t("discovery.dismiss_selected")}</button>
+              <button type="button" className="btn-primary" disabled={rowsInert} onClick={() => setImportIds(selectedPending)}>{t("discovery.import_selected")}</button>
+              {selectedDismissable.length ? <button type="button" className="btn-ghost" disabled={batch.isPending || rowsInert} onClick={() => batch.mutate({ ids: selectedDismissable, action: "dismiss" })}>{t("discovery.dismiss_selected")}</button> : null}
             </>
           ) : null}
+          {!selectedPending.length && selectedDismissable.length ? (
+            <button type="button" className="btn-primary" disabled={batch.isPending || rowsInert} onClick={() => batch.mutate({ ids: selectedDismissable, action: "dismiss" })}>{t("discovery.dismiss_selected")}</button>
+          ) : null}
           {selectedDismissed.length ? (
-            <button type="button" className="btn-primary" disabled={batch.isPending} onClick={() => batch.mutate({ ids: selectedDismissed, action: "restore" })}>{t("discovery.restore_selected")}</button>
+            <button type="button" className="btn-primary" disabled={batch.isPending || rowsInert} onClick={() => batch.mutate({ ids: selectedDismissed, action: "restore" })}>{t("discovery.restore_selected")}</button>
           ) : null}
         </SelectionBar>
 
@@ -329,14 +376,20 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
         {candidates.error ? (
           <ErrorState message={safeDiscoveryError(t, candidates.error, t("discovery.load_failed"))} onRetry={() => candidates.refetch()} />
         ) : null}
+        {candidates.isFetching && !candidates.isLoading ? (
+          <p className="mb-3 text-xs font-medium text-accent" role="status">{t("discovery.updating_candidates")}</p>
+        ) : null}
         {!candidates.isLoading && !candidates.error && visible.length === 0 ? (
-          <EmptyState title={t("discovery.no_candidates")} description={t("discovery.no_candidates_desc")} />
+          <EmptyState
+            title={t((candidates.data?.items.length || 0) > 0 ? "discovery.no_candidates_page" : "discovery.no_candidates")}
+            description={t((candidates.data?.items.length || 0) > 0 ? "discovery.no_candidates_page_desc" : "discovery.no_candidates_desc")}
+          />
         ) : null}
 
         {visible.length ? (
           <>
             <div className="hidden overflow-x-auto rounded-lg border border-border lg:block">
-              <table className="w-full min-w-[56rem] text-sm">
+              <table className="w-full min-w-[56rem] text-sm" aria-busy={rowsInert}>
                 <thead className="bg-subtle text-xs font-medium text-muted">
                   <tr>
                     <th className="w-12 px-3 py-3 text-left">
@@ -344,6 +397,7 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
                         type="checkbox"
                         className="rounded"
                         aria-label={t("discovery.select_visible")}
+                        disabled={rowsInert}
                         checked={allVisibleSelected}
                         onChange={(event) => setSelected(event.target.checked ? new Set(visible.map((candidate) => candidate.id)) : new Set())}
                       />
@@ -357,20 +411,20 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
                     <th className="w-28 min-w-28 px-3 py-3 text-left">{t("discovery.actions")}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className={`divide-y divide-border ${rowsInert ? "pointer-events-none opacity-60" : ""}`}>
                   {visible.map((candidate) => {
                     const name = candidate.display_name || candidate.source_creator_id;
                     const source = accounts.find((account) => account.id === candidate.remote_account_id)?.source || "pixiv";
                     return (
                       <tr key={candidate.id} className="bg-surface align-top hover:bg-subtle/60">
-                        <td className="px-3 py-3"><input type="checkbox" className="rounded" aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} /></td>
+                        <td className="px-3 py-3"><input type="checkbox" className="rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} /></td>
                         <td className="px-3 py-3"><CandidateIdentity candidate={candidate} /></td>
                         <td className="px-3 py-3"><span className="rounded-md border border-border bg-subtle px-2 py-1 text-xs font-medium text-fg">{providerLabel(t, source)}</span></td>
                         <td className="px-3 py-3"><ConfidenceDetails candidate={candidate} /></td>
                         <td className="px-3 py-3"><LocalMatch candidate={candidate} /></td>
                         <td className="px-3 py-3"><StatusBadge status={candidate.is_following ? "up" : "warning"} label={t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")} /></td>
                         <td className="px-3 py-3 text-xs text-muted"><span className="whitespace-nowrap">{fmt.dateTime(candidate.updated_at)}</span></td>
-                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} pending={batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} /></td>
+                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} /></td>
                       </tr>
                     );
                   })}
@@ -378,14 +432,14 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
               </table>
             </div>
 
-            <div className="grid gap-3 lg:hidden">
+            <div className={`grid gap-3 lg:hidden ${rowsInert ? "pointer-events-none opacity-60" : ""}`} aria-busy={rowsInert}>
               {visible.map((candidate) => {
                 const name = candidate.display_name || candidate.source_creator_id;
                 const source = accounts.find((account) => account.id === candidate.remote_account_id)?.source || "pixiv";
                 return (
                   <article key={candidate.id} className="rounded-lg border border-border bg-surface p-3">
                     <div className="flex items-start gap-3">
-                      <input type="checkbox" className="mt-2 rounded" aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} />
+                      <input type="checkbox" className="mt-2 rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} />
                       <div className="min-w-0 flex-1"><CandidateIdentity candidate={candidate} /></div>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border py-3 text-xs">
@@ -396,14 +450,16 @@ export default function CandidateWorkbench({ accounts }: { accounts: RemoteAccou
                     </div>
                     <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                       <span className="text-xs text-muted">{fmt.dateTime(candidate.updated_at)}</span>
-                      <RowActions candidate={candidate} pending={batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} />
+                      <RowActions candidate={candidate} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} />
                     </div>
                   </article>
                 );
               })}
             </div>
-            <Pagination page={page} pageSize={PAGE_SIZE} total={candidates.data?.total || 0} onPageChange={(next) => { setPage(next); setSelected(new Set()); }} />
           </>
+        ) : null}
+        {!candidates.error && (candidates.data?.total || 0) > PAGE_SIZE ? (
+          <Pagination page={page} pageSize={PAGE_SIZE} total={candidates.data?.total || 0} onPageChange={(next) => { setPage(next); setSelected(new Set()); }} />
         ) : null}
       </SectionPanel>
 

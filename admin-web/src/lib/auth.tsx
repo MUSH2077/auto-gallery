@@ -1,6 +1,8 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
 
 const TOKEN_KEY = "ag_token";
 
@@ -36,6 +38,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -85,12 +88,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     const me: AuthUser = await meRes.json();
 
+    clearPrivateDiscoveryCache(queryClient);
     localStorage.setItem(TOKEN_KEY, accessToken);
     setTokenCookie(accessToken);
     setToken(accessToken);
     setUser(me);
     return me;
-  }, []);
+  }, [queryClient]);
 
   const updateAccessToken = useCallback(async (nextToken: string) => {
     const meRes = await fetch("/api/v1/auth/me", {
@@ -100,20 +104,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error("Failed to refresh session");
     }
     const me: AuthUser = await meRes.json();
+    if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
     localStorage.setItem(TOKEN_KEY, nextToken);
     setTokenCookie(nextToken);
     setToken(nextToken);
     setUser(me);
-  }, []);
+  }, [queryClient, user?.id]);
 
   const logout = useCallback(() => {
+    clearPrivateDiscoveryCache(queryClient);
     localStorage.removeItem(TOKEN_KEY);
     clearTokenCookie();
     // Clean up batch import state so re-login doesn't recover stale jobs
     try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
     setToken(null);
     setUser(null);
-  }, []);
+  }, [queryClient]);
 
   return (
     <AuthContext.Provider

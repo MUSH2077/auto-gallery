@@ -27,61 +27,64 @@ function candidateParams(filters: DiscoveryCandidateFilters = {}) {
 }
 
 export const remoteDiscoveryApi = {
-  listRemoteAccounts: (offset = 0, limit = 50) =>
-    request<RemoteAccountRead[]>(`/api/v1/remote-accounts?offset=${offset}&limit=${limit}`),
+  listRemoteAccounts: (offset = 0, limit = 50, signal?: AbortSignal) =>
+    request<RemoteAccountRead[]>(`/api/v1/remote-accounts?offset=${offset}&limit=${limit}`, { signal }),
 
-  getRemoteAccount: (id: string) =>
-    request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}`),
+  getRemoteAccount: (id: string, signal?: AbortSignal) =>
+    request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}`, { signal }),
 
-  createRemoteAccount: (input: RemoteAccountCreateInput) =>
+  createRemoteAccount: (input: RemoteAccountCreateInput, signal?: AbortSignal) =>
     request<RemoteAccountRead>("/api/v1/remote-accounts", {
       method: "POST",
       body: JSON.stringify(input),
+      signal,
     }),
 
-  updateRemoteAccount: (id: string, input: RemoteAccountUpdateInput) =>
+  updateRemoteAccount: (id: string, input: RemoteAccountUpdateInput, signal?: AbortSignal) =>
     request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input),
+      signal,
     }),
 
-  deleteRemoteAccount: (id: string) =>
-    request<void>(`/api/v1/remote-accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteRemoteAccount: (id: string, signal?: AbortSignal) =>
+    request<void>(`/api/v1/remote-accounts/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
 
-  testRemoteAccount: (id: string) =>
-    request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/test`, { method: "POST" }),
+  testRemoteAccount: (id: string, signal?: AbortSignal) =>
+    request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/test`, { method: "POST", signal }),
 
-  listRemoteCollections: (id: string) =>
-    request<RemoteCollection[]>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/collections`),
+  listRemoteCollections: (id: string, signal?: AbortSignal) =>
+    request<RemoteCollection[]>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/collections`, { signal }),
 
-  authorizeXOAuth: (accountId?: string) => {
+  authorizeXOAuth: (accountId?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (accountId) params.set("account_id", accountId);
     const suffix = params.size ? `?${params.toString()}` : "";
-    return request<XOAuthAuthorizeResponse>(`/api/v1/remote-accounts/x/oauth/authorize${suffix}`);
+    return request<XOAuthAuthorizeResponse>(`/api/v1/remote-accounts/x/oauth/authorize${suffix}`, { signal });
   },
 
-  completeXOAuth: (state: string, code: string) => {
+  completeXOAuth: (state: string, code: string, signal?: AbortSignal) => {
     const params = new URLSearchParams({ state, code });
-    return request<RemoteAccountRead>(`/api/v1/remote-accounts/x/oauth/callback?${params.toString()}`);
+    return request<RemoteAccountRead>(`/api/v1/remote-accounts/x/oauth/callback?${params.toString()}`, { signal });
   },
 
-  createDiscoveryScan: (remoteAccountId: string) =>
+  createDiscoveryScan: (remoteAccountId: string, signal?: AbortSignal) =>
     request<TaskRun>("/api/v1/discovery/scans", {
       method: "POST",
       body: JSON.stringify({ remote_account_id: remoteAccountId }),
+      signal,
     }),
 
-  listDiscoveryScans: (remoteAccountId?: string, offset = 0, limit = 50) => {
+  listDiscoveryScans: (remoteAccountId?: string, offset = 0, limit = 50, signal?: AbortSignal) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     if (remoteAccountId) params.set("remote_account_id", remoteAccountId);
-    return request<TaskRunListResponse>(`/api/v1/discovery/scans?${params.toString()}`);
+    return request<TaskRunListResponse>(`/api/v1/discovery/scans?${params.toString()}`, { signal });
   },
 
-  listDiscoveryCandidates: (filters: DiscoveryCandidateFilters = {}) =>
-    request<DiscoveryCandidateListResponse>(`/api/v1/discovery/candidates?${candidateParams(filters).toString()}`),
+  listDiscoveryCandidates: (filters: DiscoveryCandidateFilters = {}, signal?: AbortSignal) =>
+    request<DiscoveryCandidateListResponse>(`/api/v1/discovery/candidates?${candidateParams(filters).toString()}`, { signal }),
 
-  batchDiscoveryCandidates: (input: DiscoveryCandidateBatchInput) =>
+  batchDiscoveryCandidates: (input: DiscoveryCandidateBatchInput, signal?: AbortSignal) =>
     request<DiscoveryCandidateBatchResponse>("/api/v1/discovery/candidates/batch-actions", {
       method: "POST",
       body: JSON.stringify({
@@ -89,9 +92,10 @@ export const remoteDiscoveryApi = {
         action: input.action,
         immediate_sync: input.syncNow ?? false,
       }),
+      signal,
     }),
 
-  resolveDiscoveryCandidate: (id: string, input: DiscoveryCandidateResolveInput) =>
+  resolveDiscoveryCandidate: (id: string, input: DiscoveryCandidateResolveInput, signal?: AbortSignal) =>
     request<DiscoveryCandidateResolveResponse>(`/api/v1/discovery/candidates/${encodeURIComponent(id)}/resolve`, {
       method: "POST",
       body: JSON.stringify({
@@ -99,5 +103,6 @@ export const remoteDiscoveryApi = {
         creator_name: input.creatorName,
         immediate_sync: input.syncNow ?? false,
       }),
+      signal,
     }),
 };

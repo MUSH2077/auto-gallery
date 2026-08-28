@@ -6,12 +6,15 @@ const root = process.cwd();
 const endpointPath = path.join(root, "src/lib/api/endpoints/remoteDiscovery.ts");
 const typesPath = path.join(root, "src/lib/api/types.ts");
 const apiIndexPath = path.join(root, "src/lib/api/index.ts");
+const pagePath = path.join(root, "src/app/admin/discovery/RemoteDiscoveryPage.tsx");
+const privateCachePath = path.join(root, "src/lib/remoteDiscoveryPrivateCache.ts");
 
 assert.ok(fs.existsSync(endpointPath), "remote discovery must have a focused typed endpoint module");
 
 const endpoint = fs.readFileSync(endpointPath, "utf8");
 const types = fs.readFileSync(typesPath, "utf8");
 const apiIndex = fs.readFileSync(apiIndexPath, "utf8");
+const page = fs.readFileSync(pagePath, "utf8");
 
 for (const route of [
   "/api/v1/remote-accounts",
@@ -33,5 +36,12 @@ assert.match(types, /type RemoteDiscoverySource\s*=\s*"pixiv"\s*\|\s*"x"\s*\|\s*
 assert.match(endpoint, /immediate_sync:\s*input\.syncNow\s*\?\?\s*false/);
 assert.doesNotMatch(apiIndex, /queryKeys[\s\S]{0,1200}(?:credentials|refresh_token|SESSDATA|cookie)/i,
   "query keys must not contain credential material");
+assert.match(apiIndex, /all:\s*\(userId:\s*number\)\s*=>\s*\["remote-discovery-private",\s*userId/,
+  "remote account keys must include the authenticated user ID");
+assert.match(apiIndex, /candidates:\s*\(userId:\s*number,\s*filters\?/,
+  "candidate keys must include the authenticated user ID");
+assert.ok(fs.existsSync(privateCachePath), "private discovery cache must have an explicit cleanup boundary");
+assert.doesNotMatch(page, /useSearchParams/, "OAuth callback secrets must not enter reactive search-param state");
+assert.doesNotMatch(page, /oauthCallback\s*=\s*useMutation/, "OAuth callback secrets must not enter mutation variables");
 
 console.log("Remote discovery frontend API contract passed.");
