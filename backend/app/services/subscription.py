@@ -400,7 +400,7 @@ class SubscriptionService:
                         result, creator_id, source_url)
         return result
 
-    async def trigger_sync(self, subscription_id: UUID) -> dict:
+    async def trigger_sync(self, subscription_id: UUID, *, user_id: int | None = None) -> dict:
         from app.services.tasks import TaskService
         from app.services.subscription_enqueue import enqueue_subscription_source_sync
         from app.services.cache import invalidate_api_caches
@@ -409,14 +409,47 @@ class SubscriptionService:
         if not sub:
             raise ValueError("Subscription not found")
 
-        sources = await self.db.execute(
-            select(SubscriptionSource).where(
-                and_(
-                    SubscriptionSource.subscription_id == subscription_id,
-                    SubscriptionSource.is_enabled == True,
+        membership = None
+        bindings_by_source = {}
+        if user_id is not None:
+            from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
+
+            membership = (
+                await self.db.execute(
+                    select(UserSubscription).where(
+                        UserSubscription.user_id == user_id,
+                        UserSubscription.subscription_id == subscription_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                raise ValueError("Subscription not found")
+            binding_rows = (
+                await self.db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == membership.id,
+                        UserSubscriptionSource.is_enabled.is_(True),
+                    )
+                )
+            ).scalars().all()
+            bindings_by_source = {
+                binding.subscription_source_id: binding for binding in binding_rows
+            }
+            source_ids = list(bindings_by_source)
+            sources = await self.db.execute(
+                select(SubscriptionSource).where(SubscriptionSource.id.in_(source_ids))
+                if source_ids
+                else select(SubscriptionSource).where(SubscriptionSource.id.is_(None))
+            )
+        else:
+            sources = await self.db.execute(
+                select(SubscriptionSource).where(
+                    and_(
+                        SubscriptionSource.subscription_id == subscription_id,
+                        SubscriptionSource.is_enabled == True,
+                    )
                 )
             )
-        )
         sub_sources = sources.scalars().all()
         if not sub_sources:
             return {"status": "ok", "message": "No enabled sources", "job_ids": []}
@@ -430,6 +463,7 @@ class SubscriptionService:
             queue_name="downloads",
             progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
             meta={"subscription_id": str(subscription_id), "scope": "subscription"},
+            triggering_user_subscription_id=membership.id if membership else None,
         )
 
         job_ids = []
@@ -445,6 +479,12 @@ class SubscriptionService:
                 force=False,
                 parent_task_id=parent_task.id,
                 force_reason="subscription_sync_now",
+                triggering_user_subscription_id=membership.id if membership else None,
+                triggering_remote_account_id=(
+                    bindings_by_source[ss.id].remote_account_id
+                    if ss.id in bindings_by_source
+                    else None
+                ),
             )
             if result["status"] == "enqueued":
                 job_ids.append(result["job_id"])

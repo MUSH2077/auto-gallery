@@ -99,7 +99,7 @@ from app.services.source_search_identity import (
     parse_source_identity,
     parse_source_url,
 )
-from app.services.tasks import task_payload
+from app.services.tasks import task_payload, task_visibility_condition
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
@@ -1944,6 +1944,9 @@ class SearchService:
         force_sfw: bool = False,
         kind: str | None = None,
         cursor: str | None = None,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         request_started_at = monotonic_time.perf_counter()
         # ``kind`` remains a thin adapter for internal callers while all
@@ -2003,6 +2006,8 @@ class SearchService:
                         resolved,
                         target_offset,
                         target_limit,
+                        allowed_subscription_ids=allowed_subscription_ids,
+                        allowed_repository_ids=allowed_repository_ids,
                     )
         elif not text and targets == ("works",) and self._works_db_compatible(parsed):
             groups["works"], execution = await self._hedged_structured_works_search(
@@ -2016,13 +2021,30 @@ class SearchService:
         elif not text and not has_filters and len(targets) == 1:
             target = targets[0]
             if target in ("creators", "subscriptions", "tags", "repositories"):
-                groups[target] = await self._search_reference_db(target, offset, limit)
+                groups[target] = await self._search_reference_db(
+                    target,
+                    offset,
+                    limit,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                )
 
         meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
         if cursor and meili_targets:
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
-            groups.update(await self._search_meili(parsed, meili_targets, resolved, offset, limit, force_sfw))
+            groups.update(
+                await self._search_meili(
+                    parsed,
+                    meili_targets,
+                    resolved,
+                    offset,
+                    limit,
+                    force_sfw,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                )
+            )
             execution.update({
                 "winner": "meilisearch",
                 "consistency": "fulltext_index_required",
@@ -2035,6 +2057,7 @@ class SearchService:
                 offset,
                 limit,
                 permissions=permission_set,
+                user_id=user_id,
             )
         if "scheduler" in targets:
             groups["scheduler"] = await self._search_scheduler(parsed, resolved, offset, limit)
@@ -2085,6 +2108,9 @@ class SearchService:
         offset: int,
         limit: int,
         force_sfw: bool,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict[str, dict]:
         text = _free_text(query)
         timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
@@ -2107,6 +2133,34 @@ class SearchService:
                 resolved,
                 force_sfw=force_sfw,
             )
+            if target == "subscriptions" and allowed_subscription_ids is not None:
+                if allowed_subscription_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(subscription_id))}"
+                        for subscription_id in sorted(
+                            allowed_subscription_ids, key=str
+                        )
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_subscription__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
+            if target == "repositories" and allowed_repository_ids is not None:
+                if allowed_repository_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(repository_id))}"
+                        for repository_id in sorted(allowed_repository_ids, key=str)
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_repository__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
             sort = _meili_sort(query, target)
             if filter_expression:
                 search_kwargs["filter"] = filter_expression
@@ -2215,6 +2269,7 @@ class SearchService:
         visibility: str = "all",
         *,
         permissions: set[str] | frozenset[str],
+        user_id: int | None = None,
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
         excluded_admin_operation_types = (
@@ -2226,6 +2281,8 @@ class SearchService:
                 TaskRun.operation_type.is_(None),
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
+        if user_id is not None:
+            conditions.append(task_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2291,6 +2348,7 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         permissions: set[str] | frozenset[str] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2301,6 +2359,7 @@ class SearchService:
             limit,
             visibility=visibility,
             permissions=permissions if permissions is not None else frozenset(),
+            user_id=user_id,
         )
 
     async def search_download_jobs(
@@ -2310,6 +2369,8 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
+        subscription_id: UUID | str | None = None,
     ) -> list[DownloadJob]:
         """Return download-domain rows using the canonical task search AST.
 
@@ -2320,6 +2381,30 @@ class SearchService:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if subscription_id is not None:
+            conditions.append(DownloadJob.subscription_id == UUID(str(subscription_id)))
+        if user_id is not None:
+            from app.models.remote_discovery import RemoteAccount, UserSubscription
+
+            owned_memberships = select(UserSubscription.id).where(
+                UserSubscription.user_id == user_id
+            )
+            owned_accounts = select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
+            conditions.extend([
+                DownloadJob.subscription_id.in_(
+                    select(UserSubscription.subscription_id).where(
+                        UserSubscription.user_id == user_id
+                    )
+                ),
+                or_(
+                    DownloadJob.triggering_user_subscription_id.is_(None),
+                    DownloadJob.triggering_user_subscription_id.in_(owned_memberships),
+                ),
+                or_(
+                    DownloadJob.triggering_remote_account_id.is_(None),
+                    DownloadJob.triggering_remote_account_id.in_(owned_accounts),
+                ),
+            ])
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -3567,7 +3652,13 @@ class SearchService:
             await asyncio.to_thread(cache_release_lock, INDEX_WRITE_LOCK, lease)
 
     async def _search_reference_db(
-        self, target: str, offset: int, limit: int
+        self,
+        target: str,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         """Direct DB list query for real-time listing — no index dependency.
 
@@ -3578,7 +3669,16 @@ class SearchService:
         if target == "creators":
             return await self._search_creators_db(offset, limit)
         if target == "subscriptions":
-            return await self._search_subscriptions_db(offset, limit)
+            return await self._search_subscriptions_db(
+                offset,
+                limit,
+                allowed_subscription_ids=allowed_subscription_ids,
+            )
+        if target == "repositories" and allowed_repository_ids is not None:
+            # Empty reference searches do not currently expose repositories;
+            # retain that contract while keeping the ownership argument
+            # explicit for future DB-backed listing support.
+            return {"total": 0, "items": []}
         if target == "works":
             return await self._search_works_db(offset, limit)
         # Tags and repositories already have their own DB endpoints;
@@ -3592,6 +3692,9 @@ class SearchService:
         resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         """Execute source-identity reference searches against committed rows."""
 
@@ -3601,6 +3704,10 @@ class SearchService:
             "subscriptions": Subscription,
         }[target]
         conditions: list[Any] = []
+        if target == "subscriptions" and allowed_subscription_ids is not None:
+            conditions.append(Subscription.id.in_(allowed_subscription_ids))
+        if target == "repositories" and allowed_repository_ids is not None:
+            conditions.append(SubscriptionSource.id.in_(allowed_repository_ids))
 
         for (key, negated), tokens in _grouped_qualifiers(query, target).items():
             expressions: list[Any] = []
@@ -3867,19 +3974,34 @@ class SearchService:
 
         return {"total": total, "items": items}
 
-    async def _search_subscriptions_db(self, offset: int, limit: int) -> dict:
+    async def _search_subscriptions_db(
+        self,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+    ) -> dict:
         # Total count
-        total = (await self.db.execute(
-            select(func.count()).select_from(Subscription)
-        )).scalar() or 0
+        ownership = (
+            Subscription.id.in_(allowed_subscription_ids)
+            if allowed_subscription_ids is not None
+            else None
+        )
+        count_stmt = select(func.count()).select_from(Subscription)
+        if ownership is not None:
+            count_stmt = count_stmt.where(ownership)
+        total = (await self.db.execute(count_stmt)).scalar() or 0
 
         # Paginated rows
-        rows = (await self.db.execute(
+        rows_stmt = (
             select(Subscription, Creator)
             .join(Creator, Creator.id == Subscription.creator_id)
             .order_by(Subscription.updated_at.desc())
             .offset(offset).limit(limit)
-        )).all()
+        )
+        if ownership is not None:
+            rows_stmt = rows_stmt.where(ownership)
+        rows = (await self.db.execute(rows_stmt)).all()
 
         if not rows:
             return {"total": total, "items": []}

@@ -101,6 +101,7 @@ async def list_tasks(
             offset=offset,
             limit=limit,
             excluded_admin_operation_types=excluded_operation_types,
+            user_id=user.id,
         )
         return {"total": total, "items": [task_payload(task) for task in tasks]}
     canonical = q or ""
@@ -122,6 +123,7 @@ async def list_tasks(
             limit=limit,
             visibility=visibility,
             permissions=admin_operation_permissions_for_user(user),
+            user_id=user.id,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
@@ -184,6 +186,8 @@ async def get_task(
     svc = TaskService(db)
     task = await svc.get(task_id)
     if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         require_admin_operation_access(user, task.operation_type)

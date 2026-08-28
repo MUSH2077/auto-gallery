@@ -119,6 +119,8 @@ async def enqueue_subscription_source_sync(
     parent_task_id: UUID | None = None,
     force_reason: str | None = None,
     scheduler_config: dict | None = None,
+    triggering_user_subscription_id: UUID | None = None,
+    triggering_remote_account_id: UUID | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
@@ -217,6 +219,8 @@ async def enqueue_subscription_source_sync(
             source=ss.source,
             source_url=normalized_url,
             status="enqueued",
+            triggering_user_subscription_id=triggering_user_subscription_id,
+            triggering_remote_account_id=triggering_remote_account_id,
         )
         apply_download_progress(
             job,

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
@@ -23,6 +23,70 @@ from app.models.task_run import TaskEvent, TaskRun
 NONTERMINAL_STATUSES = {"enqueued", "running", "paused", "recovering"}
 TERMINAL_STATUSES = {"complete", "failed", "cancelled", "stale"}
 _UNSET = object()
+
+
+def task_visibility_condition(user_id: int):
+    """SQL ownership predicate, including provable legacy job ownership."""
+
+    from app.models.remote_discovery import RemoteAccount, UserSubscription
+
+    owned_memberships = select(UserSubscription.id).where(
+        UserSubscription.user_id == user_id
+    )
+    owned_accounts = select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
+    has_trigger = or_(
+        TaskRun.triggering_user_subscription_id.is_not(None),
+        TaskRun.triggering_remote_account_id.is_not(None),
+    )
+    owned_trigger = and_(
+        has_trigger,
+        or_(
+            TaskRun.triggering_user_subscription_id.is_(None),
+            TaskRun.triggering_user_subscription_id.in_(owned_memberships),
+        ),
+        or_(
+            TaskRun.triggering_remote_account_id.is_(None),
+            TaskRun.triggering_remote_account_id.in_(owned_accounts),
+        ),
+    )
+    legacy_download = and_(
+        ~has_trigger,
+        TaskRun.subject_type == "download_job",
+        exists(
+            select(1)
+            .select_from(DownloadJob)
+            .join(
+                UserSubscription,
+                and_(
+                    UserSubscription.subscription_id == DownloadJob.subscription_id,
+                    UserSubscription.user_id == user_id,
+                ),
+            )
+            .where(DownloadJob.id == TaskRun.subject_id)
+        ),
+    )
+    legacy_import = and_(
+        ~has_trigger,
+        TaskRun.subject_type == "import_job",
+        exists(
+            select(1)
+            .select_from(ImportJob)
+            .join(DownloadJob, DownloadJob.id == ImportJob.download_job_id)
+            .join(
+                UserSubscription,
+                and_(
+                    UserSubscription.subscription_id == DownloadJob.subscription_id,
+                    UserSubscription.user_id == user_id,
+                ),
+            )
+            .where(ImportJob.id == TaskRun.subject_id)
+        ),
+    )
+    public_operation = and_(
+        ~has_trigger,
+        TaskRun.kind.not_in({"download", "import", "discovery"}),
+    )
+    return or_(owned_trigger, legacy_download, legacy_import, public_operation)
 
 
 def normalize_task_status(status: str | None) -> str:
@@ -94,10 +158,24 @@ class TaskService:
         resource_reason: str | None = None,
         reason_code: str | None = None,
         task_id: UUID | None = None,
+        triggering_user_subscription_id: UUID | None = None,
+        triggering_remote_account_id: UUID | None = None,
     ) -> TaskRun:
         if subject_type and subject_id:
             existing = await self.get_by_subject(subject_type, subject_id)
             if existing:
+                if (
+                    triggering_user_subscription_id is not None
+                    and existing.triggering_user_subscription_id is None
+                ):
+                    existing.triggering_user_subscription_id = (
+                        triggering_user_subscription_id
+                    )
+                if (
+                    triggering_remote_account_id is not None
+                    and existing.triggering_remote_account_id is None
+                ):
+                    existing.triggering_remote_account_id = triggering_remote_account_id
                 await self.update_task(
                     existing,
                     status=status,
@@ -127,6 +205,8 @@ class TaskService:
             subject_type=subject_type,
             subject_id=subject_id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=triggering_user_subscription_id,
+            triggering_remote_account_id=triggering_remote_account_id,
             status=normalized,
             resource_state=(
                 resource_state
@@ -369,6 +449,8 @@ class TaskService:
             subject_type="download_job",
             subject_id=job.id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=job.triggering_user_subscription_id,
+            triggering_remote_account_id=job.triggering_remote_account_id,
             status=job.status,
             queue_name="downloads",
             title=f"Download {job.source}",
@@ -386,6 +468,7 @@ class TaskService:
 
     async def ensure_import_task(self, job: ImportJob, *, parent_task_id: UUID | None = None) -> TaskRun:
         progress = job.progress_data if isinstance(job.progress_data, dict) else None
+        download_job = await self.db.get(DownloadJob, job.download_job_id)
         if not parent_task_id:
             parent = await self.get_by_subject("download_job", job.download_job_id)
             parent_task_id = parent.id if parent else None
@@ -395,6 +478,12 @@ class TaskService:
             subject_type="import_job",
             subject_id=job.id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=(
+                download_job.triggering_user_subscription_id if download_job else None
+            ),
+            triggering_remote_account_id=(
+                download_job.triggering_remote_account_id if download_job else None
+            ),
             status=job.status,
             queue_name="imports",
             title="Import metadata",
@@ -419,6 +508,7 @@ class TaskService:
         offset: int = 0,
         limit: int = 50,
         excluded_admin_operation_types: frozenset[str] = frozenset(),
+        user_id: int | None = None,
     ) -> tuple[int, list[TaskRun]]:
         stmt = select(TaskRun)
         count_stmt = select(func.count(TaskRun.id))
@@ -446,12 +536,25 @@ class TaskService:
                 TaskRun.operation_type.is_(None),
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
+        if user_id is not None:
+            filters.append(task_visibility_condition(user_id))
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)
         total = (await self.db.execute(count_stmt)).scalar_one()
         result = await self.db.execute(stmt.order_by(TaskRun.created_at.desc()).offset(offset).limit(limit))
         return int(total), list(result.scalars().all())
+
+    async def is_visible_to_user(self, task: TaskRun, user_id: int) -> bool:
+        visible = (
+            await self.db.execute(
+                select(TaskRun.id).where(
+                    TaskRun.id == task.id,
+                    task_visibility_condition(user_id),
+                )
+            )
+        ).scalar_one_or_none()
+        return visible is not None
 
     async def task_events(self, task_id: UUID) -> list[TaskEvent]:
         result = await self.db.execute(
@@ -470,6 +573,16 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
         "subject_type": task.subject_type,
         "subject_id": str(task.subject_id) if task.subject_id else None,
         "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+        "triggering_user_subscription_id": (
+            str(task.triggering_user_subscription_id)
+            if task.triggering_user_subscription_id
+            else None
+        ),
+        "triggering_remote_account_id": (
+            str(task.triggering_remote_account_id)
+            if task.triggering_remote_account_id
+            else None
+        ),
         "status": task.status,
         "resource_state": task.resource_state,
         "resource_reason": task.resource_reason,

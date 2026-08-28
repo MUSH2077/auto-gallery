@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -964,9 +964,12 @@ class TaskEngine:
         else:
             raise TaskEngineError(f"Invalid task_type '{task_type}'.")
 
-        if filters.get("ids"):
+        if "ids" in filters:
             ids = [UUID(i) for i in filters["ids"]]
-            stmt = stmt.where(model.id.in_(ids))
+            # An explicitly empty ownership intersection must match nothing;
+            # treating it as an absent filter would operate on every user's
+            # task.
+            stmt = stmt.where(model.id.in_(ids) if ids else false())
         if filters.get("status"):
             stmt = stmt.where(model.status == filters["status"])
         if filters.get("source") and task_type == "download":

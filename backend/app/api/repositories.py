@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequirePermission
@@ -18,6 +18,7 @@ from app.models.curation import WorkCurationState
 from app.models.work_source import WorkSource
 from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
+from app.models.remote_discovery import RemoteAccount, UserSubscription, UserSubscriptionSource
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
 from app.schemas.repository import RepositoryDetailResponse
@@ -31,6 +32,7 @@ from app.services.curation import CurationService
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.repository_identity import resolve_repository_source_creator_ids
 from app.services.sync_outcome import download_job_outcome
+from app.services.subscription_membership import SubscriptionMembershipService
 
 router = APIRouter(dependencies=[RequirePermission("library")])
 mutation_router = APIRouter()
@@ -47,10 +49,22 @@ async def batch_repository_deletion_preview(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import HierarchicalDeletionService
-
-    scope = await HierarchicalDeletionService(db).scope("repository", data.ids)
-    return scope.preview_payload(is_admin=user.is_admin)
+    owned = list(
+        (
+            await db.execute(
+                select(UserSubscriptionSource.subscription_source_id).where(
+                    UserSubscriptionSource.user_id == user.id,
+                    UserSubscriptionSource.subscription_source_id.in_(data.ids),
+                )
+            )
+        ).scalars()
+    )
+    return DeletionPreviewResponse(
+        entity_type="repository",
+        entity_ids=owned,
+        mode="soft",
+        can_delete_files=False,
+    )
 
 
 @mutation_router.post(
@@ -65,26 +79,38 @@ async def batch_delete_repositories(
     db: AsyncSession = Depends(get_db),
 ):
     from app.services.cache import invalidate_creator_subscription_caches
-    from app.services.hierarchical_deletion import (
-        HierarchicalDeletionService,
-        enqueue_permanent_deletion,
-    )
 
-    if data.delete_files and not user.is_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Administrator access required to delete files",
+    if data.delete_files:
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator access required to delete files",
+            )
+        raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
+    rows = (
+        await db.execute(
+            select(
+                UserSubscriptionSource.subscription_id,
+                UserSubscriptionSource.subscription_source_id,
+            ).where(
+                UserSubscriptionSource.user_id == user.id,
+                UserSubscriptionSource.subscription_source_id.in_(data.ids),
+            )
         )
-    service = HierarchicalDeletionService(db)
-    scope = await service.scope("repository", data.ids)
-    service.ensure_no_active_jobs(scope)
-    if user.is_admin:
-        response.status_code = 202
-        result = await enqueue_permanent_deletion(
-            "repository", data.ids, delete_files=data.delete_files
-        )
-    else:
-        result = await service.soft_delete(scope)
+    ).all()
+    service = SubscriptionMembershipService(db, user.id)
+    removed = []
+    for subscription_id, source_id in rows:
+        await service.remove_source(subscription_id, source_id)
+        removed.append(source_id)
+    await db.commit()
+    result = DeletionResultResponse(
+        status="soft_deleted",
+        mode="soft",
+        entity_type="repository",
+        entity_ids=removed,
+        delete_files=False,
+    )
     invalidate_creator_subscription_caches(include_works=True)
     return result
 
@@ -184,7 +210,14 @@ def _iso(value) -> str | None:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _repository_payload(ss: SubscriptionSource, provider: dict, latest_job_payload: dict | None) -> dict:
+def _repository_payload(
+    ss: SubscriptionSource,
+    provider: dict,
+    latest_job_payload: dict | None,
+    *,
+    binding: UserSubscriptionSource | None = None,
+) -> dict:
+    policy = binding or ss
     return {
         "id": str(ss.id),
         "subscription_id": str(ss.subscription_id),
@@ -192,21 +225,27 @@ def _repository_payload(ss: SubscriptionSource, provider: dict, latest_job_paylo
         "source_display_name": provider["display_name"],
         "source_creator_id": ss.source_creator_id,
         "source_url": ss.source_url,
-        "is_enabled": ss.is_enabled,
-        "auth_healthy": ss.auth_healthy,
-        "auth_status": ss.auth_status,
-        "auth_error_reason": ss.auth_error_reason,
-        "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
-        "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
-        "last_synced_at": ss.last_synced_at.isoformat() if ss.last_synced_at else None,
-        "last_attempted_at": ss.last_attempted_at.isoformat() if ss.last_attempted_at else None,
+        "is_enabled": policy.is_enabled,
+        "auth_healthy": policy.auth_healthy,
+        "auth_status": policy.auth_status,
+        "auth_error_reason": policy.auth_error_reason,
+        "last_auth_checked_at": (
+            policy.last_auth_checked_at.isoformat() if policy.last_auth_checked_at else None
+        ),
+        "last_successful_auth": (
+            policy.last_successful_auth.isoformat() if policy.last_successful_auth else None
+        ),
+        "last_synced_at": policy.last_synced_at.isoformat() if policy.last_synced_at else None,
+        "last_attempted_at": (
+            policy.last_attempted_at.isoformat() if policy.last_attempted_at else None
+        ),
         "can_download": bool(provider["capabilities"]["can_download"]),
         "supports_gallerydl": bool(provider["capabilities"]["supports_gallerydl"]),
         "url_valid": bool(provider["url_valid"]),
         "is_repository": bool(provider["capabilities"]["can_download"] and provider["url_valid"] and ss.source_url),
         "latest_job": latest_job_payload,
         "created_at": ss.created_at.isoformat() if ss.created_at else None,
-        "updated_at": ss.updated_at.isoformat() if ss.updated_at else None,
+        "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
     }
 
 
@@ -223,16 +262,42 @@ async def _get_source_context(db: AsyncSession, source_id: UUID):
     return row
 
 
+async def _get_member_source_context(
+    db: AsyncSession,
+    source_id: UUID,
+    user_id: int,
+) -> tuple[UserSubscription, UserSubscriptionSource]:
+    row = (
+        await db.execute(
+            select(UserSubscription, UserSubscriptionSource)
+            .join(
+                UserSubscriptionSource,
+                UserSubscriptionSource.user_subscription_id == UserSubscription.id,
+            )
+            .where(
+                UserSubscription.user_id == user_id,
+                UserSubscriptionSource.subscription_source_id == source_id,
+            )
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return row
+
+
 @mutation_router.get("/{source_id}/deletion-preview", response_model=DeletionPreviewResponse)
 async def repository_deletion_preview(
     source_id: UUID,
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import HierarchicalDeletionService
-
-    scope = await HierarchicalDeletionService(db).scope("repository", [source_id])
-    return scope.preview_payload(is_admin=user.is_admin)
+    await _get_member_source_context(db, source_id, user.id)
+    return DeletionPreviewResponse(
+        entity_type="repository",
+        entity_ids=[source_id],
+        mode="soft",
+        can_delete_files=False,
+    )
 
 
 @mutation_router.delete(
@@ -247,37 +312,63 @@ async def delete_repository(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import (
-        HierarchicalDeletionService,
-        enqueue_permanent_deletion,
+    if delete_files:
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator access required to delete files",
+            )
+        raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
+    member, _binding = await _get_member_source_context(db, source_id, user.id)
+    await SubscriptionMembershipService(db, user.id).remove_source(
+        member.subscription_id, source_id
     )
-
-    if delete_files and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
-    svc = HierarchicalDeletionService(db)
-    scope = await svc.scope("repository", [source_id])
-    svc.ensure_no_active_jobs(scope)
-    if user.is_admin:
-        response.status_code = 202
-        result = await enqueue_permanent_deletion(
-            "repository", [source_id], delete_files=delete_files
-        )
-    else:
-        result = await svc.soft_delete(scope)
-    return result
+    await db.commit()
+    return DeletionResultResponse(
+        status="soft_deleted",
+        mode="soft",
+        entity_type="repository",
+        entity_ids=[source_id],
+        delete_files=False,
+    )
 
 
 @router.get("/{source_id}", response_model=RepositoryDetailResponse, response_model_exclude_unset=True)
-async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_repository(
+    source_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("library"),
+):
     ss, sub, creator = await _get_source_context(db, source_id)
+    user_id = getattr(user, "id", None)
+    member = None
+    binding = None
+    if isinstance(user_id, int):
+        member, binding = await _get_member_source_context(db, source_id, user_id)
     provider = _provider_payload(ss)
 
+    job_filters = [
+        DownloadJob.subscription_source_id == ss.id,
+        DownloadJob.status.in_(RUNNING_STATUSES),
+    ]
+    if member is not None:
+        job_filters.extend(
+            [
+                or_(
+                    DownloadJob.triggering_user_subscription_id.is_(None),
+                    DownloadJob.triggering_user_subscription_id == member.id,
+                ),
+                or_(
+                    DownloadJob.triggering_remote_account_id.is_(None),
+                    DownloadJob.triggering_remote_account_id.in_(
+                        select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
+                    ),
+                ),
+            ]
+        )
     jobs_result = await db.execute(
         select(DownloadJob)
-        .where(
-            DownloadJob.subscription_source_id == ss.id,
-            DownloadJob.status.in_(RUNNING_STATUSES),
-        )
+        .where(*job_filters)
         .order_by(DownloadJob.created_at.desc())
         .limit(10)
     )
@@ -363,7 +454,9 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
             })
 
     return {
-        "repository": _repository_payload(ss, provider, latest_job_payload),
+        "repository": _repository_payload(
+            ss, provider, latest_job_payload, binding=binding
+        ),
         "creator": {
             "id": str(creator.id),
             "name": creator.name,
@@ -373,13 +466,13 @@ async def get_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
         },
         "subscription": {
             "id": str(sub.id),
-            "name": sub.name,
-            "is_active": sub.is_active,
-            "sync_enabled": sub.sync_enabled,
-            "sync_interval_hours": sub.sync_interval_hours,
-            "schedule_mode": sub.schedule_mode,
-            "schedule_rule": sub.schedule_rule,
-            "scheduled_times": sub.scheduled_times,
+            "name": (member or sub).name,
+            "is_active": (member or sub).is_active,
+            "sync_enabled": (member or sub).sync_enabled,
+            "sync_interval_hours": (member or sub).sync_interval_hours,
+            "schedule_mode": (member or sub).schedule_mode,
+            "schedule_rule": (member or sub).schedule_rule,
+            "scheduled_times": (member or sub).scheduled_times,
             "last_synced_at": sub.last_synced_at.isoformat() if sub.last_synced_at else None,
         },
         "provider": provider,
@@ -399,8 +492,12 @@ async def get_repository_tags(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    user=RequirePermission("library"),
 ):
     ss, _, creator = await _get_source_context(db, source_id)
+    user_id = getattr(user, "id", None)
+    if isinstance(user_id, int):
+        await _get_member_source_context(db, source_id, user_id)
     source_creator_ids = await resolve_repository_source_creator_ids(db, ss, creator.id)
     if not source_creator_ids:
         return {"items": [], "total": 0}
@@ -451,13 +548,29 @@ async def get_repository_tags(
 
 
 @router.post("/{source_id}/sync-now")
-async def sync_repository(source_id: UUID, db: AsyncSession = Depends(get_db)):
+async def sync_repository(
+    source_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("library"),
+):
     await _get_source_context(db, source_id)
+    user_id = getattr(user, "id", None)
+    member = None
+    binding = None
+    if isinstance(user_id, int):
+        member, binding = await _get_member_source_context(db, source_id, user_id)
+    ownership = {}
+    if member is not None:
+        ownership = {
+            "triggering_user_subscription_id": member.id,
+            "triggering_remote_account_id": binding.remote_account_id,
+        }
     result = await enqueue_subscription_source_sync(
         db,
         source_id,
         trigger="manual_repository",
         force=False,
+        **ownership,
     )
     reason = result.get("reason") or {}
     code = result.get("skip_reason") or reason.get("code")
@@ -493,7 +606,11 @@ async def get_repository_curation_graph(
     trigger: str | None = None,
     include_baseline: bool = True,
     db: AsyncSession = Depends(get_db),
+    user=RequirePermission("library"),
 ):
     await _get_source_context(db, source_id)
+    user_id = getattr(user, "id", None)
+    if isinstance(user_id, int):
+        await _get_member_source_context(db, source_id, user_id)
     svc = CurationService(db)
     return await svc.repository_graph(source_id, offset=offset, limit=limit, trigger=trigger, include_baseline=include_baseline)

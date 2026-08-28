@@ -18,6 +18,7 @@ class SubscriptionSourceUpdate(BaseModel):
     source_creator_id: str | None = None
     source_url: str | None = None
     is_enabled: bool | None = None
+    remote_account_id: UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -25,6 +26,8 @@ class SubscriptionSourceUpdate(BaseModel):
 class SubscriptionSourceRead(BaseModel):
     id: UUID
     subscription_id: UUID
+    membership_source_id: UUID | None = None
+    remote_account_id: UUID | None = None
     source: str
     source_creator_id: str | None = None
     source_url: str | None = None
