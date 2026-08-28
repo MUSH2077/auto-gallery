@@ -301,6 +301,9 @@ async def enqueue_subscription_source_sync(
         if ss is None:
             return skip_result(subscription_source_id, "source_not_found")
 
+        if scheduler_config is None:
+            scheduler_config = await get_scheduler_config(db)
+
         selection = await select_eligible_membership_source(
             db,
             ss,
@@ -308,6 +311,11 @@ async def enqueue_subscription_source_sync(
             preferred_membership_id=triggering_user_subscription_id,
             preferred_account_id=triggering_remote_account_id,
             require_due=trigger == "scheduler" and not force,
+            system_schedule_mode=(
+                scheduler_config.get("schedule_mode", "interval")
+                if trigger == "scheduler" and not force
+                else None
+            ),
         )
         if selection is None:
             return skip_result(ss.id, "no_eligible_member_source")
@@ -365,15 +373,13 @@ async def enqueue_subscription_source_sync(
             source_url=normalized_url,
         )
         append_manifest_event(job, "created", trigger=trigger)
-        if scheduler_config is None:
-            scheduler_config = await get_scheduler_config(db)
         from app.jobs.subscription_sync import next_subscription_check_at
 
         next_sync_at = next_subscription_check_at(
             selection.membership,
             scheduler_config,
             selection.binding.last_synced_at,
-            selection.binding.last_attempted_at,
+            now,
             now,
         )
         # Flush caller-owned state before opening the SAVEPOINT. SQLAlchemy

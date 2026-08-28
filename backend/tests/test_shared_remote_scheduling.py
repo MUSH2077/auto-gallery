@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 import json
 import os
+from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -304,6 +307,87 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_membership_cache_keeps_canonical_schedule_constraint_consistent():
+    """Canonical schedule fields remain a valid cache as private demand toggles."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                _source,
+                members,
+                _accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for member in members:
+                member.sync_enabled = False
+                member.schedule_mode = "manual"
+
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.flush()
+
+            assert subscription.sync_enabled is False
+            assert subscription.schedule_mode == "manual"
+
+            members[1].sync_enabled = True
+            members[1].schedule_mode = "interval"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.flush()
+
+            assert subscription.sync_enabled is True
+            assert subscription.schedule_mode != "manual"
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_inherited_manual_members_are_not_eligible_for_automatic_selection():
+    """A system-manual inherited policy cannot trigger an automatic download."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import select_eligible_membership_source
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                _subscription,
+                source,
+                members,
+                _accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for member in members:
+                member.schedule_mode = None
+            await db.flush()
+
+            selected = await select_eligible_membership_source(
+                db,
+                source,
+                now=now,
+                system_schedule_mode="manual",
+            )
+
+            assert selected is None
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_durable_secret(
     tmp_path,
 ):
@@ -393,7 +477,10 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
 
     from app.database import async_session, engine
     from app.services import subscription_enqueue
-    from app.services.subscription_membership import recompute_subscription_membership_cache
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
 
     mark_failure = getattr(subscription_enqueue, "mark_source_auth_failure", None)
     assert mark_failure is not None, "auth failures must be recorded on private demand"
@@ -429,8 +516,196 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
             assert source.is_enabled is True
             assert source.auth_healthy is True
             assert source.next_sync_at == dues[1]
+            takeover = await select_eligible_membership_source(db, source, now=now)
+            assert takeover is not None
+            assert takeover.membership.id == members[1].id
+            assert takeover.account is not None
+            assert takeover.account.id == accounts[1].id
             await db.rollback()
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_failure(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Subprocess output cannot copy credential canaries into durable/Redis/log state."""
+
+    from sqlalchemy import select
+
+    from app.database import async_session, engine
+    from app.jobs import download as download_job
+    from app.models import DownloadJob, TaskRun
+    from app.services import job_progress, proxy
+    from app.services.remote_credentials import CredentialVault
+
+    canary = "task4-worker-output-secret-canary"
+    vault = CredentialVault(base64.urlsafe_b64encode(b"w" * 32).decode())
+    redis_payloads: list[str] = []
+    materialized_paths: list[str] = []
+
+    class FakeProcess:
+        pid = 987654
+        returncode = 1
+
+        def __init__(self, command, *_args, **_kwargs):
+            config_index = max(
+                index
+                for index, item in enumerate(command)
+                if item == "--config"
+            )
+            personal_path = command[config_index + 1]
+            materialized_paths.append(personal_path)
+            assert os.stat(personal_path).st_mode & 0o777 == 0o600
+            assert canary in Path(personal_path).read_text(encoding="utf-8")
+            self.stdout = StringIO("")
+            self.stderr = StringIO(f"401 Unauthorized {canary}\n")
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, _timeout=None):
+            return self.returncode
+
+    class FakeControl:
+        command = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    async def defaults():
+        return {
+            "timeout_seconds": 1,
+            "stall_timeout_seconds": 1,
+            "max_retries": 3,
+            "max_posts": 1,
+        }
+
+    async def no_proxy():
+        return {"enabled": False}
+
+    async def no_artifacts(_job_id):
+        return 0, 0, []
+
+    raw_runner = download_job.run_download_job
+    while hasattr(raw_runner, "__wrapped__"):
+        raw_runner = raw_runner.__wrapped__
+    monkeypatch.setattr(download_job, "_read_download_defaults", defaults)
+    monkeypatch.setattr(download_job, "build_effective_gallerydl_config", lambda *_args: {})
+    monkeypatch.setattr(download_job, "staging_enabled", lambda: False)
+    monkeypatch.setattr(download_job, "ControlListener", FakeControl)
+    monkeypatch.setattr(download_job, "HeartbeatPublisher", FakeControl)
+    monkeypatch.setattr(download_job.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(download_job, "_process_group_exists", lambda _pid: False)
+    monkeypatch.setattr(download_job, "_artifact_counts", no_artifacts)
+    monkeypatch.setattr(proxy, "_load_proxy_config", no_proxy)
+    monkeypatch.setattr(
+        job_progress.ProgressTracker,
+        "set",
+        staticmethod(lambda *_args: redis_payloads.append(str(_args))),
+    )
+    monkeypatch.setattr(
+        job_progress.TaskEventPublisher,
+        "publish_progress",
+        staticmethod(lambda *_args: redis_payloads.append(str(_args))),
+    )
+    monkeypatch.setattr(
+        download_job,
+        "get_redis",
+        lambda: SimpleNamespace(
+            hset=lambda *_args, **_kwargs: None,
+            expire=lambda *_args, **_kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(download_job.settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr(
+        download_job.settings,
+        "gallerydl_config_root",
+        str(tmp_path / "gallerydl"),
+    )
+    monkeypatch.setattr(
+        download_job.settings,
+        "remote_credential_key",
+        base64.urlsafe_b64encode(b"w" * 32).decode(),
+    )
+    (tmp_path / "downloads").mkdir()
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[1]
+            account.credential_ciphertext = vault.encrypt(
+                {"refresh_token": canary},
+                user_id=account.user_id,
+                source=account.source,
+                account_id=account.id,
+            )
+            job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=members[1].id,
+                triggering_remote_account_id=account.id,
+                source="pixiv",
+                source_url=source.source_url,
+                status="enqueued",
+            )
+            db.add(job)
+            await db.commit()
+            job_id = job.id
+
+        await raw_runner(str(job_id))
+
+        assert materialized_paths
+        assert all(not os.path.exists(path) for path in materialized_paths)
+        async with async_session() as db:
+            stored = await db.get(DownloadJob, job_id)
+            task = (
+                await db.execute(
+                    select(TaskRun).where(
+                        TaskRun.subject_type == "download_job",
+                        TaskRun.subject_id == job_id,
+                    )
+                )
+            ).scalar_one()
+            durable = json.dumps(
+                {
+                    "error": stored.error_log,
+                    "manifest": stored.manifest,
+                    "progress": stored.progress_data,
+                    "task_error": task.error_log,
+                    "task_meta": task.meta,
+                    "task_progress": task.progress_data,
+                },
+                default=str,
+            )
+            assert stored.status == "failed"
+            assert stored.gallerydl_config_path is None
+            assert canary not in durable
+            assert not any(canary in payload for payload in redis_payloads)
+            assert canary not in caplog.text
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
         await engine.dispose()
 
 
@@ -519,6 +794,102 @@ async def test_scheduler_enqueue_selects_earliest_healthy_member_and_records_onl
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_concurrent_shared_source_enqueues_create_one_canonical_job(monkeypatch):
+    """The canonical PostgreSQL source lock serializes competing user demand."""
+
+    from sqlalchemy import func, select
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def publish(db, *_args, **_kwargs):
+        # Match the real publisher's durable transaction boundary and release
+        # the canonical row lock so the competing session can observe the job.
+        await db.commit()
+        return SimpleNamespace(id="rq-test")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    now = datetime.now(timezone.utc)
+    source_id = None
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+            source_id = source.id
+
+        async def enqueue_once():
+            async with async_session() as db:
+                return await subscription_enqueue.enqueue_subscription_source_sync(
+                    db,
+                    source_id,
+                    trigger="scheduler",
+                    scheduler_config={
+                        "schedule_mode": "interval",
+                        "default_sync_interval_hours": 6,
+                        "scheduler_scan_interval_minutes": 5,
+                        "timezone": "UTC",
+                    },
+                )
+
+        results = await asyncio.gather(enqueue_once(), enqueue_once())
+
+        assert sorted(result["status"] for result in results) == ["enqueued", "skipped"]
+        assert next(result for result in results if result["status"] == "skipped")[
+            "skip_reason"
+        ] == "already_running"
+        async with async_session() as db:
+            count = (
+                await db.execute(
+                    select(func.count(DownloadJob.id)).where(
+                        DownloadJob.subscription_source_id == source_id
+                    )
+                )
+            ).scalar_one()
+            assert count == 1
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_shared_download_success_replans_every_member_with_its_own_schedule():
     """One shared success must move each private due time by its own interval."""
 
@@ -598,22 +969,27 @@ async def test_due_discovery_admission_claims_once_and_routes_discovery_queue():
             )
             db.add(account)
             await db.commit()
+            account_id = account.id
 
-            first = await admit_due(db, now=now, publisher=publish)
-            second = await admit_due(db, now=now, publisher=publish)
+        async def admit_once():
+            async with async_session() as db:
+                return await admit_due(db, now=now, publisher=publish)
 
+        first, second = await asyncio.gather(admit_once(), admit_once())
+        async with async_session() as db:
+            third = await admit_due(db, now=now, publisher=publish)
             target_tasks = list(
                 (
                     await db.execute(
                         select(TaskRun).where(
-                            TaskRun.triggering_remote_account_id == account.id,
+                            TaskRun.triggering_remote_account_id == account_id,
                             TaskRun.operation_type == "remote-discovery-scan",
                         )
                     )
                 ).scalars()
             )
-            assert first["created"] >= 1
-            assert second["created"] == 0
+            assert first["created"] + second["created"] == 1
+            assert third["created"] == 0
             assert len(target_tasks) == 1
             assert (str(target_tasks[0].id), "discovery") in published
     finally:

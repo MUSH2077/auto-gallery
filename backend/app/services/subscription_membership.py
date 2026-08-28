@@ -78,6 +78,7 @@ async def select_eligible_membership_source(
     preferred_membership_id: UUID | None = None,
     preferred_account_id: UUID | None = None,
     require_due: bool = True,
+    system_schedule_mode: str | None = None,
 ) -> EligibleMembershipSource | None:
     """Lock and return the earliest usable private demand for a shared source."""
 
@@ -102,6 +103,13 @@ async def select_eligible_membership_source(
         conditions.append(
             UserSubscriptionSource.next_sync_at.is_(None)
             | (UserSubscriptionSource.next_sync_at <= now)
+        )
+    if system_schedule_mode == "manual":
+        conditions.extend(
+            [
+                UserSubscription.schedule_mode.is_not(None),
+                UserSubscription.schedule_mode != "manual",
+            ]
         )
     if preferred_membership_id is not None:
         conditions.append(UserSubscription.id == preferred_membership_id)
@@ -161,11 +169,21 @@ async def recompute_subscription_membership_cache(
         )
     ).scalars().all()
     subscription.is_active = bool(active_members)
-    subscription.sync_enabled = any(member.sync_enabled for member in active_members)
-    if subscription.sync_enabled:
+    sync_members = [member for member in active_members if member.sync_enabled]
+    subscription.sync_enabled = bool(sync_members)
+    if sync_members:
         subscription.sync_interval_hours = min(
-            member.sync_interval_hours for member in active_members if member.sync_enabled
+            member.sync_interval_hours for member in sync_members
         )
+        # These fields are a compatibility cache, but still have to satisfy the
+        # canonical table's legacy consistency constraint. Private membership
+        # policy remains authoritative for actual scheduling.
+        if subscription.schedule_mode == "manual":
+            subscription.schedule_mode = None
+            subscription.schedule_rule = None
+    else:
+        subscription.schedule_mode = "manual"
+        subscription.schedule_rule = None
 
     sources = (
         await db.execute(
@@ -174,7 +192,7 @@ async def recompute_subscription_membership_cache(
             .with_for_update(of=SubscriptionSource)
         )
     ).scalars().all()
-    active_ids = {member.id for member in active_members if member.sync_enabled}
+    active_ids = {member.id for member in sync_members}
     for source in sources:
         binding_rows = (
             await db.execute(
