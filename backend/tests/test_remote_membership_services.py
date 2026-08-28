@@ -1002,3 +1002,172 @@ async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_subscription_query_accepts_real_dict_search_hits(monkeypatch):
+    """The subscription compatibility endpoint consumes SearchService dict items."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription
+    from app.services.search import SearchService
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "dict_search_hit")
+            creator = Creator(name="Dict Search Creator")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Canonical Dict Name")
+            db.add(subscription)
+            await db.flush()
+            member = await SubscriptionMembershipService(db, user.id).ensure_membership(
+                subscription, name="Private Dict Name"
+            )
+            await db.commit()
+            username = user.username
+            subscription_id = subscription.id
+            membership_id = member.id
+
+        async def fake_search(self, query, offset, limit, **kwargs):
+            return {
+                "groups": {
+                    "subscriptions": {
+                        "total": 1,
+                        "items": [{"id": str(subscription_id), "name": "Indexed Name"}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(SearchService, "search", fake_search)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/subscriptions",
+                params={"q": "Dict"},
+                headers=_headers(username),
+            )
+        assert response.status_code == 200, response.text
+        assert len(response.json()) == 1
+        assert response.json()[0]["id"] == str(subscription_id)
+        assert response.json()[0]["membership_id"] == str(membership_id)
+        assert response.json()[0]["name"] == "Private Dict Name"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_search_assist_and_scheduler_use_private_source_bindings_before_pagination():
+    """Repo suggestions and scheduler rows cannot be crowded or overlaid by peers."""
+    from datetime import datetime, timedelta, timezone
+
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription, SubscriptionSource
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            first = await _seed_user(db, "search_policy_first")
+            second = await _seed_user(db, "search_policy_second")
+
+            peer_creator = Creator(name="Peer Search Creator")
+            shared_creator = Creator(name="Shared Search Creator")
+            db.add_all([peer_creator, shared_creator])
+            await db.flush()
+            peer_subscription = Subscription(
+                creator_id=peer_creator.id,
+                name="Peer Canonical Subscription",
+            )
+            shared_subscription = Subscription(
+                creator_id=shared_creator.id,
+                name="Shared Canonical Subscription",
+            )
+            db.add_all([peer_subscription, shared_subscription])
+            await db.flush()
+            # Insert the peer row first so an unfiltered LIMIT 1 crowds out the
+            # current user's later repository suggestion.
+            peer_source = SubscriptionSource(
+                subscription_id=peer_subscription.id,
+                source="pixiv",
+                source_creator_id="crowd-assist-peer",
+                source_url="https://www.pixiv.net/users/44001",
+            )
+            shared_source = SubscriptionSource(
+                subscription_id=shared_subscription.id,
+                source="pixiv",
+                source_creator_id="crowd-assist-own",
+                source_url="https://www.pixiv.net/users/44002",
+            )
+            db.add_all([peer_source, shared_source])
+            await db.flush()
+            peer_member = await SubscriptionMembershipService(
+                db, second.id
+            ).ensure_membership(peer_subscription, name="Peer Private Subscription")
+            first_member = await SubscriptionMembershipService(
+                db, first.id
+            ).ensure_membership(shared_subscription, name="First Private Subscription")
+            second_member = await SubscriptionMembershipService(
+                db, second.id
+            ).ensure_membership(shared_subscription, name="Second Private Subscription")
+            await SubscriptionMembershipService(db, second.id).ensure_source_binding(
+                peer_member, peer_source, is_enabled=True
+            )
+            first_binding = await SubscriptionMembershipService(
+                db, first.id
+            ).ensure_source_binding(first_member, shared_source, is_enabled=False)
+            await SubscriptionMembershipService(db, second.id).ensure_source_binding(
+                second_member, shared_source, is_enabled=True
+            )
+            first_binding.auth_healthy = False
+            first_binding.auth_status = "unhealthy"
+            first_binding.next_sync_at = datetime.now(timezone.utc) + timedelta(hours=9)
+            await db.commit()
+            first_name = first.username
+            shared_source_id = shared_source.id
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            headers = _headers(first_name)
+            assist = await client.post(
+                "/api/v1/search/assist",
+                json={
+                    "before_cursor": "repo:crowd-assist",
+                    "after_cursor": "",
+                    "scope": "global",
+                    "limit": 1,
+                },
+                headers=headers,
+            )
+            assert assist.status_code == 200, assist.text
+            assert len(assist.json()["suggestions"]) == 1
+            assert "crowd-assist-own" in assist.json()["suggestions"][0]["label"]
+
+            scheduler = await client.get(
+                "/api/v1/search",
+                params={"scope": "scheduler", "limit": 100},
+                headers=headers,
+            )
+            assert scheduler.status_code == 200, scheduler.text
+            group = scheduler.json()["groups"]["scheduler"]
+            assert group["total"] == 1
+            assert len(group["items"]) == 1
+            item = group["items"][0]
+            assert item["source_id"] == str(shared_source_id)
+            assert item["subscription_name"] == "First Private Subscription"
+            assert item["source_enabled"] is False
+            assert item["auth_healthy"] is False
+            assert item["decision"] == "source_disabled"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

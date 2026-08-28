@@ -70,7 +70,11 @@ async def list_subscriptions(
             status_code=503,
             detail={"code": "search_unavailable", "message": str(exc)},
         ) from exc
-    candidate_ids = [UUID(str(item.id)) for item in result["groups"]["subscriptions"]["items"]]
+    candidate_ids = [
+        UUID(str(item.get("id") if isinstance(item, dict) else item.id))
+        for item in result["groups"]["subscriptions"]["items"]
+        if (item.get("id") if isinstance(item, dict) else getattr(item, "id", None))
+    ]
     owned = []
     for subscription_id in candidate_ids:
         try:

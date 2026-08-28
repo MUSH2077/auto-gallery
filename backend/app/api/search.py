@@ -162,6 +162,18 @@ async def assist(
 ):
     svc = SearchService(db)
     try:
+        allowed_repository_ids = None
+        user_id = getattr(user, "id", None)
+        if db is not None and user_id is not None:
+            allowed_repository_ids = set(
+                (
+                    await db.execute(
+                        select(UserSubscriptionSource.subscription_source_id).where(
+                            UserSubscriptionSource.user_id == user_id
+                        )
+                    )
+                ).scalars()
+            )
         return await svc.assist(
             before_cursor=data.before_cursor,
             after_cursor=data.after_cursor,
@@ -170,6 +182,7 @@ async def assist(
             permissions=_permissions(user),
             compose=data.compose.model_dump() if data.compose else None,
             composes=[item.model_dump() for item in data.composes],
+            allowed_repository_ids=allowed_repository_ids,
         )
     except SearchQueryError as error:
         _raise_search_error(error)
