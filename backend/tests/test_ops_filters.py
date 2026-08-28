@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from uuid import uuid4
 
 
@@ -38,9 +39,11 @@ def test_import_jobs_list_supports_download_job_and_text_filters():
         download_job_id=download_job_id,
         q="boom",
         db=FakeDB(),
+        user=SimpleNamespace(id=41),
     ))
 
     assert payload == {"total": 0, "items": []}
     assert all("failed" in params.values() for params in seen_params)
     assert all(f"%{download_job_id}%" in params.values() for params in seen_params)
     assert all("%boom%" in params.values() for params in seen_params)
+    assert all(41 in params.values() for params in seen_params)
