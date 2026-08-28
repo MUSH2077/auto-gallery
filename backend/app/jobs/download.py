@@ -6,7 +6,6 @@ import os
 import re
 import signal
 import subprocess
-import tempfile
 import threading
 import time
 from collections import deque
@@ -234,35 +233,24 @@ async def _materialize_personal_download_config(
         )
     )
 
-    jobs_dir = Path(config_root or settings.gallerydl_config_root) / "jobs"
+    from app.services.personal_auth_storage import (
+        PersonalAuthStorageError,
+        write_personal_auth_config,
+    )
+
     try:
-        jobs_dir.mkdir(parents=True, exist_ok=True)
-        fd, raw_path = tempfile.mkstemp(
-            prefix=f"auth-{job.id}-",
-            suffix=".json",
-            dir=jobs_dir,
+        path = write_personal_auth_config(
+            config_root or settings.personal_auth_tmp_root,
+            job_id=str(job.id),
+            payload=effective,
         )
-    except OSError as exc:
+    except (PersonalAuthStorageError, OSError) as exc:
         raise PersonalDownloadConfigurationError(
             "personal download authentication temp storage is unavailable"
         ) from exc
-    path = Path(raw_path)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            json.dump(effective, handle, ensure_ascii=False)
-        os.chmod(path, 0o600)
-    except Exception as exc:
-        if fd >= 0:
-            os.close(fd)
-        _cleanup_temp_config(str(path))
-        if isinstance(exc, (TypeError, ValueError)):
-            raise PersonalCredentialFailure(
-                "personal download credential config is invalid"
-            ) from exc
-        raise PersonalDownloadConfigurationError(
-            "personal download authentication config could not be created"
+    except (TypeError, ValueError) as exc:
+        raise PersonalCredentialFailure(
+            "personal download credential config is invalid"
         ) from exc
     return _PersonalDownloadConfig(path=path, secret_values=secrets)
 
@@ -500,11 +488,14 @@ AUTH_ERROR_PATTERNS = [
 
 def _cleanup_temp_config(path: str | None):
     """Remove temp config file."""
-    if path:
-        try:
-            os.unlink(path)
-        except Exception:
-            pass
+    if not path:
+        return
+    try:
+        from app.services.personal_auth_storage import remove_personal_auth_config
+
+        remove_personal_auth_config(path)
+    except Exception:
+        pass
 
 
 AUTH_WARNING_PATTERNS = [

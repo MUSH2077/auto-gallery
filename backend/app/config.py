@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     library_root: str = "/library"
     gallerydl_config_root: str = "/gallerydl-config"
     app_config_root: str = "/app-config"
+    personal_auth_tmp_root: str = "/run/auto-gallery-secrets"
 
     cors_origins: str = "http://localhost:13000"
     log_level: str = "INFO"

@@ -326,6 +326,13 @@ rotation needs downtime plus an audited all-row decrypt/re-encrypt migration.
 Never print or paste the key/cookies/tokens into logs, task metadata, Redis, or
 incident tickets.
 
+`worker-download` must have `PERSONAL_AUTH_TMP_ROOT=/run/auto-gallery-secrets`
+mounted as `tmpfs` with mode `0700`. A startup failure mentioning personal
+authentication tmpfs is a hard security failure: verify `docker compose config`
+still shows the service-local tmpfs and do not redirect the path to
+`GALLERYDL_CONFIG_ROOT`, `APP_CONFIG_ROOT`, downloads, or library storage.
+Backup estimates and archives intentionally exclude `gallerydl-config/jobs`.
+
 The remote-discovery migrations are additive. Application rollback retains the
 new tables and canonical summary caches. Production operators must not run an
 Alembic downgrade that drops multi-user membership, remote account, candidate,

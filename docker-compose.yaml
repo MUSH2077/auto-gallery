@@ -259,6 +259,7 @@ services:
       LIBRARY_ROOT: /library
       GALLERYDL_CONFIG_ROOT: /gallerydl-config
       APP_CONFIG_ROOT: /app-config
+      PERSONAL_AUTH_TMP_ROOT: /run/auto-gallery-secrets
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TIMEZONE: ${TIMEZONE:-UTC}
       RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
@@ -281,6 +282,8 @@ services:
       - ${HOST_LIBRARY:-./data/library}:/library
       - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
       - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    tmpfs:
+      - /run/auto-gallery-secrets:rw,noexec,nosuid,nodev,mode=0700
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

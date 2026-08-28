@@ -98,8 +98,12 @@ python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_
 轮换：更换前必须安排停机，并原子迁移全部凭据；禁止混合密钥部署。
 
 除 AES-GCM 密文外，明文凭据不得进入其他 PostgreSQL 字段、Redis、`TaskRun`、manifest、
-API 响应或日志。下载 worker 只在权限 `0600` 的临时文件中生成认证覆盖项，并在所有退出路径
-删除。删除远端账号会立即清除密文和未导入候选；已导入成员关系与共享作品继续保留。
+API 响应或日志。下载 worker 只在权限 `0700` 的 `PERSONAL_AUTH_TMP_ROOT` 中生成权限
+`0600` 的认证覆盖文件。Compose 仅在 `worker-download` 内把该路径挂载为专用 `tmpfs`；
+worker 启动及每次私有任务前会清理崩溃残留，正常和错误退出均删除本任务文件。若该路径可持久化、
+不可用、经过符号链接或与备份根目录重叠，worker 会拒绝启动。作为纵深防御，备份估算与归档
+还会排除 `gallerydl-config/jobs`。删除远端账号会立即清除密文和未导入候选；已导入成员关系与
+共享作品继续保留。
 
 `.env.example` 中所有 discovery rollout 开关默认 `false`。按“私有成员 → Pixiv 预览 →
 Pixiv 自动导入 → X 预览 → X 自动导入 → Bilibili 预览 → Bilibili 自动导入”顺序启用。

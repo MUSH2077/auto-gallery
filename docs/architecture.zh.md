@@ -266,8 +266,9 @@ Worker 取走 import_job
 |---|---|---|
 | `DOWNLOAD_ROOT` | `/downloads` | 原图仓库：长期保存原始文件，按 source/creator/work 组织 |
 | `LIBRARY_ROOT` | `/library` | 索引层：每个作品的元数据 + 缩略图 |
-| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置、cookie、短生命周期任务配置 |
+| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | 持久 gallery-dl 配置/cookie 与不含密钥的任务配置 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用运行时配置 |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | 仅 `worker-download` 使用的 tmpfs，存放权限 0600 的个人认证覆盖文件；永不备份 |
 
 NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 
@@ -293,7 +294,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 │   ├── gallery-dl/                     # GALLERYDL_CONFIG_ROOT
 │   │   ├── config.json                 # gallery-dl 基础配置
 │   │   ├── cookies/                    # 各来源认证 cookie
-│   │   └── jobs/                       # worker 短生命周期任务配置（自动清理）
+│   │   └── jobs/                       # 不含密钥的任务配置；备份时排除
 │   └── app/                            # APP_CONFIG_ROOT — 运行时配置
 │
 ├── docker/                             # 持久化卷
@@ -306,6 +307,9 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
     ├── config/                         # 配置备份
     └── metadata/                       # metadata.json 副本
 ```
+
+个人账号认证覆盖文件不属于 NAS 持久目录。下载 worker 将它们写入专用非持久
+tmpfs `/run/auto-gallery-secrets`，并在使用前验证该边界。
 
 ### 存储规则
 
@@ -339,6 +343,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 | `LIBRARY_ROOT` | `/library` | 元数据 + 缩略图存储路径 |
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置路径 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用配置路径 |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | 下载 worker 的个人认证覆盖 tmpfs |
 
 ## API 路由分组
 

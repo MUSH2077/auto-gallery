@@ -112,10 +112,14 @@ key. Never start a mixed-key deployment.
 
 Plain credentials are forbidden from PostgreSQL fields other than the AES-GCM
 ciphertext, Redis, `TaskRun`, manifests, API responses, and logs. Download
-workers materialize only an authentication override in a mode-`0600` temporary
-file and delete it in every exit path. Deleting a remote account immediately
-clears ciphertext and unimported candidates; imported memberships and shared
-works remain.
+workers materialize only an authentication override in a mode-`0600` file under
+the mode-`0700` `PERSONAL_AUTH_TMP_ROOT`. Compose mounts that path as a dedicated
+`tmpfs` only in `worker-download`; worker startup and every private job sweep
+crash debris, and every normal/error exit removes its own file. Startup fails
+closed if the path is persistent, unavailable, symlinked, or overlaps a backup
+root. `gallerydl-config/jobs` is excluded from backup estimates and archives as
+defense in depth. Deleting a remote account immediately clears ciphertext and
+unimported candidates; imported memberships and shared works remain.
 
 All discovery rollout flags in `.env.example` default to `false`. Enable them
 in order: private members, Pixiv preview, Pixiv automatic import, X preview, X

@@ -253,6 +253,18 @@ def build_worker_specs(
     return specs
 
 
+def _sweep_personal_auth_startup(queues: list[str]) -> int:
+    """Recover private-auth crash debris before download workers are spawned."""
+
+    if not any(queue.startswith("downloads") for queue in queues):
+        return 0
+    from app.services.personal_auth_storage import (
+        sweep_abandoned_personal_auth_configs,
+    )
+
+    return sweep_abandoned_personal_auth_configs()
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <queue_name> [concurrency]", file=sys.stderr)
@@ -272,6 +284,23 @@ def main():
     )
     with_scheduler = "--with-scheduler" in sys.argv[2:]
     _register_resource_state_bridge()
+
+    try:
+        removed_auth_configs = _sweep_personal_auth_startup(queues)
+    except Exception as exc:
+        print(
+            f"[worker_entrypoint] personal authentication tmpfs validation failed: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
+    if removed_auth_configs:
+        print(
+            "[worker_entrypoint] removed "
+            f"{removed_auth_configs} abandoned personal authentication config(s)",
+            file=sys.stderr,
+            flush=True,
+        )
 
     configured_concurrency: int | None = None
     concurrency_cap: int | None = None

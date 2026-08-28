@@ -449,6 +449,7 @@ async def test_inherited_manual_members_are_not_eligible_for_automatic_selection
 @pytest.mark.asyncio
 async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_durable_secret(
     tmp_path,
+    monkeypatch,
 ):
     """Credential plaintext exists only in the worker-owned 0600 temp overlay."""
 
@@ -456,7 +457,11 @@ async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_d
     from app.jobs import download as download_job
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
     from app.remote_discovery.registry import DiscoveryAdapterRegistry
+    from app.services import personal_auth_storage
     from app.services.remote_credentials import CredentialVault
+
+    monkeypatch.setattr(personal_auth_storage, "_filesystem_type", lambda _path: "tmpfs")
+    monkeypatch.setattr(personal_auth_storage, "_durable_roots", lambda: ())
 
     materialize = getattr(download_job, "_materialize_personal_download_config", None)
     assert materialize is not None, "download worker must materialize private auth at execution"
@@ -498,16 +503,19 @@ async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_d
             )
             await db.flush()
 
+            secret_root = tmp_path / "runtime-auth"
             personal = await materialize(
                 db,
                 job,
                 {"extractor": {"pixiv": {"filename": "{id}.{extension}"}}},
-                config_root=tmp_path,
+                config_root=secret_root,
                 vault=vault,
                 adapters=adapters,
             )
             assert personal is not None
             config_path = personal.path
+            assert config_path.parent == secret_root
+            assert os.stat(secret_root).st_mode & 0o777 == 0o700
             assert os.stat(config_path).st_mode & 0o777 == 0o600
             config = json.loads(config_path.read_text())
             assert config["extractor"]["pixiv"] == {
@@ -536,7 +544,7 @@ async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_d
                         db,
                         job,
                         {},
-                        config_root=tmp_path,
+                        config_root=secret_root,
                         vault=vault,
                         adapters=adapters,
                     )
@@ -1015,7 +1023,11 @@ async def test_personal_materialization_distinguishes_credentials_from_filesyste
     from app.jobs import download as download_job
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
     from app.remote_discovery.registry import DiscoveryAdapterRegistry
+    from app.services import personal_auth_storage
     from app.services.remote_credentials import CredentialVault
+
+    monkeypatch.setattr(personal_auth_storage, "_filesystem_type", lambda _path: "tmpfs")
+    monkeypatch.setattr(personal_auth_storage, "_durable_roots", lambda: ())
 
     credential_failure = getattr(download_job, "PersonalCredentialFailure", None)
     assert credential_failure is not None
@@ -1064,7 +1076,7 @@ async def test_personal_materialization_distinguishes_credentials_from_filesyste
                 account_id=account.id,
             )
             monkeypatch.setattr(
-                download_job.tempfile,
+                personal_auth_storage.tempfile,
                 "mkstemp",
                 lambda **_kwargs: (_ for _ in ()).throw(OSError("read-only filesystem")),
             )
@@ -1279,7 +1291,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
     from app.database import async_session, engine
     from app.jobs import download as download_job
     from app.models import DownloadJob, TaskRun
-    from app.services import job_progress, proxy
+    from app.services import job_progress, personal_auth_storage, proxy
     from app.services.remote_credentials import CredentialVault
 
     auth_token_canary = "task4-x-auth-token-child-canary"
@@ -1383,6 +1395,13 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
         "gallerydl_config_root",
         str(tmp_path / "gallerydl"),
     )
+    monkeypatch.setattr(
+        download_job.settings,
+        "personal_auth_tmp_root",
+        str(tmp_path / "runtime-auth"),
+    )
+    monkeypatch.setattr(personal_auth_storage, "_filesystem_type", lambda _path: "tmpfs")
+    monkeypatch.setattr(personal_auth_storage, "_durable_roots", lambda: ())
     monkeypatch.setattr(
         download_job.settings,
         "remote_credential_key",

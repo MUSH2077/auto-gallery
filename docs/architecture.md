@@ -294,8 +294,9 @@ Application code uses only these env-var-driven paths:
 |---|---|---|
 | `DOWNLOAD_ROOT` | `/downloads` | Original Media Store: long-term original files, organized by source/creator/work |
 | `LIBRARY_ROOT` | `/library` | Library Index: per-work metadata + thumbnails |
-| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl configs, cookies, and short-lived per-job configs |
+| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | Durable gallery-dl configs/cookies and non-secret per-job configs |
 | `APP_CONFIG_ROOT` | `/app-config` | Application runtime config |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | `worker-download`-only tmpfs for mode-0600 personal auth overlays; never backed up |
 
 NAS host paths are mapped in `docker-compose.yaml` only.
 
@@ -321,7 +322,7 @@ NAS host paths are mapped in `docker-compose.yaml` only.
 │   ├── gallery-dl/                     # GALLERYDL_CONFIG_ROOT
 │   │   ├── config.json                 # gallery-dl base config
 │   │   ├── cookies/                    # Auth cookies per source
-│   │   └── jobs/                       # Short-lived worker job configs (auto-cleaned)
+│   │   └── jobs/                       # Non-secret per-job configs; excluded from backup
 │   └── app/                            # APP_CONFIG_ROOT — runtime configs
 │
 ├── docker/                             # Persistent volumes
@@ -334,6 +335,10 @@ NAS host paths are mapped in `docker-compose.yaml` only.
     ├── config/                         # Config backups
     └── metadata/                       # metadata.json copies
 ```
+
+Personal account authentication overlays are not part of the NAS tree. The
+download worker writes them under `/run/auto-gallery-secrets`, a dedicated
+nonpersistent tmpfs, and validates that boundary before use.
 
 ### Storage rules
 
@@ -367,6 +372,7 @@ Key environment variables used by the application:
 | `LIBRARY_ROOT` | `/library` | Metadata + thumbnail storage path |
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl configuration path |
 | `APP_CONFIG_ROOT` | `/app-config` | Application config path |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | worker-download tmpfs for personal authentication overlays |
 
 ## API Route Groups
 
