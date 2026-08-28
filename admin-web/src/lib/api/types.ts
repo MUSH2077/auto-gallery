@@ -202,6 +202,8 @@ export interface TaskRun {
   subject_type?: string | null;
   subject_id?: string | null;
   parent_task_id?: string | null;
+  triggering_user_subscription_id?: string | null;
+  triggering_remote_account_id?: string | null;
   status: string;
   resource_state?: "running" | "waiting" | "yielded" | string | null;
   resource_reason?: string | null;
