@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -66,6 +66,7 @@ class RemoteAccountService:
         stmt = select(RemoteAccount).where(
             RemoteAccount.id == account_id,
             RemoteAccount.user_id == self.user_id,
+            or_(RemoteAccount.auth_status.is_(None), RemoteAccount.auth_status != "deleted"),
         )
         if lock:
             stmt = stmt.with_for_update(of=RemoteAccount)
@@ -177,30 +178,36 @@ class RemoteAccountService:
         self._validate_auth_method(source, auth_method)
         existing = (
             await self.db.execute(
-                select(RemoteAccount.id).where(
+                select(RemoteAccount)
+                .where(
                     RemoteAccount.user_id == self.user_id,
                     RemoteAccount.source == source,
                 )
+                .with_for_update(of=RemoteAccount)
             )
         ).scalar_one_or_none()
-        if existing is not None:
+        if existing is not None and existing.auth_status != "deleted":
             raise ValueError("A remote account for this source already exists")
-        account = RemoteAccount(
-            user_id=self.user_id,
-            source=source,
-            auth_method=auth_method,
-            remote_user_id=payload.get("remote_user_id"),
-            remote_username=payload.get("remote_username"),
-            scopes=payload.get("scopes") or [],
-            collection_selectors=payload.get("collection_selectors") or [],
-            is_enabled=payload.get("is_enabled", True),
-            scan_interval_hours=payload.get("scan_interval_hours", 24),
-            auto_import_enabled=payload.get("auto_import_enabled", False),
-            auto_import_min_confidence=payload.get("auto_import_min_confidence", "high"),
-            auto_import_limit=payload.get("auto_import_limit", 25),
-            auth_status="untested",
-        )
-        self.db.add(account)
+        account = existing or RemoteAccount(user_id=self.user_id, source=source)
+        account.auth_method = auth_method
+        account.remote_user_id = payload.get("remote_user_id")
+        account.remote_username = payload.get("remote_username")
+        account.scopes = payload.get("scopes") or []
+        account.collection_selectors = payload.get("collection_selectors") or []
+        account.is_enabled = payload.get("is_enabled", True)
+        account.scan_interval_hours = payload.get("scan_interval_hours", 24)
+        account.auto_import_enabled = payload.get("auto_import_enabled", False)
+        account.auto_import_min_confidence = payload.get("auto_import_min_confidence", "high")
+        account.auto_import_limit = payload.get("auto_import_limit", 25)
+        account.auth_status = "untested"
+        account.auth_error_reason = None
+        account.last_authenticated_at = None
+        account.scan_cursor = None
+        account.last_scan_started_at = None
+        account.last_scan_completed_at = None
+        account.next_scan_at = None
+        if existing is None:
+            self.db.add(account)
         await self.db.flush()
         self._encrypt(account, credentials)
         await self.db.flush()
@@ -211,7 +218,13 @@ class RemoteAccountService:
         accounts = (
             await self.db.execute(
                 select(RemoteAccount)
-                .where(RemoteAccount.user_id == self.user_id)
+                .where(
+                    RemoteAccount.user_id == self.user_id,
+                    or_(
+                        RemoteAccount.auth_status.is_(None),
+                        RemoteAccount.auth_status != "deleted",
+                    ),
+                )
                 .order_by(RemoteAccount.source, RemoteAccount.id)
                 .offset(max(0, offset))
                 .limit(max(1, min(limit, 200)))
@@ -275,14 +288,34 @@ class RemoteAccountService:
             .where(UserSubscriptionSource.remote_account_id == account.id)
             .values(remote_account_id=None)
         )
-        # Imported membership rows survive; candidate snapshots cannot survive
-        # a hard account delete because their ownership FK is restrictive.
+        imported_exists = (
+            await self.db.execute(
+                select(DiscoveryCandidate.id)
+                .where(
+                    DiscoveryCandidate.remote_account_id == account.id,
+                    DiscoveryCandidate.state == "imported",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none() is not None
         await self.db.execute(
-            delete(DiscoveryCandidate).where(DiscoveryCandidate.remote_account_id == account.id)
+            delete(DiscoveryCandidate).where(
+                DiscoveryCandidate.remote_account_id == account.id,
+                DiscoveryCandidate.state != "imported",
+            )
         )
         account.credential_ciphertext = None
         account.credential_metadata = None
         account.credential_key_version = None
+        if imported_exists:
+            account.is_enabled = False
+            account.auth_status = "deleted"
+            account.auth_error_reason = None
+            account.last_authenticated_at = None
+            account.scan_cursor = None
+            account.next_scan_at = None
+            await self.db.flush()
+            return
         await self.db.flush()
         await self.db.delete(account)
         await self.db.flush()

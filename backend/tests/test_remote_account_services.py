@@ -53,8 +53,8 @@ class FakeRegistry:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_remote_account_service_encrypts_validates_lists_and_deletes_without_orphans():
-    """Secrets cross only the vault/adapter boundary and account deletion preserves membership."""
+async def test_remote_account_delete_tombstones_imported_provenance_and_create_revives_it():
+    """Delete clears secrets while imported provenance survives a later reconnect."""
     from sqlalchemy import select, text
 
     from app.database import async_session, engine
@@ -167,7 +167,13 @@ async def test_remote_account_service_encrypts_validates_lists_and_deletes_witho
 
             await service.delete(account.id)
             await db.commit()
-            assert await db.get(RemoteAccount, account.id) is None
+            tombstone = await db.get(RemoteAccount, account.id)
+            assert tombstone is not None
+            assert tombstone.auth_status == "deleted"
+            assert tombstone.is_enabled is False
+            assert tombstone.credential_ciphertext is None
+            assert tombstone.credential_metadata is None
+            assert tombstone.credential_key_version is None
             assert await db.get(UserSubscription, member.id) is not None
             await db.refresh(binding)
             assert binding.remote_account_id is None
@@ -176,7 +182,27 @@ async def test_remote_account_service_encrypts_validates_lists_and_deletes_witho
                     select(DiscoveryCandidate).where(DiscoveryCandidate.user_id == user.id)
                 )
             ).scalars().all()
-            assert candidates == []
+            assert [candidate.id for candidate in candidates] == [imported.id]
+            assert candidates[0].user_subscription_id == member.id
+            assert await service.list() == []
+            with pytest.raises(ValueError, match="Remote account not found"):
+                await service.get(account.id)
+
+            revived = await service.create(
+                {
+                    "source": "pixiv",
+                    "auth_method": "refresh_token",
+                    "credentials": {"refresh_token": "top-secret-refresh"},
+                    "collection_selectors": [{"restrict": "private"}],
+                }
+            )
+            await db.commit()
+            assert revived.id == account.id
+            assert revived.auth_status == "untested"
+            assert revived.has_credentials is True
+            assert revived.collection_selectors == [{"restrict": "private"}]
+            assert [listed.id for listed in await service.list()] == [account.id]
+            assert await db.get(DiscoveryCandidate, imported.id) is not None
     finally:
         async with async_session() as db:
             await db.execute(
