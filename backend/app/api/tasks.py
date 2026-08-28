@@ -396,7 +396,7 @@ async def _control_task(
                 },
             )
         return await _retry_admin_task(task, svc)
-    if user is not None and not await svc.is_visible_to_user(task, user.id):
+    elif user is not None and not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
     if not task.subject_id or task.subject_type not in {"download_job", "import_job"}:
         raise HTTPException(

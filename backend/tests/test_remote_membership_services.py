@@ -1030,6 +1030,11 @@ async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users()
             assert (
                 await client.get(f"/api/v1/tasks/{task_id}", headers=ordinary_headers)
             ).status_code == 403
+            assert (
+                await client.post(
+                    f"/api/v1/tasks/{task_id}/retry", headers=ordinary_headers
+                )
+            ).status_code == 403
 
             for username in names[1:]:
                 headers = _headers(username)
@@ -1043,6 +1048,11 @@ async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users()
                 overview = await client.get("/api/v1/tasks/anomalies", headers=headers)
                 assert overview.status_code == 200
                 assert "Global Scheduler Batch" in overview.text
+                control = await client.post(
+                    f"/api/v1/tasks/{task_id}/retry", headers=headers
+                )
+                assert control.status_code == 409, control.text
+                assert control.json()["detail"]["code"] == "invalid_task_action"
     finally:
         async with async_session() as db:
             if task_id:
