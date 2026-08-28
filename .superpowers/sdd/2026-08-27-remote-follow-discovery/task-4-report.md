@@ -292,3 +292,55 @@ TDD evidence on real PostgreSQL:
   `103 passed in 113.07s`.
 - Compileall, Ruff for both changed Python files, and `git diff --check` all
   passed. No live provider call or real credential was used.
+
+## Review Fix Round 3 (2026-08-28)
+
+Round 3 started from `af81385` and closes stale-outcome monotonicity and the
+private credential lifecycle deadlock.
+
+- Tombstoned and hard-deleted bindings are quarantined from shared success
+  fan-out. A stale receipt may still replan healthy peer bindings, but it does
+  not change the deleted binding's receipt, due time, health, safe reason, or
+  authentication check timestamp.
+- Success and authentication-failure outcomes lock and validate the opaque
+  trigger account before locking member-source rows. Under that lock they
+  require an enabled, non-deleted account with ciphertext and matching binding
+  ownership before changing private health.
+- The persisted `DownloadJob.created_at` is carried into success finalization
+  as a non-secret credential-generation boundary. If the account was deleted,
+  replaced, validated, or revived after the job was created, that older result
+  cannot heal or damage the current same-ID credential generation.
+- The deterministic lock order for all credential lifecycle and outcome paths
+  is documented as `RemoteAccount` first, then
+  `UserSubscriptionSource` ordered by ID, then the sole canonical aggregate.
+  Canonical mutations were moved after member-source locks to prevent ORM
+  autoflush from silently taking a source lock out of order. Discovery scan
+  admission/execution only locks the account row and does not introduce a
+  reverse member-source edge.
+- Legacy migrated bindings that were healthy with `remote_account_id=NULL`
+  remain supported. A stale non-NULL account ID that was hard-deleted cannot
+  fall through into that legacy path or poison the canonical source.
+
+Real PostgreSQL TDD evidence:
+
+- Initial tombstone/reconnect RED: `3 failed, 10 deselected in 2.22s`.
+  Stale success changed `deleted` to `healthy`; stale auth failure changed it
+  to `unhealthy`; same-ID reconnect lacked an outcome-generation boundary.
+- Deterministic two-session barrier RED: `2 failed, 29 deselected in 4.63s`.
+  Both delete-vs-success and validate-vs-auth-failure raised PostgreSQL
+  `DeadlockDetectedError` from the reversed account/member-source locks.
+- Focused GREEN after the fix: `5 passed, 39 deselected in 3.62s`.
+- Complete account and shared-scheduling files: `44 passed in 14.00s`.
+- Broad 26-file Task 4/account/membership/scheduler/download/finalization/
+  worker/discovery/task regression: `291 passed in 364.22s`.
+- `python3 -m compileall -q backend/app ...` passed; Ruff reported
+  `All checks passed!`; the production canary scan and
+  `git diff --check af81385..HEAD` produced no findings.
+
+Implementation commit: `5dd9219 fix: quarantine stale remote account
+outcomes`. Exact `git diff af81385..HEAD` was self-reviewed. No schema or
+public API changes were required, no live provider call or real credential was
+used, and the pre-existing untracked `admin-web/node_modules` symlink remains
+untouched. The generation boundary intentionally treats any intervening
+account-row update as newer provenance; this is conservative for health
+mutation while shared content fan-out still proceeds for eligible peers.
