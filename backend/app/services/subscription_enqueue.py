@@ -293,7 +293,14 @@ def _binding_provenance_is_current(
     triggering_credential_generation: int | None,
 ) -> bool:
     if account is None:
-        return binding.remote_account_id is None and binding.auth_status != "deleted"
+        # ON DELETE SET NULL preserves the private job's generation.  Only a
+        # job that was legacy from inception (and therefore has no generation)
+        # may act on a legacy binding after the account row disappears.
+        return bool(
+            triggering_credential_generation is None
+            and binding.remote_account_id is None
+            and binding.auth_status != "deleted"
+        )
     return bool(
         binding.auth_status != "deleted"
         and binding.remote_account_id == account.id

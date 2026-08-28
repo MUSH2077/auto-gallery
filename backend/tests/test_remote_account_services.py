@@ -275,6 +275,65 @@ async def test_unrelated_account_update_keeps_matching_job_generation_current():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_hard_delete_fk_null_cannot_turn_private_job_into_legacy_provenance():
+    """The retained generation distinguishes FK-nullified private jobs from legacy."""
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob, UserSubscriptionSource
+    from app.services.subscription_enqueue import mark_source_auth_failure
+
+    marker = f"remote_gen_fk_null_{uuid4().hex}"
+    job_id = None
+    try:
+        async with async_session() as db:
+            service, account, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=member.id,
+                triggering_remote_account_id=account.id,
+                triggering_credential_generation=1,
+                source=source.source,
+                source_url=source.source_url,
+                status="enqueued",
+            )
+            db.add(job)
+            await db.commit()
+            job_id = job.id
+
+            await service.delete(account.id)
+            await db.commit()
+            await db.refresh(job)
+            assert job.triggering_remote_account_id is None
+            assert job.triggering_credential_generation == 1
+
+            stored_binding = await db.get(UserSubscriptionSource, binding.id)
+            stored_binding.auth_healthy = True
+            stored_binding.auth_status = "healthy"
+            stored_binding.auth_error_reason = None
+            await db.commit()
+
+            await mark_source_auth_failure(db, job, "HTTP 401 Unauthorized")
+            assert stored_binding.auth_healthy is True
+            assert stored_binding.auth_status == "healthy"
+            await db.delete(job)
+            await db.commit()
+    finally:
+        if job_id is not None:
+            async with async_session() as db:
+                leftover = await db.get(DownloadJob, job_id)
+                if leftover is not None:
+                    await db.delete(leftover)
+                    await db.commit()
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_stale_success_cannot_revive_tombstoned_account_or_binding():
     """A pre-delete download receipt must leave deleted private provenance quarantined."""
 
