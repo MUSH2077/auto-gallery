@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+const endpointPath = path.join(root, "src/lib/api/endpoints/remoteDiscovery.ts");
+const typesPath = path.join(root, "src/lib/api/types.ts");
+const apiIndexPath = path.join(root, "src/lib/api/index.ts");
+
+assert.ok(fs.existsSync(endpointPath), "remote discovery must have a focused typed endpoint module");
+
+const endpoint = fs.readFileSync(endpointPath, "utf8");
+const types = fs.readFileSync(typesPath, "utf8");
+const apiIndex = fs.readFileSync(apiIndexPath, "utf8");
+
+for (const route of [
+  "/api/v1/remote-accounts",
+  "/test",
+  "/collections",
+  "/x/oauth/authorize",
+  "/x/oauth/callback",
+  "/api/v1/discovery/scans",
+  "/api/v1/discovery/candidates",
+  "/candidates/batch-actions",
+  "/resolve",
+]) {
+  assert.ok(endpoint.includes(route), `typed endpoint module must include ${route}`);
+}
+
+assert.match(types, /interface RemoteAccountRead/);
+assert.match(types, /interface DiscoveryCandidate/);
+assert.match(types, /type RemoteDiscoverySource\s*=\s*"pixiv"\s*\|\s*"x"\s*\|\s*"bilibili"/);
+assert.match(endpoint, /immediate_sync:\s*input\.syncNow\s*\?\?\s*false/);
+assert.doesNotMatch(apiIndex, /queryKeys[\s\S]{0,1200}(?:credentials|refresh_token|SESSDATA|cookie)/i,
+  "query keys must not contain credential material");
+
+console.log("Remote discovery frontend API contract passed.");

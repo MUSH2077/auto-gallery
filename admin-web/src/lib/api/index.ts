@@ -1,5 +1,5 @@
 import { request, ApiError, clearAuthOn401 } from "./client";
-import { worksApi } from "./endpoints";
+import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
 export * from "./types";
@@ -46,6 +46,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
 // ── API ──
 
 export const api = {
+  ...remoteDiscoveryApi,
   // System
   health: () => request<T.HealthResponse>("/api/v1/system/health"),
 
@@ -957,6 +958,24 @@ export const queryKeys = {
     detail: (id: string) => ["subscriptions", id] as const,
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
     summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
+  },
+  remoteAccounts: {
+    all: ["remote-accounts"] as const,
+    collections: (id: string) => ["remote-accounts", id, "collections"] as const,
+  },
+  discovery: {
+    all: ["discovery"] as const,
+    scans: (accountId?: string) => ["discovery", "scans", accountId || "all"] as const,
+    candidates: (filters?: T.DiscoveryCandidateFilters) => [
+      "discovery",
+      "candidates",
+      filters?.accountId || "all",
+      filters?.state || "all",
+      filters?.confidence || "all",
+      filters?.isFollowing === undefined ? "all" : filters.isFollowing,
+      filters?.offset || 0,
+      filters?.limit || 25,
+    ] as const,
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,

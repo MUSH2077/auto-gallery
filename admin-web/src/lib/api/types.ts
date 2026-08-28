@@ -444,7 +444,129 @@ export interface ProviderInfo {
     supports_tags: boolean;
     is_reference_only: boolean;
     supports_download_cursor?: boolean;
+    supports_remote_discovery?: boolean;
+    discovery_auth_methods?: RemoteAuthMethod[];
+    supports_collection_selectors?: boolean;
   };
+}
+
+export type RemoteDiscoverySource = "pixiv" | "x" | "bilibili";
+export type RemoteAuthMethod = "refresh_token" | "oauth2" | "cookie" | "sessdata";
+export type DiscoveryConfidence = "high" | "medium" | "low";
+export type DiscoveryCandidateState = "pending" | "dismissed" | "imported" | "conflict";
+
+export interface RemoteCollection {
+  id: string;
+  name: string;
+  selector: Record<string, unknown>;
+}
+
+export interface RemoteAccountRead {
+  id: string;
+  user_id: number;
+  source: RemoteDiscoverySource;
+  remote_user_id?: string | null;
+  remote_username?: string | null;
+  auth_method?: RemoteAuthMethod | null;
+  scopes: string[];
+  collection_selectors: Record<string, unknown>[];
+  is_enabled: boolean;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_authenticated_at?: string | null;
+  last_scan_started_at?: string | null;
+  last_scan_completed_at?: string | null;
+  next_scan_at?: string | null;
+  scan_interval_hours: number;
+  auto_import_enabled: boolean;
+  auto_import_min_confidence: DiscoveryConfidence;
+  auto_import_limit: number;
+  has_credentials: boolean;
+  credential_mask: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RemoteAccountCreateInput {
+  source: RemoteDiscoverySource;
+  remote_user_id?: string;
+  remote_username?: string;
+  auth_method: RemoteAuthMethod;
+  scopes?: string[];
+  collection_selectors?: Record<string, unknown>[];
+  is_enabled?: boolean;
+  scan_interval_hours?: number;
+  auto_import_enabled?: boolean;
+  auto_import_min_confidence?: DiscoveryConfidence;
+  auto_import_limit?: number;
+  credentials: Record<string, string>;
+}
+
+export type RemoteAccountUpdateInput = Partial<Omit<RemoteAccountCreateInput, "source">>;
+
+export interface DiscoveryCandidate {
+  id: string;
+  remote_account_id: string;
+  user_id: number;
+  source_creator_id: string;
+  remote_url?: string | null;
+  display_name?: string | null;
+  metadata?: Record<string, unknown> | null;
+  confidence: DiscoveryConfidence;
+  confidence_reasons?: Array<string | Record<string, unknown>> | null;
+  state: DiscoveryCandidateState;
+  subscription_id?: string | null;
+  user_subscription_id?: string | null;
+  dismissed_at?: string | null;
+  imported_at?: string | null;
+  last_seen_at?: string | null;
+  is_following: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiscoveryCandidateListResponse {
+  total: number;
+  items: DiscoveryCandidate[];
+}
+
+export interface DiscoveryCandidateFilters {
+  accountId?: string;
+  state?: DiscoveryCandidateState;
+  confidence?: DiscoveryConfidence;
+  isFollowing?: boolean;
+  offset?: number;
+  limit?: number;
+}
+
+export interface DiscoveryCandidateBatchInput {
+  ids: string[];
+  action: "import" | "dismiss" | "restore";
+  syncNow?: boolean;
+}
+
+export interface DiscoveryCandidateBatchResponse {
+  items: DiscoveryCandidate[];
+  immediate_sync: boolean;
+  sync_results: unknown[];
+}
+
+export interface DiscoveryCandidateResolveInput {
+  creatorId?: string;
+  creatorName?: string;
+  syncNow?: boolean;
+}
+
+export interface DiscoveryCandidateResolveResponse {
+  candidate: DiscoveryCandidate;
+  immediate_sync: boolean;
+  sync_result?: unknown | null;
+}
+
+export interface XOAuthAuthorizeResponse {
+  authorization_url: string;
+  state: string;
+  expires_in: number;
 }
 
 export interface Creator {
