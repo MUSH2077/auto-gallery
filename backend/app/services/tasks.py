@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import String, and_, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
@@ -68,7 +68,11 @@ def import_job_visibility_condition(user_id: int):
 def task_visibility_condition(user_id: int):
     """SQL ownership predicate, including provable legacy job ownership."""
 
-    from app.models.remote_discovery import RemoteAccount, UserSubscription
+    from app.models.remote_discovery import (
+        RemoteAccount,
+        UserSubscription,
+        UserSubscriptionSource,
+    )
 
     owned_memberships = select(UserSubscription.id).where(
         UserSubscription.user_id == user_id
@@ -122,11 +126,54 @@ def task_visibility_condition(user_id: int):
             .where(ImportJob.id == TaskRun.subject_id)
         ),
     )
+    owned_subscription_ids = select(UserSubscription.subscription_id).where(
+        UserSubscription.user_id == user_id
+    )
+    owned_source_ids = select(UserSubscriptionSource.subscription_source_id).where(
+        UserSubscriptionSource.user_id == user_id
+    )
+    subscription_scoped = or_(
+        TaskRun.operation_type == "subscription-sync-batch",
+        TaskRun.subject_type.in_({"subscription", "subscription_source"}),
+        TaskRun.meta["subscription_id"].astext.is_not(None),
+        TaskRun.meta["subscription_source_id"].astext.is_not(None),
+    )
+    legacy_subscription = and_(
+        ~has_trigger,
+        subscription_scoped,
+        or_(
+            and_(
+                TaskRun.subject_type == "subscription",
+                TaskRun.subject_id.in_(owned_subscription_ids),
+            ),
+            and_(
+                TaskRun.subject_type == "subscription_source",
+                TaskRun.subject_id.in_(owned_source_ids),
+            ),
+            TaskRun.meta["subscription_id"].astext.in_(
+                select(cast(UserSubscription.subscription_id, String)).where(
+                    UserSubscription.user_id == user_id
+                )
+            ),
+            TaskRun.meta["subscription_source_id"].astext.in_(
+                select(cast(UserSubscriptionSource.subscription_source_id, String)).where(
+                    UserSubscriptionSource.user_id == user_id
+                )
+            ),
+        ),
+    )
     public_operation = and_(
         ~has_trigger,
         TaskRun.kind.not_in({"download", "import", "discovery"}),
+        ~subscription_scoped,
     )
-    return or_(owned_trigger, legacy_download, legacy_import, public_operation)
+    return or_(
+        owned_trigger,
+        legacy_download,
+        legacy_import,
+        legacy_subscription,
+        public_operation,
+    )
 
 
 def normalize_task_status(status: str | None) -> str:

@@ -786,9 +786,24 @@ async def test_legacy_task_visibility_follows_download_and_import_membership_sub
                 status="enqueued",
                 title="Legacy Second Import",
             )
-            db.add_all([first_task, second_task, second_import_task])
+            second_subscription_task = TaskRun(
+                kind="admin",
+                operation_type="subscription-sync-batch",
+                status="failed",
+                attention_state="open",
+                title="Legacy Second Subscription Batch",
+                meta={"subscription_id": str(second_subscription.id)},
+            )
+            db.add_all(
+                [first_task, second_task, second_import_task, second_subscription_task]
+            )
             await db.commit()
-            task_ids = [first_task.id, second_task.id, second_import_task.id]
+            task_ids = [
+                first_task.id,
+                second_task.id,
+                second_import_task.id,
+                second_subscription_task.id,
+            ]
             import_ids = [second_import.id]
             job_ids = [first_job.id, second_job.id]
             first_name = first.username
@@ -802,11 +817,28 @@ async def test_legacy_task_visibility_follows_download_and_import_membership_sub
                 assert "Legacy First Download" in titles
                 assert "Legacy Second Download" not in titles
                 assert "Legacy Second Import" not in titles
+                assert "Legacy Second Subscription Batch" not in titles
+            for endpoint in ("/api/v1/tasks/anomalies", "/api/v1/operations/overview"):
+                response = await client.get(endpoint, headers=headers)
+                assert response.status_code == 200, response.text
+                assert "Legacy Second Subscription Batch" not in {
+                    item["title"] for item in response.json()["items"]
+                }
             assert (
                 await client.get(f"/api/v1/tasks/{second_task.id}", headers=headers)
             ).status_code == 404
             assert (
                 await client.get(f"/api/v1/tasks/{second_import_task.id}", headers=headers)
+            ).status_code == 404
+            assert (
+                await client.get(
+                    f"/api/v1/tasks/{second_subscription_task.id}", headers=headers
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"/api/v1/tasks/{second_subscription_task.id}/retry", headers=headers
+                )
             ).status_code == 404
     finally:
         async with async_session() as db:

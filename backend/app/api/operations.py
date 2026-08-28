@@ -28,6 +28,7 @@ async def get_operations_overview(
             offset=offset,
             limit=limit,
             excluded_admin_operation_types=inaccessible_admin_operation_types(user),
+            user_id=user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
