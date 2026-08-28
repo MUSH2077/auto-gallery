@@ -60,6 +60,10 @@ docker compose --env-file .env.ci down -v
 - [ ] Upgrade and rollback were tested when the release contains migrations.
 - [ ] For multi-user discovery schema, application rollback retains additive
       tables and summary caches; no production Alembic downgrade drops them.
+- [ ] Every migration is backward-compatible with the previous application
+      image, and the generated schema-forward rollback was tested at both the
+      pre-deploy and candidate revisions. Candidate-schema rollback skipped old
+      migrate and produced an auditable `rollback-receipt.env`.
 - [ ] Normal pytest skipped live-provider smoke tests and made no provider
       network calls. Any explicitly opted-in smoke used dedicated test accounts.
 

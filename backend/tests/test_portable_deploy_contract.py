@@ -1,7 +1,97 @@
+import os
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_deploy_rollback(tmp_path: Path, current_revision: str):
+    """Run the production rollback entrypoint against a recording Docker fake."""
+
+    rollback_dir = tmp_path / "rollback"
+    project_root = tmp_path / "project"
+    fake_bin = tmp_path / "bin"
+    rollback_dir.mkdir()
+    project_root.mkdir()
+    fake_bin.mkdir()
+    rollback_script = ROOT / "scripts/deploy-rollback.sh"
+    shutil.copy2(rollback_script, rollback_dir / "rollback.sh")
+    (rollback_dir / "rollback.sh").chmod(0o700)
+    (rollback_dir / ".env.predeploy").write_text("SECRET_KEY=test-only\n", encoding="utf-8")
+    (rollback_dir / "docker-compose.candidate.yaml").write_text("services: {}\n", encoding="utf-8")
+
+    predeploy_revision = "111111111111"
+    candidate_revision = "222222222222"
+    manifest = {
+        "DEPLOYMENT_ID": "rollback-contract",
+        "PROJECT_ROOT": str(project_root),
+        "PREDEPLOY_GIT_HEAD": "predeploy-git-head",
+        "PREDEPLOY_ALEMBIC_REVISION": predeploy_revision,
+        "CANDIDATE_ALEMBIC_REVISION": candidate_revision,
+        "BACKEND_IMAGE_ID": "sha256:old-backend",
+        "BACKEND_ROLLBACK_TAG": "auto-gallery-backend:rollback-contract",
+        "ADMIN_IMAGE_ID": "sha256:old-admin",
+        "ADMIN_ROLLBACK_TAG": "auto-gallery-admin-web:rollback-contract",
+        "CANDIDATE_BACKEND_IMAGE": "auto-gallery-backend:candidate-contract",
+        "CANDIDATE_BACKEND_IMAGE_ID": "sha256:candidate-backend",
+        "CANDIDATE_ADMIN_IMAGE": "auto-gallery-admin-web:candidate-contract",
+        "CANDIDATE_ADMIN_IMAGE_ID": "sha256:candidate-admin",
+        "ROLLBACK_SCHEMA_POLICY": "schema-forward",
+        "ROLLBACK_SCHEMA_CURRENT_REVISION_AT_SNAPSHOT": predeploy_revision,
+        "ROLLBACK_SCHEMA_RETAIN_CANDIDATE": "true",
+        "ROLLBACK_OLD_MIGRATE_ONLY_AT_PREDEPLOY": "true",
+    }
+    (rollback_dir / "manifest.env").write_text(
+        "".join(f"{key}={shlex.quote(value)}\n" for key, value in manifest.items()),
+        encoding="utf-8",
+    )
+
+    log_path = tmp_path / "docker.log"
+    (fake_bin / "docker").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$ROLLBACK_TEST_LOG"
+if [[ "$*" == *"exec -T postgres sh -c"* ]]; then
+  printf '%s\\n' "$ROLLBACK_TEST_CURRENT_REVISION"
+fi
+if [[ "${ROLLBACK_TEST_REJECT_OLD_MIGRATE:-0}" == "1" \
+      && "$*" == *"up --force-recreate --no-deps --no-build migrate"* ]]; then
+  exit 91
+fi
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "docker").chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "ROLLBACK_TEST_LOG": str(log_path),
+        "ROLLBACK_TEST_CURRENT_REVISION": current_revision,
+        # A retained candidate schema may be unknown to the old image. Make
+        # accidental old-migrate execution fatal in the behavioral contract.
+        "ROLLBACK_TEST_REJECT_OLD_MIGRATE": "1" if current_revision == candidate_revision else "0",
+    }
+    result = subprocess.run(
+        [str(rollback_dir / "rollback.sh")],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    receipt_path = rollback_dir / "rollback-receipt.env"
+    receipt = {}
+    if receipt_path.exists():
+        receipt = dict(
+            line.split("=", 1)
+            for line in receipt_path.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+    return result, log, receipt, predeploy_revision, candidate_revision
 
 
 def test_default_deploy_does_not_resolve_acceptance_or_gate_on_host_pressure():
@@ -74,20 +164,118 @@ def test_project_backup_and_core_health_failures_are_fail_closed():
     assert 'if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 ]]' in source
 
 
+def test_automatic_failure_trap_executes_the_frozen_rollback_entrypoint(tmp_path):
+    """A post-mutation deploy error must invoke the same snapshotted renderer."""
+
+    source = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    start = source.index("deploy_failed() {")
+    end = source.index("\n}\n\ntrap deploy_failed ERR", start) + 2
+    failure_function = source[start:end]
+    rollback_dir = tmp_path / "rollback"
+    rollback_dir.mkdir()
+    marker = tmp_path / "rollback-invoked"
+    (rollback_dir / "rollback.sh").write_text(
+        f"#!/usr/bin/env bash\nprintf invoked >{shlex.quote(str(marker))}\n",
+        encoding="utf-8",
+    )
+    (rollback_dir / "rollback.sh").chmod(0o700)
+    harness = tmp_path / "failure-harness.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -Eeuo pipefail\n"
+        "RED=''\nNC=''\n"
+        "DEPLOY_MUTATION_STARTED=1\nROLLBACK_READY=1\n"
+        f"ROLLBACK_DIR={shlex.quote(str(rollback_dir))}\n"
+        "compose() { return 0; }\n"
+        f"{failure_function}\n"
+        "trap deploy_failed ERR\n"
+        "false\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o700)
+
+    result = subprocess.run(
+        [str(harness)], capture_output=True, text=True, timeout=5
+    )
+
+    assert result.returncode == 1
+    assert marker.read_text(encoding="utf-8") == "invoked"
+    assert "Automatic foreground rollback completed" in result.stderr
+
+
 def test_rollback_commands_override_frozen_custom_image_configuration():
     """Rollback must use snapshotted image identities, not .env image aliases."""
-    source = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    rollback = (ROOT / "scripts/deploy-rollback.sh").read_text(encoding="utf-8")
 
     assert (
-        'BACKEND_IMAGE="$candidate_backend_id" ADMIN_IMAGE="$candidate_admin_id" \\\n'
-        "      docker compose"
-    ) in source
-    assert (
-        'BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \\\n'
-        "  docker compose"
-    ) in source
-    assert "run --rm --no-deps migrate alembic downgrade" in source
-    assert "up -d --force-recreate --no-deps --no-build --wait" in source
+        'BACKEND_IMAGE="$BACKEND_IMAGE_ID" ADMIN_IMAGE="$ADMIN_IMAGE_ID" \\\n'
+        "    docker compose"
+    ) in rollback
+    assert "scripts/deploy-rollback.sh" in deploy
+    for field in (
+        "ROLLBACK_SCHEMA_POLICY",
+        "ROLLBACK_SCHEMA_CURRENT_REVISION_AT_SNAPSHOT",
+        "ROLLBACK_SCHEMA_RETAIN_CANDIDATE",
+        "ROLLBACK_OLD_MIGRATE_ONLY_AT_PREDEPLOY",
+    ):
+        assert field in deploy
+    assert "alembic downgrade" not in deploy
+    assert "alembic downgrade" not in rollback
+    assert "up -d --force-recreate --no-deps --no-build --wait" in rollback
+
+
+def test_candidate_schema_rollback_retains_schema_and_skips_old_migrate(tmp_path):
+    candidate = "222222222222"
+    result, log, receipt, _, _ = _run_deploy_rollback(tmp_path, candidate)
+
+    assert result.returncode == 0, result.stderr
+    assert "alembic downgrade" not in log
+    assert "up --force-recreate --no-deps --no-build migrate" not in log
+    assert "backend admin-web" in log
+    assert receipt == {
+        "ROLLBACK_STATUS": "complete",
+        "ROLLBACK_SCHEMA_POLICY": "schema-forward",
+        "ROLLBACK_CURRENT_ALEMBIC_REVISION": candidate,
+        "ROLLBACK_SCHEMA_RETAINED": "true",
+        "ROLLBACK_OLD_MIGRATE_RAN": "false",
+        "ROLLBACK_APPLICATION_GIT_HEAD": "predeploy-git-head",
+    }
+
+
+def test_unchanged_predeploy_schema_may_run_old_migrate(tmp_path):
+    result, log, receipt, predeploy, _ = _run_deploy_rollback(tmp_path, "111111111111")
+
+    assert result.returncode == 0, result.stderr
+    assert "alembic downgrade" not in log
+    assert "up --force-recreate --no-deps --no-build migrate" in log
+    assert receipt["ROLLBACK_CURRENT_ALEMBIC_REVISION"] == predeploy
+    assert receipt["ROLLBACK_SCHEMA_RETAINED"] == "false"
+    assert receipt["ROLLBACK_OLD_MIGRATE_RAN"] == "true"
+    assert receipt["ROLLBACK_STATUS"] == "complete"
+
+
+def test_rollback_refuses_an_unexpected_schema_revision(tmp_path):
+    result, log, receipt, _, _ = _run_deploy_rollback(tmp_path, "333333333333")
+
+    assert result.returncode == 2
+    assert "unexpected Alembic revision" in result.stderr
+    assert "backend admin-web" not in log
+    assert receipt["ROLLBACK_STATUS"] == "refused"
+    assert receipt["ROLLBACK_CURRENT_ALEMBIC_REVISION"] == "333333333333"
+    assert receipt["ROLLBACK_SCHEMA_RETAINED"] == "unknown"
+
+
+def test_only_isolated_acceptance_round_trip_may_use_alembic_downgrade():
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    rollback = (ROOT / "scripts/deploy-rollback.sh").read_text(encoding="utf-8")
+    acceptance = (ROOT / "scripts/test-env.sh").read_text(encoding="utf-8")
+
+    assert "alembic downgrade" not in deploy
+    assert "alembic downgrade" not in rollback
+    assert 'compose run --rm --no-deps migrate alembic downgrade "$predeploy"' in acceptance
+    assert 'TEST_PROJECT="auto-gallery-test-' in acceptance
+    assert 'TEST_ROOT="$STATE_ROOT/$TEST_RUN_ID"' in acceptance
 
 
 def test_verified_mode_retains_manifest_correctness_checks():

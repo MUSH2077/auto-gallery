@@ -248,9 +248,13 @@ bash scripts/deploy.sh
 ### Image-based rollback
 
 Every successful pre-deploy snapshot contains an executable `rollback.sh`. It
-downgrades the additive migration with the candidate image, restores the tagged
-backend/web images, and brings back only the foreground stack under the new
-resource ceilings. Heavy workers remain stopped until the failure is understood:
+uses a permanent **schema-forward application rollback** policy. If the database
+is still at the pre-deploy revision, the old image's migrate service may run. If
+the candidate revision has already been applied, the script retains that schema,
+skips the old image's migrate service (whose Alembic graph may not know the
+candidate revision), restores the tagged backend/web images, and brings back only
+the foreground stack under the new resource ceilings. Any unexpected database
+revision is refused. Heavy workers remain stopped until the failure is understood:
 
 ```bash
 /volume2/docker/auto-gallery-deployments/<deployment-id>/rollback.sh
@@ -258,6 +262,11 @@ resource ceilings. Heavy workers remain stopped until the failure is understood:
 
 Use the checksummed `postgres.dump` only for verified data corruption. Ordinary
 code or migration rollback should not overwrite the database from a dump.
+Inspect `rollback-receipt.env` for the policy, observed revision, whether the
+schema was retained, and whether old migrate ran. Every production migration
+must remain backward-compatible with the previous application image. If that
+image is incompatible with the retained candidate schema, restore the candidate
+image and ship a forward repair; never downgrade or drop the multi-user tables.
 
 Gitllery remains product v1. During the segment-format rollout, keep the legacy
 git-object layout read-only and leave `.gitllery.build-segment-r1` unpromoted.
@@ -320,8 +329,11 @@ incident tickets.
 The remote-discovery migrations are additive. Application rollback retains the
 new tables and canonical summary caches. Production operators must not run an
 Alembic downgrade that drops multi-user membership, remote account, candidate,
-or credential-generation data. Restore the previous application image against
-the retained schema instead.
+or credential-generation data. The generated rollback records
+`ROLLBACK_SCHEMA_POLICY=schema-forward`; when the candidate revision is present,
+it restores only the previous backend/web images and deliberately skips their
+migrate service. If the previous image cannot tolerate the retained schema,
+restore the candidate image and perform a forward fix instead.
 
 Live provider smoke tests are opt-in and excluded from normal network-free
 pytest runs. Use only dedicated test accounts in a controlled shell; the exact

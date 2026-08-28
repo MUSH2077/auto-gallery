@@ -348,7 +348,7 @@ PY
 }
 
 prepare_rollback_point() {
-    local backend_id admin_id candidate_backend_id candidate_admin_id
+    local backend_id admin_id candidate_backend_id candidate_admin_id predeploy_git_head
 
     install -d -m 700 "$ROLLBACK_DIR"
     cp docker-compose.yaml "$ROLLBACK_DIR/docker-compose.candidate.yaml"
@@ -385,92 +385,30 @@ prepare_rollback_point() {
         'psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --tuples-only --no-align --command="SELECT version_num FROM alembic_version"')"
     PREDEPLOY_REVISION="${PREDEPLOY_REVISION//[[:space:]]/}"
     [[ "$PREDEPLOY_REVISION" =~ ^[a-f0-9]{12}$ ]]
+    predeploy_git_head="$(git rev-parse HEAD)"
 
-    cat >"$ROLLBACK_DIR/manifest.env" <<EOF
-DEPLOYMENT_ID=$DEPLOYMENT_ID
-PROJECT_ROOT=$PROJECT_ROOT
-PREDEPLOY_GIT_HEAD=$(git rev-parse HEAD)
-PREDEPLOY_ALEMBIC_REVISION=$PREDEPLOY_REVISION
-CANDIDATE_ALEMBIC_REVISION=$CANDIDATE_REVISION
-CANDIDATE_SOURCE_DIGEST=$CANDIDATE_SOURCE_DIGEST
-BACKEND_IMAGE_ID=$backend_id
-BACKEND_ROLLBACK_TAG=auto-gallery-backend:rollback-$DEPLOYMENT_ID
-ADMIN_IMAGE_ID=$admin_id
-ADMIN_ROLLBACK_TAG=auto-gallery-admin-web:rollback-$DEPLOYMENT_ID
-CANDIDATE_BACKEND_IMAGE=$CANDIDATE_BACKEND_IMAGE
-CANDIDATE_BACKEND_IMAGE_ID=$candidate_backend_id
-CANDIDATE_ADMIN_IMAGE=$CANDIDATE_ADMIN_IMAGE
-CANDIDATE_ADMIN_IMAGE_ID=$candidate_admin_id
-EOF
+    {
+        printf 'DEPLOYMENT_ID=%q\n' "$DEPLOYMENT_ID"
+        printf 'PROJECT_ROOT=%q\n' "$PROJECT_ROOT"
+        printf 'PREDEPLOY_GIT_HEAD=%q\n' "$predeploy_git_head"
+        printf 'PREDEPLOY_ALEMBIC_REVISION=%q\n' "$PREDEPLOY_REVISION"
+        printf 'CANDIDATE_ALEMBIC_REVISION=%q\n' "$CANDIDATE_REVISION"
+        printf 'CANDIDATE_SOURCE_DIGEST=%q\n' "$CANDIDATE_SOURCE_DIGEST"
+        printf 'BACKEND_IMAGE_ID=%q\n' "$backend_id"
+        printf 'BACKEND_ROLLBACK_TAG=%q\n' "auto-gallery-backend:rollback-$DEPLOYMENT_ID"
+        printf 'ADMIN_IMAGE_ID=%q\n' "$admin_id"
+        printf 'ADMIN_ROLLBACK_TAG=%q\n' "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID"
+        printf 'CANDIDATE_BACKEND_IMAGE=%q\n' "$CANDIDATE_BACKEND_IMAGE"
+        printf 'CANDIDATE_BACKEND_IMAGE_ID=%q\n' "$candidate_backend_id"
+        printf 'CANDIDATE_ADMIN_IMAGE=%q\n' "$CANDIDATE_ADMIN_IMAGE"
+        printf 'CANDIDATE_ADMIN_IMAGE_ID=%q\n' "$candidate_admin_id"
+        printf 'ROLLBACK_SCHEMA_POLICY=%q\n' "schema-forward"
+        printf 'ROLLBACK_SCHEMA_CURRENT_REVISION_AT_SNAPSHOT=%q\n' "$PREDEPLOY_REVISION"
+        printf 'ROLLBACK_SCHEMA_RETAIN_CANDIDATE=%q\n' "true"
+        printf 'ROLLBACK_OLD_MIGRATE_ONLY_AT_PREDEPLOY=%q\n' "true"
+    } >"$ROLLBACK_DIR/manifest.env"
     chmod 600 "$ROLLBACK_DIR/manifest.env"
-
-    cat >"$ROLLBACK_DIR/rollback.sh" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$PROJECT_ROOT"
-
-# The parent deploy process exports candidate image names.  A rollback must
-# resolve images from its frozen env file (and the rollback tags below), not
-# inherit those candidate overrides from the failed deploy process.
-unset BACKEND_IMAGE ADMIN_IMAGE
-
-# Preserve the new resource ceilings during rollback. Heavy workers stay
-# stopped; restore browsing first, then investigate before resuming work.
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  stop -t 120 migrate backend admin-web worker-download worker-import worker-operations scheduler || true
-
-current_revision="\$(docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  exec -T postgres sh -c \
-  'psql --username="\$POSTGRES_USER" --dbname="\$POSTGRES_DB" --tuples-only --no-align --command="SELECT version_num FROM alembic_version"')"
-current_revision="\${current_revision//[[:space:]]/}"
-case "\$current_revision" in
-  "$PREDEPLOY_REVISION")
-    ;;
-  "$CANDIDATE_REVISION")
-    docker image inspect "$CANDIDATE_BACKEND_IMAGE" >/dev/null
-    docker image tag "$CANDIDATE_BACKEND_IMAGE" auto-gallery-backend:latest
-    BACKEND_IMAGE="$candidate_backend_id" ADMIN_IMAGE="$candidate_admin_id" \
-      docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-      --env-file "$ROLLBACK_DIR/.env.predeploy" \
-      -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-      run --rm --no-deps migrate alembic downgrade $PREDEPLOY_REVISION
-    ;;
-  *)
-    echo "Refusing rollback from unexpected Alembic revision: \$current_revision" >&2
-    exit 2
-    ;;
-esac
-
-docker image tag "auto-gallery-backend:rollback-$DEPLOYMENT_ID" auto-gallery-backend:latest
-docker image tag "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID" auto-gallery-admin-web:latest
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up --force-recreate --no-deps --no-build migrate
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up -d --force-recreate --no-deps --no-build --wait --wait-timeout 180 \
-  backend admin-web
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" ps
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  exec -T backend curl -sf http://localhost:8000/api/v1/system/ready >/dev/null
-EOF
+    cp scripts/deploy-rollback.sh "$ROLLBACK_DIR/rollback.sh"
     chmod 700 "$ROLLBACK_DIR/rollback.sh"
 
     ROLLBACK_READY=1
@@ -512,8 +450,13 @@ backup_frozen_state() {
     fi
 
     cat >"$ROLLBACK_DIR/README.txt" <<'EOF'
-This directory is a deployment rollback point. Run rollback.sh for an ordinary
-code/migration rollback; it does not overwrite PostgreSQL or Redis data.
+This directory is a deployment rollback point. Run rollback.sh for a
+schema-forward application rollback; it never downgrades or overwrites
+PostgreSQL or Redis data. Inspect rollback-receipt.env after it exits.
+
+If the candidate schema is already applied, rollback.sh skips the old image's
+migrate service. Heavy workers stay stopped. If the old application cannot read
+the retained schema, restore the candidate image and ship a forward repair.
 
 Use postgres.dump only after confirmed data corruption and a separate restore
 review. To restore Redis after confirmed data loss, first stop Redis and move
