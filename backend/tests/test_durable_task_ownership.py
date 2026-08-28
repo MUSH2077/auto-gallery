@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 
 
 OWNER_REVISION = "0d7e8f9a1b2c"
+CURRENT_HEAD_REVISION = "a6c8e0f2b4d7"
 
 
 def test_download_and_task_owners_are_durable_indexed_audit_identifiers():
@@ -39,8 +40,8 @@ def test_download_and_task_owners_are_durable_indexed_audit_identifiers():
         )
 
 
-def test_owner_migration_is_the_only_head_and_follows_credential_generation():
-    """The durable-owner schema change stays additive on the reviewed head."""
+def test_owner_migration_precedes_the_current_single_head():
+    """The durable-owner schema change remains in the reviewed linear graph."""
 
     backend_dir = Path(__file__).resolve().parents[1]
     result = subprocess.run(
@@ -51,7 +52,15 @@ def test_owner_migration_is_the_only_head_and_follows_credential_generation():
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"{OWNER_REVISION} (head)"
+    assert result.stdout.strip() == f"{CURRENT_HEAD_REVISION} (head)"
+
+    alignment_migration = (
+        backend_dir
+        / "alembic"
+        / "versions"
+        / "a6c8e0f2b4d7_align_subscription_source_identity.py"
+    ).read_text()
+    assert f'down_revision = "{OWNER_REVISION}"' in alignment_migration
 
 
 @pytest.mark.asyncio

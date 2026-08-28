@@ -350,6 +350,11 @@ it restores only the previous backend/web images and deliberately skips their
 migrate service. If the previous image cannot tolerate the retained schema,
 restore the candidate image and perform a forward fix instead.
 
+Do not downgrade past the subscription-source identity alignment after a
+subscription has multiple identities for one provider. Restoring the legacy
+provider-only uniqueness constraint fails rather than deleting or merging rows;
+production recovery remains schema-forward.
+
 Live provider smoke tests are opt-in and excluded from normal network-free
 pytest runs. Use only dedicated test accounts in a controlled shell; the exact
 opt-in is `AUTO_GALLERY_LIVE_REMOTE_DISCOVERY=explicitly-enabled` plus one of
