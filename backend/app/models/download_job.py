@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +10,13 @@ from app.models.base import Base, TimestampMixin
 
 class DownloadJob(TimestampMixin, Base):
     __tablename__ = "download_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "triggering_credential_generation IS NULL "
+            "OR triggering_credential_generation >= 1",
+            name="ck_download_jobs_triggering_credential_generation",
+        ),
+    )
 
     subscription_id: Mapped[UUID] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
     subscription_source_id: Mapped[UUID | None] = mapped_column(ForeignKey("subscription_sources.id"))
@@ -18,6 +25,10 @@ class DownloadJob(TimestampMixin, Base):
     )
     triggering_remote_account_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("remote_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    triggering_credential_generation: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     source_url: Mapped[str] = mapped_column(String(2000), nullable=False)

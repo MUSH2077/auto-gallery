@@ -70,6 +70,10 @@ class RemoteAccount(TimestampMixin, Base):
             "auto_import_limit BETWEEN 1 AND 200",
             name="ck_remote_accounts_auto_import_limit",
         ),
+        CheckConstraint(
+            "credential_generation >= 0",
+            name="ck_remote_accounts_credential_generation",
+        ),
         Index(
             "ix_remote_accounts_next_scan_due",
             "next_scan_at",
@@ -93,6 +97,12 @@ class RemoteAccount(TimestampMixin, Base):
     credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     credential_key_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     credential_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    credential_generation: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     auth_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     auth_error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

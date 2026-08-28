@@ -367,6 +367,7 @@ def test_remote_account_read_and_repr_never_expose_ciphertext():
         scopes=["users.read", "follows.read"],
         collection_selectors=[{"list_id": "123"}],
         credential_ciphertext="ciphertext-that-must-stay-private",
+        credential_generation=1,
         is_enabled=True,
         scan_interval_hours=24,
         auto_import_enabled=False,
