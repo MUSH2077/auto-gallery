@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FlaskConical, KeyRound, Radar, Settings2, ShieldCheck, Trash2 } from "lucide-react";
 
@@ -17,7 +17,7 @@ import {
 } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { runPrivateDiscoveryRequest } from "@/lib/remoteDiscoveryPrivateCache";
+import { runPrivateDiscoveryRequest, startPrivateDiscoveryRequest } from "@/lib/remoteDiscoveryPrivateCache";
 import { DISCOVERY_SOURCES, providerLabel, safeDiscoveryError } from "./discoveryPresentation";
 
 type DialogKind = "connect" | "reconnect" | "settings" | null;
@@ -54,7 +54,9 @@ function CredentialsDialog({
   const [credential, setCredential] = useState("");
   const [xMethod, setXMethod] = useState<"oauth2" | "cookie">("oauth2");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [connectPending, setConnectPending] = useState(false);
   const [oauthPending, setOAuthPending] = useState(false);
+  const pendingConnectCancel = useRef<(() => void) | null>(null);
   const reconnecting = !!account;
 
   useEffect(() => {
@@ -66,37 +68,65 @@ function CredentialsDialog({
     setCredential("");
     setFeedback(null);
     setXMethod(account?.auth_method === "cookie" ? "cookie" : "oauth2");
+    return () => {
+      pendingConnectCancel.current?.();
+      pendingConnectCancel.current = null;
+    };
   }, [account?.auth_method, open]);
 
-  const connect = useMutation({
-    mutationKey: queryKeys.discovery.mutation(userId, "account-connect"),
-    mutationFn: async () => {
-      const authMethod: RemoteAuthMethod = source === "pixiv"
-        ? "refresh_token"
-        : source === "bilibili"
-          ? "sessdata"
-          : "cookie";
-      const credentials: Record<string, string> = source === "pixiv"
-        ? { refresh_token: credential }
-        : source === "bilibili"
-          ? { SESSDATA: credential }
-          : { cookie: credential };
-      if (account) {
-        return runPrivateDiscoveryRequest(userId, (signal) => api.updateRemoteAccount(account.id, { auth_method: authMethod, credentials }, signal));
-      }
-      return runPrivateDiscoveryRequest(userId, (signal) => api.createRemoteAccount({ source, auth_method: authMethod, credentials }, signal));
-    },
-    onSuccess: async () => {
-      setCredential("");
+  const closeDialog = () => {
+    pendingConnectCancel.current?.();
+    pendingConnectCancel.current = null;
+    setCredential("");
+    setFeedback(null);
+    setConnectPending(false);
+    onClose();
+  };
+
+  const submitCredential = async () => {
+    if (connectPending) return;
+    let rawCredential = credential;
+    setCredential("");
+    setFeedback(null);
+    setConnectPending(true);
+    const authMethod: RemoteAuthMethod = source === "pixiv"
+      ? "refresh_token"
+      : source === "bilibili"
+        ? "sessdata"
+        : "cookie";
+    let credentials: Record<string, string> = source === "pixiv"
+      ? { refresh_token: rawCredential }
+      : source === "bilibili"
+        ? { SESSDATA: rawCredential }
+        : { cookie: rawCredential };
+    const request = startPrivateDiscoveryRequest(userId, (signal) => account
+      ? api.updateRemoteAccount(account.id, { auth_method: authMethod, credentials }, signal)
+      : api.createRemoteAccount({ source, auth_method: authMethod, credentials }, signal));
+    const cancel = request.cancel;
+    pendingConnectCancel.current = cancel;
+    rawCredential = "";
+    for (const key of Object.keys(credentials)) credentials[key] = "";
+    credentials = {};
+    try {
+      await request.promise;
+      if (pendingConnectCancel.current !== cancel) return;
       await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
+      if (pendingConnectCancel.current !== cancel) return;
+      pendingConnectCancel.current = null;
+      setConnectPending(false);
       toast.success(t("discovery.account_connected"));
       onClose();
-    },
-    onError: (error) => {
+    } catch (error) {
+      if (pendingConnectCancel.current !== cancel) return;
       onPrivateAccessError(error);
       setFeedback(safeDiscoveryError(t, error, t("discovery.connection_failed")));
-    },
-  });
+    } finally {
+      if (pendingConnectCancel.current === cancel) {
+        pendingConnectCancel.current = null;
+        setConnectPending(false);
+      }
+    }
+  };
 
   const authorizeOAuth = async () => {
     if (oauthPending) return;
@@ -131,10 +161,7 @@ function CredentialsDialog({
   return (
     <Modal
       open={open}
-      onClose={() => {
-        setCredential("");
-        onClose();
-      }}
+      onClose={closeDialog}
       title={t(reconnecting ? "discovery.reconnect_title" : "discovery.connect_title", { provider })}
     >
       <div className="space-y-4">
@@ -190,12 +217,12 @@ function CredentialsDialog({
         {feedback ? <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">{feedback}</p> : null}
         {!isOAuth ? (
           <div className="flex flex-wrap justify-end gap-2 pt-1">
-            <button type="button" className="btn-ghost" onClick={onClose}>{t("common.cancel")}</button>
+            <button type="button" className="btn-ghost" onClick={closeDialog}>{t("common.cancel")}</button>
             <button
               type="button"
               className="btn-primary"
-              disabled={!credential.trim() || connect.isPending}
-              onClick={() => connect.mutate()}
+              disabled={!credential.trim() || connectPending}
+              onClick={() => void submitCredential()}
             >
               <KeyRound aria-hidden="true" className="h-4 w-4" />
               {t(reconnecting ? "discovery.reconnect_account" : "discovery.connect_account")}

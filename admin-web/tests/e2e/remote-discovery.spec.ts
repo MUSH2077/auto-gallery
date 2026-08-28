@@ -92,6 +92,8 @@ type FixtureOptions = {
   candidateDelay?: (url: URL) => number;
   oauthCallbackStatus?: number;
   oauthCallbackDelayMs?: number;
+  accountConnectStatus?: number;
+  accountConnectDelayMs?: number;
   onPrivateRequest?: (user: "a" | "b", path: string) => void;
   onMutation?: (path: string, body: Record<string, unknown>) => void;
 };
@@ -140,6 +142,8 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     }
     if (path === "/api/v1/remote-accounts" && request.method() === "GET") return json(route, accounts);
     if (path === "/api/v1/remote-accounts" && request.method() === "POST") {
+      if (options.accountConnectDelayMs) await new Promise((resolve) => setTimeout(resolve, options.accountConnectDelayMs));
+      if (options.accountConnectStatus) return json(route, { detail: "credential rejected" }, options.accountConnectStatus);
       options.onMutation?.(path, body || {});
       const created = account({
         id: `acc-${String(body?.source)}`,
@@ -298,6 +302,33 @@ async function privateQueryCacheText(page: Page) {
   });
 }
 
+async function privateMutationOptions(page: Page) {
+  return page.evaluate(() => {
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
+      if (!fiberKey) continue;
+      let fiber = (element as unknown as Record<string, unknown>)[fiberKey] as {
+        return?: unknown;
+        memoizedProps?: { client?: { getMutationCache?: () => { getAll: () => Array<{ options: { mutationKey?: unknown; mutationFn?: unknown }; state: { status: string } }> } } };
+      } | null;
+      while (fiber) {
+        const client = fiber.memoizedProps?.client;
+        if (client?.getMutationCache) {
+          return client.getMutationCache().getAll()
+            .filter((mutation) => Array.isArray(mutation.options.mutationKey) && mutation.options.mutationKey[0] === "remote-discovery-private")
+            .map((mutation) => ({
+              mutationKey: mutation.options.mutationKey,
+              status: mutation.state.status,
+              retainsMutationFn: typeof mutation.options.mutationFn === "function",
+            }));
+        }
+        fiber = fiber.return as typeof fiber;
+      }
+    }
+    throw new Error("QueryClient not found in React tree");
+  });
+}
+
 test("connects Pixiv, saves collections and never re-renders the refresh token", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   await installFixtures(context, { onMutation: (path, body) => mutations.push({ path, body }) });
@@ -336,6 +367,40 @@ test("connects Pixiv, saves collections and never re-renders the refresh token",
   await expect(page.getByLabel("Pixiv refresh token")).toHaveValue("");
 });
 
+test("does not retain a failed credential submission function in MutationCache", async ({ context, page }) => {
+  const credentialCanary = "failed-refresh-token-canary";
+  await installFixtures(context, { accountConnectStatus: 400 });
+  await page.goto("/admin/discovery");
+  await page.getByRole("button", { name: "Connect Pixiv" }).click();
+  await page.getByLabel("Pixiv refresh token").fill(credentialCanary);
+  await page.getByRole("button", { name: "Connect account" }).click();
+  await expect(page.getByText("Could not connect the account. Check the credentials and try again.")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  expect(await privateMutationOptions(page)).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ mutationKey: expect.arrayContaining(["account-connect"]), retainsMutationFn: true }),
+  ]));
+  expect(await mutationCacheText(page)).not.toContain(credentialCanary);
+  await expect(page.getByText(credentialCanary)).toHaveCount(0);
+});
+
+test("cancels a pending credential submission without retaining its function in MutationCache", async ({ context, page }) => {
+  const credentialCanary = "pending-refresh-token-canary";
+  await installFixtures(context, { accountConnectDelayMs: 2000 });
+  await page.goto("/admin/discovery");
+  await page.getByRole("button", { name: "Connect Pixiv" }).click();
+  await page.getByLabel("Pixiv refresh token").fill(credentialCanary);
+  await page.getByRole("button", { name: "Connect account" }).click();
+  await expect(page.getByRole("button", { name: "Connect account" })).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  expect(await privateMutationOptions(page)).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ mutationKey: expect.arrayContaining(["account-connect"]), retainsMutationFn: true }),
+  ]));
+  expect(await mutationCacheText(page)).not.toContain(credentialCanary);
+  await expect(page.getByText(credentialCanary)).toHaveCount(0);
+});
+
 test("never clears selectors when collection enumeration fails, then saves after retry", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   let collectionsAvailable = false;
@@ -364,7 +429,9 @@ test("scans, filters, imports without immediate sync, dismisses and restores vis
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error" && !message.text().includes("Failed to load resource")) {
+      consoleErrors.push(message.text());
+    }
   });
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   await installFixtures(context, {
@@ -561,6 +628,12 @@ test("renders a private 403 state without leaking discovery rows", async ({ cont
 
 test("switches users in one session without flashing or reusing private discovery data", async ({ context, page }) => {
   const privateRequests: Array<{ user: "a" | "b"; path: string }> = [];
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.text().includes("Failed to load resource")) {
+      consoleErrors.push(message.text());
+    }
+  });
   await installFixtures(context, {
     accounts: [account({ remote_username: "private_account_a" })],
     candidates: [candidate("private-a", { display_name: "Private Artist A" })],
@@ -603,6 +676,7 @@ test("switches users in one session without flashing or reusing private discover
     "/api/v1/discovery/candidates",
   ]));
   expect(await page.evaluate(() => (window as typeof window & { __privateDiscoveryLeaks?: string[] }).__privateDiscoveryLeaks)).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("keeps the account and candidate workbench usable on mobile", async ({ context, page }) => {
