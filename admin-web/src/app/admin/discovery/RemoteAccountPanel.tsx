@@ -356,6 +356,29 @@ function AccountCard({
         ? t("discovery.scan_in_progress")
         : null;
   const authTone = account?.auth_status === "healthy" ? "up" : account?.auth_status ? "warning" : "unknown";
+  const authLabel = account?.auth_status === "healthy"
+    ? t("discovery.auth_healthy")
+    : account?.auth_status
+      ? t("discovery.auth_requires_attention")
+      : t("discovery.auth_untested");
+  const progressCurrent = typeof scan?.progress_current === "number"
+    ? scan.progress_current
+    : typeof scan?.progress_data?.current === "number"
+      ? scan.progress_data.current
+      : typeof scan?.progress_data?.selector_index === "number"
+        ? scan.progress_data.selector_index
+        : null;
+  const progressTotal = typeof scan?.progress_total === "number"
+    ? scan.progress_total
+    : typeof scan?.progress_data?.total === "number"
+      ? scan.progress_data.total
+      : typeof scan?.progress_data?.selector_count === "number"
+        ? scan.progress_data.selector_count
+        : null;
+  const candidatesSeen = typeof scan?.progress_data?.candidates_seen === "number" ? scan.progress_data.candidates_seen : 0;
+  const progressPercent = progressCurrent !== null && progressTotal && progressTotal > 0
+    ? Math.min(100, Math.max(0, (progressCurrent / progressTotal) * 100))
+    : null;
 
   return (
     <article aria-label={t("discovery.provider_account", { provider: label })} className="rounded-lg border border-border bg-surface p-4">
@@ -379,7 +402,7 @@ function AccountCard({
             </p>
           </div>
         </div>
-        {account ? <StatusBadge status={authTone} label={account.auth_status === "healthy" ? t("status.up") : t("status.unknown")} /> : null}
+        {account ? <StatusBadge status={authTone} label={authLabel} /> : null}
       </div>
 
       {!account ? (
@@ -409,9 +432,33 @@ function AccountCard({
               : t("discovery.auto_import_off")}
           </p>
           {scanState ? (
-            <div className="mt-3 flex items-center gap-2 text-xs font-medium text-accent" role="status">
-              <Radar aria-hidden="true" className={`h-4 w-4 ${activeScan ? "animate-pulse" : ""}`} />
-              {scanState}
+            <div className="mt-3 text-xs font-medium text-accent" role="status">
+              <div className="flex items-center gap-2">
+                <Radar aria-hidden="true" className={`h-4 w-4 ${activeScan ? "animate-pulse" : ""}`} />
+                {scanState}
+              </div>
+              {activeScan ? (
+                <div className="mt-2">
+                  <div
+                    className="h-1.5 overflow-hidden rounded-full bg-border"
+                    role={progressPercent !== null ? "progressbar" : undefined}
+                    aria-label={progressPercent !== null ? scanState : undefined}
+                    aria-valuemin={progressPercent !== null ? 0 : undefined}
+                    aria-valuemax={progressPercent !== null ? 100 : undefined}
+                    aria-valuenow={progressPercent !== null ? Math.round(progressPercent) : undefined}
+                  >
+                    <div
+                      className={`h-full w-full rounded-full bg-accent ${progressPercent === null ? "animate-pulse" : "transition-transform duration-slow ease-out"}`}
+                      style={{ transform: `scaleX(${progressPercent === null ? 0.6 : progressPercent / 100})`, transformOrigin: "left" }}
+                    />
+                  </div>
+                  {progressCurrent !== null && progressTotal !== null ? (
+                    <p className="mt-1 text-[11px] font-normal text-muted">
+                      {t("discovery.scan_progress", { current: progressCurrent, total: progressTotal, candidates: candidatesSeen })}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
