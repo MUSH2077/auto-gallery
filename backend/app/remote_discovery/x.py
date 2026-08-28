@@ -107,11 +107,10 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
     async def validate_account(self, credentials: Mapping[str, Any]) -> RemoteCandidateIdentity:
         method = self._auth_method(credentials)
         if method == "oauth2":
-            token = await self._oauth_access_token(credentials)
-            response = await self.transport.request(
+            response = await self._oauth_request(
+                credentials,
                 "GET",
                 f"{self.API_BASE}/users/me",
-                headers={"Authorization": f"Bearer {token}"},
                 params={"user.fields": "id,name,username,description,profile_image_url,url,verified,protected"},
             )
             payload = checked_payload(response, provider="X")
@@ -138,29 +137,95 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         token = credentials.get("access_token")
         if isinstance(token, str) and token:
             return token
-        refresh_token = required_text(credentials, "refresh_token", provider="X")
-        client_id = required_text(credentials, "client_id", provider="X")
-        response = await self.transport.request(
-            "POST",
-            f"{self.API_BASE}/oauth2/token",
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-            },
-        )
-        payload = checked_oauth_token_payload(response, provider="X")
-        token = payload.get("access_token")
+        rotated = await self._refresh_oauth_tokens(credentials)
+        token = rotated.get("access_token")
         if not isinstance(token, str) or not token:
             raise MalformedRemoteResponse("X token response is missing access_token")
         return token
+
+    async def _refresh_oauth_tokens(
+        self,
+        credentials: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        async def request_rotation(current: Mapping[str, Any]) -> Mapping[str, Any]:
+            refresh_token = required_text(current, "refresh_token", provider="X")
+            client_id = required_text(current, "client_id", provider="X")
+            response = await self.transport.request(
+                "POST",
+                f"{self.API_BASE}/oauth2/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                },
+            )
+            payload = checked_oauth_token_payload(response, provider="X")
+            access_token = payload.get("access_token")
+            if not isinstance(access_token, str) or not access_token:
+                raise MalformedRemoteResponse("X token response is missing access_token")
+            rotated = dict(current)
+            rotated["access_token"] = access_token
+            refresh = payload.get("refresh_token")
+            if isinstance(refresh, str) and refresh:
+                rotated["refresh_token"] = refresh
+            expected_remote_user_id = current.get("remote_user_id")
+            if isinstance(expected_remote_user_id, str) and expected_remote_user_id:
+                identity_response = await self.transport.request(
+                    "GET",
+                    f"{self.API_BASE}/users/me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"user.fields": "id"},
+                )
+                identity_payload = checked_payload(identity_response, provider="X")
+                identity = identity_payload.get("data")
+                if (
+                    not isinstance(identity, Mapping)
+                    or str(identity.get("id") or "") != expected_remote_user_id
+                ):
+                    raise RemoteReauthenticationRequired(
+                        401,
+                        "X OAuth account identity changed",
+                    )
+            return rotated
+
+        coordinator = getattr(credentials, "rotate_oauth_tokens", None)
+        if callable(coordinator):
+            return dict(await coordinator(request_rotation))
+        rotated = dict(await request_rotation(credentials))
+        if isinstance(credentials, dict):
+            credentials.update(rotated)
+        return rotated
+
+    async def _oauth_request(
+        self,
+        credentials: Mapping[str, Any],
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ):
+        token = await self._oauth_access_token(credentials)
+        response = await self.transport.request(
+            method,
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            **kwargs,
+        )
+        if response.status_code != 401:
+            return response
+        # Only official OAuth refreshes. Cookie mode never crosses this helper.
+        rotated = await self._refresh_oauth_tokens(credentials)
+        return await self.transport.request(
+            method,
+            url,
+            headers={"Authorization": f"Bearer {rotated['access_token']}"},
+            **kwargs,
+        )
 
     async def list_collections(self, credentials: Mapping[str, Any]) -> tuple[RemoteCollection, ...]:
         if self._auth_method(credentials) == "cookie":
             required_text(credentials, "cookie", provider="X")
             return (RemoteCollection("following", "Following", {"kind": "following"}),)
         user_id = required_text(credentials, "remote_user_id", provider="X")
-        token = await self._oauth_access_token(credentials)
         collections = [RemoteCollection("following", "Following", {"kind": "following"})]
         pagination_token: str | None = None
         seen_tokens: set[str] = set()
@@ -171,10 +236,10 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             }
             if pagination_token:
                 params["pagination_token"] = pagination_token
-            response = await self.transport.request(
+            response = await self._oauth_request(
+                credentials,
                 "GET",
                 f"{self.API_BASE}/users/{user_id}/owned_lists",
-                headers={"Authorization": f"Bearer {token}"},
                 params=params,
             )
             payload = checked_payload(response, provider="X")
@@ -259,7 +324,6 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         )
 
     async def _discover_oauth(self, credentials, *, collection_id, cursor, page_size):
-        token = await self._oauth_access_token(credentials)
         params: dict[str, Any] = {
             "user.fields": "id,name,username,description,profile_image_url,url,verified,protected",
         }
@@ -274,8 +338,11 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             params["max_results"] = min(max(page_size, 1), 100)
         else:
             raise ValueError("unknown X discovery collection")
-        response = await self.transport.request(
-            "GET", url, headers={"Authorization": f"Bearer {token}"}, params=params
+        response = await self._oauth_request(
+            credentials,
+            "GET",
+            url,
+            params=params,
         )
         payload = checked_payload(response, provider="X")
         data = payload.get("data", [])

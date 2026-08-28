@@ -27,7 +27,11 @@ from app.remote_discovery.classifier import IdentityMatchSignals, classify_ident
 from app.remote_discovery.common import RemoteReauthenticationRequired
 from app.remote_discovery.contract import RemoteCandidateIdentity
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
-from app.services.remote_accounts import RemoteAccountService, configured_credential_vault
+from app.services.remote_accounts import (
+    RemoteAccountService,
+    RemoteCredentialGenerationChanged,
+    configured_credential_vault,
+)
 from app.services.remote_credentials import CredentialVault
 from app.services.remote_discovery_rollout import (
     RemoteDiscoveryUnavailable,
@@ -234,6 +238,43 @@ class RemoteDiscoveryService:
             raise ValueError("Remote account not found")
         return account
 
+    @staticmethod
+    def _remote_identity(account: RemoteAccount) -> dict[str, Any]:
+        return {
+            "account_id": str(account.id),
+            "auth_method": account.auth_method,
+            "remote_user_id": account.remote_user_id,
+            "source": account.source,
+        }
+
+    async def _locked_pinned_account(
+        self,
+        account_id: UUID,
+        *,
+        generation: int,
+        remote_identity: dict[str, Any],
+    ) -> RemoteAccount:
+        account = (
+            await self.db.execute(
+                select(RemoteAccount)
+                .where(RemoteAccount.id == account_id)
+                .with_for_update(of=RemoteAccount)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if account is None:
+            raise RemoteCredentialGenerationChanged(
+                "remote account was removed during discovery"
+            )
+        if (
+            int(account.credential_generation or 0) != generation
+            or self._remote_identity(account) != remote_identity
+        ):
+            raise RemoteCredentialGenerationChanged(
+                "remote account credentials changed during discovery"
+            )
+        return account
+
     async def create_scan(self, user_id: int, account_id: UUID) -> TaskRun:
         account = await self._owned_account(user_id, account_id, lock=True)
         require_preview(account.source)
@@ -254,6 +295,14 @@ class RemoteDiscoveryService:
 
         selectors = account.collection_selectors or [{}]
         resume = account.scan_cursor if isinstance(account.scan_cursor, dict) else None
+        remote_identity = self._remote_identity(account)
+        credential_generation = int(account.credential_generation or 0)
+        if resume and (
+            resume.get("credential_generation") != credential_generation
+            or resume.get("remote_identity") != remote_identity
+        ):
+            resume = None
+            account.scan_cursor = None
         started_at = (
             datetime.fromisoformat(str(resume["started_at"]))
             if resume and resume.get("started_at")
@@ -269,6 +318,8 @@ class RemoteDiscoveryService:
             "pages_completed": int((resume or {}).get("pages_completed") or 0),
             "candidates_seen": int((resume or {}).get("candidates_seen") or 0),
             "scan_started_at": _utc(started_at).isoformat(),
+            "credential_generation": credential_generation,
+            "remote_identity": remote_identity,
         }
         task = await TaskService(self.db).create_task(
             kind="discovery",
@@ -293,19 +344,32 @@ class RemoteDiscoveryService:
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[int, list[TaskRun]]:
+        owner_filter = or_(
+            TaskRun.owner_user_id == user_id,
+            and_(
+                TaskRun.owner_user_id.is_(None),
+                RemoteAccount.user_id == user_id,
+            ),
+        )
         stmt = (
             select(TaskRun)
-            .join(RemoteAccount, RemoteAccount.id == TaskRun.triggering_remote_account_id)
+            .outerjoin(
+                RemoteAccount,
+                RemoteAccount.id == TaskRun.triggering_remote_account_id,
+            )
             .where(
-                RemoteAccount.user_id == user_id,
+                owner_filter,
                 TaskRun.operation_type == "remote-discovery-scan",
             )
         )
         count_stmt = (
             select(func.count(TaskRun.id))
-            .join(RemoteAccount, RemoteAccount.id == TaskRun.triggering_remote_account_id)
+            .outerjoin(
+                RemoteAccount,
+                RemoteAccount.id == TaskRun.triggering_remote_account_id,
+            )
             .where(
-                RemoteAccount.user_id == user_id,
+                owner_filter,
                 TaskRun.operation_type == "remote-discovery-scan",
             )
         )
@@ -520,9 +584,31 @@ class RemoteDiscoveryService:
             # itself behind the control plane.
             raise ValueError("Discovery scan must be re-enqueued before execution")
 
+        task_service = TaskService(self.db)
+
+        async def fail_before_provider(exc: Exception) -> None:
+            """Durably terminalize a claimed task when setup cannot begin."""
+
+            await self.db.rollback()
+            failed_task = await self.db.get(TaskRun, task_id)
+            if failed_task is not None and failed_task.status in NONTERMINAL_STATUSES:
+                await task_service.update_task(
+                    failed_task,
+                    status="failed",
+                    progress=dict(failed_task.progress_data or {}),
+                    error=f"Discovery scan failed ({type(exc).__name__})",
+                    reason_code=(
+                        "remote_credential_changed"
+                        if isinstance(exc, RemoteCredentialGenerationChanged)
+                        else "remote_discovery_failed"
+                    ),
+                )
+                await self.db.commit()
+            raise exc
+
         account_id = claimed.triggering_remote_account_id
         if account_id is None:
-            raise ValueError("Discovery scan task has no account")
+            await fail_before_provider(ValueError("Discovery scan task has no account"))
         account = (
             await self.db.execute(
                 select(RemoteAccount)
@@ -531,16 +617,57 @@ class RemoteDiscoveryService:
             )
         ).scalar_one_or_none()
         if account is None:
-            raise ValueError("Remote account not found")
+            await fail_before_provider(ValueError("Remote account not found"))
         task = await self.db.get(TaskRun, task_id, populate_existing=True)
         progress = dict(task.progress_data or {})
+        pinned_generation = progress.get("credential_generation")
+        pinned_identity = progress.get("remote_identity")
+        current_identity = self._remote_identity(account)
+        current_generation = int(account.credential_generation or 0)
+        if (
+            not isinstance(pinned_generation, int)
+            or not isinstance(pinned_identity, dict)
+        ):
+            pinned_generation = current_generation
+            pinned_identity = current_identity
+            progress.update(
+                {
+                    "credential_generation": pinned_generation,
+                    "remote_identity": pinned_identity,
+                }
+            )
+        elif (
+            pinned_generation != current_generation
+            or pinned_identity != current_identity
+        ):
+            if progress.get("phase") == "queued":
+                await fail_before_provider(
+                    RemoteCredentialGenerationChanged(
+                        "remote account credentials changed before discovery started"
+                    )
+                )
+            # An explicitly recovered task restarts a full scan at the current
+            # generation; carrying a prior-generation cursor would mix pages.
+            pinned_generation = current_generation
+            pinned_identity = current_identity
+            progress = {
+                **progress,
+                "phase": "queued",
+                "selector_index": 0,
+                "cursor": None,
+                "pages_completed": 0,
+                "candidates_seen": 0,
+                "scan_started_at": _utc(_now()).isoformat(),
+                "credential_generation": pinned_generation,
+                "remote_identity": pinned_identity,
+            }
+            account.scan_cursor = None
         selectors = account.collection_selectors or [{}]
         selector_index = int(progress.get("selector_index") or 0)
         cursor = progress.get("cursor")
         started_at = datetime.fromisoformat(str(progress["scan_started_at"]))
         pages_completed = int(progress.get("pages_completed") or 0)
         seen_count = int(progress.get("candidates_seen") or 0)
-        task_service = TaskService(self.db)
         await task_service.add_event(
             task,
             "status_changed",
@@ -566,13 +693,52 @@ class RemoteDiscoveryService:
                 adapters=self.adapters,
             )
             while selector_index < len(selectors):
-                account = await self.db.get(RemoteAccount, account.id)
-                credentials = account_service.credentials_for_adapter(account)
+                account = await self._locked_pinned_account(
+                    account.id,
+                    generation=pinned_generation,
+                    remote_identity=pinned_identity,
+                )
+
+                async def advance_generation(new_generation: int) -> None:
+                    nonlocal pinned_generation, progress
+
+                    if self._remote_identity(account) != pinned_identity:
+                        raise RemoteCredentialGenerationChanged(
+                            "remote account identity changed during OAuth refresh"
+                        )
+                    pinned_generation = new_generation
+                    progress = {
+                        **progress,
+                        "credential_generation": new_generation,
+                        "remote_identity": pinned_identity,
+                    }
+                    task_for_pin = await self.db.get(TaskRun, task_id)
+                    task_for_pin.progress_data = progress
+                    if isinstance(account.scan_cursor, dict):
+                        account.scan_cursor = {
+                            **account.scan_cursor,
+                            "credential_generation": new_generation,
+                            "remote_identity": pinned_identity,
+                        }
+
+                credentials = account_service.credentials_for_adapter(
+                    account,
+                    expected_generation=pinned_generation,
+                    on_generation_advanced=advance_generation,
+                )
+                # Do not hold a database row lock across ordinary provider I/O.
+                # A replacement during fetch is detected before any page write.
+                await self.db.commit()
                 page = await self.adapters.get(account.source).fetch_page(
                     credentials,
                     selector=selectors[selector_index],
                     cursor=cursor,
                     page_size=100,
+                )
+                account = await self._locked_pinned_account(
+                    account.id,
+                    generation=pinned_generation,
+                    remote_identity=pinned_identity,
                 )
                 seen_at = _now()
                 for identity in page.items:
@@ -590,6 +756,8 @@ class RemoteDiscoveryService:
                     "pages_completed": pages_completed,
                     "candidates_seen": seen_count,
                     "started_at": _utc(started_at).isoformat(),
+                    "credential_generation": pinned_generation,
+                    "remote_identity": pinned_identity,
                 }
                 progress = {
                     "phase": "fetching" if selector_index < len(selectors) else "finalizing",
@@ -599,6 +767,8 @@ class RemoteDiscoveryService:
                     "pages_completed": pages_completed,
                     "candidates_seen": seen_count,
                     "scan_started_at": _utc(started_at).isoformat(),
+                    "credential_generation": pinned_generation,
+                    "remote_identity": pinned_identity,
                 }
                 account.scan_cursor = checkpoint if selector_index < len(selectors) else None
                 task = await self.db.get(TaskRun, task_id)
@@ -607,6 +777,11 @@ class RemoteDiscoveryService:
                 # Candidate snapshots and their cursor are one page transaction.
                 await self.db.commit()
 
+            account = await self._locked_pinned_account(
+                account.id,
+                generation=pinned_generation,
+                remote_identity=pinned_identity,
+            )
             await self.db.execute(
                 update(DiscoveryCandidate)
                 .where(
@@ -618,7 +793,6 @@ class RemoteDiscoveryService:
                 )
                 .values(is_following=False)
             )
-            account = await self.db.get(RemoteAccount, account.id)
             account.scan_cursor = None
             account.last_scan_completed_at = _now()
             account.next_scan_at = account.last_scan_completed_at + timedelta(
@@ -643,16 +817,33 @@ class RemoteDiscoveryService:
         except Exception as exc:
             await self.db.rollback()
             task = await self.db.get(TaskRun, task_id)
-            account = await self.db.get(RemoteAccount, task.triggering_remote_account_id)
-            if isinstance(exc, RemoteReauthenticationRequired) and account is not None:
-                account.auth_status = "unhealthy"
-                account.auth_error_reason = "reauthentication_required"
+            if isinstance(exc, RemoteReauthenticationRequired):
+                try:
+                    account = await self._locked_pinned_account(
+                        task.triggering_remote_account_id,
+                        generation=pinned_generation,
+                        remote_identity=pinned_identity,
+                    )
+                except RemoteCredentialGenerationChanged:
+                    account = None
+                if account is not None:
+                    account.auth_status = "unhealthy"
+                    account.auth_error_reason = "reauthentication_required"
+                    await account_service._set_binding_health(
+                        account,
+                        healthy=False,
+                        failure_reason="reauthentication_required",
+                    )
             await TaskService(self.db).update_task(
                 task,
                 status="failed",
                 progress=dict(task.progress_data or progress),
                 error=f"Discovery scan failed ({type(exc).__name__})",
-                reason_code="remote_discovery_failed",
+                reason_code=(
+                    "remote_credential_changed"
+                    if isinstance(exc, RemoteCredentialGenerationChanged)
+                    else "remote_discovery_failed"
+                ),
             )
             await self.db.commit()
             raise

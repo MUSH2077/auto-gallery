@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -13,9 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import DiscoveryCandidate, RemoteAccount, UserSubscriptionSource
+from app.remote_discovery.common import RemoteReauthenticationRequired
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.schemas.remote_discovery import RemoteAccountRead
-from app.services.remote_credentials import CredentialVault, RedactedCredentials
+from app.services.remote_credentials import (
+    CredentialVault,
+    RedactedCredentials,
+    RefreshableCredentials,
+)
 from app.services.remote_discovery_rollout import require_auto_import, require_preview
 
 
@@ -48,6 +54,10 @@ _X_SCOPES = frozenset({"users.read", "follows.read", "list.read", "offline.acces
 _MAX_SELECTORS = 200
 _MAX_SELECTOR_BYTES = 64 * 1024
 _NUMERIC_REMOTE_ID = re.compile(r"-?[0-9]{1,32}\Z")
+
+
+class RemoteCredentialGenerationChanged(RuntimeError):
+    """A credential consumer no longer owns the account generation it pinned."""
 
 
 def validate_remote_account_policy(
@@ -261,7 +271,13 @@ class RemoteAccountService:
         account.credential_metadata = {"fields": sorted(credentials)}
         account.credential_generation = int(account.credential_generation or 0) + 1
 
-    def credentials_for_adapter(self, account: RemoteAccount) -> RedactedCredentials:
+    def credentials_for_adapter(
+        self,
+        account: RemoteAccount,
+        *,
+        expected_generation: int | None = None,
+        on_generation_advanced: Callable[[int], Awaitable[None]] | None = None,
+    ) -> RedactedCredentials:
         if not account.credential_ciphertext:
             raise ValueError("Remote account has no credentials")
         values = self.vault.decrypt(
@@ -273,7 +289,126 @@ class RemoteAccountService:
         values["auth_method"] = account.auth_method
         if account.remote_user_id:
             values["remote_user_id"] = account.remote_user_id
-        return RedactedCredentials(values)
+        if account.source != "x" or account.auth_method != "oauth2":
+            return RedactedCredentials(values)
+
+        pinned_identity = (
+            account.id,
+            account.user_id,
+            account.source,
+            account.auth_method,
+            account.remote_user_id,
+        )
+        state = {
+            "generation": int(
+                account.credential_generation
+                if expected_generation is None
+                else expected_generation
+            )
+        }
+
+        async def rotate(
+            request_rotation: Callable[
+                [Mapping[str, Any]], Awaitable[Mapping[str, Any]]
+            ],
+        ) -> Mapping[str, Any]:
+            current = (
+                await self.db.execute(
+                    select(RemoteAccount)
+                    .where(RemoteAccount.id == account.id)
+                    .with_for_update(of=RemoteAccount)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            if current is None or (
+                current.id,
+                current.user_id,
+                current.source,
+                current.auth_method,
+                current.remote_user_id,
+            ) != pinned_identity:
+                raise RemoteCredentialGenerationChanged(
+                    "remote account identity changed during credential use"
+                )
+
+            current_generation = int(current.credential_generation or 0)
+            if current_generation != state["generation"]:
+                rotation = (
+                    (current.credential_metadata or {}).get("oauth_refresh")
+                    if isinstance(current.credential_metadata, dict)
+                    else None
+                )
+                internally_rotated = bool(
+                    isinstance(rotation, dict)
+                    and rotation.get("previous_generation") == state["generation"]
+                    and current_generation == state["generation"] + 1
+                )
+                if not internally_rotated:
+                    raise RemoteCredentialGenerationChanged(
+                        "remote account credentials changed during credential use"
+                    )
+                state["generation"] = current_generation
+                if on_generation_advanced is not None:
+                    await on_generation_advanced(current_generation)
+                latest = self.vault.decrypt(
+                    current.credential_ciphertext,
+                    user_id=current.user_id,
+                    source=current.source,
+                    account_id=current.id,
+                ).materialize()
+                latest["auth_method"] = current.auth_method
+                if current.remote_user_id:
+                    latest["remote_user_id"] = current.remote_user_id
+                return latest
+
+            stored = self.vault.decrypt(
+                current.credential_ciphertext,
+                user_id=current.user_id,
+                source=current.source,
+                account_id=current.id,
+            ).materialize()
+            ephemeral = {
+                **stored,
+                "auth_method": current.auth_method,
+            }
+            if current.remote_user_id:
+                ephemeral["remote_user_id"] = current.remote_user_id
+            rotated = dict(await request_rotation(ephemeral))
+            persisted = {
+                key: rotated[key]
+                for key in ("access_token", "refresh_token", "client_id")
+                if isinstance(rotated.get(key), str) and rotated[key]
+            }
+            self._validate_credentials("x", "oauth2", persisted)
+            previous_generation = state["generation"]
+            current.credential_ciphertext = self.vault.encrypt(
+                persisted,
+                user_id=current.user_id,
+                source=current.source,
+                account_id=current.id,
+            )
+            current.credential_key_version = 1
+            current.credential_metadata = {
+                "fields": sorted(persisted),
+                "oauth_refresh": {
+                    "previous_generation": previous_generation,
+                },
+            }
+            current.credential_generation = previous_generation + 1
+            state["generation"] = current.credential_generation
+            if on_generation_advanced is not None:
+                await on_generation_advanced(current.credential_generation)
+            await self.db.flush()
+            # Providers may invalidate the old refresh token immediately. Make
+            # the encrypted replacement durable before the single API retry.
+            await self.db.commit()
+            result = dict(persisted)
+            result["auth_method"] = current.auth_method
+            if current.remote_user_id:
+                result["remote_user_id"] = current.remote_user_id
+            return result
+
+        return RefreshableCredentials(values, rotate)
 
     async def _set_binding_health(
         self,
@@ -281,6 +416,7 @@ class RemoteAccountService:
         *,
         healthy: bool,
         checked_at: datetime | None = None,
+        failure_reason: str = "Account validation failed",
     ) -> None:
         """Update every binding for one owned account and refresh shared caches."""
 
@@ -289,7 +425,7 @@ class RemoteAccountService:
         for binding in bindings:
             binding.auth_healthy = healthy
             binding.auth_status = "healthy" if healthy else "unhealthy"
-            binding.auth_error_reason = None if healthy else "Account validation failed"
+            binding.auth_error_reason = None if healthy else failure_reason
             binding.last_auth_checked_at = checked_at
         await self._recompute_binding_caches(bindings)
 
@@ -464,10 +600,21 @@ class RemoteAccountService:
             identity = await adapter.validate_account(self.credentials_for_adapter(account))
             if identity.source != account.source:
                 raise ValueError("Remote adapter returned an identity for a different source")
+        except RemoteCredentialGenerationChanged:
+            raise
         except Exception as exc:
+            reauthentication = isinstance(exc, RemoteReauthenticationRequired)
             account.auth_status = "unhealthy"
-            account.auth_error_reason = "Account validation failed"
-            await self._set_binding_health(account, healthy=False)
+            account.auth_error_reason = (
+                "reauthentication_required"
+                if reauthentication
+                else "Account validation failed"
+            )
+            await self._set_binding_health(
+                account,
+                healthy=False,
+                failure_reason=account.auth_error_reason,
+            )
             await self.db.flush()
             raise
         checked_at = datetime.now(timezone.utc)
@@ -482,11 +629,25 @@ class RemoteAccountService:
         return self._read(account)
 
     async def collections(self, account_id: UUID):
-        account = await self._account(account_id)
+        account = await self._account(account_id, lock=True)
         require_preview(account.source)
-        return await self.adapters.get(account.source).list_collections(
-            self.credentials_for_adapter(account)
-        )
+        try:
+            return await self.adapters.get(account.source).list_collections(
+                self.credentials_for_adapter(account)
+            )
+        except RemoteReauthenticationRequired:
+            account.auth_status = "unhealthy"
+            account.auth_error_reason = "reauthentication_required"
+            await self._set_binding_health(
+                account,
+                healthy=False,
+                failure_reason="reauthentication_required",
+            )
+            await self.db.flush()
+            # The collections API has no success-path write. Persist the
+            # account-local failure before returning its generic 502.
+            await self.db.commit()
+            raise
 
     async def delete(self, account_id: UUID) -> None:
         account = await self._account(account_id, lock=True)

@@ -6,7 +6,7 @@ import base64
 import binascii
 import json
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
 from pathlib import PurePath
 from typing import Any
@@ -95,6 +95,36 @@ class RedactedCredentials(Mapping[str, Any]):
         """Return an ephemeral copy for an authenticated transport boundary."""
 
         return deepcopy(self.__values)
+
+    def _replace_values(self, values: Mapping[str, Any]) -> None:
+        """Replace ephemeral values without ever exposing them in repr/str."""
+
+        self.__values = deepcopy(dict(values))
+
+
+class RefreshableCredentials(RedactedCredentials):
+    """Ephemeral credentials with a storage-owned OAuth rotation coordinator."""
+
+    def __init__(
+        self,
+        values: Mapping[str, Any],
+        rotate: Callable[
+            [Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any]]]],
+            Awaitable[Mapping[str, Any]],
+        ],
+    ):
+        super().__init__(values)
+        self.__rotate = rotate
+
+    async def rotate_oauth_tokens(
+        self,
+        request_rotation: Callable[
+            [Mapping[str, Any]], Awaitable[Mapping[str, Any]]
+        ],
+    ) -> dict[str, Any]:
+        rotated = dict(await self.__rotate(request_rotation))
+        self._replace_values(rotated)
+        return deepcopy(rotated)
 
 
 def _walk_values(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:

@@ -42,7 +42,8 @@ async def _cleanup(db):
             "ON ra.id=tr.triggering_remote_account_id LEFT JOIN user_subscriptions us "
             "ON us.id=tr.triggering_user_subscription_id "
             "WHERE ra.user_id IN (SELECT id FROM users WHERE username LIKE :prefix) "
-            "OR us.user_id IN (SELECT id FROM users WHERE username LIKE :prefix))"
+            "OR us.user_id IN (SELECT id FROM users WHERE username LIKE :prefix) "
+            "OR tr.owner_user_id IN (SELECT id FROM users WHERE username LIKE :prefix))"
         ),
         params,
     )
@@ -52,7 +53,8 @@ async def _cleanup(db):
             "SELECT id FROM remote_accounts WHERE user_id IN "
             "(SELECT id FROM users WHERE username LIKE :prefix)) "
             "OR triggering_user_subscription_id IN (SELECT id FROM user_subscriptions WHERE user_id IN "
-            "(SELECT id FROM users WHERE username LIKE :prefix))"
+            "(SELECT id FROM users WHERE username LIKE :prefix)) "
+            "OR owner_user_id IN (SELECT id FROM users WHERE username LIKE :prefix)"
         ),
         params,
     )
@@ -283,6 +285,366 @@ async def test_incomplete_scan_preserves_prior_follow_state_and_checkpoint_witho
             assert "scan-secret" not in str(stored_task.progress_data)
             await db.refresh(old)
             assert old.is_following is True
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_external_credential_replacement_during_fetch_commits_no_page_or_finalization():
+    """A fetched page cannot cross an externally replaced credential generation."""
+
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount, TaskRun
+    from app.remote_discovery.contract import DiscoveryPage, RemoteCandidateIdentity
+    from app.services.remote_accounts import (
+        RemoteAccountService,
+        RemoteCredentialGenerationChanged,
+    )
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class BlockingAdapter(PagedPixivAdapter):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def fetch_page(self, credentials, *, selector=None, cursor=None, page_size=100):
+            assert credentials.materialize()["refresh_token"] == "scan-secret"
+            self.started.set()
+            await self.release.wait()
+            return DiscoveryPage(
+                items=(
+                    RemoteCandidateIdentity(
+                        source="pixiv",
+                        source_creator_id="generation-mixed-page",
+                        profile_url="https://www.pixiv.net/users/94001",
+                        display_name="Generation Mixed Page",
+                    ),
+                ),
+                done=True,
+            )
+
+    class FinalizationProbe(RemoteDiscoveryService):
+        auto_import_called = False
+
+        async def auto_import(self, account):
+            self.auto_import_called = True
+            return []
+
+    adapter = BlockingAdapter()
+    adapters = Registry(adapter)
+    scan_task = None
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "generation_during_fetch")
+            account = await _account(db, user, adapter, auto=True)
+            old = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=user.id,
+                source_creator_id="generation-old-follow",
+                state="pending",
+                is_following=True,
+                last_seen_at=datetime.now(timezone.utc) - timedelta(days=3),
+            )
+            db.add(old)
+            service = FinalizationProbe(db, vault=_vault(), adapters=adapters)
+            task = await service.create_scan(user.id, account.id)
+            await db.commit()
+            task_id = task.id
+            account_id = account.id
+            user_id = user.id
+            assert task.progress_data["credential_generation"] == 1
+            assert task.progress_data["remote_identity"] == {
+                "account_id": str(account.id),
+                "auth_method": "refresh_token",
+                "remote_user_id": None,
+                "source": "pixiv",
+            }
+
+        async def run():
+            async with async_session() as worker_db:
+                return await FinalizationProbe(
+                    worker_db,
+                    vault=_vault(),
+                    adapters=adapters,
+                ).run_scan(task_id)
+
+        scan_task = asyncio.create_task(run())
+        await asyncio.wait_for(adapter.started.wait(), timeout=5)
+        async with async_session() as replacement_db:
+            await RemoteAccountService(
+                replacement_db,
+                user_id,
+                vault=_vault(),
+                adapters=adapters,
+            ).update(
+                account_id,
+                {"credentials": {"refresh_token": "external-replacement-secret"}},
+            )
+            await replacement_db.commit()
+        adapter.release.set()
+        with pytest.raises(RemoteCredentialGenerationChanged):
+            await asyncio.wait_for(scan_task, timeout=10)
+
+        async with async_session() as db:
+            assert (
+                await db.execute(
+                    select(DiscoveryCandidate.id).where(
+                        DiscoveryCandidate.remote_account_id == account_id,
+                        DiscoveryCandidate.source_creator_id == "generation-mixed-page",
+                    )
+                )
+            ).scalar_one_or_none() is None
+            old = (
+                await db.execute(
+                    select(DiscoveryCandidate).where(
+                        DiscoveryCandidate.remote_account_id == account_id,
+                        DiscoveryCandidate.source_creator_id == "generation-old-follow",
+                    )
+                )
+            ).scalar_one()
+            assert old.is_following is True
+            assert FinalizationProbe.auto_import_called is False
+            stored_task = await db.get(TaskRun, task_id)
+            assert stored_task.status == "failed"
+            assert (await db.get(RemoteAccount, account_id)).credential_generation == 2
+    finally:
+        adapter.release.set()
+        if scan_task is not None and not scan_task.done():
+            scan_task.cancel()
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_generation_change_between_pages_aborts_and_new_scan_restarts_current_generation():
+    """A prior-generation cursor is never resumed after external reauthentication."""
+
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount, TaskRun
+    from app.remote_discovery.contract import DiscoveryPage, RemoteCandidateIdentity
+    from app.services.remote_accounts import (
+        RemoteAccountService,
+        RemoteCredentialGenerationChanged,
+    )
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class BetweenPagesAdapter(PagedPixivAdapter):
+        def __init__(self):
+            super().__init__()
+            self.second_started = asyncio.Event()
+            self.release_second = asyncio.Event()
+
+        async def fetch_page(self, credentials, *, selector=None, cursor=None, page_size=100):
+            assert credentials.materialize()["refresh_token"] == "scan-secret"
+            if not cursor:
+                return DiscoveryPage(
+                    items=(
+                        RemoteCandidateIdentity(
+                            source="pixiv",
+                            source_creator_id="generation-page-one",
+                            profile_url="https://www.pixiv.net/users/95001",
+                            display_name="Generation Page One",
+                        ),
+                    ),
+                    done=False,
+                    next_cursor={"offset": 1},
+                )
+            self.second_started.set()
+            await self.release_second.wait()
+            return DiscoveryPage(
+                items=(
+                    RemoteCandidateIdentity(
+                        source="pixiv",
+                        source_creator_id="generation-page-two",
+                        profile_url="https://www.pixiv.net/users/95002",
+                        display_name="Generation Page Two",
+                    ),
+                ),
+                done=True,
+            )
+
+    adapter = BetweenPagesAdapter()
+    adapters = Registry(adapter)
+    scan_task = None
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "generation_between_pages")
+            account = await _account(db, user, adapter)
+            task = await RemoteDiscoveryService(
+                db, vault=_vault(), adapters=adapters
+            ).create_scan(user.id, account.id)
+            await db.commit()
+            task_id = task.id
+            account_id = account.id
+            user_id = user.id
+
+        async def run():
+            async with async_session() as worker_db:
+                return await RemoteDiscoveryService(
+                    worker_db,
+                    vault=_vault(),
+                    adapters=adapters,
+                ).run_scan(task_id)
+
+        scan_task = asyncio.create_task(run())
+        await asyncio.wait_for(adapter.second_started.wait(), timeout=5)
+        async with async_session() as replacement_db:
+            await RemoteAccountService(
+                replacement_db,
+                user_id,
+                vault=_vault(),
+                adapters=adapters,
+            ).update(
+                account_id,
+                {"credentials": {"refresh_token": "between-page-replacement"}},
+            )
+            await replacement_db.commit()
+        adapter.release_second.set()
+        with pytest.raises(RemoteCredentialGenerationChanged):
+            await asyncio.wait_for(scan_task, timeout=10)
+
+        async with async_session() as db:
+            candidates = list(
+                (
+                    await db.execute(
+                        select(DiscoveryCandidate.source_creator_id).where(
+                            DiscoveryCandidate.remote_account_id == account_id,
+                            DiscoveryCandidate.source_creator_id.in_(
+                                {"generation-page-one", "generation-page-two"}
+                            ),
+                        )
+                    )
+                ).scalars()
+            )
+            assert candidates == ["generation-page-one"]
+            stored_task = await db.get(TaskRun, task_id)
+            assert stored_task.progress_data["cursor"] == {"offset": 1}
+            new_scan = await RemoteDiscoveryService(
+                db,
+                vault=_vault(),
+                adapters=adapters,
+            ).create_scan(user_id, account_id)
+            assert new_scan.progress_data["credential_generation"] == 2
+            assert new_scan.progress_data["cursor"] is None
+            assert new_scan.progress_data["pages_completed"] == 0
+    finally:
+        adapter.release_second.set()
+        if scan_task is not None and not scan_task.done():
+            scan_task.cancel()
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_generation_change_before_worker_claim_fails_old_task_and_allows_full_scan():
+    """A queued task is pinned at creation and cannot adopt replacement credentials."""
+
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services.remote_accounts import (
+        RemoteAccountService,
+        RemoteCredentialGenerationChanged,
+    )
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "generation_before_claim")
+            account = await _account(db, user, adapter)
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            old_task = await service.create_scan(user.id, account.id)
+            await db.commit()
+            user_id = user.id
+            account_id = account.id
+            old_task_id = old_task.id
+
+            await RemoteAccountService(
+                db,
+                user_id,
+                vault=_vault(),
+                adapters=adapters,
+            ).update(
+                account_id,
+                {"credentials": {"refresh_token": "before-claim-replacement"}},
+            )
+            await db.commit()
+
+            with pytest.raises(RemoteCredentialGenerationChanged):
+                await service.run_scan(old_task_id)
+
+            stored = await db.get(TaskRun, old_task_id, populate_existing=True)
+            assert stored.status == "failed"
+            assert stored.reason_code == "remote_credential_changed"
+            replacement = await service.create_scan(user_id, account_id)
+            assert replacement.progress_data["credential_generation"] == 2
+            assert replacement.progress_data["cursor"] is None
+            assert replacement.progress_data["pages_completed"] == 0
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scan_list_retains_owned_history_after_remote_account_hard_delete():
+    """Durable task ownership must not depend on deletable account provenance."""
+
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            owner = await _seed_user(db, "scan_history_owner")
+            peer = await _seed_user(db, "scan_history_peer")
+            account = await _account(db, owner, adapter)
+            discovery = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            task = await discovery.create_scan(owner.id, account.id)
+            task.status = "failed"
+            await db.commit()
+            task_id = task.id
+            owner_id = owner.id
+            peer_id = peer.id
+
+            await RemoteAccountService(
+                db,
+                owner_id,
+                vault=_vault(),
+                adapters=adapters,
+            ).delete(account.id)
+            await db.commit()
+            stored = await db.get(TaskRun, task_id, populate_existing=True)
+            assert stored.triggering_remote_account_id is None
+            assert stored.owner_user_id == owner_id
+
+            total, items = await discovery.list_scans(owner_id)
+            assert total == 1
+            assert [item.id for item in items] == [task_id]
+            peer_total, peer_items = await discovery.list_scans(peer_id)
+            assert peer_total == 0
+            assert peer_items == []
     finally:
         async with async_session() as db:
             await _cleanup(db)

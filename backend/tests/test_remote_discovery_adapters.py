@@ -638,6 +638,91 @@ async def test_remote_auth_failures_map_to_reauthentication(status):
 
 
 @pytest.mark.asyncio
+async def test_x_oauth_401_refreshes_rotated_tokens_and_retries_exactly_once():
+    """An OAuth access-token 401 is recoverable when refresh material exists."""
+
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(401, {"title": "expired"}, {}),
+        response(
+            200,
+            {
+                "access_token": "adapter-rotated-access-canary",
+                "refresh_token": "adapter-rotated-refresh-canary",
+            },
+            {},
+        ),
+        response(200, {"data": {"id": "42"}}, {}),
+        response(
+            200,
+            {
+                "data": [{"id": "77", "name": "Recovered", "username": "recovered"}],
+                "meta": {"result_count": 1},
+            },
+            {},
+        ),
+    )
+    credentials = {
+        "auth_method": "oauth2",
+        "access_token": "adapter-expired-access-canary",
+        "refresh_token": "adapter-original-refresh-canary",
+        "client_id": "adapter-client-canary",
+        "remote_user_id": "42",
+    }
+
+    page = await XRemoteDiscoveryAdapter(transport).fetch_page(credentials)
+
+    assert page.items[0].source_creator_id == "77"
+    assert [request[:2] for request in transport.requests] == [
+        ("GET", "https://api.x.com/2/users/42/following"),
+        ("POST", "https://api.x.com/2/oauth2/token"),
+        ("GET", "https://api.x.com/2/users/me"),
+        ("GET", "https://api.x.com/2/users/42/following"),
+    ]
+    assert transport.requests[3][2]["headers"]["Authorization"] == (
+        "Bearer adapter-rotated-access-canary"
+    )
+
+
+@pytest.mark.asyncio
+async def test_x_oauth_second_401_requires_reauthentication_without_refresh_loop():
+    """The post-refresh retry is the only retry and still fails closed."""
+
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(401, {"title": "expired"}, {}),
+        response(
+            200,
+            {
+                "access_token": "adapter-retry-access-canary",
+                "refresh_token": "adapter-retry-refresh-canary",
+            },
+            {},
+        ),
+        response(200, {"data": {"id": "42"}}, {}),
+        response(401, {"title": "still unauthorized"}, {}),
+    )
+
+    with pytest.raises(_common().RemoteReauthenticationRequired) as caught:
+        await XRemoteDiscoveryAdapter(transport).fetch_page(
+            {
+                "auth_method": "oauth2",
+                "access_token": "adapter-expired-access-canary",
+                "refresh_token": "adapter-original-refresh-canary",
+                "client_id": "adapter-client-canary",
+                "remote_user_id": "42",
+            }
+        )
+
+    assert caught.value.status_code == 401
+    assert len(transport.requests) == 4
+
+
+@pytest.mark.asyncio
 async def test_remote_rate_limit_preserves_retry_after():
     from app.remote_discovery.bilibili import BilibiliRemoteDiscoveryAdapter
 
