@@ -196,14 +196,28 @@ async def get_task(
     return task_payload(task, events)
 
 
+async def _require_visible_task(
+    db: AsyncSession,
+    task_id: UUID,
+    user,
+):
+    svc = TaskService(db)
+    task = await svc.get(task_id)
+    if task is None or not await svc.is_visible_to_user(task, user.id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
 @router.get("/{task_id}/conflicts")
 async def get_download_conflicts(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, user)
         return await DownloadConflictService(db).inspect(task_id)
     except DownloadConflictError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -215,10 +229,12 @@ async def get_download_conflict_media(
     relative_path: str = Query(min_length=1, max_length=2000),
     side: Literal["canonical", "staged"] = Query(),
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, user)
         handle, stored_relative = await DownloadConflictService(db).open_media(
             task_id,
             relative_path,
@@ -249,6 +265,7 @@ async def resolve_download_conflicts(
     if len(decisions) != len(data.decisions):
         raise HTTPException(status_code=422, detail="Each conflict path must appear exactly once")
     try:
+        await _require_visible_task(db, task_id, _admin)
         result = await DownloadConflictService(db).resolve(
             task_id,
             decisions,
@@ -296,6 +313,7 @@ async def rollback_download_conflict_resolution(
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, _admin)
         result = await DownloadConflictService(db).rollback(
             task_id,
             resolution_id,
@@ -317,7 +335,7 @@ async def acknowledge_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task:
+    if not task or not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         require_admin_operation_access(user, task.operation_type)
@@ -345,7 +363,7 @@ async def _control_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task:
+    if not task or not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         require_admin_operation_access(user, task.operation_type)

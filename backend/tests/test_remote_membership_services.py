@@ -638,6 +638,10 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 if item.get("task_id")
             }
             assert str(second_task.id) not in anomaly_task_ids
+            denied_task_mutation = await client.post(
+                f"/api/v1/tasks/{second_task.id}/acknowledge", headers=headers
+            )
+            assert denied_task_mutation.status_code == 404
             jobs_response = await client.get("/api/v1/download-jobs", headers=headers)
             assert jobs_response.status_code == 200, jobs_response.text
             assert [item["id"] for item in jobs_response.json()] == [str(first_job_id)]
