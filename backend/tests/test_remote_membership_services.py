@@ -1065,6 +1065,142 @@ async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users()
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped():
+    """A trigger-owned batch cannot be promoted to a scheduler-global audit task."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import delete
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import (
+        Creator,
+        RemoteAccount,
+        Subscription,
+        TaskEvent,
+        TaskRun,
+    )
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    task_ids = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            owner = await _seed_user(db, "trigger_batch_owner")
+            ordinary = await _seed_user(db, "trigger_batch_ordinary")
+            system_user = await _seed_user(db, "trigger_batch_system")
+            system_user.permissions = [*system_user.permissions, "system"]
+            admin = await _seed_user(db, "trigger_batch_admin", admin=True)
+            creator = Creator(name="Trigger Batch Artist")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Trigger Batch Shared")
+            db.add(subscription)
+            await db.flush()
+            membership = await SubscriptionMembershipService(
+                db, owner.id
+            ).ensure_membership(subscription)
+            account = RemoteAccount(
+                user_id=owner.id,
+                source="pixiv",
+                auth_method="refresh_token",
+                auth_status="healthy",
+            )
+            db.add(account)
+            await db.flush()
+            member_task = TaskRun(
+                kind="admin",
+                operation_type="subscription-sync-batch",
+                triggering_user_subscription_id=membership.id,
+                status="failed",
+                attention_state="open",
+                title="Scoped Trigger Batch Membership",
+                meta={"mode": "legacy"},
+            )
+            account_task = TaskRun(
+                kind="admin",
+                operation_type="subscription-sync-batch",
+                triggering_remote_account_id=account.id,
+                status="failed",
+                attention_state="open",
+                title="Scoped Trigger Batch Account",
+                meta={"mode": "legacy"},
+            )
+            non_admin_task = TaskRun(
+                kind="download",
+                operation_type="subscription-sync-batch",
+                status="failed",
+                attention_state="open",
+                title="Scoped Trigger Batch Non Admin",
+                meta={"mode": "legacy"},
+            )
+            db.add_all([member_task, account_task, non_admin_task])
+            await db.commit()
+            task_ids = [member_task.id, account_task.id, non_admin_task.id]
+            owner_name = owner.username
+            unrelated_names = (
+                ordinary.username,
+                system_user.username,
+                admin.username,
+            )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            owner_headers = _headers(owner_name)
+            owner_list = await client.get(
+                "/api/v1/tasks",
+                params={"q": "Scoped Trigger Batch"},
+                headers=owner_headers,
+            )
+            assert owner_list.status_code == 200, owner_list.text
+            assert {item["id"] for item in owner_list.json()["items"]} == {
+                str(member_task.id),
+                str(account_task.id),
+            }
+            for task in (member_task, account_task):
+                detail = await client.get(
+                    f"/api/v1/tasks/{task.id}", headers=owner_headers
+                )
+                assert detail.status_code == 200, detail.text
+                control = await client.post(
+                    f"/api/v1/tasks/{task.id}/retry", headers=owner_headers
+                )
+                assert control.status_code == 409, control.text
+                assert control.json()["detail"]["code"] == "invalid_task_action"
+            assert (
+                await client.get(
+                    f"/api/v1/tasks/{non_admin_task.id}", headers=owner_headers
+                )
+            ).status_code == 404
+
+            for username in unrelated_names:
+                headers = _headers(username)
+                listed = await client.get(
+                    "/api/v1/tasks",
+                    params={"q": "Scoped Trigger Batch"},
+                    headers=headers,
+                )
+                assert listed.status_code == 200, listed.text
+                assert listed.json()["items"] == []
+                for task_id in task_ids:
+                    assert (
+                        await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+                    ).status_code == 404
+                    assert (
+                        await client.post(
+                            f"/api/v1/tasks/{task_id}/retry", headers=headers
+                        )
+                    ).status_code == 404
+    finally:
+        async with async_session() as db:
+            if task_ids:
+                await db.execute(delete(TaskEvent).where(TaskEvent.task_run_id.in_(task_ids)))
+                await db.execute(delete(TaskRun).where(TaskRun.id.in_(task_ids)))
+                await db.commit()
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
     """A tasks-only user cannot read/control peer imports or run global scans."""
     from httpx import ASGITransport, AsyncClient

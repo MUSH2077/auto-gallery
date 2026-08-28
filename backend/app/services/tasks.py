@@ -73,9 +73,19 @@ def _subscription_membership_locator_condition():
     )
 
 
+def _task_trigger_condition():
+    return or_(
+        TaskRun.triggering_user_subscription_id.is_not(None),
+        TaskRun.triggering_remote_account_id.is_not(None),
+    )
+
+
 def _global_subscription_batch_condition():
     return and_(
+        (TaskRun.kind == "admin").is_(True),
         (TaskRun.operation_type == "subscription-sync-batch").is_(True),
+        TaskRun.triggering_user_subscription_id.is_(None),
+        TaskRun.triggering_remote_account_id.is_(None),
         ~_subscription_membership_locator_condition(),
     )
 
@@ -83,7 +93,10 @@ def _global_subscription_batch_condition():
 def is_global_subscription_batch(task: TaskRun) -> bool:
     meta = task.meta if isinstance(task.meta, dict) else {}
     return bool(
-        task.operation_type == "subscription-sync-batch"
+        task.kind == "admin"
+        and task.operation_type == "subscription-sync-batch"
+        and task.triggering_user_subscription_id is None
+        and task.triggering_remote_account_id is None
         and task.subject_type not in {"subscription", "subscription_source"}
         and not meta.get("subscription_id")
         and not meta.get("subscription_source_id")
@@ -110,10 +123,7 @@ def task_visibility_condition(user_id: int):
         UserSubscription.user_id == user_id
     )
     owned_accounts = select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
-    has_trigger = or_(
-        TaskRun.triggering_user_subscription_id.is_not(None),
-        TaskRun.triggering_remote_account_id.is_not(None),
-    )
+    has_trigger = _task_trigger_condition()
     owned_trigger = and_(
         has_trigger,
         or_(
@@ -207,6 +217,7 @@ def task_surface_visibility_condition(
 
     independently_authorized_admin = and_(
         TaskRun.kind == "admin",
+        ~_task_trigger_condition(),
         ~_subscription_membership_locator_condition(),
         ~_global_subscription_batch_condition(),
     )
