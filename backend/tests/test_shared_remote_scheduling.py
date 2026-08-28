@@ -1641,6 +1641,41 @@ async def test_shared_download_success_replans_every_member_with_its_own_schedul
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_shared_success_keeps_disabled_private_binding_unscheduled():
+    """Shared content updates a disabled binding's receipt without creating demand."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_enqueue import mark_source_sync_success
+
+    when = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                _subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=when)
+            accounts[0].auth_status = "healthy"
+            bindings[1].is_enabled = False
+
+            await mark_source_sync_success(db, source.id, when)
+
+            assert bindings[0].next_sync_at == when + timedelta(hours=2)
+            assert bindings[1].last_synced_at == when
+            assert bindings[1].next_sync_at is None
+            assert source.next_sync_at == bindings[0].next_sync_at
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_canonical_due_cache_keeps_null_when_any_eligible_member_is_unseen():
     """NULL private demand is immediately due and must win over future demand."""
 

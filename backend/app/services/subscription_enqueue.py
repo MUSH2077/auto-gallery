@@ -117,7 +117,7 @@ async def mark_source_sync_success(
         binding.last_attempted_at = when
         binding.next_sync_at = (
             next_user_subscription_check_at(membership, config, when, when, when)
-            if membership.sync_enabled
+            if membership.sync_enabled and binding.is_enabled
             else None
         )
         provenance_matches = (
