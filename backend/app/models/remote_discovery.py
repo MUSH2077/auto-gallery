@@ -26,14 +26,6 @@ class UserSubscription(TimestampMixin, Base):
             "(schedule_mode IS DISTINCT FROM 'manual' AND sync_enabled IS TRUE)",
             name="ck_user_subscriptions_schedule_sync_consistent",
         ),
-        CheckConstraint(
-            "sync_interval_hours > 0",
-            name="ck_user_subscriptions_sync_interval_positive",
-        ),
-        CheckConstraint(
-            "schedule_mode IS DISTINCT FROM 'calendar' OR schedule_rule IS NOT NULL",
-            name="ck_user_subscriptions_calendar_rule",
-        ),
     )
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
