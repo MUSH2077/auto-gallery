@@ -366,6 +366,7 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         headers["x-client-transaction-id"] = await self.transaction_id_provider.generate(
             method,
             url,
+            cookie=headers["Cookie"],
         )
         return headers
 

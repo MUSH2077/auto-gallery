@@ -22,8 +22,8 @@ class FixtureTransactionIdProvider:
     def __init__(self):
         self.calls = []
 
-    async def generate(self, method, url):
-        self.calls.append((method, url))
+    async def generate(self, method, url, *, cookie):
+        self.calls.append((method, url, cookie))
         return f"fixture-transaction-{len(self.calls)}"
 
 
@@ -393,8 +393,16 @@ async def test_x_authenticated_web_requests_include_per_request_transaction_id()
     await adapter.fetch_page(credentials)
 
     assert transaction_ids.calls == [
-        ("GET", "https://api.x.com/1.1/account/verify_credentials.json"),
-        ("GET", "https://x.com/i/api/graphql/SaWqzw0TFAWMx1nXWjXoaQ/Following"),
+        (
+            "GET",
+            "https://api.x.com/1.1/account/verify_credentials.json",
+            "auth_token=secret; ct0=csrf",
+        ),
+        (
+            "GET",
+            "https://x.com/i/api/graphql/SaWqzw0TFAWMx1nXWjXoaQ/Following",
+            "auth_token=secret; ct0=csrf",
+        ),
     ]
     assert transport.requests[0][2]["headers"]["x-client-transaction-id"] == (
         "fixture-transaction-1"
