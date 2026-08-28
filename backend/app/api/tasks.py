@@ -335,7 +335,9 @@ async def acknowledge_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task or not await svc.is_visible_to_user(task, user.id):
+    if not task or (
+        user is not None and not await svc.is_visible_to_user(task, user.id)
+    ):
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         require_admin_operation_access(user, task.operation_type)
@@ -363,7 +365,9 @@ async def _control_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task or not await svc.is_visible_to_user(task, user.id):
+    if not task or (
+        user is not None and not await svc.is_visible_to_user(task, user.id)
+    ):
         raise HTTPException(status_code=404, detail="Task not found")
     if task.kind == "admin":
         require_admin_operation_access(user, task.operation_type)
