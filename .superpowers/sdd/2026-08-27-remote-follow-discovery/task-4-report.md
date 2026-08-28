@@ -356,6 +356,7 @@ Additional commits:
 - `83e2225 feat: persist remote credential generations`
 - `9072d2b fix: serialize credential provenance and lifecycle locks`
 - `a8e0d26 test: preserve canonical unhealthy expectations`
+- `a290617 fix: distinguish deleted private jobs from legacy`
 
 ### Explicit credential generation
 
@@ -421,16 +422,23 @@ Focused RED evidence:
 - PostgreSQL lock RED: publication restore/update_source and
   candidate-import/delete each raised `DeadlockDetectedError`
   (`2 failed in 3.79s`).
+- Final provenance self-review RED: PostgreSQL `ON DELETE SET NULL` retained
+  the old private job's non-NULL generation but removed its account ID, so the
+  account-less path incorrectly treated it as a legacy job and marked a later
+  healthy NULL binding unhealthy (`1 failed in 1.01s`). The account-less
+  outcome path now accepts only generation-NULL jobs that were legacy from
+  inception.
 
 Fresh GREEN evidence after the final commits:
 
 - Complete remote-account and shared-scheduling affected files:
-  `49 passed in 16.79s`.
+  `50 passed in 14.87s` after the final provenance guard.
 - Dedicated generation model plus isolated PostgreSQL migration
   upgrade/backfill/downgrade: `2 passed in 32.80s`.
 - Existing migration-idempotency baseline: `10 passed in 65.31s`.
 - Broad 27-file membership/scheduler/download/finalization/worker/discovery/
-  task/provider regression: `303 passed in 371.82s`.
+  task/provider regression: `303 passed in 371.82s`; the final one-predicate
+  provenance guard was then covered by the complete affected-file rerun above.
 - Ruff over every Python file changed from `6a76c68`: `All checks passed!`.
 - `python3 -m compileall -q` over backend application, Alembic, and changed
   tests passed.
