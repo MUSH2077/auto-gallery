@@ -15,6 +15,7 @@ import pytest
 
 PREDECESSOR_REVISION = "0d7e8f9a1b2c"
 ALIGNMENT_REVISION = "a6c8e0f2b4d7"
+CURRENT_HEAD_REVISION = "b8d0f2a4c6e9"
 OLD_CONSTRAINT = "uq_subscription_sources_sub_source"
 NEW_CONSTRAINT = "uq_subscription_sources_sub_url"
 OWNERSHIP_CONSTRAINT = "uq_subscription_sources_id_subscription"
@@ -118,7 +119,7 @@ async def _seed_subscription(asyncpg_url: str) -> None:
         await connection.close()
 
 
-def test_subscription_source_alignment_is_the_only_head_and_matches_model():
+def test_subscription_source_alignment_is_in_the_only_head_and_matches_model():
     """The reviewed model constraint must be represented by the single DB head."""
 
     import app.models  # noqa: F401 - register metadata
@@ -133,7 +134,7 @@ def test_subscription_source_alignment_is_the_only_head_and_matches_model():
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"{ALIGNMENT_REVISION} (head)"
+    assert result.stdout.strip() == f"{CURRENT_HEAD_REVISION} (head)"
 
     table = Base.metadata.tables["subscription_sources"]
     model_uniques = {
