@@ -110,6 +110,24 @@ ciphertext fails authenticated decryption. Key rotation is not yet online:
 schedule downtime and migrate every credential atomically before replacing the
 key. Never start a mixed-key deployment.
 
+For X OAuth, register the public admin page—not the backend API—as the provider
+callback, then use the same absolute URL in `.env`:
+
+```bash
+X_OAUTH_CLIENT_ID=<public-client-id>
+X_OAUTH_REDIRECT_URI=https://autogallery.example.com/admin/discovery
+```
+
+The admin document's head script removes `code` and `state` from browser history
+before hydration and sends them once in the JSON body of
+`POST /api/v1/remote-accounts/x/oauth/callback`. The backend intentionally has
+no GET callback contract. The admin application suppresses its incoming-request
+log for `/admin/discovery`, but an edge reverse proxy receives the original URL
+before JavaScript can scrub it. Configure that proxy to omit or redact the query
+for this path. For example, an Nginx access format can log `$uri` rather than
+`$request_uri` for `/admin/discovery` (or for all routes). Never log OAuth
+callback request headers or bodies.
+
 Plain credentials are forbidden from PostgreSQL fields other than the AES-GCM
 ciphertext, Redis, `TaskRun`, manifests, API responses, and logs. Download
 workers materialize only an authentication override in a mode-`0600` file under

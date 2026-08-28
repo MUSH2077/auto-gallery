@@ -10,6 +10,9 @@ const pagePath = path.join(root, "src/app/admin/discovery/RemoteDiscoveryPage.ts
 const accountsPath = path.join(root, "src/app/admin/discovery/RemoteAccountPanel.tsx");
 const candidatesPath = path.join(root, "src/app/admin/discovery/CandidateWorkbench.tsx");
 const privateCachePath = path.join(root, "src/lib/remoteDiscoveryPrivateCache.ts");
+const callbackBootstrapPath = path.join(root, "src/lib/xOAuthCallbackBootstrap.ts");
+const layoutPath = path.join(root, "src/app/layout.tsx");
+const nextConfigPath = path.join(root, "next.config.js");
 
 assert.ok(fs.existsSync(endpointPath), "remote discovery must have a focused typed endpoint module");
 
@@ -19,6 +22,9 @@ const apiIndex = fs.readFileSync(apiIndexPath, "utf8");
 const page = fs.readFileSync(pagePath, "utf8");
 const accounts = fs.readFileSync(accountsPath, "utf8");
 const candidates = fs.readFileSync(candidatesPath, "utf8");
+const callbackBootstrap = fs.readFileSync(callbackBootstrapPath, "utf8");
+const layout = fs.readFileSync(layoutPath, "utf8");
+const nextConfig = fs.readFileSync(nextConfigPath, "utf8");
 
 for (const route of [
   "/api/v1/remote-accounts",
@@ -49,6 +55,27 @@ assert.match(apiIndex, /candidates:\s*\(userId:\s*number,\s*filters\?/,
 assert.ok(fs.existsSync(privateCachePath), "private discovery cache must have an explicit cleanup boundary");
 assert.doesNotMatch(page, /useSearchParams/, "OAuth callback secrets must not enter reactive search-param state");
 assert.doesNotMatch(page, /oauthCallback\s*=\s*useMutation/, "OAuth callback secrets must not enter mutation variables");
+assert.match(endpoint, /completeXOAuth:[\s\S]{0,400}method:\s*"POST"/,
+  "OAuth completion must send secrets in a POST body");
+assert.match(endpoint, /completeXOAuth:[\s\S]{0,500}body:\s*JSON\.stringify\(\{\s*state,\s*code\s*\}\)/,
+  "OAuth completion must serialize state and code only in the request body");
+assert.doesNotMatch(endpoint, /oauth\/callback\?/, "OAuth completion secrets must never enter an API URL");
+assert.doesNotMatch(page, /searchParams\.get\(["'](?:state|code)["']\)/,
+  "OAuth callback secrets must not be read after the head bootstrap");
+assert.match(callbackBootstrap, /window\.history\.replaceState\(null,\s*"",\s*"\/admin\/discovery"\)/,
+  "the callback URL must be scrubbed synchronously before hydration");
+assert.match(callbackBootstrap, /delete window\.__consumeAutoGalleryXOAuthCallback/,
+  "the callback closure must be a one-shot consumer");
+assert.doesNotMatch(callbackBootstrap, /MutationObserver/,
+  "the head bootstrap must not remove Next RSC scripts before hydration consumes them");
+assert.match(callbackBootstrap, /document\.querySelectorAll\("script"\)/,
+  "the one-shot consumer must scrub any serialized callback markers after hydration");
+assert.doesNotMatch(callbackBootstrap, /localStorage|sessionStorage/,
+  "the callback bootstrap must never persist OAuth secrets in browser storage");
+assert.match(layout, /<head>[\s\S]*x-oauth-callback-bootstrap[\s\S]*<\/head>/,
+  "the callback scrubber must execute from the document head");
+assert.match(nextConfig, /incomingRequests:[\s\S]{0,160}ignore:[\s\S]{0,160}admin\\\/discovery/,
+  "the frontend application must suppress access logging for the external callback target");
 assert.match(accounts, /remote_discovery_rollout\?\.manual_preview/,
   "account controls must fail closed on the backend-effective preview gate");
 assert.match(accounts, /remote_discovery_rollout\?\.auto_import/,

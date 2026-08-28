@@ -10159,6 +10159,28 @@
         ],
         "title": "WorkRead",
         "type": "object"
+      },
+      "XOAuthCallbackRequest": {
+        "properties": {
+          "code": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 200,
+            "minLength": 20,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "code"
+        ],
+        "title": "XOAuthCallbackRequest",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -22398,33 +22420,19 @@
       }
     },
     "/api/v1/remote-accounts/x/oauth/callback": {
-      "get": {
+      "post": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
-        "operationId": "get_api_v1_remote_accounts_x_oauth_callback",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "state",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 20,
-              "title": "State",
-              "type": "string"
+        "operationId": "post_api_v1_remote_accounts_x_oauth_callback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/XOAuthCallbackRequest"
+              }
             }
           },
-          {
-            "in": "query",
-            "name": "code",
-            "required": true,
-            "schema": {
-              "maxLength": 2000,
-              "minLength": 1,
-              "title": "Code",
-              "type": "string"
-            }
-          }
-        ],
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

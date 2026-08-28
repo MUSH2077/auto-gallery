@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequirePermission
 from app.config import settings
 from app.database import get_db
-from app.schemas.remote_discovery import RemoteAccountCreate, RemoteAccountRead, RemoteAccountUpdate
+from app.schemas.remote_discovery import (
+    RemoteAccountCreate,
+    RemoteAccountRead,
+    RemoteAccountUpdate,
+    XOAuthCallbackRequest,
+)
 from app.services.redis_client import get_redis
 from app.services.remote_accounts import RemoteAccountService
 from app.services.remote_discovery_rollout import (
@@ -86,10 +91,9 @@ async def authorize_x_oauth(
     return {"authorization_url": result.url, "state": result.state, "expires_in": 600}
 
 
-@router.get("/x/oauth/callback", response_model=RemoteAccountRead)
+@router.post("/x/oauth/callback", response_model=RemoteAccountRead)
 async def x_oauth_callback(
-    state: str = Query(min_length=20, max_length=200),
-    code: str = Query(min_length=1, max_length=2000),
+    data: XOAuthCallbackRequest,
     db: AsyncSession = Depends(get_db),
     user=RequirePermission("subscriptions"),
     redis=Depends(get_redis),
@@ -101,9 +105,9 @@ async def x_oauth_callback(
             redis,
             client_id=settings.x_oauth_client_id,
             redirect_uri=settings.x_oauth_redirect_uri,
-        ).consume(state=state, user_id=user.id)
+        ).consume(state=data.state, user_id=user.id)
         token_response = await exchange.exchange(
-            code=code,
+            code=data.code,
             verifier=payload.verifier,
             redirect_uri=settings.x_oauth_redirect_uri,
             client_id=settings.x_oauth_client_id,

@@ -156,6 +156,11 @@ class RemoteAccountUpdate(BaseModel):
     credentials: dict[str, str] | None = Field(default=None, min_length=1)
 
 
+class XOAuthCallbackRequest(BaseModel):
+    state: str = Field(min_length=20, max_length=200)
+    code: str = Field(min_length=1, max_length=2000)
+
+
 class RemoteAccountRead(BaseModel):
     id: UUID
     user_id: int

@@ -94,6 +94,7 @@ type FixtureOptions = {
   oauthCallbackDelayMs?: number;
   accountConnectStatus?: number;
   accountConnectDelayMs?: number;
+  onOAuthCallback?: (request: { method: string; url: string; body: Record<string, unknown> | null }) => void;
   onPrivateRequest?: (user: "a" | "b", path: string) => void;
   onMutation?: (path: string, body: Record<string, unknown>) => void;
   rollout?: Partial<Record<"pixiv" | "x" | "bilibili", { manual_preview: boolean; auto_import: boolean; unavailable_reason: string | null }>>;
@@ -165,6 +166,10 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, created, 201);
     }
     if (path === "/api/v1/remote-accounts/x/oauth/callback") {
+      options.onOAuthCallback?.({ method: request.method(), url: request.url(), body });
+      if (request.method() !== "POST" || url.search) {
+        return json(route, { detail: "OAuth callback must use a query-free POST" }, 405);
+      }
       if (options.oauthCallbackDelayMs) await new Promise((resolve) => setTimeout(resolve, options.oauthCallbackDelayMs));
       if (options.oauthCallbackStatus) return json(route, { detail: "oauth failed" }, options.oauthCallbackStatus);
       const connected = account({
@@ -591,17 +596,34 @@ for (const callbackStatus of [200, 400]) {
     const stateCanary = `state-canary-${callbackStatus}-long-enough`;
     const codeCanary = `code-canary-${callbackStatus}`;
     const consoleText: string[] = [];
+    const callbackRequests: Array<{ method: string; url: string; body: Record<string, unknown> | null }> = [];
+    const callbackResponses: string[] = [];
     page.on("console", (message) => consoleText.push(message.text()));
+    page.on("response", async (response) => {
+      if (new URL(response.url()).pathname === "/api/v1/remote-accounts/x/oauth/callback") {
+        callbackResponses.push(await response.text());
+      }
+    });
     await installFixtures(context, {
       oauthCallbackStatus: callbackStatus === 200 ? undefined : callbackStatus,
       oauthCallbackDelayMs: 500,
+      onOAuthCallback: (request) => callbackRequests.push(request),
     });
     await page.goto(`/admin/discovery?state=${stateCanary}&code=${codeCanary}`);
 
     await expect(page).toHaveURL(/\/admin\/discovery$/);
+    await expect(page.getByText(callbackStatus === 200 ? "X OAuth account connected." : "X OAuth authorization did not complete.")).toBeVisible();
     expect(await mutationCacheText(page)).not.toContain(stateCanary);
     expect(await mutationCacheText(page)).not.toContain(codeCanary);
-    await expect(page.getByText(callbackStatus === 200 ? "X OAuth account connected." : "X OAuth authorization did not complete.")).toBeVisible();
+    expect(callbackRequests).toEqual([{
+      method: "POST",
+      url: expect.not.stringContaining("?"),
+      body: { state: stateCanary, code: codeCanary },
+    }]);
+    expect(callbackResponses).toHaveLength(1);
+    expect(callbackResponses[0]).not.toContain(stateCanary);
+    expect(callbackResponses[0]).not.toContain(codeCanary);
+    expect(await page.evaluate(() => typeof window.__consumeAutoGalleryXOAuthCallback)).toBe("undefined");
     await expect.poll(() => page.evaluate(() => JSON.stringify(window.history.state))).not.toContain(stateCanary);
     await expect.poll(() => page.evaluate(() => JSON.stringify(window.history.state))).not.toContain(codeCanary);
 

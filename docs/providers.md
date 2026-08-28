@@ -93,7 +93,10 @@ admin UI never reconstructs deployment flags locally.
 | Bilibili | Experimental | `SESSDATA` | all following and following groups |
 
 X OAuth requests exactly `users.read`, `follows.read`, `list.read`, and
-`offline.access`. OAuth tokens are discovery-only unless a separate download
+`offline.access`. Register the provider redirect as the admin frontend
+`/admin/discovery` URL; the frontend completes the exchange through a
+query-free backend POST after synchronously scrubbing the external callback
+URL. OAuth tokens are discovery-only unless a separate download
 cookie is present; the Cookie fallback may break when X changes private Web
 API behavior. Pixiv and Bilibili use undocumented or reverse-engineered API
 surfaces and must remain marked experimental. Bilibili creator normalization

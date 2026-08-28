@@ -2909,13 +2909,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * X Oauth Callback
          * @description See the request, response, permission, and risk metadata for this operation.
          */
-        get: operations["get_api_v1_remote_accounts_x_oauth_callback"];
-        put?: never;
-        post?: never;
+        post: operations["post_api_v1_remote_accounts_x_oauth_callback"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7947,6 +7947,13 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** XOAuthCallbackRequest */
+        XOAuthCallbackRequest: {
+            /** Code */
+            code: string;
+            /** State */
+            state: string;
         };
     };
     responses: never;
@@ -15566,17 +15573,18 @@ export interface operations {
             };
         };
     };
-    get_api_v1_remote_accounts_x_oauth_callback: {
+    post_api_v1_remote_accounts_x_oauth_callback: {
         parameters: {
-            query: {
-                state: string;
-                code: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["XOAuthCallbackRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

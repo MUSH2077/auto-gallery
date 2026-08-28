@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Providers from "./providers";
 import { ADMIN_SIDEBAR_BOOTSTRAP_SCRIPT } from "@/lib/adminSidebar";
+import { X_OAUTH_CALLBACK_BOOTSTRAP_SCRIPT } from "@/lib/xOAuthCallbackBootstrap";
 import "./globals.css";
 
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
+        <script
+          id="x-oauth-callback-bootstrap"
+          dangerouslySetInnerHTML={{ __html: X_OAUTH_CALLBACK_BOOTSTRAP_SCRIPT }}
+        />
         <script
           id="admin-sidebar-bootstrap"
           dangerouslySetInnerHTML={{ __html: ADMIN_SIDEBAR_BOOTSTRAP_SCRIPT }}

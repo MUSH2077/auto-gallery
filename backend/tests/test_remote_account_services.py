@@ -1200,16 +1200,25 @@ class FakeOAuthExchange:
         }
 
 
-def test_x_pkce_state_is_ten_minute_single_use_and_owner_bound():
+def test_x_pkce_state_is_ten_minute_single_use_and_owner_bound(monkeypatch):
     """Redis state contains no tokens and replay/cross-owner callbacks are rejected."""
     from app.services.x_oauth import XOAuthPKCEState
 
     redis = MemoryRedis()
+    credential_key = base64.urlsafe_b64encode(b"p" * 32).decode()
     state_service = XOAuthPKCEState(
         redis,
         client_id="public-client",
-        redirect_uri="https://gallery.example/api/v1/remote-accounts/x/oauth/callback",
+        redirect_uri="https://gallery.example/admin/discovery",
+        credential_key=credential_key,
     )
+    generated = iter(
+        (
+            "state-value-long-enough-for-contract",
+            "private-verifier-canary-not-for-redis",
+        )
+    )
+    monkeypatch.setattr("app.services.x_oauth.secrets.token_urlsafe", lambda _size: next(generated))
     authorization = state_service.authorize(user_id=7)
     assert authorization.state
     assert "code_challenge=" in authorization.url
@@ -1218,16 +1227,145 @@ def test_x_pkce_state_is_ten_minute_single_use_and_owner_bound():
     assert redis.ttls[key] == 600
     stored = redis.values[key].decode() if isinstance(redis.values[key], bytes) else redis.values[key]
     assert "token" not in stored.casefold()
+    assert "private-verifier-canary-not-for-redis" not in stored
 
     with pytest.raises(ValueError, match="owner"):
         redis.ttls[key] = 321
+        original_stored = redis.values[key]
         state_service.consume(state=authorization.state, user_id=8)
     # An ownership failure must not burn the rightful user's state.
     assert redis.ttls[key] == 321
+    assert redis.values[key] == original_stored
     payload = state_service.consume(state=authorization.state, user_id=7)
     assert payload.verifier
     with pytest.raises(ValueError, match="expired or already used"):
         state_service.consume(state=authorization.state, user_id=7)
+
+
+def test_x_pkce_state_rejects_wrong_key_aad_and_tamper_without_exposure():
+    """Purpose key, owner, state, and account target authenticate the verifier."""
+
+    from app.services.x_oauth import XOAuthPKCEState
+
+    redis = MemoryRedis()
+    credential_key = base64.urlsafe_b64encode(b"p" * 32).decode()
+    wrong_key = base64.urlsafe_b64encode(b"w" * 32).decode()
+    account_id = str(uuid4())
+    state_service = XOAuthPKCEState(
+        redis,
+        client_id="public-client",
+        redirect_uri="https://gallery.example/admin/discovery",
+        credential_key=credential_key,
+    )
+    wrong_key_service = XOAuthPKCEState(
+        redis,
+        client_id="public-client",
+        redirect_uri="https://gallery.example/admin/discovery",
+        credential_key=wrong_key,
+    )
+
+    wrong_key_state = state_service.authorize(user_id=7, account_id=account_id).state
+    wrong_key_redis_key = f"remote-discovery:x:oauth-state:{wrong_key_state}"
+    redis.ttls[wrong_key_redis_key] = 418
+    with pytest.raises(ValueError, match="authenticated") as wrong_key_error:
+        wrong_key_service.consume(state=wrong_key_state, user_id=7)
+    assert "verifier" not in str(wrong_key_error.value).casefold()
+    assert redis.ttls[wrong_key_redis_key] == 418
+    assert wrong_key_redis_key in redis.values
+    assert state_service.consume(state=wrong_key_state, user_id=7).account_id == account_id
+
+    aad_state = state_service.authorize(user_id=7, account_id=account_id).state
+    aad_key = f"remote-discovery:x:oauth-state:{aad_state}"
+    aad_envelope = json.loads(redis.values[aad_key])
+    aad_envelope["account_target"] = str(uuid4())
+    redis.values[aad_key] = json.dumps(aad_envelope, separators=(",", ":"))
+    with pytest.raises(ValueError, match="authenticated"):
+        state_service.consume(state=aad_state, user_id=7)
+    assert aad_key in redis.values
+
+    moved_state = state_service.authorize(user_id=7, account_id=account_id).state
+    moved_raw = redis.values[f"remote-discovery:x:oauth-state:{moved_state}"]
+    alternate_state = "alternate-state-long-enough-for-contract"
+    redis.values[f"remote-discovery:x:oauth-state:{alternate_state}"] = moved_raw
+    with pytest.raises(ValueError, match="authenticated"):
+        state_service.consume(state=alternate_state, user_id=7)
+
+    tampered_state = state_service.authorize(user_id=7, account_id=account_id).state
+    tampered_key = f"remote-discovery:x:oauth-state:{tampered_state}"
+    tampered = json.loads(redis.values[tampered_key])
+    ciphertext = tampered["ciphertext"]
+    midpoint = len(ciphertext) // 2
+    replacement = "A" if ciphertext[midpoint] != "A" else "B"
+    tampered["ciphertext"] = (
+        ciphertext[:midpoint] + replacement + ciphertext[midpoint + 1 :]
+    )
+    redis.values[tampered_key] = json.dumps(tampered, separators=(",", ":"))
+    with pytest.raises(ValueError, match="authenticated") as tamper_error:
+        state_service.consume(state=tampered_state, user_id=7)
+    assert "verifier" not in str(tamper_error.value).casefold()
+    assert tampered_key in redis.values
+
+
+@pytest.mark.integration
+def test_x_pkce_real_redis_consume_is_atomic_and_raw_bytes_are_encrypted(monkeypatch):
+    """Two callbacks race through Lua compare-delete and exactly one consumes state."""
+
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    from app.services.redis_client import get_redis
+    from app.services.x_oauth import XOAuthPKCEState
+
+    redis = get_redis()
+    credential_key = base64.urlsafe_b64encode(b"p" * 32).decode()
+    verifier = "redis-raw-verifier-canary-that-must-stay-encrypted"
+    generated = iter((f"redis-state-{uuid4().hex}", verifier))
+    monkeypatch.setattr("app.services.x_oauth.secrets.token_urlsafe", lambda _size: next(generated))
+    service = XOAuthPKCEState(
+        redis,
+        client_id="public-client",
+        redirect_uri="https://gallery.example/admin/discovery",
+        credential_key=credential_key,
+    )
+    authorization = service.authorize(user_id=7001, account_id=str(uuid4()))
+    key = f"remote-discovery:x:oauth-state:{authorization.state}"
+    try:
+        raw = redis.get(key)
+        assert isinstance(raw, bytes)
+        if verifier.encode() in raw:
+            raise AssertionError("the PKCE verifier reached raw Redis bytes")
+        before_wrong_owner = redis.pttl(key)
+        with pytest.raises(ValueError, match="owner"):
+            service.consume(state=authorization.state, user_id=7002)
+        after_wrong_owner = redis.pttl(key)
+        assert 0 <= before_wrong_owner - after_wrong_owner < 1000
+
+        barrier = threading.Barrier(2)
+
+        def consume_once():
+            contender = XOAuthPKCEState(
+                redis,
+                client_id="public-client",
+                redirect_uri="https://gallery.example/admin/discovery",
+                credential_key=credential_key,
+            )
+            barrier.wait(timeout=5)
+            try:
+                return contender.consume(state=authorization.state, user_id=7001)
+            except ValueError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _index: consume_once(), range(2)))
+        successes = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+        failures = [outcome for outcome in outcomes if isinstance(outcome, ValueError)]
+        assert len(successes) == 1
+        assert successes[0].verifier == verifier
+        assert len(failures) == 1
+        assert "expired or already used" in str(failures[0])
+        assert redis.get(key) is None
+    finally:
+        redis.delete(key)
 
 
 def test_remote_account_write_schemas_accept_credentials_but_reads_cannot_serialize_them():
@@ -1459,7 +1597,7 @@ async def test_remote_account_api_is_owner_scoped_redacted_and_admin_audit_is_me
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay():
+async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay(caplog):
     """OAuth callback stores encrypted tokens only after consuming owner-bound PKCE state."""
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy import select, text
@@ -1479,7 +1617,7 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay():
     old_redirect = settings.x_oauth_redirect_uri
     settings.remote_credential_key = base64.urlsafe_b64encode(b"o" * 32).decode()
     settings.x_oauth_client_id = "test-public-client"
-    settings.x_oauth_redirect_uri = "https://gallery.example/api/v1/remote-accounts/x/oauth/callback"
+    settings.x_oauth_redirect_uri = "https://gallery.example/admin/discovery"
     app.dependency_overrides[get_redis] = lambda: redis
     app.dependency_overrides[get_x_oauth_exchange] = lambda: exchange
     try:
@@ -1507,21 +1645,37 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay():
             )
             assert authorize.status_code == 200, authorize.text
             state = authorize.json()["state"]
-            callback = await client.get(
+            raw_state = redis.values[f"remote-discovery:x:oauth-state:{state}"]
+            assert "verifier" not in str(raw_state).casefold()
+            code_canary = "authorization-code-canary-not-for-url-or-log"
+            callback = await client.post(
                 "/api/v1/remote-accounts/x/oauth/callback",
-                params={"state": state, "code": "authorization-code"},
+                json={"state": state, "code": code_canary},
                 headers=_headers(username),
             )
             assert callback.status_code == 200, callback.text
             assert callback.json()["source"] == "x"
             assert callback.json()["has_credentials"] is True
-            assert "oauth-access-secret" not in callback.text
-            replay = await client.get(
+            for secret in (state, code_canary, "oauth-access-secret", "oauth-refresh-secret"):
+                assert secret not in callback.text
+            replay = await client.post(
                 "/api/v1/remote-accounts/x/oauth/callback",
-                params={"state": state, "code": "authorization-code"},
+                json={"state": state, "code": code_canary},
                 headers=_headers(username),
             )
             assert replay.status_code == 400
+            deprecated_get = await client.get(
+                "/api/v1/remote-accounts/x/oauth/callback",
+                headers=_headers(username),
+            )
+            assert deprecated_get.status_code == 405
+            assert exchange.calls == [
+                (code_canary, exchange.calls[0][1], settings.x_oauth_redirect_uri, "test-public-client")
+            ]
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        for secret in (state, code_canary, "oauth-access-secret", "oauth-refresh-secret"):
+            assert secret not in log_text
 
         async with async_session() as db:
             account = (

@@ -16,12 +16,23 @@ import { safeDiscoveryError } from "./discoveryPresentation";
 
 const ACTIVE_SCAN_STATES = new Set(["enqueued", "running", "recovering", "waiting"]);
 
-function consumeOAuthSecretsFromDocument(state: string, code: string) {
-  window.history.replaceState(null, "", adminRoutes.discovery);
-  for (const script of Array.from(document.scripts)) {
-    const source = script.textContent || "";
-    if (source.includes(state) || source.includes(code)) script.remove();
+type XOAuthCallback = { state: string; code: string };
+
+declare global {
+  interface Window {
+    __consumeAutoGalleryXOAuthCallback?: () => XOAuthCallback | null;
   }
+}
+
+function takeBootstrappedOAuthCallback(): XOAuthCallback | null | undefined {
+  const consume = window.__consumeAutoGalleryXOAuthCallback;
+  if (!consume) return undefined;
+  const callback = consume();
+  delete window.__consumeAutoGalleryXOAuthCallback;
+  if (!callback || typeof callback.state !== "string" || typeof callback.code !== "string") {
+    return null;
+  }
+  return callback;
 }
 
 export default function RemoteDiscoveryPage() {
@@ -63,29 +74,27 @@ export default function RemoteDiscoveryPage() {
 
   useLayoutEffect(() => {
     if (oauthAttempted.current || userId <= 0) return;
+    const callback = takeBootstrappedOAuthCallback();
     const callbackUrl = new URL(window.location.href);
     const outcome = callbackUrl.searchParams.get("oauth");
-    let callbackState = callbackUrl.searchParams.get("state");
-    let callbackCode = callbackUrl.searchParams.get("code");
-    if (!outcome && (!callbackState || !callbackCode)) return;
+    if (callback === undefined && !outcome) return;
     oauthAttempted.current = true;
-    if (callbackState && callbackCode) consumeOAuthSecretsFromDocument(callbackState, callbackCode);
-    else window.history.replaceState(null, "", adminRoutes.discovery);
-    // replaceState removes the public URL synchronously. The router replacement also
-    // rebuilds Next's private history tree so it cannot retain the callback secrets.
+    window.history.replaceState(null, "", adminRoutes.discovery);
+    // The head bootstrap already removed the public query. This router replacement
+    // now rebuilds Next's private history after the one-shot consumer scrubs RSC markers.
     router.replace(adminRoutes.discovery, { scroll: false });
     if (outcome) {
       if (outcome === "success") toast.success(t("discovery.oauth_succeeded"));
       if (outcome === "error") toast.error(t("discovery.oauth_failed"));
-      callbackState = null;
-      callbackCode = null;
+      return;
+    }
+    if (!callback) {
+      toast.error(t("discovery.oauth_failed"));
       return;
     }
     const callbackPromise = runPrivateDiscoveryRequest(userId, (signal) => (
-      api.completeXOAuth(callbackState!, callbackCode!, signal)
+      api.completeXOAuth(callback.state, callback.code, signal)
     ));
-    callbackState = null;
-    callbackCode = null;
     void callbackPromise.then(async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
       toast.success(t("discovery.oauth_succeeded"));

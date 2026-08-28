@@ -92,7 +92,9 @@ Pixiv、X 与 Bilibili 使用独立的 `RemoteDiscoveryAdapter` 契约：
 | Bilibili | 实验性 | `SESSDATA` | 全部关注与关注分组 |
 
 X OAuth 精确申请 `users.read`、`follows.read`、`list.read` 与
-`offline.access`。除非另有下载 Cookie，OAuth token 仅用于发现；X 修改私有 Web API
+`offline.access`。Provider redirect 必须注册为管理端 `/admin/discovery` URL；管理端先
+同步清理外部 callback URL，再通过不带 query 的后端 POST 完成交换。除非另有下载
+Cookie，OAuth token 仅用于发现；X 修改私有 Web API
 后 Cookie 回退可能失效。Pixiv 与 Bilibili 依赖未正式承诺或逆向 API，必须持续标记为
 实验性。Bilibili 创作者 URL 归一化支持 `/dynamic` 与 `/upload/opus`，使发现账号可订阅
 动态图片。

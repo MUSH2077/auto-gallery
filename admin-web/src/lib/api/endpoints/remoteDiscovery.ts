@@ -64,8 +64,11 @@ export const remoteDiscoveryApi = {
   },
 
   completeXOAuth: (state: string, code: string, signal?: AbortSignal) => {
-    const params = new URLSearchParams({ state, code });
-    return request<RemoteAccountRead>(`/api/v1/remote-accounts/x/oauth/callback?${params.toString()}`, { signal });
+    return request<RemoteAccountRead>("/api/v1/remote-accounts/x/oauth/callback", {
+      method: "POST",
+      body: JSON.stringify({ state, code }),
+      signal,
+    });
   },
 
   createDiscoveryScan: (remoteAccountId: string, signal?: AbortSignal) =>

@@ -12,6 +12,15 @@ const nextConfig = {
   // Next 16 blocks cross-origin development assets unless this is explicit.
   allowedDevOrigins: ['127.0.0.1'],
 
+  // X redirects to this frontend route with a short-lived code/state query.
+  // The head bootstrap scrubs it before hydration; suppress Next's request log
+  // for the route so the original request target cannot persist there either.
+  logging: {
+    incomingRequests: {
+      ignore: [/^\/admin\/discovery(?:\?.*)?$/],
+    },
+  },
+
   // API proxying is handled by Next.js rewrites (server-side proxy).
   // Do NOT add a catch-all route handler under src/app/api/v1/ — rewrites
   // intercept those paths first, so any manual proxy there would be dead code.

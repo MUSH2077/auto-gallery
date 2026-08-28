@@ -326,6 +326,14 @@ rotation needs downtime plus an audited all-row decrypt/re-encrypt migration.
 Never print or paste the key/cookies/tokens into logs, task metadata, Redis, or
 incident tickets.
 
+`X_OAUTH_REDIRECT_URI` must be the public admin frontend URL ending in
+`/admin/discovery`, never the backend completion endpoint. The frontend removes
+the provider's query before hydration and completes through a query-free POST.
+Its own incoming-request log is suppressed for that route. The reverse proxy
+still sees the first callback request, so its access-log format must record a
+path-only target (`$uri` in Nginx) or explicitly redact the query for
+`/admin/discovery`; do not log callback headers or bodies.
+
 `worker-download` must have `PERSONAL_AUTH_TMP_ROOT=/run/auto-gallery-secrets`
 mounted as `tmpfs` with mode `0700`. A startup failure mentioning personal
 authentication tmpfs is a hard security failure: verify `docker compose config`
