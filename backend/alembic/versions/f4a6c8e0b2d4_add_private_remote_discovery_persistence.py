@@ -26,7 +26,30 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("subscription_id", sa.Uuid(), nullable=False),
-        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("name", sa.String(length=500), nullable=True),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("sync_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("sync_interval_hours", sa.Integer(), nullable=False, server_default="6"),
+        sa.Column("schedule_mode", sa.String(length=20), nullable=True),
+        sa.Column("schedule_rule", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("scheduled_times", sa.String(length=100), nullable=True),
+        sa.CheckConstraint(
+            "schedule_mode IS NULL OR schedule_mode IN ('interval', 'calendar', 'manual')",
+            name="ck_user_subscriptions_schedule_mode",
+        ),
+        sa.CheckConstraint(
+            "(schedule_mode = 'manual' AND sync_enabled IS FALSE) OR "
+            "(schedule_mode IS DISTINCT FROM 'manual' AND sync_enabled IS TRUE)",
+            name="ck_user_subscriptions_schedule_sync_consistent",
+        ),
+        sa.CheckConstraint(
+            "sync_interval_hours > 0",
+            name="ck_user_subscriptions_sync_interval_positive",
+        ),
+        sa.CheckConstraint(
+            "schedule_mode IS DISTINCT FROM 'calendar' OR schedule_rule IS NOT NULL",
+            name="ck_user_subscriptions_calendar_rule",
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_user_subscriptions_user", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["subscription_id"], ["subscriptions.id"], name="fk_user_subscriptions_subscription", ondelete="RESTRICT"
@@ -44,6 +67,19 @@ def upgrade() -> None:
         sa.Column("source", sa.String(length=50), nullable=False),
         sa.Column("remote_user_id", sa.String(length=255), nullable=True),
         sa.Column("remote_username", sa.String(length=255), nullable=True),
+        sa.Column("auth_method", sa.String(length=50), nullable=True),
+        sa.Column(
+            "scopes",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column(
+            "collection_selectors",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
         sa.Column("credential_ciphertext", sa.Text(), nullable=True),
         sa.Column("credential_key_version", sa.Integer(), nullable=True),
         sa.Column("credential_metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
@@ -60,6 +96,13 @@ def upgrade() -> None:
         sa.Column("auto_import_min_confidence", sa.String(length=20), nullable=False, server_default="high"),
         sa.Column("auto_import_limit", sa.Integer(), nullable=False, server_default="25"),
         sa.CheckConstraint("source IN ('pixiv', 'x', 'bilibili')", name="ck_remote_accounts_source"),
+        sa.CheckConstraint(
+            "auth_method IS NULL OR "
+            "(source = 'pixiv' AND auth_method = 'refresh_token') OR "
+            "(source = 'x' AND auth_method IN ('oauth2', 'cookie')) OR "
+            "(source = 'bilibili' AND auth_method = 'sessdata')",
+            name="ck_remote_accounts_auth_method",
+        ),
         sa.CheckConstraint(
             "auto_import_min_confidence IN ('high', 'medium', 'low')",
             name="ck_remote_accounts_auto_import_confidence",
@@ -151,7 +194,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("remote_account_id", sa.Uuid(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("remote_creator_id", sa.String(length=255), nullable=False),
+        sa.Column("source_creator_id", sa.String(length=255), nullable=False),
         sa.Column("remote_url", sa.String(length=2000), nullable=True),
         sa.Column("display_name", sa.String(length=500), nullable=True),
         sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
@@ -163,6 +206,7 @@ def upgrade() -> None:
         sa.Column("dismissed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("imported_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("is_following", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.CheckConstraint("confidence IN ('high', 'medium', 'low')", name="ck_discovery_candidates_confidence"),
         sa.CheckConstraint(
             "state IN ('pending', 'dismissed', 'imported', 'conflict')", name="ck_discovery_candidates_state"
@@ -194,7 +238,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("remote_account_id", "remote_creator_id", name="uq_discovery_candidates_account_creator"),
+        sa.UniqueConstraint("remote_account_id", "source_creator_id", name="uq_discovery_candidates_account_creator"),
     )
     op.create_index("ix_discovery_candidates_account_state", "discovery_candidates", ["remote_account_id", "state", "id"])
 
@@ -240,8 +284,18 @@ def upgrade() -> None:
     # credentials, so current installations keep the same effective behavior.
     op.execute(
         """
-        INSERT INTO user_subscriptions (id, user_id, subscription_id, is_enabled, created_at, updated_at)
-        SELECT gen_random_uuid(), admin.id, subscription.id, subscription.is_active, now(), now()
+        INSERT INTO user_subscriptions (
+            id, user_id, subscription_id,
+            name, is_active, sync_enabled, sync_interval_hours, schedule_mode,
+            schedule_rule, scheduled_times,
+            created_at, updated_at
+        )
+        SELECT
+            gen_random_uuid(), admin.id, subscription.id,
+            subscription.name, subscription.is_active, subscription.sync_enabled,
+            subscription.sync_interval_hours, subscription.schedule_mode,
+            subscription.schedule_rule, subscription.scheduled_times,
+            now(), now()
         FROM subscriptions AS subscription
         CROSS JOIN LATERAL (
             SELECT id

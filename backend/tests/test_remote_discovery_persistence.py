@@ -21,6 +21,18 @@ def test_private_discovery_models_register_ownership_and_source_constraints():
     accounts = Base.metadata.tables["remote_accounts"]
     candidates = Base.metadata.tables["discovery_candidates"]
 
+    assert {
+        "name",
+        "is_active",
+        "sync_enabled",
+        "sync_interval_hours",
+        "schedule_mode",
+        "schedule_rule",
+        "scheduled_times",
+    }.issubset(memberships.c.keys())
+    assert "is_enabled" not in memberships.c
+    assert memberships.c.name.type.length == 500
+
     assert any(
         {"user_id", "subscription_id"} == set(constraint.columns.keys())
         for constraint in memberships.constraints
@@ -32,7 +44,7 @@ def test_private_discovery_models_register_ownership_and_source_constraints():
         if constraint.__class__.__name__ == "UniqueConstraint"
     )
     assert any(
-        {"remote_account_id", "remote_creator_id"} == set(constraint.columns.keys())
+        {"remote_account_id", "source_creator_id"} == set(constraint.columns.keys())
         for constraint in candidates.constraints
         if constraint.__class__.__name__ == "UniqueConstraint"
     )
@@ -53,7 +65,19 @@ def test_private_discovery_models_register_ownership_and_source_constraints():
     assert (("remote_account_id", "user_id"), "fk_discovery_candidates_account_owner") in candidate_foreign_keys
     assert (("user_subscription_id", "user_id", "subscription_id"), "fk_discovery_candidates_membership_owner") in candidate_foreign_keys
     assert isinstance(accounts.c.scan_cursor.type, JSONB)
+    assert isinstance(accounts.c.scopes.type, JSONB)
+    assert isinstance(accounts.c.collection_selectors.type, JSONB)
     assert isinstance(candidates.c.metadata.type, JSONB)
+    assert candidates.c.is_following.nullable is False
+    membership_checks = {
+        constraint.name
+        for constraint in memberships.constraints
+        if constraint.__class__.__name__ == "CheckConstraint"
+    }
+    assert {
+        "ck_user_subscriptions_schedule_mode",
+        "ck_user_subscriptions_schedule_sync_consistent",
+    }.issubset(membership_checks)
     assert all(
         foreign_key.ondelete == "RESTRICT"
         for table in (memberships, membership_sources, accounts, candidates)
@@ -61,19 +85,103 @@ def test_private_discovery_models_register_ownership_and_source_constraints():
     )
 
 
+def test_membership_schemas_own_private_schedule_and_normalize_manual_mode():
+    """Removing private schedule fields or manual consistency would restore a shared policy."""
+    from app.schemas.remote_discovery import (
+        UserSubscriptionCreate,
+        UserSubscriptionRead,
+        UserSubscriptionUpdate,
+    )
+
+    subscription_id = uuid4()
+    defaults = UserSubscriptionCreate(subscription_id=subscription_id)
+    assert defaults.model_dump() == {
+        "subscription_id": subscription_id,
+        "name": None,
+        "is_active": True,
+        "sync_enabled": True,
+        "sync_interval_hours": 6,
+        "schedule_mode": None,
+        "schedule_rule": None,
+        "scheduled_times": None,
+    }
+
+    manual = UserSubscriptionCreate(
+        subscription_id=subscription_id,
+        schedule_mode="manual",
+        sync_enabled=True,
+    )
+    assert manual.schedule_mode == "manual"
+    assert manual.sync_enabled is False
+
+    disabled = UserSubscriptionCreate(
+        subscription_id=subscription_id,
+        sync_enabled=False,
+    )
+    assert disabled.schedule_mode == "manual"
+    assert disabled.sync_enabled is False
+
+    inherit = UserSubscriptionUpdate(
+        schedule_mode="inherit",
+        schedule_rule={"frequency": "daily", "times": ["03:00"]},
+    )
+    assert inherit.schedule_mode is None
+    assert inherit.schedule_rule is None
+    assert inherit.sync_enabled is True
+
+    with pytest.raises(ValidationError):
+        UserSubscriptionCreate(
+            subscription_id=subscription_id,
+            schedule_mode="calendar",
+        )
+    with pytest.raises(ValidationError):
+        UserSubscriptionCreate(subscription_id=subscription_id, name="x" * 501)
+
+    now = datetime.now(timezone.utc)
+    payload = UserSubscriptionRead.model_validate({
+        "id": uuid4(),
+        "user_id": 7,
+        "subscription_id": subscription_id,
+        "name": "Private artist label",
+        "is_active": True,
+        "sync_enabled": True,
+        "sync_interval_hours": 12,
+        "schedule_mode": "interval",
+        "schedule_rule": None,
+        "scheduled_times": "03:00,21:00",
+        "created_at": now,
+        "updated_at": now,
+    }).model_dump()
+    assert payload["name"] == "Private artist label"
+    assert payload["sync_interval_hours"] == 12
+    assert "is_enabled" not in payload
+
+
 def test_remote_account_input_has_safe_automatic_import_defaults_and_cap():
     """Changing opt-in/default cap could silently import an unsafe number of follows."""
     from app.schemas.remote_discovery import RemoteAccountCreate
 
-    account = RemoteAccountCreate(source="pixiv")
+    account = RemoteAccountCreate(source="pixiv", auth_method="refresh_token")
 
     assert account.auto_import_enabled is False
     assert account.auto_import_min_confidence == "high"
     assert account.auto_import_limit == 25
+    assert account.auth_method == "refresh_token"
+    assert account.scopes == []
+    assert account.collection_selectors == []
+    other = RemoteAccountCreate(source="pixiv")
+    account.scopes.append("follow.read")
+    account.collection_selectors.append({"restrict": "private"})
+    assert other.scopes == []
+    assert other.collection_selectors == []
     with pytest.raises(ValidationError):
         RemoteAccountCreate(source="pixiv", auto_import_limit=201)
     with pytest.raises(ValidationError):
         RemoteAccountCreate(source="mastodon")
+    with pytest.raises(ValidationError):
+        RemoteAccountCreate(source="pixiv", auth_method="cookie")
+    with pytest.raises(ValidationError):
+        RemoteAccountCreate(source="x", auth_method="x" * 51)
 
 
 def test_remote_account_read_and_repr_never_expose_ciphertext():
@@ -85,6 +193,9 @@ def test_remote_account_read_and_repr_never_expose_ciphertext():
         id=uuid4(),
         user_id=7,
         source="x",
+        auth_method="oauth2",
+        scopes=["users.read", "follows.read"],
+        collection_selectors=[{"list_id": "123"}],
         credential_ciphertext="ciphertext-that-must-stay-private",
         is_enabled=True,
         scan_interval_hours=24,
@@ -98,7 +209,36 @@ def test_remote_account_read_and_repr_never_expose_ciphertext():
     payload = RemoteAccountRead.model_validate(account).model_dump()
 
     assert "credential_ciphertext" not in payload
+    assert payload["auth_method"] == "oauth2"
+    assert payload["scopes"] == ["users.read", "follows.read"]
+    assert payload["collection_selectors"] == [{"list_id": "123"}]
     assert "ciphertext-that-must-stay-private" not in repr(account)
+
+
+def test_candidate_read_uses_canonical_identity_and_remote_follow_state():
+    """Renaming the provider identity or omitting follow state would break scan upserts."""
+    from app.models import DiscoveryCandidate
+    from app.schemas.remote_discovery import DiscoveryCandidateRead
+
+    now = datetime.now(timezone.utc)
+    candidate = DiscoveryCandidate(
+        id=uuid4(),
+        remote_account_id=uuid4(),
+        user_id=7,
+        source_creator_id="12539859",
+        display_name="Artist",
+        is_following=True,
+        confidence="low",
+        state="pending",
+        created_at=now,
+        updated_at=now,
+    )
+
+    payload = DiscoveryCandidateRead.model_validate(candidate).model_dump()
+
+    assert payload["source_creator_id"] == "12539859"
+    assert payload["is_following"] is True
+    assert "remote_creator_id" not in payload
 
 
 def test_download_and_task_records_hold_only_optional_opaque_trigger_ids():
@@ -161,9 +301,23 @@ def test_single_migration_creates_enforced_private_schema_before_backfill(monkey
     assert list(created_tables).index("remote_accounts") < list(created_tables).index("discovery_candidates")
 
     binding_columns = {column.name for column in created_tables["user_subscription_sources"] if hasattr(column, "name")}
+    membership_columns = {column.name for column in created_tables["user_subscriptions"] if hasattr(column, "name")}
+    account_columns = {column.name for column in created_tables["remote_accounts"] if hasattr(column, "name")}
     candidate_columns = {column.name for column in created_tables["discovery_candidates"] if hasattr(column, "name")}
+    assert {
+        "name",
+        "is_active",
+        "sync_enabled",
+        "sync_interval_hours",
+        "schedule_mode",
+        "schedule_rule",
+        "scheduled_times",
+    }.issubset(membership_columns)
+    assert "is_enabled" not in membership_columns
+    assert {"auth_method", "scopes", "collection_selectors"}.issubset(account_columns)
     assert {"user_id", "subscription_id"}.issubset(binding_columns)
-    assert "user_id" in candidate_columns
+    assert {"user_id", "source_creator_id", "is_following"}.issubset(candidate_columns)
+    assert "remote_creator_id" not in candidate_columns
     binding_constraints = {
         constraint.name
         for constraint in created_tables["user_subscription_sources"]
@@ -188,10 +342,20 @@ def test_single_migration_creates_enforced_private_schema_before_backfill(monkey
     backfills = [statement for statement in statements if "INSERT INTO user_subscriptions" in statement]
     assert len(backfills) == 1
     backfill = backfills[0]
+    normalized_backfill = " ".join(backfill.split())
     assert "is_active IS TRUE" in backfill
     assert "is_admin IS TRUE" in backfill
     assert "ORDER BY created_at ASC, id ASC" in backfill
     assert "ON CONFLICT (user_id, subscription_id) DO NOTHING" in backfill
+    assert (
+        "name, is_active, sync_enabled, sync_interval_hours, schedule_mode, "
+        "schedule_rule, scheduled_times"
+    ) in normalized_backfill
+    assert (
+        "subscription.name, subscription.is_active, subscription.sync_enabled, "
+        "subscription.sync_interval_hours, subscription.schedule_mode, "
+        "subscription.schedule_rule, subscription.scheduled_times"
+    ) in normalized_backfill
     source_backfills = [statement for statement in statements if "INSERT INTO user_subscription_sources" in statement]
     assert len(source_backfills) == 1
     assert "user_id, subscription_id" in source_backfills[0]
@@ -292,12 +456,57 @@ async def test_database_rejects_candidate_using_another_users_imported_membershi
             fixture = await _private_binding_fixture(db, "cross-candidate")
             candidate = DiscoveryCandidate(
                 remote_account_id=fixture["first_account"].id,
-                remote_creator_id="creator-cross-owner",
+                source_creator_id="creator-cross-owner",
                 subscription_id=fixture["first_subscription"].id,
                 user_subscription_id=fixture["second_membership"].id,
             )
             candidate.user_id = fixture["first_user"].id
             db.add(candidate)
+            with pytest.raises(IntegrityError):
+                await db.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_database_enforces_membership_schedule_and_candidate_defaults():
+    """Losing database defaults or consistency checks would corrupt private due state."""
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, UserSubscription
+
+    try:
+        async with async_session() as db:
+            fixture = await _private_binding_fixture(db, "private-defaults")
+            membership = fixture["first_membership"]
+            candidate = DiscoveryCandidate(
+                remote_account_id=fixture["first_account"].id,
+                user_id=fixture["first_user"].id,
+                source_creator_id="private-default-creator",
+            )
+            db.add(candidate)
+            await db.flush()
+            await db.refresh(membership)
+            await db.refresh(candidate)
+
+            assert membership.name is None
+            assert membership.is_active is True
+            assert membership.sync_enabled is True
+            assert membership.sync_interval_hours == 6
+            assert membership.schedule_mode is None
+            assert membership.schedule_rule is None
+            assert membership.scheduled_times is None
+            assert candidate.is_following is True
+
+        async with async_session() as db:
+            fixture = await _private_binding_fixture(db, "invalid-manual")
+            invalid = UserSubscription(
+                user_id=fixture["first_user"].id,
+                subscription_id=fixture["second_subscription"].id,
+                schedule_mode="manual",
+                sync_enabled=True,
+            )
+            db.add(invalid)
             with pytest.raises(IntegrityError):
                 await db.commit()
     finally:
