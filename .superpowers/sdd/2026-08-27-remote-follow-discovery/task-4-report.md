@@ -170,3 +170,92 @@ Additional final checks:
   queue fallback.
 - The pre-existing untracked `admin-web/node_modules` symlink was not touched
   or added.
+
+## Review Fix Round 1 (2026-08-28)
+
+Review fixes were implemented from base `fb79d6b` without live provider calls.
+Additional commits:
+
+- `6e894cd fix: redact derived download credentials`
+- `28e5660 fix: recover private credential health safely`
+- `29fe56f fix: preserve manual download ownership`
+- `c9f6210 fix: make private due scheduling authoritative`
+- `851a515 test: isolate inherited member replan coverage`
+- `c1cba50 fix: treat every auth override leaf as secret`
+- `38a850a fix: keep disabled member demand unscheduled`
+
+### Security and credential recovery
+
+- Secret collection now covers every string leaf in both decrypted credential
+  material and the adapter-produced auth fragment. This includes raw X Cookie,
+  derived `auth_token`/`ct0`, flat provider-specific keys, custom headers, and
+  structured/list variants.
+- The full worker failure canary verifies raw and derived values are absent
+  from DownloadJob error/progress/manifest/config provenance, TaskRun,
+  isolated Redis progress, captured logs, exception text, and leftover temp
+  files.
+- AES-GCM/key/AAD/tamper errors and invalid adapter auth fragments are terminal
+  for the selected credential provenance and do not retry that credential.
+  Filesystem/temp-storage failures remain retryable system failures and do not
+  damage credential health.
+- Credential replacement and successful account validation heal all bindings
+  for that owned account and recompute every affected canonical cache. Failed
+  validation safely marks only that account and its bindings unhealthy.
+- Legacy canonical auth is poisoned only when both opaque trigger IDs are
+  NULL. Stale/mismatched private provenance is a no-op, including account
+  rebinding while a job is running.
+
+### Manual provenance and authoritative scheduling
+
+- Explicit sync-now may use an owned active/enabled/healthy manual membership
+  even when automatic canonical cache state is disabled. Exact membership and
+  account ownership are required; another user's earlier credential can never
+  be substituted.
+- DownloadOrchestrator validates authenticated caller provenance and forwards
+  the exact opaque IDs for both canonical-source and generic URL jobs.
+- Membership schedule mutations replan all locked private source bindings for
+  interval, calendar, manual, and inherited policy, then call the existing sole
+  canonical aggregate. System setting changes replan inherited private rows;
+  canonical-only rows retain legacy compatibility.
+- Whole-policy inheritance uses current system interval/calendar settings
+  rather than stale fields copied during migration. Disabled private bindings
+  retain shared receipt timestamps after peer success but remain unscheduled.
+- Canonical aggregation preserves NULL when any eligible binding is unseen/
+  immediately due; timestamps are minimized only when all eligible values are
+  non-NULL.
+- Enqueue durably claims the selected private binding in the same transaction
+  as the outbox before Redis publication. It performs no stale ORM due write
+  after publication, so fast success fan-out wins. Rejected publication uses a
+  compare-and-swap restoration of the original logical demand.
+
+### Fix-round TDD and verification
+
+Focused REDs reproduced every reviewed gap, including derived Cookie child
+leaks, stale account poisoning, failed account-health recovery, manual-owner
+substitution, unchanged private due rows, mixed NULL/future aggregation, and
+the deterministic fast-finalizer race. Additional self-review REDs covered
+flat/custom auth leaves and disabled binding success scheduling.
+
+Verification results:
+
+- D-focused plus membership/scheduler/replan baselines: `51 passed in 60.81s`.
+- Full review regression across 30 Task 4, membership/manual/scheduler,
+  download/finalization/retry/task, discovery/provider, queue, and worker
+  suites: `375 passed in 385.29s`.
+- Post-hardening affected suites: `72 passed in 15.24s`.
+- Flat/structured secret collection plus full worker Cookie canary:
+  `2 passed in 1.80s`.
+- Disabled-binding fan-out plus success/race baselines: `3 passed in 1.45s`.
+- `python3 -m compileall -q backend/app ...` — passed.
+- Ruff over every Python file changed from `fb79d6b` — `All checks passed!`.
+- `docker compose -f docker-compose.yaml config --quiet` — exit 0 with only
+  expected warnings for unset local secret variables.
+- Production-code canary scan — no Task 4 canary literal found.
+- `git diff --check fb79d6b..HEAD` — no output.
+
+Exact `git diff fb79d6b..HEAD` was self-reviewed. Remaining operational risks
+are unchanged: temp unlink is best-effort under filesystem failure, and the
+independent discovery queue still shares the operations worker process until
+Task 6 finalizes deployment controls. Test isolation forced the dedicated
+`autogallery_test` PostgreSQL database and Redis DB 15. The pre-existing
+untracked `admin-web/node_modules` symlink was not touched or added.
