@@ -3354,3 +3354,93 @@ async def test_due_discovery_admission_claims_once_and_routes_discovery_queue():
         async with async_session() as db:
             await _cleanup_shared_test_rows(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_due_discovery_admission_filters_to_effective_preview_sources(monkeypatch):
+    """Closed X/Bilibili providers must not be claimed beside an open Pixiv account."""
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, TaskRun, User
+    from app.services.remote_discovery import admit_due_remote_accounts
+
+    monkeypatch.setattr(settings, "remote_discovery_private_members_enabled", True)
+    monkeypatch.setattr(settings, "remote_discovery_pixiv_preview_enabled", True)
+    monkeypatch.setattr(settings, "remote_discovery_x_enabled", False)
+    monkeypatch.setattr(settings, "remote_discovery_bilibili_enabled", False)
+    published: list[tuple[str, str]] = []
+
+    def publish(task_id, *, queue_name):
+        published.append((str(task_id), queue_name))
+
+    now = datetime.now(timezone.utc)
+    due_at = now - timedelta(minutes=1)
+    try:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+            user = User(
+                username=f"shared_schedule_test_provider_gate_{uuid4().hex[:8]}",
+                password_hash="test-only",
+                is_active=True,
+            )
+            db.add(user)
+            await db.flush()
+            accounts = {
+                source: RemoteAccount(
+                    user_id=user.id,
+                    source=source,
+                    auth_method={"pixiv": "refresh_token", "x": "cookie", "bilibili": "sessdata"}[source],
+                    credential_ciphertext=f"test-{source}-ciphertext",
+                    credential_key_version=1,
+                    credential_generation=1,
+                    is_enabled=True,
+                    auth_status="healthy",
+                    next_scan_at=due_at,
+                    scan_interval_hours=24,
+                )
+                for source in ("pixiv", "x", "bilibili")
+            }
+            db.add_all(accounts.values())
+            await db.commit()
+            account_ids = {source: account.id for source, account in accounts.items()}
+
+        async with async_session() as db:
+            result = await admit_due_remote_accounts(db, now=now, publisher=publish)
+
+        async with async_session() as db:
+            stored = {
+                account.source: account
+                for account in (
+                    await db.execute(
+                        select(RemoteAccount).where(RemoteAccount.id.in_(account_ids.values()))
+                    )
+                ).scalars()
+            }
+            tasks = list(
+                (
+                    await db.execute(
+                        select(TaskRun).where(
+                            TaskRun.triggering_remote_account_id.in_(account_ids.values()),
+                            TaskRun.operation_type == "remote-discovery-scan",
+                        )
+                    )
+                ).scalars()
+            )
+
+        assert result["created"] == 1
+        assert result["published"] == 1
+        assert len(tasks) == 1
+        assert tasks[0].triggering_remote_account_id == account_ids["pixiv"]
+        assert published == [(str(tasks[0].id), "discovery")]
+        assert stored["pixiv"].last_scan_started_at is not None
+        for source in ("x", "bilibili"):
+            assert stored[source].last_scan_started_at is None
+            assert stored[source].next_scan_at == due_at
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()

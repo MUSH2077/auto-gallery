@@ -380,7 +380,9 @@ function AccountSettingsDialog({
           </label>
         </div>
         {!autoImportAvailable ? (
-          <p className="rounded-md border border-border bg-subtle p-3 text-xs text-muted">{t("discovery.auto_import_unavailable")}</p>
+          <p className="rounded-md border border-border bg-subtle p-3 text-xs text-muted">
+            {t(autoImport ? "discovery.auto_import_configured_paused" : "discovery.auto_import_unavailable")}
+          </p>
         ) : null}
         {feedback ? <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">{feedback}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
@@ -420,6 +422,7 @@ function AccountCard({
   const label = providerLabel(t, source);
   const experimental = source !== "x" && provider?.capabilities.supports_remote_discovery;
   const previewAvailable = provider?.capabilities.remote_discovery_rollout?.manual_preview === true;
+  const autoImportAvailable = provider?.capabilities.remote_discovery_rollout?.auto_import === true;
   const activeScan = scan && ["enqueued", "running", "recovering", "waiting"].includes(scan.status);
   const scanState = scan?.status === "complete"
     ? t("discovery.scan_complete")
@@ -498,10 +501,12 @@ function AccountCard({
           </dl>
           <p className="mt-3 text-xs text-muted">
             {account.auto_import_enabled
-              ? t("discovery.auto_import_summary", {
-                  threshold: t(`discovery.confidence_${account.auto_import_min_confidence}`),
-                  limit: account.auto_import_limit,
-                })
+              ? autoImportAvailable
+                ? t("discovery.auto_import_summary", {
+                    threshold: t(`discovery.confidence_${account.auto_import_min_confidence}`),
+                    limit: account.auto_import_limit,
+                  })
+                : t("discovery.auto_import_summary_paused")
               : t("discovery.auto_import_off")}
           </p>
           {scanState ? (

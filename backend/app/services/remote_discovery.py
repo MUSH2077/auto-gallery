@@ -554,13 +554,16 @@ class RemoteDiscoveryService:
         )
         await self.db.commit()
 
-        account_service = RemoteAccountService(
-            self.db,
-            account.user_id,
-            vault=self.vault or configured_credential_vault(),
-            adapters=self.adapters,
-        )
         try:
+            # Credential-key resolution is part of execution, not admission.
+            # Keep it inside the failure-finalization boundary so a missing or
+            # wrong deployment key cannot strand the already claimed task.
+            account_service = RemoteAccountService(
+                self.db,
+                account.user_id,
+                vault=self.vault or configured_credential_vault(),
+                adapters=self.adapters,
+            )
             while selector_index < len(selectors):
                 account = await self.db.get(RemoteAccount, account.id)
                 credentials = account_service.credentials_for_adapter(account)

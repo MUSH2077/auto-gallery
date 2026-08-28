@@ -39,3 +39,25 @@ def test_service_placeholders_are_rejected(field: str, value: str) -> None:
 def test_undocumented_admin_placeholder_passwords_are_rejected(admin_password: str) -> None:
     with pytest.raises(RuntimeError, match="ADMIN_PASSWORD"):
         Settings(**_settings_kwargs(admin_password=admin_password))
+
+
+def test_remote_discovery_settings_defaults_are_really_fail_closed(monkeypatch) -> None:
+    """The real Settings defaults must stay closed independent of feature fixtures."""
+
+    fields = (
+        "remote_discovery_private_members_enabled",
+        "remote_discovery_pixiv_preview_enabled",
+        "remote_discovery_pixiv_auto_import_enabled",
+        "remote_discovery_x_enabled",
+        "remote_discovery_x_auto_import_enabled",
+        "remote_discovery_bilibili_enabled",
+        "remote_discovery_bilibili_auto_import_enabled",
+    )
+    for field in fields:
+        monkeypatch.delenv(field.upper(), raising=False)
+
+    isolated = Settings(_env_file=None, **_settings_kwargs())
+
+    assert {field: getattr(isolated, field) for field in fields} == {
+        field: False for field in fields
+    }

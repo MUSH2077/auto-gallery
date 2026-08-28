@@ -202,6 +202,9 @@ async def test_remote_account(
         result = await RemoteAccountService(db, user.id).test(account_id)
         await db.commit()
         return result
+    except RemoteDiscoveryUnavailable as exc:
+        await db.commit()
+        raise _not_found_or_bad_request(exc) from exc
     except ValueError as exc:
         await db.commit()
         raise _not_found_or_bad_request(exc) from exc
@@ -222,6 +225,8 @@ async def list_remote_account_collections(
             {"id": item.id, "name": item.name, "selector": dict(item.selector)}
             for item in collections
         ]
+    except RemoteDiscoveryUnavailable as exc:
+        raise _not_found_or_bad_request(exc) from exc
     except ValueError as exc:
         raise _not_found_or_bad_request(exc) from exc
     except Exception as exc:

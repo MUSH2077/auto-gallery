@@ -703,6 +703,41 @@ test("backend rollout disables provider execution but keeps cleanup actions", as
   await expect(page.getByRole("button", { name: /Ignore Artist rollout/i }).first()).toBeEnabled();
 });
 
+test("closed auto gate shows a configured policy as paused and preserves it on save", async ({ context, page }) => {
+  const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  await installFixtures(context, {
+    accounts: [account({
+      auto_import_enabled: true,
+      auto_import_min_confidence: "medium",
+      auto_import_limit: 50,
+    })],
+    rollout: {
+      pixiv: {
+        manual_preview: true,
+        auto_import: false,
+        unavailable_reason: "auto_import_disabled",
+      },
+    },
+    onMutation: (path, body) => mutations.push({ path, body }),
+  });
+  await page.goto("/admin/discovery");
+  const pixivCard = page.locator("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) }).first();
+  await expect(pixivCard.getByText("Auto import configured, paused by rollout")).toBeVisible();
+  await page.getByRole("button", { name: "Configure Pixiv" }).click();
+
+  await expect(page.getByLabel("Automatic import")).toBeChecked();
+  await expect(page.getByLabel("Automatic import")).toBeDisabled();
+  await expect(page.getByText("Automatic import is configured on, but paused by the current rollout gate. The saved setting is preserved.")).toBeVisible();
+
+  await page.getByLabel("Scan interval (hours)").fill("12");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  const settingsMutation = mutations.find((mutation) => mutation.path === "/api/v1/remote-accounts/acc-pixiv");
+  expect(settingsMutation?.body.scan_interval_hours).toBe(12);
+  expect(settingsMutation?.body).not.toHaveProperty("auto_import_enabled");
+  expect(settingsMutation?.body).not.toHaveProperty("auto_import_min_confidence");
+  expect(settingsMutation?.body).not.toHaveProperty("auto_import_limit");
+});
+
 test("keeps the account and candidate workbench usable on mobile", async ({ context, page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installFixtures(context, { accounts: [account()], candidates: [candidate("mobile")] });

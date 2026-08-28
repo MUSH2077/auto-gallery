@@ -314,3 +314,57 @@ async def test_queued_scan_rechecks_rollout_before_claim_or_adapter_call(monkeyp
     assert result.reason_code == "private_members_disabled"
     assert db.execute_count == 1
     assert db.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint_name", "expected_detail"),
+    [
+        ("test_remote_account", "Remote account validation failed"),
+        ("list_remote_account_collections", "Remote collections request failed"),
+    ],
+)
+async def test_disabled_account_execution_endpoints_return_structured_503(
+    monkeypatch,
+    endpoint_name,
+    expected_detail,
+):
+    """Real routes must not turn rollout RuntimeError into a provider 502."""
+    from uuid import uuid4
+
+    from app.api import remote_accounts as remote_account_api
+    from app.services import remote_accounts as remote_account_service
+    from fastapi import HTTPException
+
+    class AccountResult:
+        def scalar_one_or_none(self):
+            return SimpleNamespace(source="pixiv")
+
+    class Database:
+        def __init__(self):
+            self.commits = 0
+
+        async def execute(self, *_args, **_kwargs):
+            return AccountResult()
+
+        async def commit(self):
+            self.commits += 1
+
+    class BombAdapters:
+        def get(self, _source):
+            raise AssertionError("disabled endpoint reached the provider adapter")
+
+    _close_all(monkeypatch)
+    monkeypatch.setattr(remote_account_service, "registry", BombAdapters())
+    endpoint = getattr(remote_account_api, endpoint_name)
+    db = Database()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await endpoint(uuid4(), db=db, user=SimpleNamespace(id=41))
+
+    assert exc_info.value.status_code == 503, expected_detail
+    assert exc_info.value.detail == {
+        "code": "remote_discovery_unavailable",
+        "reason": "private_members_disabled",
+        "source": "pixiv",
+    }

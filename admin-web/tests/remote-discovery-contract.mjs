@@ -53,6 +53,10 @@ assert.match(accounts, /remote_discovery_rollout\?\.manual_preview/,
   "account controls must fail closed on the backend-effective preview gate");
 assert.match(accounts, /remote_discovery_rollout\?\.auto_import/,
   "account settings must disable automatic import independently");
+assert.match(accounts, /auto_import_configured_paused/,
+  "a stored auto-import preference behind a closed gate must be labeled as configured but paused");
+assert.match(accounts, /auto_import_summary_paused/,
+  "the account card must distinguish a configured policy from effective automatic import");
 assert.match(candidates, /previewEnabledAccountIds/,
   "candidate import and conflict actions must honor provider preview rollout");
 

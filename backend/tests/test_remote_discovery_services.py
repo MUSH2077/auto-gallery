@@ -291,6 +291,68 @@ async def test_incomplete_scan_preserves_prior_follow_state_and_checkpoint_witho
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("vault_mode", ["missing", "wrong"])
+async def test_scan_credential_setup_failure_is_terminal_and_recoverable(
+    monkeypatch, vault_mode
+):
+    """Pre-provider credential failures must not strand a claimed scan as running."""
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.services.remote_credentials import CredentialVault
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    monkeypatch.setattr(settings, "remote_discovery_private_members_enabled", True)
+    monkeypatch.setattr(settings, "remote_discovery_pixiv_preview_enabled", True)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, f"credential-{vault_mode}")
+            account = await _account(db, user, adapter)
+            task = await RemoteDiscoveryService(db, adapters=Registry(adapter)).create_scan(
+                user.id, account.id
+            )
+            await db.commit()
+            task_id = task.id
+
+            if vault_mode == "missing":
+                monkeypatch.setattr(settings, "remote_credential_key", "")
+                failing_vault = None
+            else:
+                failing_vault = CredentialVault(
+                    base64.urlsafe_b64encode(b"w" * 32).decode()
+                )
+
+            with pytest.raises((RuntimeError, ValueError)):
+                await RemoteDiscoveryService(
+                    db, vault=failing_vault, adapters=Registry(adapter)
+                ).run_scan(task_id)
+
+            stored_task = await db.get(TaskRun, task_id, populate_existing=True)
+            assert stored_task.status == "failed"
+            assert stored_task.reason_code == "remote_discovery_failed"
+            assert "scan-secret" not in str(stored_task.error_log)
+            assert adapter.calls == []
+
+            # RQ recovery (or an operator retry after fixing configuration) may
+            # reclaim the terminal task; no stale `running` row blocks it.
+            stored_task.status = "recovering"
+            await db.commit()
+            completed = await RemoteDiscoveryService(
+                db, vault=_vault(), adapters=Registry(adapter)
+            ).run_scan(task_id)
+            assert completed.status == "complete"
+            assert adapter.calls
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_run_scan_atomically_claims_single_provider_execution_and_requires_stale_requeue():
     """Concurrent workers cannot both cross the adapter boundary for one scan."""
     import asyncio
