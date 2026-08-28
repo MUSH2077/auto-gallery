@@ -2,11 +2,13 @@ from fastapi import APIRouter
 
 from app.auth import RequirePermission
 from app.providers import registry
+from app.schemas.source_registry import SourceListResponse
+from app.services.remote_discovery_rollout import provider_rollout
 
 router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
-@router.get("")
+@router.get("", response_model=SourceListResponse)
 async def list_sources():
     sources = []
     for name in registry.list_sources():
@@ -23,6 +25,11 @@ async def list_sources():
                 "supports_remote_discovery": p.capabilities.supports_remote_discovery,
                 "discovery_auth_methods": p.capabilities.discovery_auth_methods,
                 "supports_collection_selectors": p.capabilities.supports_collection_selectors,
+                "remote_discovery_rollout": (
+                    provider_rollout(p.source_name)
+                    if p.capabilities.supports_remote_discovery
+                    else None
+                ),
             },
         })
     return {"sources": sources}

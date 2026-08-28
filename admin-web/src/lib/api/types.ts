@@ -449,7 +449,14 @@ export interface ProviderInfo {
     supports_remote_discovery?: boolean;
     discovery_auth_methods?: RemoteAuthMethod[];
     supports_collection_selectors?: boolean;
+    remote_discovery_rollout?: RemoteDiscoveryRollout | null;
   };
+}
+
+export interface RemoteDiscoveryRollout {
+  manual_preview: boolean;
+  auto_import: boolean;
+  unavailable_reason?: string | null;
 }
 
 export type RemoteDiscoverySource = "pixiv" | "x" | "bilibili";

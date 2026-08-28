@@ -7,6 +7,8 @@ const endpointPath = path.join(root, "src/lib/api/endpoints/remoteDiscovery.ts")
 const typesPath = path.join(root, "src/lib/api/types.ts");
 const apiIndexPath = path.join(root, "src/lib/api/index.ts");
 const pagePath = path.join(root, "src/app/admin/discovery/RemoteDiscoveryPage.tsx");
+const accountsPath = path.join(root, "src/app/admin/discovery/RemoteAccountPanel.tsx");
+const candidatesPath = path.join(root, "src/app/admin/discovery/CandidateWorkbench.tsx");
 const privateCachePath = path.join(root, "src/lib/remoteDiscoveryPrivateCache.ts");
 
 assert.ok(fs.existsSync(endpointPath), "remote discovery must have a focused typed endpoint module");
@@ -15,6 +17,8 @@ const endpoint = fs.readFileSync(endpointPath, "utf8");
 const types = fs.readFileSync(typesPath, "utf8");
 const apiIndex = fs.readFileSync(apiIndexPath, "utf8");
 const page = fs.readFileSync(pagePath, "utf8");
+const accounts = fs.readFileSync(accountsPath, "utf8");
+const candidates = fs.readFileSync(candidatesPath, "utf8");
 
 for (const route of [
   "/api/v1/remote-accounts",
@@ -32,6 +36,8 @@ for (const route of [
 
 assert.match(types, /interface RemoteAccountRead/);
 assert.match(types, /interface DiscoveryCandidate/);
+assert.match(types, /interface RemoteDiscoveryRollout/,
+  "frontend types must consume backend-effective rollout capabilities");
 assert.match(types, /type RemoteDiscoverySource\s*=\s*"pixiv"\s*\|\s*"x"\s*\|\s*"bilibili"/);
 assert.match(endpoint, /immediate_sync:\s*input\.syncNow\s*\?\?\s*false/);
 assert.doesNotMatch(apiIndex, /queryKeys[\s\S]{0,1200}(?:credentials|refresh_token|SESSDATA|cookie)/i,
@@ -43,5 +49,11 @@ assert.match(apiIndex, /candidates:\s*\(userId:\s*number,\s*filters\?/,
 assert.ok(fs.existsSync(privateCachePath), "private discovery cache must have an explicit cleanup boundary");
 assert.doesNotMatch(page, /useSearchParams/, "OAuth callback secrets must not enter reactive search-param state");
 assert.doesNotMatch(page, /oauthCallback\s*=\s*useMutation/, "OAuth callback secrets must not enter mutation variables");
+assert.match(accounts, /remote_discovery_rollout\?\.manual_preview/,
+  "account controls must fail closed on the backend-effective preview gate");
+assert.match(accounts, /remote_discovery_rollout\?\.auto_import/,
+  "account settings must disable automatic import independently");
+assert.match(candidates, /previewEnabledAccountIds/,
+  "candidate import and conflict actions must honor provider preview rollout");
 
 console.log("Remote discovery frontend API contract passed.");

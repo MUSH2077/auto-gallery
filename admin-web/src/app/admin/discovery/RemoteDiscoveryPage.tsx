@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
@@ -117,6 +117,14 @@ export default function RemoteDiscoveryPage() {
   }, [pendingScanId, qc, scans.data, t, toast]);
 
   const accountError = privateAccessError || accounts.error || providers.error || scans.error;
+  const previewEnabledAccountIds = useMemo(() => {
+    const enabledSources = new Set((providers.data?.sources || [])
+      .filter((provider) => provider.capabilities.remote_discovery_rollout?.manual_preview === true)
+      .map((provider) => provider.source_name));
+    return new Set((accounts.data || [])
+      .filter((account) => enabledSources.has(account.source))
+      .map((account) => account.id));
+  }, [accounts.data, providers.data?.sources]);
   return (
     <PageShell className="max-w-[96rem]">
       <PageHeader title={t("discovery.title")} description={t("discovery.desc")} />
@@ -148,6 +156,7 @@ export default function RemoteDiscoveryPage() {
       ) : null}
       <CandidateWorkbench
         accounts={accounts.data || []}
+        previewEnabledAccountIds={previewEnabledAccountIds}
         userId={userId}
         enabled={!privateAccessError}
         onPrivateAccessError={handlePrivateAccessError}

@@ -104,6 +104,7 @@ function RowActions({
   onRestore,
   onResolve,
   pending,
+  importAvailable,
 }: {
   candidate: DiscoveryCandidate;
   onImport: () => void;
@@ -111,13 +112,14 @@ function RowActions({
   onRestore: () => void;
   onResolve: () => void;
   pending: boolean;
+  importAvailable: boolean;
 }) {
   const t = useT();
   const name = candidate.display_name || candidate.source_creator_id;
   if (candidate.state === "conflict") {
     return (
       <div className="flex flex-wrap gap-1">
-        <button type="button" className="btn-primary whitespace-nowrap" disabled={pending} onClick={onResolve} aria-label={t("discovery.resolve_candidate", { name })}>
+        <button type="button" className="btn-primary whitespace-nowrap" disabled={pending || !importAvailable} onClick={onResolve} aria-label={t("discovery.resolve_candidate", { name })}>
           <CircleAlert aria-hidden="true" className="h-4 w-4" />
           {t("discovery.resolve_conflict")}
         </button>
@@ -138,7 +140,7 @@ function RowActions({
   if (candidate.state === "pending") {
     return (
       <div className="flex flex-wrap gap-1">
-        <button type="button" className="btn-primary whitespace-nowrap" disabled={pending} onClick={onImport} aria-label={t("discovery.import_candidate", { name })}>
+        <button type="button" className="btn-primary whitespace-nowrap" disabled={pending || !importAvailable} onClick={onImport} aria-label={t("discovery.import_candidate", { name })}>
           <ArrowDownToLine aria-hidden="true" className="h-4 w-4" />
           {t("discovery.import")}
         </button>
@@ -186,11 +188,13 @@ function ImportDialog({
 
 export default function CandidateWorkbench({
   accounts,
+  previewEnabledAccountIds,
   userId,
   enabled = true,
   onPrivateAccessError,
 }: {
   accounts: RemoteAccountRead[];
+  previewEnabledAccountIds: ReadonlySet<string>;
   userId: number;
   enabled?: boolean;
   onPrivateAccessError?: (error: unknown) => void;
@@ -294,7 +298,7 @@ export default function CandidateWorkbench({
 
   const allVisibleSelected = visible.length > 0 && visible.every((candidate) => selected.has(candidate.id));
   const selectedRows = visible.filter((candidate) => selected.has(candidate.id));
-  const selectedPending = selectedRows.filter((candidate) => candidate.state === "pending").map((candidate) => candidate.id);
+  const selectedPending = selectedRows.filter((candidate) => candidate.state === "pending" && previewEnabledAccountIds.has(candidate.remote_account_id)).map((candidate) => candidate.id);
   const selectedDismissable = selectedRows.filter((candidate) => candidate.state === "pending" || candidate.state === "conflict").map((candidate) => candidate.id);
   const selectedDismissed = selectedRows.filter((candidate) => candidate.state === "dismissed").map((candidate) => candidate.id);
 
@@ -424,7 +428,7 @@ export default function CandidateWorkbench({
                         <td className="px-3 py-3"><LocalMatch candidate={candidate} /></td>
                         <td className="px-3 py-3"><StatusBadge status={candidate.is_following ? "up" : "warning"} label={t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")} /></td>
                         <td className="px-3 py-3 text-xs text-muted"><span className="whitespace-nowrap">{fmt.dateTime(candidate.updated_at)}</span></td>
-                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} /></td>
+                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} /></td>
                       </tr>
                     );
                   })}
@@ -450,7 +454,7 @@ export default function CandidateWorkbench({
                     </div>
                     <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                       <span className="text-xs text-muted">{fmt.dateTime(candidate.updated_at)}</span>
-                      <RowActions candidate={candidate} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} />
+                      <RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} />
                     </div>
                   </article>
                 );

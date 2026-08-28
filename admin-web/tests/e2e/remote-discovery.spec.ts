@@ -96,6 +96,7 @@ type FixtureOptions = {
   accountConnectDelayMs?: number;
   onPrivateRequest?: (user: "a" | "b", path: string) => void;
   onMutation?: (path: string, body: Record<string, unknown>) => void;
+  rollout?: Partial<Record<"pixiv" | "x" | "bilibili", { manual_preview: boolean; auto_import: boolean; unavailable_reason: string | null }>>;
 };
 
 async function json(route: Route, value: unknown, status = 200) {
@@ -129,9 +130,9 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     if (path === "/api/v1/auth/me") return json(route, actingUser === "b" ? meB : me);
     if (path === "/api/v1/sources") {
       return json(route, { sources: [
-        { source_name: "pixiv", display_name: "Pixiv", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["refresh_token"], supports_collection_selectors: true } },
-        { source_name: "x", display_name: "X", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["oauth2", "cookie"], supports_collection_selectors: true } },
-        { source_name: "bilibili", display_name: "Bilibili", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["sessdata"], supports_collection_selectors: true } },
+        { source_name: "pixiv", display_name: "Pixiv", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["refresh_token"], supports_collection_selectors: true, remote_discovery_rollout: options.rollout?.pixiv || { manual_preview: true, auto_import: true, unavailable_reason: null } } },
+        { source_name: "x", display_name: "X", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["oauth2", "cookie"], supports_collection_selectors: true, remote_discovery_rollout: options.rollout?.x || { manual_preview: true, auto_import: true, unavailable_reason: null } } },
+        { source_name: "bilibili", display_name: "Bilibili", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["sessdata"], supports_collection_selectors: true, remote_discovery_rollout: options.rollout?.bilibili || { manual_preview: true, auto_import: true, unavailable_reason: null } } },
       ] });
     }
     if (path.startsWith("/api/v1/remote-accounts") || path.startsWith("/api/v1/discovery")) {
@@ -677,6 +678,29 @@ test("switches users in one session without flashing or reusing private discover
   ]));
   expect(await page.evaluate(() => (window as typeof window & { __privateDiscoveryLeaks?: string[] }).__privateDiscoveryLeaks)).toEqual([]);
   expect(consoleErrors).toEqual([]);
+});
+
+test("backend rollout disables provider execution but keeps cleanup actions", async ({ context, page }) => {
+  await installFixtures(context, {
+    accounts: [account()],
+    candidates: [candidate("rollout")],
+    rollout: {
+      pixiv: {
+        manual_preview: false,
+        auto_import: false,
+        unavailable_reason: "pixiv_preview_disabled",
+      },
+    },
+  });
+  await page.goto("/admin/discovery");
+
+  const pixivCard = page.locator("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) }).first();
+  await expect(pixivCard.getByRole("button", { name: /Scan Pixiv/i })).toBeDisabled();
+  await expect(pixivCard.getByRole("button", { name: /Configure Pixiv/i })).toBeDisabled();
+  await expect(pixivCard.getByRole("button", { name: /Delete Pixiv/i })).toBeEnabled();
+
+  await expect(page.getByRole("button", { name: /Import Artist rollout/i }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Ignore Artist rollout/i }).first()).toBeEnabled();
 });
 
 test("keeps the account and candidate workbench usable on mobile", async ({ context, page }) => {

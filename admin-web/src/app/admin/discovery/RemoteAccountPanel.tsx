@@ -250,6 +250,7 @@ function AccountSettingsDialog({
   account,
   userId,
   supportsCollectionSelectors,
+  autoImportAvailable,
   onPrivateAccessError,
   onClose,
 }: {
@@ -257,6 +258,7 @@ function AccountSettingsDialog({
   account: RemoteAccountRead;
   userId: number;
   supportsCollectionSelectors: boolean;
+  autoImportAvailable: boolean;
   onPrivateAccessError: (error: unknown) => void;
   onClose: () => void;
 }) {
@@ -306,9 +308,11 @@ function AccountSettingsDialog({
           .map((collection) => collection.selector),
       } : {}),
       scan_interval_hours: Math.max(1, Math.floor(interval)),
-      auto_import_enabled: autoImport,
-      auto_import_min_confidence: threshold,
-      auto_import_limit: Math.min(200, Math.max(1, Math.floor(limit))),
+      ...(autoImportAvailable ? {
+        auto_import_enabled: autoImport,
+        auto_import_min_confidence: threshold,
+        auto_import_limit: Math.min(200, Math.max(1, Math.floor(limit))),
+      } : {}),
     }, signal)),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
@@ -371,10 +375,13 @@ function AccountSettingsDialog({
             </select>
           </label>
           <label className="flex min-h-11 cursor-pointer items-center gap-2 self-end rounded-md border border-border px-3 text-sm font-medium text-fg">
-            <input type="checkbox" className="rounded" checked={autoImport} onChange={(event) => setAutoImport(event.target.checked)} />
+            <input type="checkbox" className="rounded" checked={autoImport} disabled={!autoImportAvailable} onChange={(event) => setAutoImport(event.target.checked)} />
             <span>{t("discovery.auto_import")}</span>
           </label>
         </div>
+        {!autoImportAvailable ? (
+          <p className="rounded-md border border-border bg-subtle p-3 text-xs text-muted">{t("discovery.auto_import_unavailable")}</p>
+        ) : null}
         {feedback ? <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">{feedback}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>{t("common.cancel")}</button>
@@ -412,6 +419,7 @@ function AccountCard({
   const fmt = useI18nFormat();
   const label = providerLabel(t, source);
   const experimental = source !== "x" && provider?.capabilities.supports_remote_discovery;
+  const previewAvailable = provider?.capabilities.remote_discovery_rollout?.manual_preview === true;
   const activeScan = scan && ["enqueued", "running", "recovering", "waiting"].includes(scan.status);
   const scanState = scan?.status === "complete"
     ? t("discovery.scan_complete")
@@ -472,8 +480,8 @@ function AccountCard({
 
       {!account ? (
         <div className="mt-5">
-          <p className="text-sm leading-5 text-muted">{t("discovery.not_connected_desc")}</p>
-          <button type="button" className="btn-primary mt-4" onClick={() => onDialog("connect")}>
+          <p className="text-sm leading-5 text-muted">{t(previewAvailable ? "discovery.not_connected_desc" : "discovery.provider_unavailable")}</p>
+          <button type="button" className="btn-primary mt-4" disabled={!previewAvailable} onClick={() => onDialog("connect")}>
             <KeyRound aria-hidden="true" className="h-4 w-4" />
             {t("discovery.connect_provider", { provider: label })}
           </button>
@@ -527,18 +535,18 @@ function AccountCard({
             </div>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" className="btn-primary" disabled={pending || !!activeScan || account.auth_status !== "healthy"} onClick={onScan} aria-label={t("discovery.scan_provider", { provider: label })}>
+            <button type="button" className="btn-primary" disabled={!previewAvailable || pending || !!activeScan || account.auth_status !== "healthy"} onClick={onScan} aria-label={t("discovery.scan_provider", { provider: label })}>
               <Radar aria-hidden="true" className="h-4 w-4" />
               {t("discovery.scan_provider", { provider: label })}
             </button>
-            <button type="button" className="btn-ghost" disabled={pending} onClick={() => onDialog("settings")} aria-label={t("discovery.configure_provider", { provider: label })}>
+            <button type="button" className="btn-ghost" disabled={!previewAvailable || pending} onClick={() => onDialog("settings")} aria-label={t("discovery.configure_provider", { provider: label })}>
               <Settings2 aria-hidden="true" className="h-4 w-4" />
               {t("discovery.configure_provider", { provider: label })}
             </button>
-            <button type="button" className="btn-ghost" disabled={pending} onClick={onTest} aria-label={t("discovery.test_provider", { provider: label })} title={t("discovery.test_provider", { provider: label })}>
+            <button type="button" className="btn-ghost" disabled={!previewAvailable || pending} onClick={onTest} aria-label={t("discovery.test_provider", { provider: label })} title={t("discovery.test_provider", { provider: label })}>
               <ShieldCheck aria-hidden="true" className="h-4 w-4" />
             </button>
-            <button type="button" className="btn-ghost" disabled={pending} onClick={() => onDialog("reconnect")} aria-label={t("discovery.reconnect_provider", { provider: label })} title={t("discovery.reconnect_provider", { provider: label })}>
+            <button type="button" className="btn-ghost" disabled={!previewAvailable || pending} onClick={() => onDialog("reconnect")} aria-label={t("discovery.reconnect_provider", { provider: label })} title={t("discovery.reconnect_provider", { provider: label })}>
               <KeyRound aria-hidden="true" className="h-4 w-4" />
             </button>
             <button type="button" className="btn-ghost text-danger" disabled={pending} onClick={onDelete} aria-label={t("discovery.delete_provider", { provider: label })} title={t("discovery.delete_provider", { provider: label })}>
@@ -655,6 +663,7 @@ export default function RemoteAccountPanel({
           account={activeAccount}
           userId={userId}
           supportsCollectionSelectors={!!providersBySource.get(activeAccount.source)?.capabilities.supports_collection_selectors}
+          autoImportAvailable={providersBySource.get(activeAccount.source)?.capabilities.remote_discovery_rollout?.auto_import === true}
           onPrivateAccessError={onPrivateAccessError}
           onClose={() => setDialog(null)}
         />
