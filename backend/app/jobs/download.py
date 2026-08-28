@@ -113,6 +113,17 @@ class _PersonalDownloadConfig:
         return clean
 
 
+def _private_safe_error(
+    error: str,
+    personal: _PersonalDownloadConfig | None,
+) -> str:
+    """Redact private credential values and the ephemeral config identity."""
+
+    if personal is None:
+        return error
+    return personal.redact(error).replace(str(personal.path), "[private auth config]")
+
+
 def _durable_gallerydl_command(
     command: list[str],
     personal: _PersonalDownloadConfig | None,
@@ -843,6 +854,7 @@ async def run_download_job(job_id: str):
     ai_config_path = None
     job_config_path = None
     personal_download_config: _PersonalDownloadConfig | None = None
+    personal_base_config: Mapping | None = None
     source_url = job.source_url
     provider = None
     provider_chunk = None
@@ -858,17 +870,9 @@ async def run_download_job(job_id: str):
         if staging_enabled():
             validate_gallerydl_staging_config(_cfg)
         if job.triggering_remote_account_id is not None:
-            async with async_session() as _auth_db:
-                personal_download_config = await _materialize_personal_download_config(
-                    _auth_db,
-                    job,
-                    _cfg,
-                )
-            if personal_download_config is None:  # pragma: no cover - guarded by account id
-                raise PersonalDownloadConfigurationError(
-                    "personal download authentication was not materialized"
-                )
-            job_config_path = str(personal_download_config.path)
+            # Decrypt and write as late as possible, inside the cleanup-owned
+            # execution try/finally below.
+            personal_base_config = _cfg
         elif _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
@@ -951,6 +955,23 @@ async def run_download_job(job_id: str):
     try:
         if configuration_error is not None:
             raise configuration_error
+        if job.triggering_remote_account_id is not None:
+            try:
+                async with async_session() as _auth_db:
+                    personal_download_config = await _materialize_personal_download_config(
+                        _auth_db,
+                        job,
+                        personal_base_config or {},
+                    )
+            except Exception as exc:
+                raise PersonalDownloadConfigurationError(
+                    "personal download authentication config could not be prepared"
+                ) from exc
+            if personal_download_config is None:  # pragma: no cover - guarded by account id
+                raise PersonalDownloadConfigurationError(
+                    "personal download authentication was not materialized"
+                )
+            job_config_path = str(personal_download_config.path)
         download_root = Path(settings.download_root)
         download_destination = download_root
         if staging_enabled():
@@ -1510,7 +1531,16 @@ async def run_download_job(job_id: str):
         logger.info("Registered %d artifacts for job %s", _registered, job_id)
 
     except Exception as e:
-        logger.error("Unexpected error in download job %s: %s", job_id, e, exc_info=True)
+        error_text = _private_safe_error(str(e), personal_download_config)[:10000]
+        if job.triggering_remote_account_id is not None:
+            logger.error("Unexpected error in private download job %s: %s", job_id, error_text)
+        else:
+            logger.error(
+                "Unexpected error in download job %s: %s",
+                job_id,
+                error_text,
+                exc_info=True,
+            )
         if proc is not None and (
             proc.poll() is None or _process_group_exists(proc.pid)
         ):
@@ -1531,7 +1561,6 @@ async def run_download_job(job_id: str):
             repo2 = DownloadJobRepository(db2)
             j = await repo2.get(job_uuid)
             if j:
-                error_text = str(e)[:10000]
                 if terminal_stage_error:
                     # Retrying cannot resolve a different canonical file and
                     # cannot safely guess through a corrupt recovery manifest.
@@ -1662,6 +1691,10 @@ async def run_download_job(job_id: str):
         return
 
     finally:
+        # Private plaintext and its path are worker-owned and must disappear
+        # before any control/process cleanup can itself fail.
+        _cleanup_temp_config(job_config_path)
+        _cleanup_temp_config(ai_config_path)
         # ── Stop control listener + heartbeat ──
         if heartbeat:
             heartbeat.stop()

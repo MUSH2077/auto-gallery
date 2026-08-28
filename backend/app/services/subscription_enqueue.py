@@ -111,6 +111,7 @@ async def mark_source_sync_success(
             .with_for_update(of=UserSubscriptionSource)
         )
     ).all()
+    successful_binding_account_id = None
     for binding, membership in rows:
         binding.last_synced_at = when
         binding.last_attempted_at = when
@@ -119,14 +120,22 @@ async def mark_source_sync_success(
             if membership.sync_enabled
             else None
         )
-        if membership.id == triggering_user_subscription_id:
+        provenance_matches = (
+            membership.id == triggering_user_subscription_id
+            and binding.remote_account_id == triggering_remote_account_id
+        )
+        if provenance_matches:
             binding.last_successful_auth = when
             binding.auth_healthy = True
             binding.auth_status = "healthy"
             binding.auth_error_reason = None
             binding.last_auth_checked_at = when
+            successful_binding_account_id = binding.remote_account_id
 
-    if triggering_remote_account_id is not None:
+    if (
+        triggering_remote_account_id is not None
+        and successful_binding_account_id == triggering_remote_account_id
+    ):
         account = await db.get(RemoteAccount, triggering_remote_account_id)
         if account is not None:
             account.auth_status = "healthy"
@@ -174,7 +183,19 @@ async def mark_source_auth_failure(
                 .with_for_update(of=UserSubscriptionSource)
             )
         ).scalar_one_or_none()
-    safe_reason = str(reason)[:500]
+    reason_text = str(reason).casefold()
+    if "401" in reason_text:
+        safe_reason = "HTTP 401 Unauthorized"
+    elif "403" in reason_text:
+        safe_reason = "HTTP 403 Forbidden"
+    elif "cookie" in reason_text:
+        safe_reason = "Cookie expired or missing"
+    elif "token" in reason_text:
+        safe_reason = "Token expired or invalid"
+    elif "login" in reason_text:
+        safe_reason = "Login required"
+    else:
+        safe_reason = "Authentication failed"
     if binding is not None:
         binding.auth_healthy = False
         binding.auth_status = "unhealthy"

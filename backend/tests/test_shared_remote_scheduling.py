@@ -506,7 +506,12 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
                 triggering_remote_account_id=accounts[0].id,
             )
 
-            await mark_failure(db, job, "HTTP 401 Unauthorized", when=now)
+            await mark_failure(
+                db,
+                job,
+                "HTTP 401 Unauthorized task4-reason-secret-canary",
+                when=now,
+            )
 
             assert bindings[0].auth_healthy is False
             assert bindings[0].auth_error_reason == "HTTP 401 Unauthorized"
@@ -524,6 +529,63 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
             await db.rollback()
     finally:
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_shared_success_does_not_heal_an_account_outside_selected_binding():
+    """Opaque provenance must match before credential health can be restored."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_enqueue import mark_source_sync_success
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                _subscription,
+                source,
+                members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+
+            await mark_source_sync_success(
+                db,
+                source.id,
+                now,
+                triggering_user_subscription_id=members[1].id,
+                triggering_remote_account_id=accounts[0].id,
+            )
+
+            assert accounts[0].auth_status == "unhealthy"
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+def test_private_error_sanitizer_removes_secret_and_temp_path(tmp_path):
+    """Unexpected worker errors cannot persist the credential config identity."""
+
+    from app.jobs import download as download_job
+
+    sanitize = getattr(download_job, "_private_safe_error", None)
+    assert sanitize is not None
+    private = download_job._PersonalDownloadConfig(
+        path=tmp_path / "auth-secret.json",
+        secret_values=("task4-exception-secret-canary",),
+    )
+
+    safe = sanitize(
+        f"failed {private.path}: task4-exception-secret-canary",
+        private,
+    )
+
+    assert "task4-exception-secret-canary" not in safe
+    assert str(private.path) not in safe
 
 
 @pytest.mark.integration
