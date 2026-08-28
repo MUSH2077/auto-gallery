@@ -819,6 +819,15 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     except Exception:
         logger.debug("source_creator reconcile skipped", exc_info=True)
 
+    discovery_admission = {"created": 0, "published": 0, "task_ids": []}
+    try:
+        from app.services.remote_discovery import admit_due_remote_accounts
+
+        async with async_session() as discovery_db:
+            discovery_admission = await admit_due_remote_accounts(discovery_db)
+    except Exception:
+        logger.warning("Failed to admit due remote discovery scans", exc_info=True)
+
     # SQLite maintenance owns a separate exact-time schedule.  Subscription
     # scans only ensure that schedule exists; they never VACUUM inline.
     try:
@@ -845,6 +854,8 @@ async def _sync_subscriptions_locked(parent_task_id=None):
         "due": due_count,
         "enqueue_budget": enqueue_budget,
         "due_backlog_deferred": budget_deferred_count,
+        "discovery_created": discovery_admission["created"],
+        "discovery_published": discovery_admission["published"],
         "device_profile": device_profile.name,
         # The synchronous RQ wrapper fills the durable successor timestamp.
         "rescheduled_at": None,

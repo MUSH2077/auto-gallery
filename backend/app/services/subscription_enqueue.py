@@ -141,6 +141,60 @@ async def mark_source_sync_success(
     )
 
 
+async def mark_source_auth_failure(
+    db: AsyncSession,
+    job: DownloadJob,
+    reason: str,
+    *,
+    when: datetime | None = None,
+) -> None:
+    """Damage only the selected private credential and recompute shared cache."""
+
+    when = when or datetime.now(timezone.utc)
+    source_id = getattr(job, "subscription_source_id", None)
+    if source_id is None:
+        return
+    source = await db.get(SubscriptionSource, source_id)
+    if source is None:
+        return
+    membership_id = getattr(job, "triggering_user_subscription_id", None)
+    account_id = getattr(job, "triggering_remote_account_id", None)
+    binding = None
+    if membership_id is not None:
+        conditions = [
+            UserSubscriptionSource.subscription_source_id == source.id,
+            UserSubscriptionSource.user_subscription_id == membership_id,
+        ]
+        if account_id is not None:
+            conditions.append(UserSubscriptionSource.remote_account_id == account_id)
+        binding = (
+            await db.execute(
+                select(UserSubscriptionSource)
+                .where(*conditions)
+                .with_for_update(of=UserSubscriptionSource)
+            )
+        ).scalar_one_or_none()
+    safe_reason = str(reason)[:500]
+    if binding is not None:
+        binding.auth_healthy = False
+        binding.auth_status = "unhealthy"
+        binding.auth_error_reason = safe_reason
+        binding.last_auth_checked_at = when
+    if account_id is not None and binding is not None:
+        account = await db.get(RemoteAccount, account_id)
+        if account is not None and account.user_id == binding.user_id:
+            account.auth_status = "unhealthy"
+            account.auth_error_reason = safe_reason
+    if binding is None:
+        # Compatibility for a truly legacy job without member provenance.
+        source.auth_healthy = False
+        source.auth_status = "unhealthy"
+        source.auth_error_reason = safe_reason
+        source.last_auth_checked_at = when
+    else:
+        await recompute_subscription_membership_cache(db, source.subscription_id)
+
+
 async def _latest_job_for_source(db: AsyncSession, source_id: UUID) -> DownloadJob | None:
     result = await db.execute(
         select(DownloadJob)

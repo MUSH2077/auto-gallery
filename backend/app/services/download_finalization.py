@@ -42,12 +42,17 @@ async def finalize_download_job(
     await DownloadJobRepository(db).update_status(job, status, error)
     append_manifest_event(job, "download_finalized", status=status, outcome=outcome)
     if status == "complete" and mark_synced and job.subscription_source_id:
-        await mark_source_sync_success(
-            db,
-            job.subscription_source_id,
-            triggering_user_subscription_id=job.triggering_user_subscription_id,
-            triggering_remote_account_id=job.triggering_remote_account_id,
-        )
+        triggering_membership_id = getattr(job, "triggering_user_subscription_id", None)
+        triggering_account_id = getattr(job, "triggering_remote_account_id", None)
+        if triggering_membership_id is None and triggering_account_id is None:
+            await mark_source_sync_success(db, job.subscription_source_id)
+        else:
+            await mark_source_sync_success(
+                db,
+                job.subscription_source_id,
+                triggering_user_subscription_id=triggering_membership_id,
+                triggering_remote_account_id=triggering_account_id,
+            )
 
     # Persist the repository-owned outcome before TaskRun/DownloadJob rows
     # become eligible for asynchronous compaction.

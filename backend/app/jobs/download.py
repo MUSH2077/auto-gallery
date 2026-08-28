@@ -1,13 +1,17 @@
 import json
 import hashlib
+import copy
 import logging
 import os
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from inspect import isawaitable
 from pathlib import Path
@@ -25,6 +29,7 @@ from app.jobs.worker_control import (
     signal_process_group,
 )
 from app.models.download_job import DownloadJob
+from app.models.remote_discovery import RemoteAccount, UserSubscriptionSource
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
 from app.models.task_state import transition_download_job
@@ -63,6 +68,156 @@ FALLBACK_BACKOFF_BASE = 60
 FALLBACK_GALLERYDL_RETRIES = 3
 FALLBACK_GALLERYDL_TIMEOUT = 30
 FALLBACK_GALLERYDL_ABORT = 5
+
+
+class PersonalDownloadConfigurationError(RuntimeError):
+    """A selected private account could not produce a safe download overlay."""
+
+
+def _auth_config_merge(base: Mapping, override: Mapping) -> dict:
+    merged = copy.deepcopy(dict(base))
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _auth_config_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _credential_secret_values(value, path: tuple[str, ...] = ()) -> tuple[str, ...]:
+    values: list[str] = []
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            values.extend(_credential_secret_values(child, (*path, str(key).casefold())))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            values.extend(_credential_secret_values(child, path))
+    elif isinstance(value, str) and value and any(
+        marker in segment
+        for segment in path
+        for marker in ("token", "secret", "password", "cookie", "sessdata")
+    ):
+        values.append(value)
+    return tuple(dict.fromkeys(values))
+
+
+@dataclass(frozen=True)
+class _PersonalDownloadConfig:
+    path: Path
+    secret_values: tuple[str, ...]
+
+    def redact(self, text: str) -> str:
+        clean = text
+        for secret in self.secret_values:
+            clean = clean.replace(secret, "***REDACTED***")
+        return clean
+
+
+def _durable_gallerydl_command(
+    command: list[str],
+    personal: _PersonalDownloadConfig | None,
+) -> list[str]:
+    """Remove the secret-bearing temp path before command provenance is persisted."""
+
+    if personal is None:
+        return list(command)
+    clean: list[str] = []
+    skip_value = False
+    personal_path = str(personal.path)
+    for index, value in enumerate(command):
+        if skip_value:
+            skip_value = False
+            continue
+        if value == "--config" and index + 1 < len(command) and command[index + 1] == personal_path:
+            skip_value = True
+            continue
+        clean.append(personal.redact(value))
+    return clean
+
+
+async def _materialize_personal_download_config(
+    db,
+    job,
+    base_config: Mapping,
+    *,
+    config_root: str | Path | None = None,
+    vault=None,
+    adapters=None,
+) -> _PersonalDownloadConfig | None:
+    """Decrypt one selected account and create a worker-owned 0600 overlay."""
+
+    account_id = getattr(job, "triggering_remote_account_id", None)
+    if account_id is None:
+        return None
+    membership_id = getattr(job, "triggering_user_subscription_id", None)
+    source_id = getattr(job, "subscription_source_id", None)
+    if membership_id is None or source_id is None:
+        raise PersonalDownloadConfigurationError(
+            "personal download authentication has incomplete ownership metadata"
+        )
+
+    row = (
+        await db.execute(
+            select(UserSubscriptionSource, RemoteAccount)
+            .join(RemoteAccount, RemoteAccount.id == UserSubscriptionSource.remote_account_id)
+            .where(
+                UserSubscriptionSource.user_subscription_id == membership_id,
+                UserSubscriptionSource.subscription_source_id == source_id,
+                UserSubscriptionSource.remote_account_id == account_id,
+            )
+        )
+    ).first()
+    if row is None:
+        raise PersonalDownloadConfigurationError(
+            "personal download authentication ownership could not be verified"
+        )
+    binding, account = row
+    from app.services.remote_accounts import (
+        RemoteAccountService,
+        configured_credential_vault,
+    )
+    from app.services.subscription_membership import membership_source_is_usable
+
+    if not membership_source_is_usable(binding, account, source=job.source):
+        raise PersonalDownloadConfigurationError(
+            "personal download authentication is not healthy"
+        )
+    credential_vault = vault or configured_credential_vault()
+    service = RemoteAccountService(
+        db,
+        account.user_id,
+        vault=credential_vault,
+        adapters=adapters,
+    )
+    credentials = service.credentials_for_adapter(account)
+    adapter = service.adapters.get(account.source)
+    override = adapter.build_download_auth(credentials)
+    override_values = override.materialize() if override is not None else {}
+    effective = _auth_config_merge(base_config, override_values)
+    secrets = _credential_secret_values(credentials.materialize())
+
+    jobs_dir = Path(config_root or settings.gallerydl_config_root) / "jobs"
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    fd, raw_path = tempfile.mkstemp(
+        prefix=f"auth-{job.id}-",
+        suffix=".json",
+        dir=jobs_dir,
+    )
+    path = Path(raw_path)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            json.dump(effective, handle, ensure_ascii=False)
+        os.chmod(path, 0o600)
+    except Exception as exc:
+        if fd >= 0:
+            os.close(fd)
+        _cleanup_temp_config(str(path))
+        raise PersonalDownloadConfigurationError(
+            "personal download authentication config could not be created"
+        ) from exc
+    return _PersonalDownloadConfig(path=path, secret_values=secrets)
 
 
 def _parse_progress(stderr: str) -> dict | None:
@@ -687,10 +842,11 @@ async def run_download_job(job_id: str):
     skip_ai = dl_defaults.get("skip_ai_generated", False)
     ai_config_path = None
     job_config_path = None
+    personal_download_config: _PersonalDownloadConfig | None = None
     source_url = job.source_url
     provider = None
     provider_chunk = None
-    configuration_error: DownloadStageManifestError | None = None
+    configuration_error: Exception | None = None
 
     # Write per-job gallery-dl config with provider defaults plus admin gallery-dl settings.
     try:
@@ -701,7 +857,19 @@ async def run_download_job(job_id: str):
         _cfg = build_effective_gallerydl_config(job.source, _provider_cfg)
         if staging_enabled():
             validate_gallerydl_staging_config(_cfg)
-        if _cfg:
+        if job.triggering_remote_account_id is not None:
+            async with async_session() as _auth_db:
+                personal_download_config = await _materialize_personal_download_config(
+                    _auth_db,
+                    job,
+                    _cfg,
+                )
+            if personal_download_config is None:  # pragma: no cover - guarded by account id
+                raise PersonalDownloadConfigurationError(
+                    "personal download authentication was not materialized"
+                )
+            job_config_path = str(personal_download_config.path)
+        elif _cfg:
             job_config_path = os.path.join(
                 os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
                 "jobs", f"job-{job_id}.json")
@@ -716,6 +884,9 @@ async def run_download_job(job_id: str):
                     update_manifest(_cfg_j, gallerydl_config_path=job_config_path, effective_gallerydl_config=_cfg)
                     append_manifest_event(_cfg_j, "effective_config_written", path=job_config_path)
                     await _cfg_db.commit()
+    except PersonalDownloadConfigurationError as exc:
+        configuration_error = exc
+        logger.error("Private download authentication unavailable for job %s", job_id)
     except DownloadStageManifestError as exc:
         # An unsafe output template can place files outside this job's staged
         # tree.  Continuing without the rejected per-job config would turn a
@@ -724,8 +895,14 @@ async def run_download_job(job_id: str):
         # its manifest are updated consistently.
         configuration_error = exc
         logger.error("Rejected unsafe gallery-dl config for %s: %s", job_id, exc)
-    except Exception:
-        logger.warning("Failed to write per-job config for %s", job_id, exc_info=True)
+    except Exception as exc:
+        if job.triggering_remote_account_id is not None:
+            configuration_error = PersonalDownloadConfigurationError(
+                "personal download authentication config could not be prepared"
+            )
+            logger.error("Private download authentication unavailable for job %s", job_id)
+        else:
+            logger.warning("Failed to write per-job config for %s", job_id, exc_info=True)
 
     # Per-source AI filtering
     if skip_ai:
@@ -913,7 +1090,7 @@ async def run_download_job(job_id: str):
             if _manifest_job:
                 update_manifest(
                     _manifest_job,
-                    command=cmd,
+                    command=_durable_gallerydl_command(cmd, personal_download_config),
                     archive_path=archive_path,
                     staging_root=(
                         str(download_stage.root.relative_to(download_stage.download_root))
@@ -934,7 +1111,16 @@ async def run_download_job(job_id: str):
                 )
                 await _manifest_db.commit()
 
-        logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
+        if personal_download_config is not None:
+            logger.info(
+                "Running gallery-dl with private authentication for job %s "
+                "(timeout=%ds, proxy=%s)",
+                job_id,
+                dl_timeout,
+                proxy_enabled,
+            )
+        else:
+            logger.info("Running gallery-dl: %s (timeout=%ds, proxy=%s)", " ".join(cmd), dl_timeout, proxy_enabled)
 
         # ── Start gallery-dl in its own process group ──
         proc = subprocess.Popen(
@@ -961,14 +1147,19 @@ async def run_download_job(job_id: str):
         def read_output(pipe, sink, parse_progress=False):
             nonlocal last_progress_time, last_progress_publish
             for line in iter(pipe.readline, ""):
-                sink.append(line)
+                safe_line = (
+                    personal_download_config.redact(line)
+                    if personal_download_config is not None
+                    else line
+                )
+                sink.append(safe_line)
                 now = time.time()
                 with progress_lock:
                     last_progress_time = now
                 if not parse_progress:
                     continue
                 # Parse and publish progress
-                m = progress_pattern.search(line)
+                m = progress_pattern.search(safe_line)
                 if m:
                     current, total = int(m.group(1)), int(m.group(2))
                     progress = {
@@ -976,7 +1167,7 @@ async def run_download_job(job_id: str):
                         "current": current,
                         "total": total,
                         "percent": round(current / total * 100, 1) if total else 0,
-                        "message": line.strip()[:200],
+                        "message": safe_line.strip()[:200],
                     }
                     # Publish throttled (max 2/sec to avoid flooding)
                     if now - last_progress_publish >= 0.5:
@@ -1495,6 +1686,21 @@ async def run_download_job(job_id: str):
 
     # ── Handle subprocess result ──
 
+    detected_auth_issue = None
+    if result is not None:
+        combined_output = (result.stderr or "") + (result.stdout or "")
+        for pattern, label in AUTH_ERROR_PATTERNS:
+            if re.search(pattern, combined_output):
+                detected_auth_issue = label
+                break
+        if detected_auth_issue and result.returncode == 0:
+            result = subprocess.CompletedProcess(
+                result.args,
+                1,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
     async with async_session() as db2:
         repo2 = DownloadJobRepository(db2)
         j = await repo2.get(job_uuid)
@@ -1514,7 +1720,19 @@ async def run_download_job(job_id: str):
 
         elif result is not None:
             # Normal completion (success or non-zero exit)
-            if result.returncode == 0:
+            if detected_auth_issue:
+                j.retry_count = max_retries
+                await repo2.update_status(
+                    j,
+                    "failed",
+                    f"Download authentication failed: {detected_auth_issue}",
+                )
+                apply_download_progress(
+                    j,
+                    "failed",
+                    "Download authentication requires attention",
+                )
+            elif result.returncode == 0:
                 await repo2.update_status(j, "downloaded")
                 apply_download_progress(
                     j,
@@ -1542,31 +1760,15 @@ async def run_download_job(job_id: str):
                         "Download failed after gallery-dl error",
                     )
 
-            # Auth health monitoring — scan stderr regardless of exit code
-            if j.subscription_source_id:
-                ss = await db2.execute(
-                    select(SubscriptionSource).where(SubscriptionSource.id == j.subscription_source_id)
+            if detected_auth_issue and j.subscription_source_id:
+                from app.services.subscription_enqueue import mark_source_auth_failure
+
+                await mark_source_auth_failure(db2, j, detected_auth_issue)
+                logger.warning(
+                    "Private download authentication failed for job %s (%s)",
+                    job_id,
+                    detected_auth_issue,
                 )
-                source = ss.scalar_one_or_none()
-                if source:
-                    combined = (result.stderr or "") + (result.stdout or "")
-                    auth_issue = None
-                    for pattern, label in AUTH_ERROR_PATTERNS:
-                        if re.search(pattern, combined):
-                            auth_issue = label
-                            break
-                    if result.returncode == 0 and not auth_issue:
-                        source.last_successful_auth = datetime.now(timezone.utc)
-                        source.auth_healthy = True
-                        source.auth_status = "healthy"
-                        source.auth_error_reason = None
-                        source.last_auth_checked_at = datetime.now(timezone.utc)
-                    elif auth_issue:
-                        source.auth_healthy = False
-                        source.auth_status = "unhealthy"
-                        source.auth_error_reason = auth_issue
-                        source.last_auth_checked_at = datetime.now(timezone.utc)
-                        logger.warning("Auth issue for subscription_source %s: %s", source.id, auth_issue)
 
         else:
             # Timeout or stall — use distinguished error message

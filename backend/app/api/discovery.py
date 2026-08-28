@@ -15,7 +15,13 @@ from app.schemas.remote_discovery import (
     DiscoveryCandidateResolve,
     DiscoveryScanCreate,
 )
-from app.services.remote_discovery import DiscoveryScanInProgress, RemoteDiscoveryService
+from app.services.remote_discovery import (
+    DiscoveryScanInProgress,
+    RemoteDiscoveryService,
+    prepare_discovery_scan_task,
+    publish_discovery_scan,
+)
+from app.services.tasks import TaskService
 from app.services.subscription import SubscriptionService
 from app.services.tasks import task_payload
 
@@ -31,8 +37,9 @@ async def create_discovery_scan(
 ):
     try:
         task = await RemoteDiscoveryService(db).create_scan(user.id, data.remote_account_id)
+        await prepare_discovery_scan_task(db, task)
         await db.commit()
-        return task_payload(task)
+        await db.refresh(task)
     except DiscoveryScanInProgress as exc:
         await db.rollback()
         raise HTTPException(
@@ -43,6 +50,20 @@ async def create_discovery_scan(
         await db.rollback()
         status = 404 if "not found" in str(exc).casefold() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    try:
+        publish_discovery_scan(task.id, attempt=task.attempts)
+    except Exception as exc:
+        current = await db.get(type(task), task.id)
+        if current is not None:
+            await TaskService(db).update_task(
+                current,
+                status="failed",
+                error=f"Discovery enqueue failed ({type(exc).__name__})",
+                reason_code="discovery_enqueue_failed",
+            )
+            await db.commit()
+        raise HTTPException(status_code=503, detail="Discovery queue is unavailable") from exc
+    return task_payload(task)
 
 
 @router.get("/scans")

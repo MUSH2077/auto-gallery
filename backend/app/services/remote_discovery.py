@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from inspect import isawaitable
 from typing import Any
 from uuid import UUID
 
@@ -35,6 +36,115 @@ from app.services.subscription_membership import (
     recompute_subscription_membership_cache,
 )
 from app.services.tasks import NONTERMINAL_STATUSES, TaskService
+
+
+DISCOVERY_QUEUE = "discovery"
+DISCOVERY_JOB_TIMEOUT = 3600
+
+
+def discovery_rq_job_id(task_id: UUID, attempt: int) -> str:
+    return f"discovery-{task_id}-attempt-{max(1, int(attempt))}"
+
+
+async def prepare_discovery_scan_task(db: AsyncSession, task: TaskRun) -> TaskRun:
+    task.attempts = max(0, int(task.attempts or 0)) + 1
+    task.queue_name = DISCOVERY_QUEUE
+    task.rq_job_id = discovery_rq_job_id(task.id, task.attempts)
+    await db.flush()
+    return task
+
+
+def publish_discovery_scan(
+    task_id: UUID,
+    *,
+    queue_name: str = DISCOVERY_QUEUE,
+    attempt: int = 1,
+):
+    """Publish only opaque scan identity to the independent discovery queue."""
+
+    from rq import Queue, Retry
+
+    from app.jobs.remote_discovery import run_remote_discovery_scan
+    from app.services.queue_admission import checked_enqueue
+    from app.services.redis_client import get_redis
+
+    queue = Queue(name=queue_name, connection=get_redis())
+    return checked_enqueue(
+        queue,
+        run_remote_discovery_scan,
+        str(task_id),
+        job_id=discovery_rq_job_id(task_id, attempt),
+        job_timeout=DISCOVERY_JOB_TIMEOUT,
+        retry=Retry(max=3, interval=[60, 300, 900]),
+    )
+
+
+async def admit_due_remote_accounts(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 25,
+    publisher=publish_discovery_scan,
+) -> dict[str, Any]:
+    """Claim due accounts, persist single-flight TaskRuns, then publish them."""
+
+    now = now or _now()
+    accounts = list(
+        (
+            await db.execute(
+                select(RemoteAccount)
+                .where(
+                    RemoteAccount.is_enabled.is_(True),
+                    RemoteAccount.auth_status == "healthy",
+                    RemoteAccount.credential_ciphertext.is_not(None),
+                    or_(
+                        RemoteAccount.next_scan_at.is_(None),
+                        RemoteAccount.next_scan_at <= now,
+                    ),
+                )
+                .order_by(RemoteAccount.next_scan_at.asc().nullsfirst(), RemoteAccount.id)
+                .limit(max(1, min(int(limit), 200)))
+                .with_for_update(of=RemoteAccount, skip_locked=True)
+            )
+        ).scalars()
+    )
+    tasks: list[TaskRun] = []
+    service = RemoteDiscoveryService(db)
+    for account in accounts:
+        try:
+            task = await service.create_scan(account.user_id, account.id)
+        except DiscoveryScanInProgress:
+            continue
+        await prepare_discovery_scan_task(db, task)
+        tasks.append(task)
+    if tasks:
+        await db.commit()
+
+    published = 0
+    for task in tasks:
+        try:
+            result = publisher(task.id, queue_name=DISCOVERY_QUEUE)
+            if isawaitable(result):
+                await result
+            published += 1
+        except Exception as exc:
+            current = await db.get(TaskRun, task.id)
+            if current is not None:
+                await TaskService(db).update_task(
+                    current,
+                    status="failed",
+                    error=f"Discovery enqueue failed ({type(exc).__name__})",
+                    reason_code="discovery_enqueue_failed",
+                )
+                account = await db.get(RemoteAccount, current.triggering_remote_account_id)
+                if account is not None:
+                    account.next_scan_at = now + timedelta(minutes=5)
+                await db.commit()
+    return {
+        "created": len(tasks),
+        "published": published,
+        "task_ids": [str(task.id) for task in tasks],
+    }
 
 
 def _now() -> datetime:
@@ -84,7 +194,9 @@ class RemoteDiscoveryService:
         adapters: DiscoveryAdapterRegistry | None = None,
     ):
         self.db = db
-        self.vault = vault or configured_credential_vault()
+        # Account admission and list operations never decrypt credentials.
+        # Resolve the separately managed key only at the execution boundary.
+        self.vault = vault
         self.adapters = adapters or registry
 
     async def _lock_remote_identity(self, source: str, source_creator_id: str) -> None:
@@ -409,7 +521,7 @@ class RemoteDiscoveryService:
         account_service = RemoteAccountService(
             self.db,
             account.user_id,
-            vault=self.vault,
+            vault=self.vault or configured_credential_vault(),
             adapters=self.adapters,
         )
         try:
@@ -450,6 +562,7 @@ class RemoteDiscoveryService:
                 }
                 account.scan_cursor = checkpoint if selector_index < len(selectors) else None
                 task = await self.db.get(TaskRun, task_id)
+                task.last_heartbeat_at = seen_at
                 await task_service.update_task(task, progress=progress)
                 # Candidate snapshots and their cursor are one page transaction.
                 await self.db.commit()
