@@ -1171,3 +1171,106 @@ async def test_search_assist_and_scheduler_use_private_source_bindings_before_pa
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_subscription_summary_selects_latest_receipt_only_from_owned_sources():
+    """A newer peer-only source receipt cannot replace the member's own result."""
+    from datetime import datetime, timedelta, timezone
+
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import (
+        Creator,
+        RepositorySyncReceipt,
+        Subscription,
+        SubscriptionSource,
+    )
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            first = await _seed_user(db, "receipt_first")
+            second = await _seed_user(db, "receipt_second")
+            creator = Creator(name="Receipt Isolation Creator")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Receipt Shared")
+            db.add(subscription)
+            await db.flush()
+            own_source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id=f"receipt-own-{uuid4().hex}",
+                source_url="https://www.pixiv.net/users/55001",
+            )
+            peer_source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="x",
+                source_creator_id=f"receipt-peer-{uuid4().hex}",
+                source_url="https://x.com/receipt_peer",
+            )
+            db.add_all([own_source, peer_source])
+            await db.flush()
+            first_member = await SubscriptionMembershipService(
+                db, first.id
+            ).ensure_membership(subscription)
+            second_member = await SubscriptionMembershipService(
+                db, second.id
+            ).ensure_membership(subscription)
+            await SubscriptionMembershipService(db, first.id).ensure_source_binding(
+                first_member, own_source
+            )
+            await SubscriptionMembershipService(db, second.id).ensure_source_binding(
+                second_member, peer_source
+            )
+            now = datetime.now(timezone.utc)
+            own_task_id = uuid4()
+            peer_task_id = uuid4()
+            db.add_all(
+                [
+                    RepositorySyncReceipt(
+                        repository_id=own_source.id,
+                        source_download_job_id=uuid4(),
+                        source_task_id=own_task_id,
+                        source="pixiv",
+                        status="complete",
+                        outcome_code="own_complete",
+                        finished_at=now - timedelta(hours=1),
+                    ),
+                    RepositorySyncReceipt(
+                        repository_id=peer_source.id,
+                        source_download_job_id=uuid4(),
+                        source_task_id=peer_task_id,
+                        source="x",
+                        status="complete",
+                        outcome_code="peer_newer",
+                        finished_at=now,
+                    ),
+                ]
+            )
+            await db.commit()
+            first_name = first.username
+            subscription_id = subscription.id
+            own_source_id = own_source.id
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/subscriptions/summaries",
+                params={"ids": str(subscription_id)},
+                headers=_headers(first_name),
+            )
+        assert response.status_code == 200, response.text
+        latest = response.json()["items"][0]["latest_state"]
+        assert latest["state"] == "success"
+        assert latest["repository_id"] == str(own_source_id)
+        assert latest["task_id"] == str(own_task_id)
+        assert latest["outcome_code"] == "own_complete"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

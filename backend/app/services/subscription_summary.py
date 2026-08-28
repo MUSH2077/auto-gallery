@@ -143,7 +143,7 @@ async def subscription_summaries(
 
     # PostgreSQL DISTINCT ON returns one newest successful receipt per
     # subscription without loading long-lived receipt histories into Python.
-    receipt_rows = list((await db.execute(
+    receipt_stmt = (
         select(
             SubscriptionSource.subscription_id,
             RepositorySyncReceipt,
@@ -156,6 +156,16 @@ async def subscription_summaries(
             SubscriptionSource.subscription_id.in_(ordered_ids),
             RepositorySyncReceipt.status == "complete",
         )
+    )
+    if user_id is not None:
+        # Restrict the candidate receipt set before DISTINCT ON chooses the
+        # newest row; otherwise a newer peer-only source shadows this member's
+        # own latest successful result.
+        receipt_stmt = receipt_stmt.where(
+            RepositorySyncReceipt.repository_id.in_(set(bindings_by_source))
+        )
+    receipt_rows = list((await db.execute(
+        receipt_stmt
         .distinct(SubscriptionSource.subscription_id)
         .order_by(
             SubscriptionSource.subscription_id,
