@@ -67,7 +67,10 @@ for _rollout_flag in (
     "REMOTE_DISCOVERY_BILIBILI_ENABLED",
     "REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED",
 ):
-    os.environ.setdefault(_rollout_flag, "true")
+    # Compose deliberately injects the production-safe false defaults. Tests
+    # must override those inherited values so feature fixtures remain
+    # deterministic in both host and container runners.
+    os.environ[_rollout_flag] = "true"
 
 
 def _provision_main_test_database() -> None:

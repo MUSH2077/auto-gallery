@@ -775,7 +775,10 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 triggering_user_subscription_id=second_member.id,
                 source="pixiv",
                 source_url=source.source_url,
-                status="enqueued",
+                # Shared sources permit only one active download. A terminal
+                # historical job still exercises private list/detail filtering
+                # without constructing a state production cannot persist.
+                status="complete",
                 owner_user_id=second.id,
             )
             db.add_all([first_job, second_job])
@@ -874,7 +877,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
             first_stored = await db.get(DownloadJob, first_job_id)
             second_stored = await db.get(DownloadJob, second_job_id)
             assert first_stored.status == "enqueued"
-            assert second_stored.status == "enqueued"
+            assert second_stored.status == "complete"
     finally:
         async with async_session() as db:
             await _clear(db)
