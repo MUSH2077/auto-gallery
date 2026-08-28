@@ -18,6 +18,15 @@ class FixtureTransport:
         return self.responses.popleft()
 
 
+class FixtureTransactionIdProvider:
+    def __init__(self):
+        self.calls = []
+
+    async def generate(self, method, url):
+        self.calls.append((method, url))
+        return f"fixture-transaction-{len(self.calls)}"
+
+
 def _common():
     from app.remote_discovery import common
 
@@ -288,7 +297,10 @@ async def test_x_cookie_fallback_uses_gallery_dl_web_graphql_protocol():
             {},
         )
     )
-    adapter = XRemoteDiscoveryAdapter(transport)
+    adapter = XRemoteDiscoveryAdapter(
+        transport,
+        transaction_id_provider=FixtureTransactionIdProvider(),
+    )
 
     page = await adapter.fetch_page(
         {"auth_method": "cookie", "cookie": "auth_token=secret; ct0=csrf", "remote_user_id": "42"},
@@ -314,6 +326,82 @@ async def test_x_cookie_fallback_uses_gallery_dl_web_graphql_protocol():
     assert json.loads(kwargs["params"]["features"])[
         "responsive_web_graphql_timeline_navigation_enabled"
     ] is True
+
+
+@pytest.mark.asyncio
+async def test_x_authenticated_web_requests_include_per_request_transaction_id():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(
+            200,
+            {
+                "id_str": "42",
+                "name": "Owner",
+                "screen_name": "owner",
+                "description": "",
+                "profile_image_url_https": "https://pbs.twimg.com/owner.jpg",
+                "protected": False,
+                "verified": False,
+            },
+            {},
+        ),
+        response(
+            200,
+            {
+                "data": {
+                    "user": {
+                        "result": {
+                            "timeline": {
+                                "timeline": {
+                                    "instructions": [
+                                        {
+                                            "type": "TimelineAddEntries",
+                                            "entries": [
+                                                {
+                                                    "entryId": "cursor-bottom-0",
+                                                    "content": {
+                                                        "value": "0|terminal",
+                                                        "cursorType": "Bottom",
+                                                    },
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            {},
+        ),
+    )
+    transaction_ids = FixtureTransactionIdProvider()
+    adapter = XRemoteDiscoveryAdapter(
+        transport,
+        transaction_id_provider=transaction_ids,
+    )
+    credentials = {
+        "auth_method": "cookie",
+        "cookie": "auth_token=secret; ct0=csrf",
+        "remote_user_id": "42",
+    }
+
+    await adapter.validate_account(credentials)
+    await adapter.fetch_page(credentials)
+
+    assert transaction_ids.calls == [
+        ("GET", "https://api.x.com/1.1/account/verify_credentials.json"),
+        ("GET", "https://x.com/i/api/graphql/SaWqzw0TFAWMx1nXWjXoaQ/Following"),
+    ]
+    assert transport.requests[0][2]["headers"]["x-client-transaction-id"] == (
+        "fixture-transaction-1"
+    )
+    assert transport.requests[1][2]["headers"]["x-client-transaction-id"] == (
+        "fixture-transaction-2"
+    )
 
 
 @pytest.mark.asyncio
@@ -366,7 +454,10 @@ async def test_x_cookie_fallback_sends_cursor_and_stops_at_terminal_cursor():
         )
     )
 
-    page = await XRemoteDiscoveryAdapter(transport).fetch_page(
+    page = await XRemoteDiscoveryAdapter(
+        transport,
+        transaction_id_provider=FixtureTransactionIdProvider(),
+    ).fetch_page(
         {
             "auth_method": "cookie",
             "cookie": "auth_token=secret; ct0=csrf",

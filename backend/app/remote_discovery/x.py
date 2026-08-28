@@ -23,6 +23,10 @@ from app.remote_discovery.contract import (
     RemoteCollection,
     RemoteDiscoveryAdapter,
 )
+from app.remote_discovery.x_transaction import (
+    GalleryDlXTransactionIdProvider,
+    XTransactionIdProvider,
+)
 from app.services.remote_credentials import DownloadAuthenticationOverride
 
 
@@ -83,8 +87,16 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         "responsive_web_enhance_cards_enabled": False,
     }
 
-    def __init__(self, transport: RemoteHTTPTransport | None = None):
+    def __init__(
+        self,
+        transport: RemoteHTTPTransport | None = None,
+        *,
+        transaction_id_provider: XTransactionIdProvider | None = None,
+    ):
         self.transport = transport or HttpxRemoteTransport()
+        self.transaction_id_provider = (
+            transaction_id_provider or GalleryDlXTransactionIdProvider()
+        )
 
     def _auth_method(self, credentials: Mapping[str, Any]) -> str:
         method = str(credentials.get("auth_method") or "oauth2")
@@ -105,10 +117,15 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             payload = checked_payload(response, provider="X")
             user = payload.get("data")
         else:
-            headers = self._web_headers(credentials)
+            url = "https://api.x.com/1.1/account/verify_credentials.json"
+            headers = await self._authenticated_web_headers(
+                credentials,
+                method="GET",
+                url=url,
+            )
             response = await self.transport.request(
                 "GET",
-                "https://api.x.com/1.1/account/verify_credentials.json",
+                url,
                 headers=headers,
                 params={"include_entities": "true", "skip_status": "true"},
             )
@@ -276,7 +293,6 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         )
 
     async def _discover_cookie(self, credentials, *, cursor, page_size):
-        headers = self._web_headers(credentials)
         user_id = required_text(credentials, "remote_user_id", provider="X")
         variables: dict[str, Any] = {
             "userId": user_id,
@@ -286,9 +302,15 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         }
         if cursor and cursor.get("cursor"):
             variables["cursor"] = str(cursor["cursor"])
+        url = f"{self.WEB_API_BASE}{self.COOKIE_FOLLOWING_ENDPOINT}"
+        headers = await self._authenticated_web_headers(
+            credentials,
+            method="GET",
+            url=url,
+        )
         response = await self.transport.request(
             "GET",
-            f"{self.WEB_API_BASE}{self.COOKIE_FOLLOWING_ENDPOINT}",
+            url,
             headers=headers,
             params={
                 "variables": json.dumps(variables, separators=(",", ":")),
@@ -332,6 +354,20 @@ class XRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             "x-twitter-active-user": "yes",
             "authorization": f"Bearer {self.WEB_BEARER_TOKEN}",
         }
+
+    async def _authenticated_web_headers(
+        self,
+        credentials: Mapping[str, Any],
+        *,
+        method: str,
+        url: str,
+    ) -> dict[str, str]:
+        headers = self._web_headers(credentials)
+        headers["x-client-transaction-id"] = await self.transaction_id_provider.generate(
+            method,
+            url,
+        )
+        return headers
 
     @classmethod
     def _parse_web_following(
