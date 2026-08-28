@@ -452,3 +452,70 @@ real credential was used. The only acknowledged residual is that the monotonic
 generation uses a signed SQL integer; exhausting it would require more than
 two billion credential rotations for one account. The pre-existing untracked
 `admin-web/node_modules` symlink remains untouched.
+
+## Review Fix Round 5 (2026-08-28)
+
+Round 5 started from `dd3e3d2` and closes the final publication-policy CAS and
+account-attachment lock-order findings.
+
+Implementation commit:
+
+- `a168142 fix: serialize member source policy transitions`
+
+### Authoritative enable policy and publication restoration
+
+- Disabling a `UserSubscriptionSource` now removes its automatic demand by
+  setting `next_sync_at=NULL` while retaining receipt and attempt history.
+  Re-enabling calls the existing member replan service with the member's
+  current interval/calendar/manual/inherited policy, then refreshes the sole
+  canonical aggregate. It cannot revive the pre-disable overdue value.
+- Explicit manual sync still bypasses automatic membership scheduling, but the
+  selected private binding must currently be enabled. A disabled binding is
+  rejected as `no_eligible_member_source` even with owned member/account
+  provenance.
+- Publication-failure restoration now compares the locked binding's
+  `updated_at`, enable preference, authentication health/status, account ID,
+  and credential generation, plus the locked account authentication status,
+  against the exact pre-publication claim snapshot. A disable-only edit or a
+  disable/re-enable cycle invalidates the old claim even when its replanned due
+  timestamp happens to equal the claimed due.
+- The binding timestamp is a server-side `onupdate` value. Enqueue explicitly
+  refreshes that one attribute after the claim flush, avoiding implicit async
+  lazy IO while preserving an exact CAS token without another schema change.
+
+### RemoteAccount-first attachment
+
+- A non-NULL account assignment resolves the canonical source, then locks and
+  revalidates the owned target `RemoteAccount` before locking the
+  `UserSubscriptionSource`. Only then may it mutate the binding and recompute
+  canonical state. This matches lifecycle order
+  `RemoteAccount -> UserSubscriptionSource -> canonical aggregate`.
+- The locked target must still match the provider, remain enabled and
+  non-deleted, and retain credential ciphertext. Cross-owner/provider,
+  tombstoned, and credential-less targets are rejected. NULL detach retains
+  its existing binding-first path because it never waits on an account row.
+- A deterministic two-session PostgreSQL barrier pauses delete after it owns
+  the account row and watches whether rebind can acquire USS first. Rebind now
+  waits at the account, delete completes and quarantines the old binding, then
+  rebind returns safe not-found without deadlock or stale provenance.
+
+### TDD and verification
+
+- Initial real-PostgreSQL RED: `5 failed in 4.78s`. Restore overwrote a
+  concurrent disable, disable retained stale overdue demand, rebind acquired
+  USS while delete held the account, and tombstoned/credential-less accounts
+  remained attachable.
+- Focused final GREEN, including manual-disabled semantics and both lock
+  barriers: `7 passed in 6.59s`.
+- Account, membership, manual scheduling, canonical schedule, and complete
+  shared-source affected regression: `76 passed in 86.10s`.
+- Broad 27-file account/membership/scheduler/download/finalization/discovery/
+  provider/worker/task regression: `314 passed in 359.23s`.
+- During the affected run, the new CAS exposed implicit synchronous loading of
+  expired server-side `updated_at` in manual enqueue (`75 passed, 1 failed`).
+  The explicit attribute refresh above fixed the root cause; the original
+  manual case and all new race cases were rerun in the final focused result.
+
+No schema or public API change was needed in Round 5. No live provider request
+or real credential was used, and the pre-existing untracked
+`admin-web/node_modules` symlink remains untouched.
