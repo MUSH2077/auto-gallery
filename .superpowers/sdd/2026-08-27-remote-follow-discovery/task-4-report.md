@@ -344,3 +344,103 @@ used, and the pre-existing untracked `admin-web/node_modules` symlink remains
 untouched. The generation boundary intentionally treats any intervening
 account-row update as newer provenance; this is conservative for health
 mutation while shared content fan-out still proceeds for eligible peers.
+
+## Review Fix Round 4 (2026-08-28)
+
+Round 4 started from `6a76c68` and replaces the temporary timestamp boundary
+with durable, explicit credential identity while removing the two remaining
+row-lock inversions.
+
+Additional commits:
+
+- `83e2225 feat: persist remote credential generations`
+- `9072d2b fix: serialize credential provenance and lifecycle locks`
+- `a8e0d26 test: preserve canonical unhealthy expectations`
+
+### Explicit credential generation
+
+- Alembic revision `f7c9e1a3b5d7` adds non-null
+  `RemoteAccount.credential_generation` and nullable
+  `DownloadJob.triggering_credential_generation`, with named non-negative
+  constraints. Existing ciphertext-bearing accounts backfill to generation 1;
+  credential-less accounts/tombstones remain generation 0; pre-existing jobs
+  remain NULL and therefore have unknown private provenance.
+- Credential generation increments only when `_encrypt` installs a new
+  credential identity or account deletion revokes it. Creation, replacement,
+  same-ID reconnection, tombstoning, and hard deletion all use that seam.
+  Validation, health/status, selectors, scan policy, and remote identity
+  updates do not increment it.
+- Shared-source enqueue snapshots the selected account generation into the
+  canonical DownloadJob. Retry retains the same row and generation. Worker
+  materialization rejects unknown or mismatched private generations before
+  decrypting. Success and authentication-failure outcomes require the locked
+  account to be enabled, non-deleted, credential-bearing, and an exact
+  generation match before changing private account/binding health. Shared peer
+  fan-out remains independent from trigger-health mutation.
+- Generation is deliberately absent from RemoteAccount API schemas, TaskRun,
+  Redis progress, manifest/progress payloads, logs, and command provenance. It
+  is a non-secret integer and no credential hash/digest or reconstructable
+  fragment is persisted.
+
+The transaction-start inversion test begins a PostgreSQL replacement
+transaction before enqueue, then installs/commits the replacement after the
+job commit. PostgreSQL timestamps alone would order that replacement before
+the job; explicit generations correctly leave the job at 1 and the account at
+2, so its stale result cannot mutate the replacement. A separate policy-update
+test proves an unrelated `updated_at` change leaves an exact generation valid.
+
+### Deterministic lock order and CAS restoration
+
+- Publication-failure restoration now acquires private rows in
+  `RemoteAccount -> UserSubscriptionSource -> Subscription ->
+  SubscriptionSource` order (legacy starts at the binding), matching lifecycle
+  and outcome paths. It revalidates membership/account/generation provenance
+  after locking and restores only the exact enqueue claim by CAS. A concurrent
+  detach/disable edit wins without its policy or due value being overwritten.
+- Account deletion now locks
+  `RemoteAccount -> DiscoveryCandidate (sorted by id) ->
+  UserSubscriptionSource (sorted by id) -> canonical aggregate`. Candidate
+  import starts at the already-locked candidate and never acquires the account
+  row, so it can finish before delete obtains that candidate rather than
+  forming the former Candidate/USS cycle. Delete then re-reads the locked
+  candidate state and produces either a clean hard deletion or an imported,
+  credential-free tombstone. Resolve has the same candidate-first prefix and
+  does not add a reverse edge.
+- Real PostgreSQL barriers reproduce both former cycles and prove the fixed
+  transactions finish coherently: publication restore concurrent with member
+  detach, and pending candidate import concurrent with account deletion.
+
+### TDD and final verification
+
+Focused RED evidence:
+
+- Schema/model RED: the model contract raised
+  `AttributeError: credential_generation` (`1 failed, 1 deselected`).
+- Generation behavior RED: new account generation remained 0 and scheduler
+  jobs stored NULL instead of the selected generation (`2 failed in 0.83s`).
+- PostgreSQL lock RED: publication restore/update_source and
+  candidate-import/delete each raised `DeadlockDetectedError`
+  (`2 failed in 3.79s`).
+
+Fresh GREEN evidence after the final commits:
+
+- Complete remote-account and shared-scheduling affected files:
+  `49 passed in 16.79s`.
+- Dedicated generation model plus isolated PostgreSQL migration
+  upgrade/backfill/downgrade: `2 passed in 32.80s`.
+- Existing migration-idempotency baseline: `10 passed in 65.31s`.
+- Broad 27-file membership/scheduler/download/finalization/worker/discovery/
+  task/provider regression: `303 passed in 371.82s`.
+- Ruff over every Python file changed from `6a76c68`: `All checks passed!`.
+- `python3 -m compileall -q` over backend application, Alembic, and changed
+  tests passed.
+- `alembic heads` reports the single head `f7c9e1a3b5d7`.
+- `docker compose --env-file /volume2/docker/auto-gallery/.env -f
+  docker-compose.yaml config --quiet`, production canary/provenance scans, and
+  `git diff --check 6a76c68..HEAD` all exited cleanly.
+
+Exact `git diff 6a76c68..HEAD` was self-reviewed. No live provider request or
+real credential was used. The only acknowledged residual is that the monotonic
+generation uses a signed SQL integer; exhausting it would require more than
+two billion credential rotations for one account. The pre-existing untracked
+`admin-web/node_modules` symlink remains untouched.
