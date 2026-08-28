@@ -766,6 +766,151 @@ async def test_reimport_after_last_member_reactivates_default_schedule_and_sourc
         await engine.dispose()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_users_import_same_remote_identity_converges_shared_rows():
+    """Concurrent imports serialize the shared identity while retaining private members."""
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import (
+        DiscoveryCandidate,
+        RemoteAccount,
+        SourceCreator,
+        Subscription,
+        SubscriptionSource,
+        UserSubscription,
+    )
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    adapter = PagedPixivAdapter()
+    adapters = Registry(adapter)
+    arrivals = 0
+    arrival_lock = asyncio.Lock()
+    both_ready = asyncio.Event()
+
+    class RacingImportService(RemoteDiscoveryService):
+        async def _owned_account(self, *args, **kwargs):
+            nonlocal arrivals
+            account = await super()._owned_account(*args, **kwargs)
+            async with arrival_lock:
+                arrivals += 1
+                if arrivals == 2:
+                    both_ready.set()
+            await asyncio.wait_for(both_ready.wait(), timeout=5)
+            return account
+
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            first = await _seed_user(db, "race_first")
+            second = await _seed_user(db, "race_second")
+            first_account = await _account(db, first, adapter)
+            second_account = await _account(db, second, adapter)
+            await db.commit()
+
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            first_candidate = await service.upsert_candidate(
+                await db.get(RemoteAccount, first_account.id),
+                RemoteCandidateIdentity(
+                    source="pixiv",
+                    source_creator_id="concurrent-shared-identity",
+                    profile_url="https://www.pixiv.net/users/8119",
+                    display_name=f"{PREFIX}Concurrent Shared",
+                    metadata={"has_illustration_preview": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+            )
+            second_candidate = await service.upsert_candidate(
+                await db.get(RemoteAccount, second_account.id),
+                RemoteCandidateIdentity(
+                    source="pixiv",
+                    source_creator_id="concurrent-shared-identity",
+                    profile_url="https://www.pixiv.net/users/8119",
+                    display_name=f"{PREFIX}Concurrent Shared",
+                    metadata={"has_illustration_preview": True},
+                ),
+                seen_at=datetime.now(timezone.utc),
+            )
+            await db.commit()
+            identifiers = (
+                (first.id, first_candidate.id),
+                (second.id, second_candidate.id),
+            )
+
+        async def import_one(user_id, candidate_id):
+            async with async_session() as worker_db:
+                candidate = await RacingImportService(
+                    worker_db, vault=_vault(), adapters=adapters
+                ).import_candidate(user_id, candidate_id)
+                await worker_db.commit()
+                return candidate.subscription_id
+
+        subscription_ids = await asyncio.wait_for(
+            asyncio.gather(*(import_one(*item) for item in identifiers)),
+            timeout=15,
+        )
+        assert subscription_ids[0] == subscription_ids[1]
+
+        async with async_session() as db:
+            source_creators = list(
+                (
+                    await db.execute(
+                        select(SourceCreator).where(
+                            SourceCreator.source == "pixiv",
+                            SourceCreator.source_creator_id
+                            == "concurrent-shared-identity",
+                        )
+                    )
+                ).scalars()
+            )
+            assert len(source_creators) == 1
+            creator_id = source_creators[0].creator_id
+            assert (
+                await db.execute(
+                    select(func.count(Subscription.id)).where(
+                        Subscription.creator_id == creator_id
+                    )
+                )
+            ).scalar_one() == 1
+            subscription_id = subscription_ids[0]
+            assert (
+                await db.execute(
+                    select(func.count(SubscriptionSource.id)).where(
+                        SubscriptionSource.subscription_id == subscription_id,
+                        SubscriptionSource.source_creator_id
+                        == "concurrent-shared-identity",
+                    )
+                )
+            ).scalar_one() == 1
+            members = list(
+                (
+                    await db.execute(
+                        select(UserSubscription).where(
+                            UserSubscription.subscription_id == subscription_id
+                        )
+                    )
+                ).scalars()
+            )
+            assert {member.user_id for member in members} == {
+                identifiers[0][0],
+                identifiers[1][0],
+            }
+            assert (
+                await db.execute(
+                    select(func.count(DiscoveryCandidate.id)).where(
+                        DiscoveryCandidate.subscription_id == subscription_id,
+                        DiscoveryCandidate.state == "imported",
+                    )
+                )
+            ).scalar_one() == 2
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
 def _headers(username: str) -> dict[str, str]:
     from app.auth import create_access_token
 

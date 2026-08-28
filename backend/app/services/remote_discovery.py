@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -48,6 +49,13 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (tuple, list, set, frozenset)):
         return [_json_value(child) for child in value]
     return value
+
+
+def _shared_identity_lock_key(source: str, source_creator_id: str) -> int:
+    """Return a stable signed bigint key for a PostgreSQL transaction lock."""
+
+    digest = hashlib.sha256(f"{source}\0{source_creator_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
 class DiscoveryScanInProgress(ValueError):
@@ -588,6 +596,16 @@ class RemoteDiscoveryService:
         if candidate.state == "conflict" or (candidate.candidate_metadata or {}).get("identity_conflict"):
             raise ValueError("Discovery candidate has an unresolved conflict")
         account = await self._owned_account(user_id, candidate.remote_account_id)
+        # All shared rows derived from one remote identity must converge even
+        # when two users import it in separate transactions at the same time.
+        # The lock is released automatically at transaction end.
+        await self.db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    _shared_identity_lock_key(account.source, candidate.source_creator_id)
+                )
+            )
+        )
         creator = await self._resolved_creator(candidate)
         source_creator = (
             await self.db.execute(
