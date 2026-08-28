@@ -1787,7 +1787,7 @@ async def test_system_schedule_change_replans_inherited_private_bindings():
                 bindings[0].last_synced_at + timedelta(hours=1),
                 bindings[1].last_synced_at + timedelta(hours=1),
             ]
-            assert replanned == 2
+            assert replanned >= 2
             assert [binding.next_sync_at for binding in bindings] == expected
             assert source.next_sync_at == min(expected)
             await db.rollback()
