@@ -3144,6 +3144,277 @@ async def test_member_attach_accepts_only_owned_current_provider_account():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_update_source_rebind_resets_only_target_health_and_is_immediately_eligible():
+    """A healthy destination must replace stale auth state on only one binding."""
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, SubscriptionSource, UserSubscriptionSource
+    from app.services.subscription_membership import (
+        SubscriptionMembershipService,
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            destination = accounts[0]
+            destination.auth_status = "healthy"
+            destination.auth_error_reason = None
+            destination.last_authenticated_at = now
+            old_account = RemoteAccount(
+                user_id=users[0].id,
+                source="x",
+                auth_method="cookie",
+                credential_ciphertext="test-stale-account-ciphertext",
+                credential_key_version=1,
+                credential_generation=1,
+                is_enabled=False,
+                auth_status="deleted",
+                auth_error_reason="old account deleted",
+            )
+            other_source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="x",
+                source_url=f"https://x.com/stale_{uuid4().hex}",
+                is_enabled=True,
+            )
+            db.add_all([old_account, other_source])
+            await db.flush()
+            target = bindings[0]
+            target.remote_account_id = old_account.id
+            target.auth_healthy = False
+            target.auth_status = "deleted"
+            target.auth_error_reason = "old account deleted"
+            target.last_auth_checked_at = now - timedelta(days=2)
+            unrelated = UserSubscriptionSource(
+                user_id=users[0].id,
+                subscription_id=subscription.id,
+                user_subscription_id=members[0].id,
+                subscription_source_id=other_source.id,
+                remote_account_id=old_account.id,
+                is_enabled=True,
+                auth_healthy=False,
+                auth_status="deleted",
+                auth_error_reason="unrelated old failure",
+                last_auth_checked_at=now - timedelta(days=3),
+            )
+            db.add(unrelated)
+            await recompute_subscription_membership_cache(db, subscription.id)
+
+            await SubscriptionMembershipService(db, users[0].id).update_source(
+                subscription.id,
+                source.id,
+                {"remote_account_id": destination.id},
+            )
+
+            assert target.remote_account_id == destination.id
+            assert target.auth_healthy is True
+            assert target.auth_status == "healthy"
+            assert target.auth_error_reason is None
+            assert target.last_auth_checked_at == now
+            assert unrelated.remote_account_id == old_account.id
+            assert unrelated.auth_healthy is False
+            assert unrelated.auth_status == "deleted"
+            assert unrelated.auth_error_reason == "unrelated old failure"
+            selected = await select_eligible_membership_source(
+                db,
+                source,
+                now=now,
+                preferred_membership_id=members[0].id,
+                preferred_account_id=destination.id,
+                require_due=False,
+            )
+            assert selected is not None
+            assert selected.binding.id == target.id
+            assert selected.account.id == destination.id
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_update_source_explicit_detach_restores_public_auth_eligibility():
+    """Explicit detach cannot retain a failed personal-account health state."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import (
+        SubscriptionMembershipService,
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                _accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            target = bindings[0]
+            target.auth_healthy = False
+            target.auth_status = "unhealthy"
+            target.auth_error_reason = "personal token expired"
+            target.last_auth_checked_at = now - timedelta(days=1)
+            await recompute_subscription_membership_cache(db, subscription.id)
+
+            await SubscriptionMembershipService(db, users[0].id).update_source(
+                subscription.id,
+                source.id,
+                {"remote_account_id": None},
+            )
+
+            assert target.remote_account_id is None
+            assert target.auth_healthy is True
+            assert target.auth_status == "healthy"
+            assert target.auth_error_reason is None
+            assert target.last_auth_checked_at is None
+            selected = await select_eligible_membership_source(
+                db,
+                source,
+                now=now,
+                preferred_membership_id=members[0].id,
+                require_due=False,
+                require_preferred_account_match=True,
+            )
+            assert selected is not None
+            assert selected.binding.id == target.id
+            assert selected.account is None
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_candidate_import_rebind_resets_existing_binding_health():
+    """The ensure/import path resets stale auth when adopting its locked account."""
+
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount
+    from app.services.remote_credentials import CredentialVault
+    from app.services.remote_discovery import RemoteDiscoveryService
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    vault = CredentialVault(base64.urlsafe_b64encode(b"i" * 32).decode())
+    try:
+        async with async_session() as db:
+            (
+                users,
+                creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            destination = accounts[0]
+            destination.auth_status = "healthy"
+            destination.auth_error_reason = None
+            destination.last_authenticated_at = now
+            destination.credential_ciphertext = vault.encrypt(
+                {"refresh_token": "test-import-rebind-token"},
+                user_id=users[0].id,
+                source="pixiv",
+                account_id=destination.id,
+            )
+            old_account = RemoteAccount(
+                user_id=users[0].id,
+                source="x",
+                auth_method="cookie",
+                credential_ciphertext="test-import-old-ciphertext",
+                credential_key_version=1,
+                credential_generation=1,
+                is_enabled=False,
+                auth_status="deleted",
+            )
+            db.add(old_account)
+            await db.flush()
+            remote_creator_id = f"import-rebind-{uuid4().hex}"
+            remote_url = f"https://www.pixiv.net/users/{uuid4().int % 1000000}"
+            source.source_creator_id = remote_creator_id
+            source.source_url = remote_url
+            target = bindings[0]
+            target.remote_account_id = old_account.id
+            target.auth_healthy = False
+            target.auth_status = "deleted"
+            target.auth_error_reason = "stale import binding"
+            target.last_auth_checked_at = now - timedelta(days=4)
+            candidate = DiscoveryCandidate(
+                remote_account_id=destination.id,
+                user_id=users[0].id,
+                source_creator_id=remote_creator_id,
+                remote_url=remote_url,
+                display_name="Import Rebind",
+                state="pending",
+                candidate_metadata={"local_creator_ids": [str(creator.id)]},
+            )
+            db.add(candidate)
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.flush()
+
+            imported = await RemoteDiscoveryService(
+                db,
+                vault=vault,
+            ).import_candidate(users[0].id, candidate.id)
+
+            assert imported.state == "imported"
+            assert target.remote_account_id == destination.id
+            assert target.auth_healthy is True
+            assert target.auth_status == "healthy"
+            assert target.auth_error_reason is None
+            assert target.last_auth_checked_at == now
+            selected = await select_eligible_membership_source(
+                db,
+                source,
+                now=now,
+                preferred_membership_id=members[0].id,
+                preferred_account_id=destination.id,
+                require_due=False,
+            )
+            assert selected is not None
+            assert selected.binding.id == target.id
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_candidate_import_and_account_delete_serialize_without_inversion():
     """Import waits on RemoteAccount before Candidate or a new/NULL binding."""
 

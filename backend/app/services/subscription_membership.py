@@ -64,6 +64,33 @@ def membership_source_is_usable(
     )
 
 
+def reset_binding_auth_for_destination(
+    binding: UserSubscriptionSource,
+    account: RemoteAccount | None,
+) -> None:
+    """Clear prior-account health when a binding adopts a new auth mode."""
+
+    if account is None:
+        # Explicit detach opts back into the configured public/legacy provider
+        # path. Hard account deletion does not call this helper and therefore
+        # keeps its protective NULL + deleted tombstone state.
+        binding.auth_healthy = True
+        binding.auth_status = "healthy"
+        binding.auth_error_reason = None
+        binding.last_auth_checked_at = None
+        return
+
+    healthy = bool(
+        account.is_enabled
+        and account.auth_status == "healthy"
+        and account.credential_ciphertext
+    )
+    binding.auth_healthy = healthy
+    binding.auth_status = account.auth_status or "untested"
+    binding.auth_error_reason = None if healthy else account.auth_error_reason
+    binding.last_auth_checked_at = account.last_authenticated_at
+
+
 @dataclass(frozen=True)
 class EligibleMembershipSource:
     binding: UserSubscriptionSource
@@ -490,15 +517,16 @@ class SubscriptionMembershipService:
         locked_remote_account: RemoteAccount | None = None,
         is_enabled: bool | None = None,
     ) -> tuple[UserSubscriptionSource, bool]:
+        destination_account: RemoteAccount | None = None
         if remote_account_id is not None:
             if locked_remote_account is None:
-                await self._lock_remote_account_for_source(
+                destination_account = await self._lock_remote_account_for_source(
                     remote_account_id,
                     source.source,
                     expected_generation=remote_account_generation,
                 )
             else:
-                self._validate_remote_account_for_source(
+                destination_account = self._validate_remote_account_for_source(
                     locked_remote_account,
                     remote_account_id,
                     source.source,
@@ -519,6 +547,11 @@ class SubscriptionMembershipService:
             if remote_account_id is not None:
                 account_changed = binding.remote_account_id != remote_account_id
                 binding.remote_account_id = remote_account_id
+                if account_changed:
+                    reset_binding_auth_for_destination(
+                        binding,
+                        destination_account,
+                    )
             if is_enabled is not None:
                 transitioned = await apply_binding_enable_transition(
                     self.db,
@@ -555,6 +588,8 @@ class SubscriptionMembershipService:
             auth_error_reason=source.auth_error_reason,
             last_auth_checked_at=source.last_auth_checked_at,
         )
+        if destination_account is not None:
+            reset_binding_auth_for_destination(binding, destination_account)
         self.db.add(binding)
         await self.db.flush()
         await apply_binding_enable_transition(
@@ -755,8 +790,12 @@ class SubscriptionMembershipService:
         account_id = (
             data.get("remote_account_id") if "remote_account_id" in data else None
         )
+        destination_account = None
         if "remote_account_id" in data and account_id is not None:
-            await self._lock_remote_account_for_source(account_id, source.source)
+            destination_account = await self._lock_remote_account_for_source(
+                account_id,
+                source.source,
+            )
 
         binding = (
             await self.db.execute(
@@ -774,6 +813,8 @@ class SubscriptionMembershipService:
         if "remote_account_id" in data:
             account_changed = binding.remote_account_id != account_id
             binding.remote_account_id = account_id
+            if account_changed:
+                reset_binding_auth_for_destination(binding, destination_account)
         transitioned = False
         if "is_enabled" in data and data["is_enabled"] is not None:
             transitioned = await apply_binding_enable_transition(

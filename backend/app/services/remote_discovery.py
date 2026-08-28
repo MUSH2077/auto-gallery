@@ -1078,7 +1078,7 @@ class RemoteDiscoveryService:
                 name=creator.display_name or creator.name,
                 **defaults,
             )
-        binding, created = await membership_service._ensure_source_binding(
+        binding, _created = await membership_service._ensure_source_binding(
             member,
             canonical_source,
             remote_account_id=account.id,
@@ -1086,10 +1086,6 @@ class RemoteDiscoveryService:
             locked_remote_account=account,
             is_enabled=None,
         )
-        if created:
-            binding.auth_healthy = account.auth_status == "healthy"
-            binding.auth_status = account.auth_status
-            binding.auth_error_reason = None
         candidate.state = "imported"
         candidate.subscription_id = subscription.id
         candidate.user_subscription_id = member.id
