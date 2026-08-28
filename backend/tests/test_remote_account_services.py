@@ -241,6 +241,160 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
         await engine.dispose()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_remote_account_policies_are_provider_specific_and_rejected_atomically():
+    """Only provider-emitted selectors and non-secret scope values are persisted."""
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, User
+    from app.services.remote_accounts import RemoteAccountService
+
+    marker = f"ra_policy_{uuid4().hex[:20]}"
+    try:
+        async with async_session() as db:
+            user = User(
+                username=marker,
+                password_hash="test-only",
+                is_active=True,
+                permissions=["subscriptions"],
+            )
+            attacker = User(
+                username=f"{marker}_attacker",
+                password_hash="test-only",
+                is_active=True,
+                permissions=["subscriptions"],
+            )
+            db.add_all([user, attacker])
+            await db.flush()
+            attacker_id = attacker.id
+            service = RemoteAccountService(db, user.id, vault=_vault())
+
+            pixiv = await service.create(
+                {
+                    "source": "pixiv",
+                    "auth_method": "refresh_token",
+                    "credentials": {"refresh_token": "pixiv-secret"},
+                    "scopes": [],
+                    "collection_selectors": [
+                        {"restrict": "public"},
+                        {"restrict": "private"},
+                    ],
+                }
+            )
+            x = await service.create(
+                {
+                    "source": "x",
+                    "auth_method": "cookie",
+                    "credentials": {"cookie": "x-cookie"},
+                    "scopes": ["users.read", "follows.read", "list.read"],
+                    "collection_selectors": [
+                        {"kind": "following"},
+                        {"kind": "list", "list_id": "7719", "private": True},
+                    ],
+                }
+            )
+            bilibili = await service.create(
+                {
+                    "source": "bilibili",
+                    "auth_method": "sessdata",
+                    "credentials": {"SESSDATA": "bili-cookie"},
+                    "scopes": [],
+                    "collection_selectors": [
+                        {"kind": "all"},
+                        {"kind": "group", "group_id": "12", "count": 38},
+                    ],
+                }
+            )
+            await db.commit()
+            assert pixiv.collection_selectors[1] == {"restrict": "private"}
+            assert x.collection_selectors[1]["private"] is True
+            assert bilibili.collection_selectors[1]["count"] == 38
+
+            invalid_updates = (
+                (pixiv.id, {"scopes": ["users.read"]}),
+                (x.id, {"scopes": ["users.read", "tweet.read"]}),
+                (
+                    x.id,
+                    {
+                        "collection_selectors": [
+                            {
+                                "kind": "list",
+                                "list_id": {"access_token": "nested-secret"},
+                            }
+                        ]
+                    },
+                ),
+                (
+                    bilibili.id,
+                    {
+                        "collection_selectors": [
+                            {"kind": "group", "group_id": "12", "SESSDATA": "secret"}
+                        ]
+                    },
+                ),
+                (
+                    pixiv.id,
+                    {
+                        "collection_selectors": [
+                            {"restrict": "public", "cookie": "session=secret"}
+                        ]
+                    },
+                ),
+                (
+                    pixiv.id,
+                    {"collection_selectors": [{"restrict": "public"}] * 201},
+                ),
+            )
+            for account_id, payload in invalid_updates:
+                with pytest.raises(ValueError):
+                    await service.update(account_id, payload)
+
+            db.expire_all()
+            stored_pixiv = await db.get(RemoteAccount, pixiv.id)
+            stored_x = await db.get(RemoteAccount, x.id)
+            stored_bilibili = await db.get(RemoteAccount, bilibili.id)
+            assert stored_pixiv.scopes == []
+            assert stored_pixiv.collection_selectors == [
+                {"restrict": "public"},
+                {"restrict": "private"},
+            ]
+            assert stored_x.scopes == ["users.read", "follows.read", "list.read"]
+            assert stored_bilibili.collection_selectors[1] == {
+                "kind": "group",
+                "group_id": "12",
+                "count": 38,
+            }
+
+            attacker_service = RemoteAccountService(db, attacker_id, vault=_vault())
+            with pytest.raises(ValueError):
+                await attacker_service.create(
+                    {
+                        "source": "x",
+                        "auth_method": "cookie",
+                        "credentials": {"cookie": "x-cookie"},
+                        "scopes": ["offline.access", "authorization=Bearer nested-secret"],
+                        "collection_selectors": [{"kind": "following"}],
+                    }
+                )
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                text(
+                    "DELETE FROM remote_accounts WHERE user_id IN "
+                    "(SELECT id FROM users WHERE username LIKE :marker)"
+                ),
+                {"marker": f"{marker}%"},
+            )
+            await db.execute(
+                text("DELETE FROM users WHERE username LIKE :marker"),
+                {"marker": f"{marker}%"},
+            )
+            await db.commit()
+        await engine.dispose()
+
+
 class MemoryRedis:
     def __init__(self):
         self.values = {}

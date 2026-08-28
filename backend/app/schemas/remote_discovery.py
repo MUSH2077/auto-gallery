@@ -119,8 +119,8 @@ class RemoteAccountCreate(BaseModel):
     remote_user_id: str | None = Field(default=None, max_length=255)
     remote_username: str | None = Field(default=None, max_length=255)
     auth_method: AuthMethod | None = None
-    scopes: list[str] = Field(default_factory=list)
-    collection_selectors: list[dict[str, Any]] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list, max_length=4)
+    collection_selectors: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     is_enabled: bool = True
     scan_interval_hours: int = Field(default=24, ge=1)
     auto_import_enabled: bool = False
@@ -146,8 +146,8 @@ class RemoteAccountUpdate(BaseModel):
     remote_user_id: str | None = Field(default=None, max_length=255)
     remote_username: str | None = Field(default=None, max_length=255)
     auth_method: AuthMethod | None = None
-    scopes: list[str] | None = None
-    collection_selectors: list[dict[str, Any]] | None = None
+    scopes: list[str] | None = Field(default=None, max_length=4)
+    collection_selectors: list[dict[str, Any]] | None = Field(default=None, max_length=200)
     is_enabled: bool | None = None
     scan_interval_hours: int | None = Field(default=None, ge=1)
     auto_import_enabled: bool | None = None

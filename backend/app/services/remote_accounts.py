@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -40,6 +42,100 @@ _VALID_AUTH_METHODS = {
     "x": frozenset({"oauth2", "cookie"}),
     "bilibili": frozenset({"sessdata"}),
 }
+
+_X_SCOPES = frozenset({"users.read", "follows.read", "list.read", "offline.access"})
+_MAX_SELECTORS = 200
+_MAX_SELECTOR_BYTES = 64 * 1024
+_NUMERIC_REMOTE_ID = re.compile(r"-?[0-9]{1,32}\Z")
+
+
+def validate_remote_account_policy(
+    source: str,
+    scopes: Any,
+    selectors: Any,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Validate the only non-secret provider policy shapes stored or echoed."""
+
+    if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+        raise ValueError("Remote account scopes must be a list of strings")
+    if len(scopes) != len(set(scopes)):
+        raise ValueError("Remote account scopes must not contain duplicates")
+    allowed_scopes = _X_SCOPES if source == "x" else frozenset()
+    if set(scopes) - allowed_scopes:
+        raise ValueError("Remote account scopes are not valid for this source")
+
+    if not isinstance(selectors, list) or len(selectors) > _MAX_SELECTORS:
+        raise ValueError("Remote account collection selectors exceed the allowed limit")
+    try:
+        encoded_size = len(
+            json.dumps(selectors, ensure_ascii=False, separators=(",", ":")).encode()
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Remote account collection selectors must be JSON values") from exc
+    if encoded_size > _MAX_SELECTOR_BYTES:
+        raise ValueError("Remote account collection selectors are too large")
+
+    validated: list[dict[str, Any]] = []
+    for raw_selector in selectors:
+        if not isinstance(raw_selector, dict):
+            raise ValueError("Remote account collection selector must be an object")
+        selector = dict(raw_selector)
+        if source == "pixiv":
+            if set(selector) != {"restrict"} or selector.get("restrict") not in {
+                "public",
+                "private",
+            }:
+                raise ValueError("Invalid Pixiv collection selector")
+        elif source == "x":
+            kind = selector.get("kind")
+            if kind == "following":
+                if set(selector) != {"kind"}:
+                    raise ValueError("Invalid X following selector")
+            elif kind == "list":
+                if not {"kind", "list_id"} <= set(selector) or set(selector) - {
+                    "kind",
+                    "list_id",
+                    "private",
+                }:
+                    raise ValueError("Invalid X list selector")
+                list_id = selector.get("list_id")
+                if not isinstance(list_id, str) or not _NUMERIC_REMOTE_ID.fullmatch(list_id):
+                    raise ValueError("Invalid X list selector")
+                if "private" in selector and not isinstance(selector["private"], bool):
+                    raise ValueError("Invalid X list selector")
+            else:
+                raise ValueError("Invalid X collection selector")
+        elif source == "bilibili":
+            kind = selector.get("kind")
+            if kind == "all":
+                if set(selector) != {"kind"}:
+                    raise ValueError("Invalid Bilibili all-following selector")
+            elif kind == "group":
+                if not {"kind", "group_id"} <= set(selector) or set(selector) - {
+                    "kind",
+                    "group_id",
+                    "count",
+                }:
+                    raise ValueError("Invalid Bilibili group selector")
+                group_id = selector.get("group_id")
+                if not isinstance(group_id, str) or not _NUMERIC_REMOTE_ID.fullmatch(group_id):
+                    raise ValueError("Invalid Bilibili group selector")
+                count = selector.get("count")
+                if "count" in selector and not (
+                    count is None
+                    or (
+                        isinstance(count, int)
+                        and not isinstance(count, bool)
+                        and 0 <= count <= 2_147_483_647
+                    )
+                ):
+                    raise ValueError("Invalid Bilibili group selector")
+            else:
+                raise ValueError("Invalid Bilibili collection selector")
+        else:
+            raise ValueError("Unsupported remote account source")
+        validated.append(selector)
+    return list(scopes), validated
 
 
 def configured_credential_vault() -> CredentialVault:
@@ -176,6 +272,12 @@ class RemoteAccountService:
         source = str(payload["source"])
         auth_method = str(payload.get("auth_method") or _DEFAULT_AUTH_METHOD[source])
         self._validate_auth_method(source, auth_method)
+        self._validate_credentials(source, auth_method, credentials)
+        scopes, selectors = validate_remote_account_policy(
+            source,
+            payload.get("scopes") or [],
+            payload.get("collection_selectors") or [],
+        )
         existing = (
             await self.db.execute(
                 select(RemoteAccount)
@@ -192,8 +294,8 @@ class RemoteAccountService:
         account.auth_method = auth_method
         account.remote_user_id = payload.get("remote_user_id")
         account.remote_username = payload.get("remote_username")
-        account.scopes = payload.get("scopes") or []
-        account.collection_selectors = payload.get("collection_selectors") or []
+        account.scopes = scopes
+        account.collection_selectors = selectors
         account.is_enabled = payload.get("is_enabled", True)
         account.scan_interval_hours = payload.get("scan_interval_hours", 24)
         account.auto_import_enabled = payload.get("auto_import_enabled", False)
@@ -242,10 +344,25 @@ class RemoteAccountService:
         self._validate_auth_method(account.source, requested_auth_method)
         if requested_auth_method != account.auth_method and credentials is None:
             raise ValueError("Changing authentication method requires replacement credentials")
+        if credentials is not None:
+            self._validate_credentials(account.source, requested_auth_method, credentials)
+        scopes, selectors = validate_remote_account_policy(
+            account.source,
+            data.get("scopes") if data.get("scopes") is not None else account.scopes or [],
+            data.get("collection_selectors")
+            if data.get("collection_selectors") is not None
+            else account.collection_selectors or [],
+        )
         account.auth_method = requested_auth_method
-        for field in _ACCOUNT_UPDATE_FIELDS - {"auth_method"}:
+        for field in _ACCOUNT_UPDATE_FIELDS - {
+            "auth_method",
+            "scopes",
+            "collection_selectors",
+        }:
             if field in data and data[field] is not None:
                 setattr(account, field, data[field])
+        account.scopes = scopes
+        account.collection_selectors = selectors
         if credentials is not None:
             self._encrypt(account, credentials)
             account.auth_status = "untested"
