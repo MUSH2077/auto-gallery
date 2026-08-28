@@ -180,6 +180,101 @@ async def _force_imported_provenance(db, account, subscription, member):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_credential_generation_changes_only_with_credential_identity():
+    """Credential provenance is monotonic and independent from row timestamps."""
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount
+
+    marker = f"remote_account_generation_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account_read, subscription, _source, member, _binding = (
+                await _seed_bound_account(db, marker)
+            )
+            account = await db.get(RemoteAccount, account_read.id)
+            assert account.credential_generation == 1
+
+            await service.update(
+                account.id,
+                {"collection_selectors": [{"restrict": "public"}]},
+            )
+            await service.test(account.id)
+            assert account.credential_generation == 1
+
+            await service.update(
+                account.id,
+                {"credentials": {"refresh_token": "replacement-generation-token"}},
+            )
+            assert account.credential_generation == 2
+
+            await _force_imported_provenance(db, account, subscription, member)
+            await service.delete(account.id)
+            assert account.credential_generation == 3
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_unrelated_account_update_keeps_matching_job_generation_current():
+    """Policy edits must not make an exact credential outcome falsely stale."""
+
+    from datetime import datetime, timezone
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob, RemoteAccount, UserSubscriptionSource
+    from app.services.subscription_enqueue import mark_source_auth_failure
+
+    marker = f"remote_gen_policy_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account_read, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            account = await db.get(RemoteAccount, account_read.id)
+            # Isolate this test from initial-generation behavior: it exercises
+            # the exact-match boundary after a noncredential row update.
+            account.credential_generation = 7
+            job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=member.id,
+                triggering_remote_account_id=account.id,
+                triggering_credential_generation=7,
+                source=source.source,
+                source_url=source.source_url,
+                status="enqueued",
+            )
+            db.add(job)
+            await db.commit()
+
+            await service.update(
+                account.id,
+                {"collection_selectors": [{"restrict": "private"}]},
+            )
+            assert account.credential_generation == 7
+            await mark_source_auth_failure(
+                db,
+                job,
+                "HTTP 401 Unauthorized",
+                when=datetime.now(timezone.utc),
+            )
+
+            stored_binding = await db.get(UserSubscriptionSource, binding.id)
+            assert account.auth_status == "unhealthy"
+            assert stored_binding.auth_status == "unhealthy"
+            await db.delete(job)
+            await db.commit()
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_stale_success_cannot_revive_tombstoned_account_or_binding():
     """A pre-delete download receipt must leave deleted private provenance quarantined."""
 
@@ -353,6 +448,7 @@ async def test_stale_pre_reconnect_outcomes_cannot_corrupt_revived_account():
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=member.id,
                 triggering_remote_account_id=account.id,
+                triggering_credential_generation=1,
                 created_at=datetime.now(timezone.utc),
             )
             account_id = account.id
@@ -381,7 +477,9 @@ async def test_stale_pre_reconnect_outcomes_cannot_corrupt_revived_account():
                 datetime.now(timezone.utc),
                 triggering_user_subscription_id=member_id,
                 triggering_remote_account_id=account_id,
-                provenance_created_at=stale_job.created_at,
+                triggering_credential_generation=(
+                    stale_job.triggering_credential_generation
+                ),
             )
             await db.commit()
 

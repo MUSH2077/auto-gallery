@@ -81,7 +81,7 @@ async def mark_source_sync_success(
     *,
     triggering_user_subscription_id: UUID | None = None,
     triggering_remote_account_id: UUID | None = None,
-    provenance_created_at: datetime | None = None,
+    triggering_credential_generation: int | None = None,
 ) -> None:
     """Fan out a shared receipt without reviving stale private provenance.
 
@@ -153,7 +153,7 @@ async def mark_source_sync_success(
         if provenance_matches and _binding_provenance_is_current(
             trigger_account,
             binding,
-            provenance_created_at=provenance_created_at,
+            triggering_credential_generation=triggering_credential_generation,
         ):
             binding.last_successful_auth = when
             binding.auth_healthy = True
@@ -206,7 +206,11 @@ async def mark_source_auth_failure(
         # global auth or damage a newly reconnected credential generation.
         if not _private_account_can_accept_outcome(
             account,
-            provenance_created_at=getattr(job, "created_at", None),
+            triggering_credential_generation=getattr(
+                job,
+                "triggering_credential_generation",
+                None,
+            ),
         ):
             return
     binding = None
@@ -241,7 +245,11 @@ async def mark_source_auth_failure(
         if _binding_provenance_is_current(
             account,
             binding,
-            provenance_created_at=getattr(job, "created_at", None),
+            triggering_credential_generation=getattr(
+                job,
+                "triggering_credential_generation",
+                None,
+            ),
         ):
             binding.auth_healthy = False
             binding.auth_status = "unhealthy"
@@ -263,23 +271,18 @@ async def mark_source_auth_failure(
 def _private_account_can_accept_outcome(
     account: RemoteAccount | None,
     *,
-    provenance_created_at: datetime | None,
+    triggering_credential_generation: int | None,
 ) -> bool:
     """Check private credential generation while its account row is locked."""
 
-    if (
-        account is None
-        or not account.is_enabled
-        or account.auth_status == "deleted"
-        or not account.credential_ciphertext
-    ):
+    if account is None:
         return False
-    account_updated_at = _as_utc(account.updated_at)
-    provenance_created_at = _as_utc(provenance_created_at)
-    return not (
-        account_updated_at is not None
-        and provenance_created_at is not None
-        and account_updated_at > provenance_created_at
+    return bool(
+        account.is_enabled
+        and account.auth_status != "deleted"
+        and bool(account.credential_ciphertext)
+        and triggering_credential_generation is not None
+        and account.credential_generation == triggering_credential_generation
     )
 
 
@@ -287,7 +290,7 @@ def _binding_provenance_is_current(
     account: RemoteAccount | None,
     binding: UserSubscriptionSource,
     *,
-    provenance_created_at: datetime | None,
+    triggering_credential_generation: int | None,
 ) -> bool:
     if account is None:
         return binding.remote_account_id is None and binding.auth_status != "deleted"
@@ -297,7 +300,7 @@ def _binding_provenance_is_current(
         and binding.user_id == account.user_id
         and _private_account_can_accept_outcome(
             account,
-            provenance_created_at=provenance_created_at,
+            triggering_credential_generation=triggering_credential_generation,
         )
     )
 
@@ -325,22 +328,33 @@ async def _restore_failed_publication_demand(
     *,
     source_id: UUID,
     binding_id: UUID,
+    membership_id: UUID,
+    remote_account_id: UUID | None,
+    credential_generation: int | None,
     claimed_at: datetime,
     claimed_next_sync_at: datetime | None,
     previous_source_attempted_at: datetime | None,
     previous_binding_attempted_at: datetime | None,
     previous_binding_next_sync_at: datetime | None,
 ) -> None:
-    """CAS-restore logical demand after a rejected Redis publication."""
+    """CAS-restore one claim using the lifecycle/outcome lock order."""
 
     await db.rollback()
-    source = (
-        await db.execute(
-            select(SubscriptionSource)
-            .where(SubscriptionSource.id == source_id)
-            .with_for_update(of=SubscriptionSource)
-        )
-    ).scalar_one_or_none()
+    account = None
+    if remote_account_id is not None:
+        account = (
+            await db.execute(
+                select(RemoteAccount)
+                .where(RemoteAccount.id == remote_account_id)
+                .with_for_update(of=RemoteAccount)
+            )
+        ).scalar_one_or_none()
+        if not _private_account_can_accept_outcome(
+            account,
+            triggering_credential_generation=credential_generation,
+        ):
+            await db.rollback()
+            return
     binding = (
         await db.execute(
             select(UserSubscriptionSource)
@@ -348,7 +362,31 @@ async def _restore_failed_publication_demand(
             .with_for_update(of=UserSubscriptionSource)
         )
     ).scalar_one_or_none()
-    if source is None or binding is None:
+    if (
+        binding is None
+        or binding.subscription_source_id != source_id
+        or binding.user_subscription_id != membership_id
+        or binding.remote_account_id != remote_account_id
+        or (remote_account_id is None and binding.auth_status == "deleted")
+        or (remote_account_id is None and credential_generation is not None)
+    ):
+        await db.rollback()
+        return
+    # Canonical rows are always acquired after the member binding, with the
+    # Subscription row before its Source to match the sole aggregate helper.
+    await db.execute(
+        select(Subscription)
+        .where(Subscription.id == binding.subscription_id)
+        .with_for_update(of=Subscription)
+    )
+    source = (
+        await db.execute(
+            select(SubscriptionSource)
+            .where(SubscriptionSource.id == source_id)
+            .with_for_update(of=SubscriptionSource)
+        )
+    ).scalar_one_or_none()
+    if source is None:
         await db.rollback()
         return
     if (
@@ -481,6 +519,11 @@ async def enqueue_subscription_source_sync(
         triggering_remote_account_id = (
             selection.account.id if selection.account is not None else None
         )
+        triggering_credential_generation = (
+            selection.account.credential_generation
+            if selection.account is not None
+            else None
+        )
 
         running = await db.execute(
             select(DownloadJob)
@@ -514,6 +557,7 @@ async def enqueue_subscription_source_sync(
             status="enqueued",
             triggering_user_subscription_id=triggering_user_subscription_id,
             triggering_remote_account_id=triggering_remote_account_id,
+            triggering_credential_generation=triggering_credential_generation,
         )
         apply_download_progress(
             job,
@@ -603,6 +647,9 @@ async def enqueue_subscription_source_sync(
                 db,
                 source_id=ss.id,
                 binding_id=selection.binding.id,
+                membership_id=selection.membership.id,
+                remote_account_id=triggering_remote_account_id,
+                credential_generation=triggering_credential_generation,
                 claimed_at=now,
                 claimed_next_sync_at=next_sync_at,
                 previous_source_attempted_at=previous_source_attempted_at,

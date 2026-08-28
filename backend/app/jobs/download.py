@@ -162,6 +162,11 @@ async def _materialize_personal_download_config(
     account_id = getattr(job, "triggering_remote_account_id", None)
     if account_id is None:
         return None
+    credential_generation = getattr(job, "triggering_credential_generation", None)
+    if credential_generation is None:
+        raise PersonalCredentialFailure(
+            "personal download authentication has unknown credential provenance"
+        )
     membership_id = getattr(job, "triggering_user_subscription_id", None)
     source_id = getattr(job, "subscription_source_id", None)
     if membership_id is None or source_id is None:
@@ -191,7 +196,10 @@ async def _materialize_personal_download_config(
     )
     from app.services.subscription_membership import membership_source_is_usable
 
-    if not membership_source_is_usable(binding, account, source=job.source):
+    if (
+        account.credential_generation != credential_generation
+        or not membership_source_is_usable(binding, account, source=job.source)
+    ):
         raise PersonalCredentialFailure(
             "personal download authentication is not healthy"
         )

@@ -52,7 +52,11 @@ async def finalize_download_job(
                 job.subscription_source_id,
                 triggering_user_subscription_id=triggering_membership_id,
                 triggering_remote_account_id=triggering_account_id,
-                provenance_created_at=getattr(job, "created_at", None),
+                triggering_credential_generation=getattr(
+                    job,
+                    "triggering_credential_generation",
+                    None,
+                ),
             )
 
     # Persist the repository-owned outcome before TaskRun/DownloadJob rows

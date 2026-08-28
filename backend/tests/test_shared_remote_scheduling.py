@@ -116,6 +116,13 @@ async def _cleanup_shared_test_rows(db) -> None:
         ),
         params,
     )
+    await db.execute(
+        text(
+            "DELETE FROM source_creators WHERE creator_id IN (SELECT id FROM creators "
+            "WHERE name LIKE :prefix)"
+        ),
+        params,
+    )
     for table in (
         "discovery_candidates",
         "user_subscription_sources",
@@ -206,6 +213,7 @@ async def _seed_shared_source(db, *, now: datetime):
             auth_method="refresh_token",
             credential_ciphertext=f"test-ciphertext-{index}",
             credential_key_version=1,
+            credential_generation=1,
             is_enabled=True,
             auth_status=status,
         )
@@ -346,8 +354,8 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
             selected = await select_eligible_membership_source(db, source, now=now)
 
             assert selected is None
-            assert source.is_enabled is False
-            assert source.auth_healthy is False
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
             await db.rollback()
     finally:
         await engine.dispose()
@@ -483,6 +491,7 @@ async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_d
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[1].id,
                 triggering_remote_account_id=account.id,
+                triggering_credential_generation=account.credential_generation,
                 source="pixiv",
                 gallerydl_config_path=None,
                 manifest={"safe": True},
@@ -516,6 +525,24 @@ async def test_personal_download_auth_uses_0600_ephemeral_config_and_leaves_no_d
 
             download_job._cleanup_temp_config(str(config_path))
             assert not config_path.exists()
+
+            # A pre-migration/unknown private job cannot be allowed to decrypt
+            # whatever credential currently occupies the same account row.
+            job.triggering_credential_generation = None
+            stale_personal = None
+            try:
+                with pytest.raises(download_job.PersonalCredentialFailure):
+                    stale_personal = await materialize(
+                        db,
+                        job,
+                        {},
+                        config_root=tmp_path,
+                        vault=vault,
+                        adapters=adapters,
+                    )
+            finally:
+                if stale_personal is not None:
+                    download_job._cleanup_temp_config(str(stale_personal.path))
             await db.rollback()
     finally:
         await engine.dispose()
@@ -555,6 +582,7 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[0].id,
                 triggering_remote_account_id=accounts[0].id,
+                triggering_credential_generation=accounts[0].credential_generation,
             )
 
             await mark_failure(
@@ -612,6 +640,7 @@ async def test_stale_private_auth_failure_never_poisons_canonical_source():
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[0].id,
                 triggering_remote_account_id=accounts[0].id,
+                triggering_credential_generation=accounts[0].credential_generation,
             )
 
             await mark_source_auth_failure(db, job, "HTTP 401 Unauthorized", when=now)
@@ -695,6 +724,7 @@ async def test_tombstone_delete_and_stale_success_share_one_lock_order():
                     now + timedelta(minutes=1),
                     triggering_user_subscription_id=member_id,
                     triggering_remote_account_id=account_id,
+                    triggering_credential_generation=1,
                 )
                 await raw_db.commit()
 
@@ -737,10 +767,10 @@ async def test_tombstone_delete_and_stale_success_share_one_lock_order():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_validation_and_stale_auth_failure_share_one_lock_order():
-    """Revalidation and an old failure serialize without deadlock or split health."""
+async def test_validation_and_matching_auth_failure_share_one_lock_order():
+    """Same-generation validation and failure serialize to one coherent state."""
 
-    from sqlalchemy import text
+    from sqlalchemy import select, text
 
     from app.database import async_session, engine
     from app.models import RemoteAccount, SubscriptionSource, UserSubscriptionSource
@@ -795,6 +825,7 @@ async def test_validation_and_stale_auth_failure_share_one_lock_order():
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[0].id,
                 triggering_remote_account_id=account.id,
+                triggering_credential_generation=account.credential_generation,
                 created_at=account.updated_at,
             )
             user_id = users[0].id
@@ -838,11 +869,12 @@ async def test_validation_and_stale_auth_failure_share_one_lock_order():
             account = await db.get(RemoteAccount, account_id)
             binding = await db.get(UserSubscriptionSource, binding_id)
             source = await db.get(SubscriptionSource, source_id)
-            assert account.auth_status == "healthy"
-            assert account.auth_error_reason is None
-            assert binding.auth_status == "healthy"
-            assert binding.auth_healthy is True
-            assert binding.auth_error_reason is None
+            assert account.auth_status == "unhealthy"
+            assert account.auth_error_reason == "HTTP 401 Unauthorized"
+            assert binding.auth_status == "unhealthy"
+            assert binding.auth_healthy is False
+            assert binding.auth_error_reason == "HTTP 401 Unauthorized"
+            # The other user's healthy credential keeps the shared cache live.
             assert source.is_enabled is True
             assert source.auth_healthy is True
     finally:
@@ -1010,6 +1042,7 @@ async def test_personal_materialization_distinguishes_credentials_from_filesyste
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[1].id,
                 triggering_remote_account_id=account.id,
+                triggering_credential_generation=account.credential_generation,
                 source="pixiv",
             )
 
@@ -1122,6 +1155,7 @@ async def test_tampered_personal_credential_fails_once_and_allows_peer_takeover(
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[0].id,
                 triggering_remote_account_id=accounts[0].id,
+                triggering_credential_generation=accounts[0].credential_generation,
                 source="pixiv",
                 source_url=source.source_url,
                 status="enqueued",
@@ -1181,6 +1215,7 @@ async def test_shared_success_does_not_heal_an_account_outside_selected_binding(
                 now,
                 triggering_user_subscription_id=members[1].id,
                 triggering_remote_account_id=accounts[0].id,
+                triggering_credential_generation=accounts[0].credential_generation,
             )
 
             assert accounts[0].auth_status == "unhealthy"
@@ -1239,7 +1274,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
 ):
     """Subprocess output cannot copy credential canaries into durable/Redis/log state."""
 
-    from sqlalchemy import select
+    from sqlalchemy import select, text
 
     from app.database import async_session, engine
     from app.jobs import download as download_job
@@ -1385,6 +1420,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
                 subscription_source_id=source.id,
                 triggering_user_subscription_id=members[1].id,
                 triggering_remote_account_id=account.id,
+                triggering_credential_generation=account.credential_generation,
                 source="x",
                 source_url=source.source_url,
                 status="enqueued",
@@ -1507,10 +1543,144 @@ async def test_scheduler_enqueue_selects_earliest_healthy_member_and_records_onl
             ).scalar_one()
             assert job.triggering_user_subscription_id == members[1].id
             assert job.triggering_remote_account_id == accounts[1].id
+            assert job.triggering_credential_generation == 1
             assert "test-ciphertext" not in str(job.manifest)
             await db.execute(delete(DownloadJob).where(DownloadJob.id == job.id))
             await db.commit()
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_replacement_transaction_started_before_enqueue_stales_old_job_generation(
+    monkeypatch,
+):
+    """Commit order, not transaction start time, defines credential identity."""
+
+    from sqlalchemy import select, text
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob, RemoteAccount, UserSubscriptionSource
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def publish(*_args, **_kwargs):
+        return SimpleNamespace(id="rq-generation-inversion")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    now = datetime.now(timezone.utc)
+    replacement_ready = asyncio.Event()
+    allow_replacement = asyncio.Event()
+    vault = CredentialVault(base64.urlsafe_b64encode(b"g" * 32).decode())
+    source_id = None
+    account_id = None
+    binding_id = None
+    job_id = None
+    replacement_task = None
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+            source_id = source.id
+            account_id = accounts[1].id
+            binding_id = bindings[1].id
+            user_id = users[1].id
+
+        async def replace_credentials():
+            async with async_session() as raw_db:
+                # Start the PostgreSQL transaction before the job exists, but
+                # replace/commit after enqueue. Timestamp provenance sees the
+                # earlier transaction timestamp; explicit generation sees the
+                # credential identity change.
+                await raw_db.execute(text("SELECT now()"))
+                replacement_ready.set()
+                await allow_replacement.wait()
+                await RemoteAccountService(raw_db, user_id, vault=vault).update(
+                    account_id,
+                    {"credentials": {"refresh_token": "generation-two-token"}},
+                )
+                await raw_db.commit()
+
+        replacement_task = asyncio.create_task(replace_credentials())
+        await asyncio.wait_for(replacement_ready.wait(), timeout=2)
+
+        async with async_session() as db:
+            result = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source_id,
+                trigger="scheduler",
+                scheduler_config={
+                    "schedule_mode": "interval",
+                    "default_sync_interval_hours": 6,
+                    "scheduler_scan_interval_minutes": 5,
+                    "timezone": "UTC",
+                },
+            )
+            assert result["status"] == "enqueued"
+            job_id = result["job_id"]
+
+        allow_replacement.set()
+        await asyncio.wait_for(replacement_task, timeout=4)
+
+        async with async_session() as db:
+            job = await db.get(DownloadJob, job_id)
+            account = await db.get(RemoteAccount, account_id)
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            assert job.triggering_credential_generation == 1
+            assert account.credential_generation == 2
+            assert account.auth_status == "untested"
+
+            await subscription_enqueue.mark_source_auth_failure(
+                db,
+                job,
+                "HTTP 401 Unauthorized",
+                when=now + timedelta(minutes=1),
+            )
+            assert account.auth_status == "untested"
+            assert binding.auth_status == "healthy"
+            await db.rollback()
+    finally:
+        allow_replacement.set()
+        if replacement_task is not None and not replacement_task.done():
+            await asyncio.gather(replacement_task, return_exceptions=True)
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
         await engine.dispose()
 
 
@@ -1722,7 +1892,7 @@ async def test_generic_manual_download_persists_caller_membership(monkeypatch):
     from app.database import async_session, engine
     from app.models import DownloadJob
     from app.repositories.download_job import DownloadJobRepository
-    from app.services import backpressure, download_dispatch
+    from app.services import backpressure, download_dispatch, download_orchestrator
     from app.services.download_orchestrator import DownloadOrchestrator
 
     async def no_pressure(*_args, **_kwargs):
@@ -1735,6 +1905,11 @@ async def test_generic_manual_download_persists_caller_membership(monkeypatch):
         return SimpleNamespace(id="rq-test")
 
     monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(
+        download_orchestrator,
+        "download_backpressure_reason",
+        no_pressure,
+    )
     monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
     monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
 
@@ -2159,6 +2334,9 @@ async def test_fast_success_finalization_wins_over_enqueue_claim(monkeypatch):
                 completed_at,
                 triggering_user_subscription_id=job.triggering_user_subscription_id,
                 triggering_remote_account_id=job.triggering_remote_account_id,
+                triggering_credential_generation=(
+                    job.triggering_credential_generation
+                ),
             )
             await worker_db.commit()
         return SimpleNamespace(id="rq-fast-success")
@@ -2330,6 +2508,198 @@ async def test_publication_failure_restores_original_private_demand(monkeypatch)
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_publication_restore_and_member_rebind_share_lifecycle_lock_order():
+    """Restore must not hold canonical rows while waiting for a member edit."""
+
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.services import subscription_enqueue
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    claimed_next = now + timedelta(hours=2)
+    barrier = _FirstRowLockBarrier()
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                _subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            selected = bindings[0]
+            previous_source_attempted_at = source.last_attempted_at
+            previous_binding_attempted_at = selected.last_attempted_at
+            previous_binding_next_sync_at = selected.next_sync_at
+            source.last_attempted_at = now
+            selected.last_attempted_at = now
+            selected.next_sync_at = claimed_next
+            await db.commit()
+            source_id = source.id
+            subscription_id = source.subscription_id
+            binding_id = selected.id
+            membership_id = selected.user_subscription_id
+            remote_account_id = selected.remote_account_id
+            credential_generation = accounts[0].credential_generation
+            user_id = users[0].id
+
+        async def restore_failed_publication():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await subscription_enqueue._restore_failed_publication_demand(
+                    db,
+                    source_id=source_id,
+                    binding_id=binding_id,
+                    membership_id=membership_id,
+                    remote_account_id=remote_account_id,
+                    credential_generation=credential_generation,
+                    claimed_at=now,
+                    claimed_next_sync_at=claimed_next,
+                    previous_source_attempted_at=previous_source_attempted_at,
+                    previous_binding_attempted_at=previous_binding_attempted_at,
+                    previous_binding_next_sync_at=previous_binding_next_sync_at,
+                )
+
+        async def detach_member_auth():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await SubscriptionMembershipService(db, user_id).update_source(
+                    subscription_id,
+                    source_id,
+                    {"remote_account_id": None, "is_enabled": False},
+                )
+                await raw_db.commit()
+
+        restore_task = asyncio.create_task(restore_failed_publication())
+        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        edit_task = asyncio.create_task(detach_member_auth())
+        await asyncio.wait_for(asyncio.gather(restore_task, edit_task), timeout=6)
+
+        async with async_session() as db:
+            binding = await db.get(type(bindings[0]), binding_id)
+            assert binding.remote_account_id is None
+            assert binding.is_enabled is False
+            assert binding.next_sync_at == claimed_next
+            assert binding.next_sync_at != dues[0]
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_candidate_import_and_account_delete_serialize_without_inversion():
+    """An import/delete race ends as one coherent imported tombstone."""
+
+    from sqlalchemy import select, text
+
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount, SourceCreator
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    marker = f"candidate-delete-lock-{uuid4().hex}"
+    barrier = _FirstRowLockBarrier()
+    try:
+        async with async_session() as db:
+            (
+                users,
+                creator,
+                _subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[0]
+            account.auth_status = "healthy"
+            source.source_creator_id = marker
+            db.add(
+                SourceCreator(
+                    creator_id=creator.id,
+                    source="pixiv",
+                    source_creator_id=marker,
+                    source_url=source.source_url,
+                    display_name=creator.name,
+                )
+            )
+            candidate = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=users[0].id,
+                source_creator_id=marker,
+                remote_url=source.source_url,
+                display_name=creator.name,
+                confidence="high",
+                state="pending",
+                is_following=True,
+            )
+            db.add(candidate)
+            await db.commit()
+            account_id = account.id
+            candidate_id = candidate.id
+            user_id = users[0].id
+            binding_id = bindings[0].id
+
+        vault = CredentialVault(base64.urlsafe_b64encode(b"d" * 32).decode())
+
+        async def delete_account():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await RemoteAccountService(db, user_id, vault=vault).delete(account_id)
+                await raw_db.commit()
+
+        async def import_candidate():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await RemoteDiscoveryService(db).import_candidate(user_id, candidate_id)
+                await raw_db.commit()
+
+        delete_task = asyncio.create_task(delete_account())
+        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        import_task = asyncio.create_task(import_candidate())
+        await asyncio.wait_for(asyncio.gather(delete_task, import_task), timeout=6)
+
+        async with async_session() as db:
+            account = await db.get(RemoteAccount, account_id)
+            candidate = await db.get(DiscoveryCandidate, candidate_id)
+            binding = await db.get(type(bindings[0]), binding_id)
+            assert account is not None
+            assert account.auth_status == "deleted"
+            assert account.credential_ciphertext is None
+            assert candidate.state == "imported"
+            assert candidate.remote_account_id == account_id
+            assert binding.remote_account_id == account_id
+            assert binding.auth_status == "deleted"
+            assert (
+                await db.execute(
+                    select(RemoteAccount).where(
+                        RemoteAccount.id == account_id,
+                        RemoteAccount.auth_status != "deleted",
+                    )
+                )
+            ).scalar_one_or_none() is None
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_due_discovery_admission_claims_once_and_routes_discovery_queue():
     """Repeated scheduler admission must publish one persistent scan per account."""
 
@@ -2364,6 +2734,7 @@ async def test_due_discovery_admission_claims_once_and_routes_discovery_queue():
                 auth_method="refresh_token",
                 credential_ciphertext="test-ciphertext",
                 credential_key_version=1,
+                credential_generation=1,
                 is_enabled=True,
                 auth_status="healthy",
                 next_scan_at=now - timedelta(minutes=1),

@@ -249,6 +249,7 @@ class RemoteAccountService:
         )
         account.credential_key_version = 1
         account.credential_metadata = {"fields": sorted(credentials)}
+        account.credential_generation = int(account.credential_generation or 0) + 1
 
     def credentials_for_adapter(self, account: RemoteAccount) -> RedactedCredentials:
         if not account.credential_ciphertext:
@@ -471,23 +472,31 @@ class RemoteAccountService:
 
     async def delete(self, account_id: UUID) -> None:
         account = await self._account(account_id, lock=True)
-        bindings = await self._locked_account_bindings(account.id)
-        imported_exists = (
-            await self.db.execute(
-                select(DiscoveryCandidate.id)
-                .where(
-                    DiscoveryCandidate.remote_account_id == account.id,
-                    DiscoveryCandidate.state == "imported",
+        # Lifecycle/delete/import order for one account is:
+        # RemoteAccount -> DiscoveryCandidate (id order) ->
+        # UserSubscriptionSource (id order) -> canonical aggregate.  Import
+        # starts at its candidate and never locks the account, so holding no
+        # member row while waiting for the candidate removes the old
+        # Candidate <-> USS cycle.
+        candidates = list(
+            (
+                await self.db.execute(
+                    select(DiscoveryCandidate)
+                    .where(DiscoveryCandidate.remote_account_id == account.id)
+                    .order_by(DiscoveryCandidate.id)
+                    .with_for_update(of=DiscoveryCandidate)
                 )
-                .limit(1)
-            )
-        ).scalar_one_or_none() is not None
+            ).scalars()
+        )
+        bindings = await self._locked_account_bindings(account.id)
+        imported_exists = any(candidate.state == "imported" for candidate in candidates)
         await self.db.execute(
             delete(DiscoveryCandidate).where(
                 DiscoveryCandidate.remote_account_id == account.id,
                 DiscoveryCandidate.state != "imported",
             )
         )
+        account.credential_generation = int(account.credential_generation or 0) + 1
         account.credential_ciphertext = None
         account.credential_metadata = None
         account.credential_key_version = None
