@@ -856,6 +856,205 @@ async def test_legacy_task_visibility_follows_download_and_import_membership_sub
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_null_trigger_tasks_reuse_explicit_parent_job_owner_on_shared_subscription():
+    """A peer member cannot inherit a null TaskRun owned by the parent job's trigger."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import delete
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import (
+        Creator,
+        DownloadJob,
+        ImportJob,
+        RemoteAccount,
+        Subscription,
+        SubscriptionSource,
+        TaskEvent,
+        TaskRun,
+    )
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    task_ids = []
+    import_id = None
+    job_id = None
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            owner = await _seed_user(db, "legacy_explicit_owner")
+            peer = await _seed_user(db, "legacy_explicit_peer")
+            creator = Creator(name="Explicit Parent Owner")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Shared Explicit")
+            db.add(subscription)
+            await db.flush()
+            source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id=f"explicit-{uuid4().hex}",
+                source_url="https://www.pixiv.net/users/82001",
+            )
+            account = RemoteAccount(
+                user_id=owner.id,
+                source="pixiv",
+                auth_method="refresh_token",
+                auth_status="healthy",
+            )
+            db.add_all([source, account])
+            await db.flush()
+            owner_member = await SubscriptionMembershipService(
+                db, owner.id
+            ).ensure_membership(subscription)
+            await SubscriptionMembershipService(db, peer.id).ensure_membership(subscription)
+            job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                source="pixiv",
+                source_url=source.source_url,
+                status="enqueued",
+                triggering_user_subscription_id=owner_member.id,
+                triggering_remote_account_id=account.id,
+            )
+            db.add(job)
+            await db.flush()
+            import_job = ImportJob(download_job_id=job.id, status="enqueued")
+            db.add(import_job)
+            await db.flush()
+            download_task = TaskRun(
+                kind="download",
+                operation_type="download",
+                subject_type="download_job",
+                subject_id=job.id,
+                status="enqueued",
+                title="Explicit Owner Legacy Download",
+            )
+            import_task = TaskRun(
+                kind="import",
+                operation_type="import",
+                subject_type="import_job",
+                subject_id=import_job.id,
+                status="enqueued",
+                title="Explicit Owner Legacy Import",
+            )
+            db.add_all([download_task, import_task])
+            await db.commit()
+            task_ids = [download_task.id, import_task.id]
+            import_id = import_job.id
+            job_id = job.id
+            owner_name, peer_name = owner.username, peer.username
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            for username, expected_titles in (
+                (
+                    owner_name,
+                    {"Explicit Owner Legacy Download", "Explicit Owner Legacy Import"},
+                ),
+                (peer_name, set()),
+            ):
+                response = await client.get(
+                    "/api/v1/tasks",
+                    params={"q": "Explicit Owner Legacy"},
+                    headers=_headers(username),
+                )
+                assert response.status_code == 200, response.text
+                assert {item["title"] for item in response.json()["items"]} == expected_titles
+            for task_id in task_ids:
+                assert (
+                    await client.get(
+                        f"/api/v1/tasks/{task_id}", headers=_headers(owner_name)
+                    )
+                ).status_code == 200
+                assert (
+                    await client.get(
+                        f"/api/v1/tasks/{task_id}", headers=_headers(peer_name)
+                    )
+                ).status_code == 404
+    finally:
+        async with async_session() as db:
+            if task_ids:
+                await db.execute(delete(TaskEvent).where(TaskEvent.task_run_id.in_(task_ids)))
+                await db.execute(delete(TaskRun).where(TaskRun.id.in_(task_ids)))
+            if import_id:
+                await db.execute(delete(ImportJob).where(ImportJob.id == import_id))
+            if job_id:
+                await db.execute(delete(DownloadJob).where(DownloadJob.id == job_id))
+            await db.commit()
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users():
+    """A scheduler-wide batch is a system audit task, not a member-scoped batch."""
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import delete
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import TaskEvent, TaskRun
+
+    task_id = None
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            ordinary = await _seed_user(db, "global_batch_ordinary")
+            system_user = await _seed_user(db, "global_batch_system")
+            system_user.permissions = [*system_user.permissions, "system"]
+            admin = await _seed_user(db, "global_batch_admin", admin=True)
+            task = TaskRun(
+                kind="admin",
+                operation_type="subscription-sync-batch",
+                status="failed",
+                attention_state="open",
+                title="Global Scheduler Batch",
+                meta={"scheduled_for": "2026-08-28T00:00:00+00:00", "source_count": 809},
+            )
+            db.add(task)
+            await db.commit()
+            task_id = task.id
+            names = (ordinary.username, system_user.username, admin.username)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            ordinary_headers = _headers(names[0])
+            for endpoint in (
+                "/api/v1/tasks?include_account=true",
+                "/api/v1/tasks?q=Global%20Scheduler",
+                "/api/v1/tasks/anomalies",
+                "/api/v1/operations/overview",
+            ):
+                response = await client.get(endpoint, headers=ordinary_headers)
+                assert response.status_code == 200, response.text
+                assert "Global Scheduler Batch" not in response.text
+            assert (
+                await client.get(f"/api/v1/tasks/{task_id}", headers=ordinary_headers)
+            ).status_code == 403
+
+            for username in names[1:]:
+                headers = _headers(username)
+                detail = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+                assert detail.status_code == 200, detail.text
+                listed = await client.get(
+                    "/api/v1/tasks", params={"q": "Global Scheduler"}, headers=headers
+                )
+                assert listed.status_code == 200, listed.text
+                assert [item["id"] for item in listed.json()["items"]] == [str(task_id)]
+                overview = await client.get("/api/v1/tasks/anomalies", headers=headers)
+                assert overview.status_code == 200
+                assert "Global Scheduler Batch" in overview.text
+    finally:
+        async with async_session() as db:
+            if task_id:
+                await db.execute(delete(TaskEvent).where(TaskEvent.task_run_id == task_id))
+                await db.execute(delete(TaskRun).where(TaskRun.id == task_id))
+                await db.commit()
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
     """A tasks-only user cannot read/control peer imports or run global scans."""
     from httpx import ASGITransport, AsyncClient

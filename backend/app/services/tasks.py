@@ -65,12 +65,35 @@ def import_job_visibility_condition(user_id: int):
     )
 
 
-def _subscription_scoped_task_condition():
+def _subscription_membership_locator_condition():
     return or_(
-        (TaskRun.operation_type == "subscription-sync-batch").is_(True),
         TaskRun.subject_type.in_({"subscription", "subscription_source"}).is_(True),
         TaskRun.meta["subscription_id"].astext.is_not(None),
         TaskRun.meta["subscription_source_id"].astext.is_not(None),
+    )
+
+
+def _global_subscription_batch_condition():
+    return and_(
+        (TaskRun.operation_type == "subscription-sync-batch").is_(True),
+        ~_subscription_membership_locator_condition(),
+    )
+
+
+def is_global_subscription_batch(task: TaskRun) -> bool:
+    meta = task.meta if isinstance(task.meta, dict) else {}
+    return bool(
+        task.operation_type == "subscription-sync-batch"
+        and task.subject_type not in {"subscription", "subscription_source"}
+        and not meta.get("subscription_id")
+        and not meta.get("subscription_source_id")
+    )
+
+
+def can_access_global_subscription_batch(user: Any) -> bool:
+    return bool(
+        getattr(user, "is_admin", False)
+        or "system" in set(getattr(user, "permissions", None) or ())
     )
 
 
@@ -108,14 +131,11 @@ def task_visibility_condition(user_id: int):
         exists(
             select(1)
             .select_from(DownloadJob)
-            .join(
-                UserSubscription,
-                and_(
-                    UserSubscription.subscription_id == DownloadJob.subscription_id,
-                    UserSubscription.user_id == user_id,
-                ),
+            .where(
+                DownloadJob.id == TaskRun.subject_id,
+                download_job_visibility_condition(user_id),
             )
-            .where(DownloadJob.id == TaskRun.subject_id)
+            .correlate(TaskRun)
         ),
     )
     legacy_import = and_(
@@ -124,15 +144,11 @@ def task_visibility_condition(user_id: int):
         exists(
             select(1)
             .select_from(ImportJob)
-            .join(DownloadJob, DownloadJob.id == ImportJob.download_job_id)
-            .join(
-                UserSubscription,
-                and_(
-                    UserSubscription.subscription_id == DownloadJob.subscription_id,
-                    UserSubscription.user_id == user_id,
-                ),
+            .where(
+                ImportJob.id == TaskRun.subject_id,
+                import_job_visibility_condition(user_id),
             )
-            .where(ImportJob.id == TaskRun.subject_id)
+            .correlate(TaskRun)
         ),
     )
     owned_subscription_ids = select(UserSubscription.subscription_id).where(
@@ -141,7 +157,8 @@ def task_visibility_condition(user_id: int):
     owned_source_ids = select(UserSubscriptionSource.subscription_source_id).where(
         UserSubscriptionSource.user_id == user_id
     )
-    subscription_scoped = _subscription_scoped_task_condition()
+    subscription_scoped = _subscription_membership_locator_condition()
+    global_subscription_batch = _global_subscription_batch_condition()
     legacy_subscription = and_(
         ~has_trigger,
         subscription_scoped,
@@ -170,6 +187,7 @@ def task_visibility_condition(user_id: int):
         ~has_trigger,
         TaskRun.kind.not_in({"download", "import", "discovery"}),
         ~subscription_scoped,
+        ~global_subscription_batch,
     )
     return or_(
         owned_trigger,
@@ -180,14 +198,22 @@ def task_visibility_condition(user_id: int):
     )
 
 
-def task_surface_visibility_condition(user_id: int):
+def task_surface_visibility_condition(
+    user_id: int,
+    *,
+    include_global_system_tasks: bool = False,
+):
     """Combine member isolation with independently authorized admin tasks."""
 
     independently_authorized_admin = and_(
         TaskRun.kind == "admin",
-        ~_subscription_scoped_task_condition(),
+        ~_subscription_membership_locator_condition(),
+        ~_global_subscription_batch_condition(),
     )
-    return or_(independently_authorized_admin, task_visibility_condition(user_id))
+    conditions = [independently_authorized_admin, task_visibility_condition(user_id)]
+    if include_global_system_tasks:
+        conditions.append(_global_subscription_batch_condition())
+    return or_(*conditions)
 
 
 def normalize_task_status(status: str | None) -> str:
@@ -610,6 +636,7 @@ class TaskService:
         limit: int = 50,
         excluded_admin_operation_types: frozenset[str] = frozenset(),
         user_id: int | None = None,
+        include_global_system_tasks: bool = False,
     ) -> tuple[int, list[TaskRun]]:
         stmt = select(TaskRun)
         count_stmt = select(func.count(TaskRun.id))
@@ -638,7 +665,12 @@ class TaskService:
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
         if user_id is not None:
-            filters.append(task_surface_visibility_condition(user_id))
+            filters.append(
+                task_surface_visibility_condition(
+                    user_id,
+                    include_global_system_tasks=include_global_system_tasks,
+                )
+            )
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)

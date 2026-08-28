@@ -28,7 +28,12 @@ from app.services.search import SearchService
 from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.backpressure import DownloadAdmissionError
 from app.services.task_engine import TaskEngine, TaskEngineError
-from app.services.tasks import TaskService, task_payload
+from app.services.tasks import (
+    TaskService,
+    can_access_global_subscription_batch,
+    is_global_subscription_batch,
+    task_payload,
+)
 from app.services.operation_attention import (
     compact_terminal_tasks,
     operations_overview,
@@ -103,6 +108,7 @@ async def list_tasks(
             limit=limit,
             excluded_admin_operation_types=excluded_operation_types,
             user_id=user.id,
+            include_global_system_tasks=can_access_global_subscription_batch(user),
         )
         return {"total": total, "items": [task_payload(task) for task in tasks]}
     canonical = q or ""
@@ -147,6 +153,7 @@ async def list_task_anomalies(
         limit=max(1, min(limit, 100)),
         excluded_admin_operation_types=inaccessible_admin_operation_types(user),
         user_id=user.id,
+        include_global_system_tasks=can_access_global_subscription_batch(user),
     )
 
 
@@ -189,7 +196,10 @@ async def get_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    if is_global_subscription_batch(task):
+        if not can_access_global_subscription_batch(user):
+            raise HTTPException(status_code=403, detail="Missing permission: system")
+    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
     elif not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -338,7 +348,10 @@ async def acknowledge_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    if is_global_subscription_batch(task):
+        if not can_access_global_subscription_batch(user):
+            raise HTTPException(status_code=403, detail="Missing permission: system")
+    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
     elif user is not None and not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -368,7 +381,10 @@ async def _control_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    if is_global_subscription_batch(task):
+        if not can_access_global_subscription_batch(user):
+            raise HTTPException(status_code=403, detail="Missing permission: system")
+    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
         if action != "retry":
             raise HTTPException(

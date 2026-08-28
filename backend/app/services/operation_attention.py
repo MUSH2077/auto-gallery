@@ -1065,6 +1065,7 @@ async def operations_overview(
     limit: int = 50,
     excluded_admin_operation_types: frozenset[str] = frozenset(),
     user_id: int | None = None,
+    include_global_system_tasks: bool = False,
 ) -> dict[str, Any]:
     """Return one compact operations feed for desktop and mobile clients."""
 
@@ -1190,7 +1191,12 @@ async def operations_overview(
         else True
     )
     ownership = (
-        task_surface_visibility_condition(user_id) if user_id is not None else True
+        task_surface_visibility_condition(
+            user_id,
+            include_global_system_tasks=include_global_system_tasks,
+        )
+        if user_id is not None
+        else True
     )
     filters = [TaskRun.kind != "account", visible_task, ownership]
     if view == "attention":

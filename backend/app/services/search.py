@@ -2292,7 +2292,12 @@ class SearchService:
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
         if user_id is not None:
-            conditions.append(task_surface_visibility_condition(user_id))
+            conditions.append(
+                task_surface_visibility_condition(
+                    user_id,
+                    include_global_system_tasks="system" in permissions,
+                )
+            )
         if visibility == "actionable":
             conditions.append(
                 or_(
