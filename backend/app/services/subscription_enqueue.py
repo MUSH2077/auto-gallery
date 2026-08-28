@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.download_job import DownloadJob
+from app.models.remote_discovery import RemoteAccount, UserSubscription, UserSubscriptionSource
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
@@ -18,6 +19,10 @@ from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults, get_scheduler_config
 from app.services.search_projection_outbox import request_search_projection
+from app.services.subscription_membership import (
+    recompute_subscription_membership_cache,
+    select_eligible_membership_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +78,61 @@ async def mark_source_sync_success(
     db: AsyncSession,
     subscription_source_id: UUID,
     when: datetime | None = None,
+    *,
+    triggering_user_subscription_id: UUID | None = None,
+    triggering_remote_account_id: UUID | None = None,
 ) -> None:
     when = when or datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
     if not ss:
         return
     ss.last_synced_at = when
+    ss.last_successful_auth = when
     await refresh_subscription_last_synced_at(db, ss.subscription_id)
     sub = await db.get(Subscription, ss.subscription_id)
     # A success changes the interval base.  NULL invalidates the old due time;
     # the next fair coverage pass recomputes interval/fixed/manual semantics in
     # its short claim transaction.
     ss.next_sync_at = None
+    config = await get_scheduler_config(db)
+    from app.jobs.subscription_sync import next_subscription_check_at
+
+    rows = (
+        await db.execute(
+            select(UserSubscriptionSource, UserSubscription)
+            .join(
+                UserSubscription,
+                UserSubscription.id == UserSubscriptionSource.user_subscription_id,
+            )
+            .where(
+                UserSubscriptionSource.subscription_source_id == ss.id,
+                UserSubscription.is_active.is_(True),
+            )
+            .with_for_update(of=UserSubscriptionSource)
+        )
+    ).all()
+    for binding, membership in rows:
+        binding.last_synced_at = when
+        binding.last_attempted_at = when
+        binding.next_sync_at = (
+            next_subscription_check_at(membership, config, when, when, when)
+            if membership.sync_enabled
+            else None
+        )
+        if membership.id == triggering_user_subscription_id:
+            binding.last_successful_auth = when
+            binding.auth_healthy = True
+            binding.auth_status = "healthy"
+            binding.auth_error_reason = None
+            binding.last_auth_checked_at = when
+
+    if triggering_remote_account_id is not None:
+        account = await db.get(RemoteAccount, triggering_remote_account_id)
+        if account is not None:
+            account.auth_status = "healthy"
+            account.auth_error_reason = None
+            account.last_authenticated_at = when
+    await recompute_subscription_membership_cache(db, ss.subscription_id)
     await request_search_projection(
         db,
         creator_ids=[sub.creator_id] if sub else (),
@@ -189,6 +237,31 @@ async def enqueue_subscription_source_sync(
         if not acquired:
             return skip_result(ss.id, "lock_busy")
 
+        ss = (
+            await db.execute(
+                select(SubscriptionSource)
+                .where(SubscriptionSource.id == subscription_source_id)
+                .with_for_update(of=SubscriptionSource)
+            )
+        ).scalar_one_or_none()
+        if ss is None:
+            return skip_result(subscription_source_id, "source_not_found")
+
+        selection = await select_eligible_membership_source(
+            db,
+            ss,
+            now=now,
+            preferred_membership_id=triggering_user_subscription_id,
+            preferred_account_id=triggering_remote_account_id,
+            require_due=trigger == "scheduler" and not force,
+        )
+        if selection is None:
+            return skip_result(ss.id, "no_eligible_member_source")
+        triggering_user_subscription_id = selection.membership.id
+        triggering_remote_account_id = (
+            selection.account.id if selection.account is not None else None
+        )
+
         running = await db.execute(
             select(DownloadJob)
             .where(
@@ -243,10 +316,10 @@ async def enqueue_subscription_source_sync(
         from app.jobs.subscription_sync import next_subscription_check_at
 
         next_sync_at = next_subscription_check_at(
-            sub,
+            selection.membership,
             scheduler_config,
-            ss.last_synced_at,
-            now,
+            selection.binding.last_synced_at,
+            selection.binding.last_attempted_at,
             now,
         )
         # Flush caller-owned state before opening the SAVEPOINT. SQLAlchemy
@@ -320,6 +393,9 @@ async def enqueue_subscription_source_sync(
             .where(SubscriptionSource.id == ss.id)
             .values(last_attempted_at=now, next_sync_at=next_sync_at)
         )
+        selection.binding.last_attempted_at = now
+        selection.binding.next_sync_at = next_sync_at
+        await recompute_subscription_membership_cache(db, sub.id)
         await db.commit()
 
         try:

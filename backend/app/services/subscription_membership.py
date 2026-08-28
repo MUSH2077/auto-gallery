@@ -8,6 +8,8 @@ aggregate implementation.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -37,6 +39,101 @@ _MEMBERSHIP_FIELDS = {
     "schedule_rule",
     "scheduled_times",
 }
+
+
+def membership_source_is_usable(
+    binding: UserSubscriptionSource,
+    account: RemoteAccount | None,
+    *,
+    source: str,
+) -> bool:
+    """Return whether one private binding can authenticate a shared download."""
+
+    if not binding.is_enabled or not binding.auth_healthy:
+        return False
+    if binding.remote_account_id is None:
+        return True
+    return bool(
+        account is not None
+        and account.id == binding.remote_account_id
+        and account.source == source
+        and account.is_enabled
+        and account.auth_status == "healthy"
+        and account.credential_ciphertext
+    )
+
+
+@dataclass(frozen=True)
+class EligibleMembershipSource:
+    binding: UserSubscriptionSource
+    membership: UserSubscription
+    account: RemoteAccount | None
+
+
+async def select_eligible_membership_source(
+    db: AsyncSession,
+    source: SubscriptionSource,
+    *,
+    now: datetime,
+    preferred_membership_id: UUID | None = None,
+    preferred_account_id: UUID | None = None,
+    require_due: bool = True,
+) -> EligibleMembershipSource | None:
+    """Lock and return the earliest usable private demand for a shared source."""
+
+    conditions = [
+        UserSubscriptionSource.subscription_source_id == source.id,
+        UserSubscriptionSource.is_enabled.is_(True),
+        UserSubscriptionSource.auth_healthy.is_(True),
+        UserSubscription.is_active.is_(True),
+        UserSubscription.sync_enabled.is_(True),
+        (
+            UserSubscriptionSource.remote_account_id.is_(None)
+            | and_(
+                RemoteAccount.id.is_not(None),
+                RemoteAccount.source == source.source,
+                RemoteAccount.is_enabled.is_(True),
+                RemoteAccount.auth_status == "healthy",
+                RemoteAccount.credential_ciphertext.is_not(None),
+            )
+        ),
+    ]
+    if require_due:
+        conditions.append(
+            UserSubscriptionSource.next_sync_at.is_(None)
+            | (UserSubscriptionSource.next_sync_at <= now)
+        )
+    if preferred_membership_id is not None:
+        conditions.append(UserSubscription.id == preferred_membership_id)
+    if preferred_account_id is not None:
+        conditions.append(UserSubscriptionSource.remote_account_id == preferred_account_id)
+
+    row = (
+        await db.execute(
+            select(UserSubscriptionSource, UserSubscription, RemoteAccount)
+            .join(
+                UserSubscription,
+                UserSubscription.id == UserSubscriptionSource.user_subscription_id,
+            )
+            .outerjoin(
+                RemoteAccount,
+                RemoteAccount.id == UserSubscriptionSource.remote_account_id,
+            )
+            .where(*conditions)
+            .order_by(
+                UserSubscriptionSource.next_sync_at.asc().nullsfirst(),
+                UserSubscriptionSource.id.asc(),
+            )
+            .limit(1)
+            .with_for_update(of=UserSubscriptionSource, skip_locked=True)
+        )
+    ).first()
+    if row is None:
+        return None
+    binding, membership, account = row
+    if not membership_source_is_usable(binding, account, source=source.source):
+        return None
+    return EligibleMembershipSource(binding, membership, account)
 
 
 async def recompute_subscription_membership_cache(
@@ -79,9 +176,14 @@ async def recompute_subscription_membership_cache(
     ).scalars().all()
     active_ids = {member.id for member in active_members if member.sync_enabled}
     for source in sources:
-        bindings = (
+        binding_rows = (
             await db.execute(
-                select(UserSubscriptionSource).where(
+                select(UserSubscriptionSource, RemoteAccount)
+                .outerjoin(
+                    RemoteAccount,
+                    RemoteAccount.id == UserSubscriptionSource.remote_account_id,
+                )
+                .where(
                     UserSubscriptionSource.subscription_source_id == source.id,
                     UserSubscriptionSource.user_subscription_id.in_(active_ids)
                     if active_ids
@@ -89,11 +191,16 @@ async def recompute_subscription_membership_cache(
                     UserSubscriptionSource.is_enabled.is_(True),
                 )
             )
-        ).scalars().all()
+        ).all()
+        bindings = [
+            binding
+            for binding, account in binding_rows
+            if membership_source_is_usable(binding, account, source=source.source)
+        ]
         source.is_enabled = bool(bindings)
         due = [binding.next_sync_at for binding in bindings if binding.next_sync_at is not None]
         source.next_sync_at = min(due) if due else None
-        source.auth_healthy = any(binding.auth_healthy for binding in bindings) if bindings else True
+        source.auth_healthy = bool(bindings)
     await db.flush()
 
 
