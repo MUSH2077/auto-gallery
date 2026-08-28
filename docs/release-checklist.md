@@ -12,6 +12,8 @@ public tag.
 - [ ] Verify `README.md`, `README.zh.md`, setup, provider, and development docs.
 - [ ] Confirm screenshots use fictional or fully sanitized data.
 - [ ] Confirm `.env.example` describes every required deployment variable.
+- [ ] Confirm remote discovery rollout flags remain fail-closed in the release
+      environment and that `REMOTE_CREDENTIAL_KEY` is backed up separately.
 
 ## Source and privacy
 
@@ -56,6 +58,10 @@ docker compose --env-file .env.ci down -v
 - [ ] Admin login, a small authorized sync, import, search, media preview,
       backup creation, and restore validation were exercised.
 - [ ] Upgrade and rollback were tested when the release contains migrations.
+- [ ] For multi-user discovery schema, application rollback retains additive
+      tables and summary caches; no production Alembic downgrade drops them.
+- [ ] Normal pytest skipped live-provider smoke tests and made no provider
+      network calls. Any explicitly opted-in smoke used dedicated test accounts.
 
 ## GitHub controls
 

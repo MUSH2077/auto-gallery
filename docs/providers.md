@@ -70,6 +70,40 @@ All 8 downloadable providers (Pixiv, X, Iwara, Danbooru, Weibo, Bilibili, Pinter
 
 The `auto_enable_on_import` flag is per-source configurable in the gallery-dl settings page. Each source has a toggle that controls whether a newly imported subscription source defaults to `is_enabled=True`. Only Pixiv defaults to auto-enabled; all other sources default to disabled.
 
+## Remote follow discovery
+
+Pixiv, X, and Bilibili expose a separate `RemoteDiscoveryAdapter` contract:
+`validate_account()`, `list_collections()`, `fetch_page()`, and
+`build_download_auth()`. The source capability response includes
+`supports_remote_discovery`, `discovery_auth_methods`,
+`supports_collection_selectors`, and a backend-effective rollout object. The
+admin UI never reconstructs deployment flags locally.
+
+| Source | Status | Authentication | Collection selectors |
+|---|---|---|---|
+| Pixiv | Experimental | App API refresh token | public/private following |
+| X | Supported when an X Developer App is configured; Cookie fallback is best-effort | OAuth 2.0 PKCE preferred; Cookie fallback | following and Lists |
+| Bilibili | Experimental | `SESSDATA` | all following and following groups |
+
+X OAuth requests exactly `users.read`, `follows.read`, `list.read`, and
+`offline.access`. OAuth tokens are discovery-only unless a separate download
+cookie is present; the Cookie fallback may break when X changes private Web
+API behavior. Pixiv and Bilibili use undocumented or reverse-engineered API
+surfaces and must remain marked experimental. Bilibili creator normalization
+accepts `/dynamic` and `/upload/opus` so discovered identities can subscribe to
+dynamic images.
+
+Candidate confidence is explainable: a unique local identity, verified
+Danbooru/cross-site link, or Pixiv illustration preview is high confidence; X
+and Bilibili need two of art-focused bio, recent visual content, and a supported
+site link for high confidence. One creator signal is medium and no signal is
+low. Multiple local identity matches are `conflict` and are never automatically
+imported. Manual import does not synchronize immediately unless selected.
+Automatic import is separately opted in per account, preserves dismissed
+candidates, defaults to high confidence and 25 candidates, and is capped at
+1–200 per completed scan. Remote unfollow only updates candidate state and
+never disables or deletes a local subscription.
+
 ## Provider Registry
 
 `backend/app/providers/registry.py` maintains a dict of `source_name → provider instance`. Resolution:

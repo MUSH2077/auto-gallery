@@ -70,6 +70,33 @@ class ProviderCapabilities:
 
 `auto_enable_on_import` 标志按来源在 gallery-dl 设置页面中配置。每个来源都有开关，控制新导入的订阅来源是否默认启用。仅 Pixiv 默认自动启用；其余来源均默认禁用。
 
+## 远端关注发现
+
+Pixiv、X 与 Bilibili 使用独立的 `RemoteDiscoveryAdapter` 契约：
+`validate_account()`、`list_collections()`、`fetch_page()` 与
+`build_download_auth()`。来源能力响应同时公开
+`supports_remote_discovery`、`discovery_auth_methods`、
+`supports_collection_selectors` 以及后端计算后的 rollout 能力；管理端不自行推导部署开关。
+
+| 来源 | 状态 | 认证 | 集合 selectors |
+|---|---|---|---|
+| Pixiv | 实验性 | App API refresh token | 公开/私密关注 |
+| X | 配置 X Developer App 后支持；Cookie 回退为尽力而为 | 首选 OAuth 2.0 PKCE；Cookie 回退 | following 与 Lists |
+| Bilibili | 实验性 | `SESSDATA` | 全部关注与关注分组 |
+
+X OAuth 精确申请 `users.read`、`follows.read`、`list.read` 与
+`offline.access`。除非另有下载 Cookie，OAuth token 仅用于发现；X 修改私有 Web API
+后 Cookie 回退可能失效。Pixiv 与 Bilibili 依赖未正式承诺或逆向 API，必须持续标记为
+实验性。Bilibili 创作者 URL 归一化支持 `/dynamic` 与 `/upload/opus`，使发现账号可订阅
+动态图片。
+
+候选置信度可解释：唯一本地身份、已验证 Danbooru/跨站链接或 Pixiv 插画预览为高；
+X/Bilibili 在“艺术简介、近期视觉内容、受支持站点链接”三项中满足两项为高，仅一项为
+中，无证据为低。多个本地身份同时命中时为 `conflict`，永不自动导入。手动导入默认不
+立即同步，只有显式勾选才同步。自动导入按账号独立开启，保留已忽略候选，默认仅高置信度、
+每次 25 个，可配置 1–200；只有完整扫描才执行。远端取关只更新候选状态，绝不禁用或删除
+本地订阅。
+
 ## Provider 注册表
 
 `backend/app/providers/registry.py` 维护 `source_name → provider 实例` 的映射。查找方式：

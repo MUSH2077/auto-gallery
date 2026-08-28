@@ -278,6 +278,57 @@ cp -r data/config/gallery-dl.backup/* data/config/gallery-dl/
 docker compose up -d --force-recreate
 ```
 
+## Remote discovery rollout and recovery
+
+`worker-operations` supervises a separate `discovery` RQ child queue in the
+same bounded container. The scheduler only admits due, enabled, credentialed,
+healthy accounts; the discovery worker fetches pages and checkpoints the
+cursor. Neither scheduler nor Redis carries credential plaintext. Inspect both
+parents when diagnosing admission:
+
+```bash
+docker compose logs --tail=200 scheduler worker-operations
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:discovery
+```
+
+Enable stages one at a time and recreate backend, scheduler, and
+worker-operations after each `.env` change:
+
+1. `REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=true`
+2. `REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=true`
+3. `REMOTE_DISCOVERY_PIXIV_AUTO_IMPORT_ENABLED=true`
+4. `REMOTE_DISCOVERY_X_ENABLED=true`
+5. `REMOTE_DISCOVERY_X_AUTO_IMPORT_ENABLED=true`
+6. `REMOTE_DISCOVERY_BILIBILI_ENABLED=true`
+7. `REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED=true`
+
+Observe manual preview with dedicated test accounts before opening each auto
+stage. To stop a stage, set its flag to `false` and recreate the three services.
+The API, scheduler admission, worker claim, and auto-import execution all fail
+closed. Do not clear tables or change account settings: encrypted accounts,
+candidates, private memberships, shared repositories, works, and files remain.
+
+Back up `REMOTE_CREDENTIAL_KEY` in the encrypted operator-secret store. It is
+not part of a PostgreSQL or media archive. If the key is lost or wrong, disable
+all preview/auto flags, retain the database, and reconnect each remote account
+with a new key. Authentication failure caused by wrong AAD or ciphertext
+tampering is intentionally unrecoverable. Online rotation is not supported;
+rotation needs downtime plus an audited all-row decrypt/re-encrypt migration.
+Never print or paste the key/cookies/tokens into logs, task metadata, Redis, or
+incident tickets.
+
+The remote-discovery migrations are additive. Application rollback retains the
+new tables and canonical summary caches. Production operators must not run an
+Alembic downgrade that drops multi-user membership, remote account, candidate,
+or credential-generation data. Restore the previous application image against
+the retained schema instead.
+
+Live provider smoke tests are opt-in and excluded from normal network-free
+pytest runs. Use only dedicated test accounts in a controlled shell; the exact
+opt-in is `AUTO_GALLERY_LIVE_REMOTE_DISCOVERY=explicitly-enabled` plus one of
+`LIVE_PIXIV_REFRESH_TOKEN`, `LIVE_X_COOKIE`, or `LIVE_BILIBILI_SESSDATA`.
+Credential values are hidden from parameter IDs and failure output.
+
 ## Alerting & Escalation
 
 ### What to watch

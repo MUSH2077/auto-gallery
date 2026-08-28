@@ -84,6 +84,28 @@ ADMIN_PASSWORD=change-me-admin
 
 如果 backend 日志出现 `auto-gallery refused to start — insecure defaults detected`，请确认 Docker Compose 读取的是正确的 `.env`、上面的服务密钥已经不再是 `change-me-*`，并且更新代码后已重新 build backend 镜像。
 
+### 远端账号凭据密钥
+
+远端关注发现需要独立的 32 字节 URL-safe base64 密钥，禁止复用 `SECRET_KEY`：
+
+```bash
+python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+```
+
+把输出写入 `.env` 的 `REMOTE_CREDENTIAL_KEY`。使用与数据库凭据相同的加密运维密钥
+备份流程保存它，并与数据库/媒体备份分开管理。密钥丢失会使所有已存远端凭据无法解密；
+错误密钥、错误的用户/来源/账号 AAD 或被篡改的密文都会导致认证解密失败。当前不支持在线
+轮换：更换前必须安排停机，并原子迁移全部凭据；禁止混合密钥部署。
+
+除 AES-GCM 密文外，明文凭据不得进入其他 PostgreSQL 字段、Redis、`TaskRun`、manifest、
+API 响应或日志。下载 worker 只在权限 `0600` 的临时文件中生成认证覆盖项，并在所有退出路径
+删除。删除远端账号会立即清除密文和未导入候选；已导入成员关系与共享作品继续保留。
+
+`.env.example` 中所有 discovery rollout 开关默认 `false`。按“私有成员 → Pixiv 预览 →
+Pixiv 自动导入 → X 预览 → X 自动导入 → Bilibili 预览 → Bilibili 自动导入”顺序启用。
+自动开关只有在对应预览开关与私有成员底座同时开启时才有效。关闭开关会停止新的发现执行，
+但不会删除账号、候选、成员、订阅或媒体。
+
 设置时区：
 
 ```bash

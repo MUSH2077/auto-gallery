@@ -109,6 +109,9 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 
 - **为什么用 RQ**：比 Celery 更简单，使用已有的 Redis。`download_job`/`import_job` 数据库表是真实数据源，队列后端可替换。
 - **逐来源下载队列**：每个来源有独立的 RQ 队列（`downloads:pixiv`、`downloads:danbooru` 等）以隔离——一个慢来源不会阻塞另一个。`worker-download` 容器监听所有来源队列。
+- **远端发现队列**：`worker-operations` 监督独立的 `discovery` 子队列。scheduler
+  只准入到期远端账号；provider 分页与游标 checkpoint 在子 worker 中执行。任务只携带不透明的
+  task/account ID，绝不携带凭据。
 - **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。
 - **任务超时**：所有入队调用使用 `job_timeout=7200`（2 小时），防止 RQ 杀掉长时间运行的下载任务（默认 180s）。
 - **代理预检**：启动 gallery-dl 前，worker 先做 DNS 解析 + 代理连通性检查（非阻塞诊断）。
@@ -125,6 +128,11 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **权威载荷仍在领域表**：`task_run` 是信封；`download_jobs` / `import_jobs` 仍是各自字段的真实数据源。清空任务（数据管理）会同时删除 `task_runs` **和**领域任务表。
 
 ## 数据流
+
+私有意图保存在 `user_subscriptions`、`user_subscription_sources`、
+`remote_accounts` 与 `discovery_candidates`。规范的 `subscription`/
+`subscription_source`、creator、work、asset 与文件继续全局共享去重。规范来源的汇总启用/
+到期字段只是从私有成员需求派生的兼容缓存。
 
 ### 下载流程
 ```

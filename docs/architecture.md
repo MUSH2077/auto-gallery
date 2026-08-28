@@ -109,6 +109,10 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
+- **Remote discovery queue**: `worker-operations` supervises an independent
+  `discovery` child queue. The scheduler only admits due remote accounts;
+  provider pagination and cursor checkpoints run in the child worker. Jobs
+  carry opaque task/account IDs and never credential material.
 - **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
 - **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
@@ -126,6 +130,12 @@ Downloads, imports, and admin operations (backup, reindex, disk import) are all 
 - **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
 
 ## Data Flow
+
+Private intent is stored in `user_subscriptions`,
+`user_subscription_sources`, `remote_accounts`, and `discovery_candidates`.
+Canonical `subscription`/`subscription_source`, creators, works, assets, and
+files remain globally shared and deduplicated. A canonical source's aggregate
+enabled/due fields are compatibility caches derived from its private members.
 
 ### Download Flow
 ```
