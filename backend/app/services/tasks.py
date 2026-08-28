@@ -65,6 +65,15 @@ def import_job_visibility_condition(user_id: int):
     )
 
 
+def _subscription_scoped_task_condition():
+    return or_(
+        (TaskRun.operation_type == "subscription-sync-batch").is_(True),
+        TaskRun.subject_type.in_({"subscription", "subscription_source"}).is_(True),
+        TaskRun.meta["subscription_id"].astext.is_not(None),
+        TaskRun.meta["subscription_source_id"].astext.is_not(None),
+    )
+
+
 def task_visibility_condition(user_id: int):
     """SQL ownership predicate, including provable legacy job ownership."""
 
@@ -132,12 +141,7 @@ def task_visibility_condition(user_id: int):
     owned_source_ids = select(UserSubscriptionSource.subscription_source_id).where(
         UserSubscriptionSource.user_id == user_id
     )
-    subscription_scoped = or_(
-        TaskRun.operation_type == "subscription-sync-batch",
-        TaskRun.subject_type.in_({"subscription", "subscription_source"}),
-        TaskRun.meta["subscription_id"].astext.is_not(None),
-        TaskRun.meta["subscription_source_id"].astext.is_not(None),
-    )
+    subscription_scoped = _subscription_scoped_task_condition()
     legacy_subscription = and_(
         ~has_trigger,
         subscription_scoped,
@@ -174,6 +178,16 @@ def task_visibility_condition(user_id: int):
         legacy_subscription,
         public_operation,
     )
+
+
+def task_surface_visibility_condition(user_id: int):
+    """Combine member isolation with independently authorized admin tasks."""
+
+    independently_authorized_admin = and_(
+        TaskRun.kind == "admin",
+        ~_subscription_scoped_task_condition(),
+    )
+    return or_(independently_authorized_admin, task_visibility_condition(user_id))
 
 
 def normalize_task_status(status: str | None) -> str:
@@ -624,7 +638,7 @@ class TaskService:
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
         if user_id is not None:
-            filters.append(task_visibility_condition(user_id))
+            filters.append(task_surface_visibility_condition(user_id))
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)

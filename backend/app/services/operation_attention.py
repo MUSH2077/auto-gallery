@@ -28,7 +28,7 @@ from app.services.tasks import (
     TaskService,
     normalize_task_status,
     task_payload,
-    task_visibility_condition,
+    task_surface_visibility_condition,
 )
 
 logger = logging.getLogger(__name__)
@@ -1189,7 +1189,9 @@ async def operations_overview(
         if excluded_admin_operation_types
         else True
     )
-    ownership = task_visibility_condition(user_id) if user_id is not None else True
+    ownership = (
+        task_surface_visibility_condition(user_id) if user_id is not None else True
+    )
     filters = [TaskRun.kind != "account", visible_task, ownership]
     if view == "attention":
         filters.append(TaskRun.attention_state == "open")

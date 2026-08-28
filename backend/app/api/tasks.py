@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import RequireAdminUser, RequirePermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
+    admin_operation_required_permission,
     admin_operation_permissions_for_user,
     inaccessible_admin_operation_types,
     get_operation_status,
@@ -188,10 +189,10 @@ async def get_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if not await svc.is_visible_to_user(task, user.id):
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin":
+    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
+    elif not await svc.is_visible_to_user(task, user.id):
+        raise HTTPException(status_code=404, detail="Task not found")
     events = await svc.task_events(task_id)
     return task_payload(task, events)
 
@@ -335,12 +336,12 @@ async def acknowledge_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task or (
-        user is not None and not await svc.is_visible_to_user(task, user.id)
-    ):
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin":
+    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
+    elif user is not None and not await svc.is_visible_to_user(task, user.id):
+        raise HTTPException(status_code=404, detail="Task not found")
     if task.attention_state not in {"open", "resolved"}:
         raise HTTPException(status_code=409, detail="Task is not an actionable anomaly")
     await svc.update_task(task, attention_state="acknowledged")
@@ -365,11 +366,9 @@ async def _control_task(
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task or (
-        user is not None and not await svc.is_visible_to_user(task, user.id)
-    ):
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin":
+    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
         if action != "retry":
             raise HTTPException(
@@ -381,6 +380,8 @@ async def _control_task(
                 },
             )
         return await _retry_admin_task(task, svc)
+    if user is not None and not await svc.is_visible_to_user(task, user.id):
+        raise HTTPException(status_code=404, detail="Task not found")
     if not task.subject_id or task.subject_type not in {"download_job", "import_job"}:
         raise HTTPException(
             status_code=409,

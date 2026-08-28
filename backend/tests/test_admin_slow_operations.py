@@ -442,6 +442,7 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
         _offset,
         _limit,
         _force_sfw,
+        **_ownership_filters,
     ):
         return {target: {"total": 0, "items": []} for target in targets}
 

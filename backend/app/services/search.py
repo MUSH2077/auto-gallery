@@ -102,7 +102,7 @@ from app.services.source_search_identity import (
 from app.services.tasks import (
     import_job_visibility_condition,
     task_payload,
-    task_visibility_condition,
+    task_surface_visibility_condition,
 )
 
 logger = logging.getLogger(__name__)
@@ -2292,7 +2292,7 @@ class SearchService:
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
         if user_id is not None:
-            conditions.append(task_visibility_condition(user_id))
+            conditions.append(task_surface_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
