@@ -16,6 +16,15 @@ class DownloadJob(TimestampMixin, Base):
             "OR triggering_credential_generation >= 1",
             name="ck_download_jobs_triggering_credential_generation",
         ),
+        CheckConstraint(
+            "owner_user_id IS NULL OR owner_user_id > 0",
+            name="ck_download_jobs_owner_user_id_positive",
+        ),
+        CheckConstraint(
+            "(triggering_user_subscription_id IS NULL AND "
+            "triggering_remote_account_id IS NULL) OR owner_user_id IS NOT NULL",
+            name="ck_download_jobs_private_trigger_has_owner",
+        ),
     )
 
     subscription_id: Mapped[UUID] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
@@ -29,6 +38,13 @@ class DownloadJob(TimestampMixin, Base):
     triggering_credential_generation: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
+    )
+    # Immutable audit identity deliberately has no FK: administrators may
+    # delete a User row, while its private history must never become legacy.
+    owner_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
     )
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     source_url: Mapped[str] = mapped_column(String(2000), nullable=False)

@@ -150,6 +150,7 @@ class DownloadOrchestrator:
             "status": "enqueued",
             "triggering_user_subscription_id": membership_id,
             "triggering_remote_account_id": account_id,
+            "owner_user_id": user_id,
         })
         apply_download_progress(job, "enqueued", "Queued; waiting for download worker", publish=False)
         update_manifest(job, trigger="manual_url", source=source, source_url=normalized_url)

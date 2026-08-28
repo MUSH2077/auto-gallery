@@ -246,6 +246,7 @@ async def test_unrelated_account_update_keeps_matching_job_generation_current():
                 source=source.source,
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=member.user_id,
             )
             db.add(job)
             await db.commit()
@@ -298,6 +299,7 @@ async def test_hard_delete_fk_null_cannot_turn_private_job_into_legacy_provenanc
                 source=source.source,
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=member.user_id,
             )
             db.add(job)
             await db.commit()
@@ -308,6 +310,7 @@ async def test_hard_delete_fk_null_cannot_turn_private_job_into_legacy_provenanc
             await db.refresh(job)
             assert job.triggering_remote_account_id is None
             assert job.triggering_credential_generation == 1
+            assert job.owner_user_id == member.user_id
 
             stored_binding = await db.get(UserSubscriptionSource, binding.id)
             stored_binding.auth_healthy = True

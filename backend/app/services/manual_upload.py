@@ -218,6 +218,7 @@ class ManualUploadService:
                 status="downloaded",
                 subscription_id=provisioned.subscription.id,
                 subscription_source_id=None,
+                owner_user_id=user.id,
             )
             db.add(job)
             await db.flush()

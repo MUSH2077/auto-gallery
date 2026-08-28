@@ -32,26 +32,20 @@ _SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS = (
 
 
 def download_job_visibility_condition(user_id: int, job_model=DownloadJob):
-    """Owner predicate shared by download, import, and legacy task surfaces."""
+    """Prefer immutable ownership; infer only for genuinely legacy rows."""
 
-    from app.models.remote_discovery import RemoteAccount, UserSubscription
+    from app.models.remote_discovery import UserSubscription
 
-    return and_(
-        job_model.subscription_id.in_(
-            select(UserSubscription.subscription_id).where(
-                UserSubscription.user_id == user_id
-            )
-        ),
-        or_(
+    return or_(
+        job_model.owner_user_id == user_id,
+        and_(
+            job_model.owner_user_id.is_(None),
             job_model.triggering_user_subscription_id.is_(None),
-            job_model.triggering_user_subscription_id.in_(
-                select(UserSubscription.id).where(UserSubscription.user_id == user_id)
-            ),
-        ),
-        or_(
             job_model.triggering_remote_account_id.is_(None),
-            job_model.triggering_remote_account_id.in_(
-                select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
+            job_model.subscription_id.in_(
+                select(UserSubscription.subscription_id).where(
+                    UserSubscription.user_id == user_id
+                )
             ),
         ),
     )
@@ -92,6 +86,7 @@ def _global_subscription_batch_condition():
     return and_(
         (TaskRun.kind == "admin").is_(True),
         (TaskRun.operation_type == "subscription-sync-batch").is_(True),
+        TaskRun.owner_user_id.is_(None),
         TaskRun.triggering_user_subscription_id.is_(None),
         TaskRun.triggering_remote_account_id.is_(None),
         ~_subscription_membership_locator_condition(),
@@ -103,6 +98,7 @@ def is_global_subscription_batch(task: TaskRun) -> bool:
     return bool(
         task.kind == "admin"
         and task.operation_type == "subscription-sync-batch"
+        and task.owner_user_id is None
         and task.triggering_user_subscription_id is None
         and task.triggering_remote_account_id is None
         and task.subject_type not in {"subscription", "subscription_source"}
@@ -120,32 +116,17 @@ def can_access_global_subscription_batch(user: Any) -> bool:
 
 
 def task_visibility_condition(user_id: int):
-    """SQL ownership predicate, including provable legacy job ownership."""
+    """Use durable ownership, with tightly bounded legacy inference."""
 
     from app.models.remote_discovery import (
-        RemoteAccount,
         UserSubscription,
         UserSubscriptionSource,
     )
 
-    owned_memberships = select(UserSubscription.id).where(
-        UserSubscription.user_id == user_id
-    )
-    owned_accounts = select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
     has_trigger = _task_trigger_condition()
-    owned_trigger = and_(
-        has_trigger,
-        or_(
-            TaskRun.triggering_user_subscription_id.is_(None),
-            TaskRun.triggering_user_subscription_id.in_(owned_memberships),
-        ),
-        or_(
-            TaskRun.triggering_remote_account_id.is_(None),
-            TaskRun.triggering_remote_account_id.in_(owned_accounts),
-        ),
-    )
+    legacy_base = and_(TaskRun.owner_user_id.is_(None), ~has_trigger)
     legacy_download = and_(
-        ~has_trigger,
+        legacy_base,
         TaskRun.subject_type == "download_job",
         exists(
             select(1)
@@ -158,7 +139,7 @@ def task_visibility_condition(user_id: int):
         ),
     )
     legacy_import = and_(
-        ~has_trigger,
+        legacy_base,
         TaskRun.subject_type == "import_job",
         exists(
             select(1)
@@ -179,7 +160,7 @@ def task_visibility_condition(user_id: int):
     subscription_scoped = _subscription_membership_locator_condition()
     global_subscription_batch = _global_subscription_batch_condition()
     legacy_subscription = and_(
-        ~has_trigger,
+        legacy_base,
         subscription_scoped,
         or_(
             and_(
@@ -203,13 +184,13 @@ def task_visibility_condition(user_id: int):
         ),
     )
     public_operation = and_(
-        ~has_trigger,
+        legacy_base,
         TaskRun.kind.not_in({"download", "import", "discovery"}),
         ~subscription_scoped,
         ~global_subscription_batch,
     )
     return or_(
-        owned_trigger,
+        TaskRun.owner_user_id == user_id,
         legacy_download,
         legacy_import,
         legacy_subscription,
@@ -226,6 +207,7 @@ def task_surface_visibility_condition(
 
     independently_authorized_admin = and_(
         TaskRun.kind == "admin",
+        TaskRun.owner_user_id.is_(None),
         ~_task_trigger_condition(),
         ~_subscription_membership_locator_condition(),
         ~_global_subscription_batch_condition(),
@@ -307,10 +289,34 @@ class TaskService:
         task_id: UUID | None = None,
         triggering_user_subscription_id: UUID | None = None,
         triggering_remote_account_id: UUID | None = None,
+        owner_user_id: int | None = None,
     ) -> TaskRun:
+        owner_user_id = await self._resolve_owner_user_id(
+            owner_user_id=owner_user_id,
+            triggering_user_subscription_id=triggering_user_subscription_id,
+            triggering_remote_account_id=triggering_remote_account_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
         if subject_type and subject_id:
             existing = await self.get_by_subject(subject_type, subject_id)
             if existing:
+                if existing.owner_user_id != owner_user_id:
+                    raise ValueError("existing task owner does not match provenance")
+                if (
+                    existing.triggering_user_subscription_id is not None
+                    and triggering_user_subscription_id is not None
+                    and existing.triggering_user_subscription_id
+                    != triggering_user_subscription_id
+                ):
+                    raise ValueError("existing task has different membership provenance")
+                if (
+                    existing.triggering_remote_account_id is not None
+                    and triggering_remote_account_id is not None
+                    and existing.triggering_remote_account_id
+                    != triggering_remote_account_id
+                ):
+                    raise ValueError("existing task has different account provenance")
                 if (
                     triggering_user_subscription_id is not None
                     and existing.triggering_user_subscription_id is None
@@ -354,6 +360,7 @@ class TaskService:
             parent_task_id=parent_task_id,
             triggering_user_subscription_id=triggering_user_subscription_id,
             triggering_remote_account_id=triggering_remote_account_id,
+            owner_user_id=owner_user_id,
             status=normalized,
             resource_state=(
                 resource_state
@@ -391,6 +398,91 @@ class TaskService:
         await self.db.flush()
         await self.add_event(task, "created", to_status=normalized, message=title)
         return task
+
+    async def _resolve_owner_user_id(
+        self,
+        *,
+        owner_user_id: int | None,
+        triggering_user_subscription_id: UUID | None,
+        triggering_remote_account_id: UUID | None,
+        subject_type: str | None,
+        subject_id: UUID | None,
+    ) -> int | None:
+        """Derive one immutable audit owner from every available provenance."""
+
+        from app.models.remote_discovery import RemoteAccount, UserSubscription
+
+        candidates: list[int] = []
+        provenance_candidates: list[int] = []
+        if owner_user_id is not None:
+            if owner_user_id < 1:
+                raise ValueError("owner_user_id must be a positive audit identifier")
+            candidates.append(owner_user_id)
+        if triggering_user_subscription_id is not None:
+            membership_owner = (
+                await self.db.execute(
+                    select(UserSubscription.user_id).where(
+                        UserSubscription.id == triggering_user_subscription_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership_owner is None:
+                raise ValueError("triggering membership does not exist")
+            candidates.append(membership_owner)
+            provenance_candidates.append(membership_owner)
+        if triggering_remote_account_id is not None:
+            account_owner = (
+                await self.db.execute(
+                    select(RemoteAccount.user_id).where(
+                        RemoteAccount.id == triggering_remote_account_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if account_owner is None:
+                raise ValueError("triggering remote account does not exist")
+            candidates.append(account_owner)
+            provenance_candidates.append(account_owner)
+        if subject_type == "download_job" and subject_id is not None:
+            job_owner = (
+                await self.db.execute(
+                    select(DownloadJob.owner_user_id).where(DownloadJob.id == subject_id)
+                )
+            ).scalar_one_or_none()
+            if job_owner is not None:
+                candidates.append(job_owner)
+                provenance_candidates.append(job_owner)
+        elif subject_type == "import_job" and subject_id is not None:
+            job_owner = (
+                await self.db.execute(
+                    select(DownloadJob.owner_user_id)
+                    .join(ImportJob, ImportJob.download_job_id == DownloadJob.id)
+                    .where(ImportJob.id == subject_id)
+                )
+            ).scalar_one_or_none()
+            if job_owner is not None:
+                candidates.append(job_owner)
+                provenance_candidates.append(job_owner)
+        distinct = set(candidates)
+        if len(distinct) > 1:
+            raise ValueError("private task provenance resolves to mixed owners")
+        resolved = next(iter(distinct), None)
+        if owner_user_id is not None and not provenance_candidates:
+            from app.models.user import User
+
+            existing_user = (
+                await self.db.execute(select(User.id).where(User.id == owner_user_id))
+            ).scalar_one_or_none()
+            if existing_user is None:
+                raise ValueError("owner user does not exist")
+        if (
+            resolved is None
+            and (
+                triggering_user_subscription_id is not None
+                or triggering_remote_account_id is not None
+            )
+        ):
+            raise ValueError("private task provenance requires an owner")
+        return resolved
 
     async def get_by_subject(self, subject_type: str, subject_id: UUID) -> TaskRun | None:
         result = await self.db.execute(
@@ -598,6 +690,7 @@ class TaskService:
             parent_task_id=parent_task_id,
             triggering_user_subscription_id=job.triggering_user_subscription_id,
             triggering_remote_account_id=job.triggering_remote_account_id,
+            owner_user_id=job.owner_user_id,
             status=job.status,
             queue_name="downloads",
             title=f"Download {job.source}",
@@ -631,6 +724,7 @@ class TaskService:
             triggering_remote_account_id=(
                 download_job.triggering_remote_account_id if download_job else None
             ),
+            owner_user_id=download_job.owner_user_id if download_job else None,
             status=job.status,
             queue_name="imports",
             title="Import metadata",

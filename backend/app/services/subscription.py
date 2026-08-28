@@ -464,6 +464,7 @@ class SubscriptionService:
             progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
             meta={"subscription_id": str(subscription_id), "scope": "subscription"},
             triggering_user_subscription_id=membership.id if membership else None,
+            owner_user_id=membership.user_id if membership else None,
         )
 
         job_ids = []

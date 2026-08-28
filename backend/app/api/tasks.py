@@ -196,7 +196,10 @@ async def get_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if is_global_subscription_batch(task):
+    if task.owner_user_id is not None:
+        if not await svc.is_visible_to_user(task, user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
+    elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
     elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
@@ -348,7 +351,10 @@ async def acknowledge_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if is_global_subscription_batch(task):
+    if task.owner_user_id is not None:
+        if user is None or not await svc.is_visible_to_user(task, user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
+    elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
     elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
@@ -381,7 +387,10 @@ async def _control_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if is_global_subscription_batch(task):
+    if task.owner_user_id is not None:
+        if user is None or not await svc.is_visible_to_user(task, user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
+    elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
     elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):

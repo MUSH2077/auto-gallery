@@ -2031,6 +2031,7 @@ class SearchService:
                     limit,
                     allowed_subscription_ids=allowed_subscription_ids,
                     allowed_repository_ids=allowed_repository_ids,
+                    user_id=user_id,
                 )
 
         meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
@@ -2399,27 +2400,9 @@ class SearchService:
         if subscription_id is not None:
             conditions.append(DownloadJob.subscription_id == UUID(str(subscription_id)))
         if user_id is not None:
-            from app.models.remote_discovery import RemoteAccount, UserSubscription
+            from app.services.tasks import download_job_visibility_condition
 
-            owned_memberships = select(UserSubscription.id).where(
-                UserSubscription.user_id == user_id
-            )
-            owned_accounts = select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
-            conditions.extend([
-                DownloadJob.subscription_id.in_(
-                    select(UserSubscription.subscription_id).where(
-                        UserSubscription.user_id == user_id
-                    )
-                ),
-                or_(
-                    DownloadJob.triggering_user_subscription_id.is_(None),
-                    DownloadJob.triggering_user_subscription_id.in_(owned_memberships),
-                ),
-                or_(
-                    DownloadJob.triggering_remote_account_id.is_(None),
-                    DownloadJob.triggering_remote_account_id.in_(owned_accounts),
-                ),
-            ])
+            conditions.append(download_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -3362,6 +3345,16 @@ class SearchService:
             by_subscription[str(repository.subscription_id)].append(repository)
 
         running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
+        index_safe_job = and_(
+            DownloadJob.owner_user_id.is_(None),
+            DownloadJob.triggering_user_subscription_id.is_(None),
+            DownloadJob.triggering_remote_account_id.is_(None),
+        )
+        index_safe_task = and_(
+            TaskRun.owner_user_id.is_(None),
+            TaskRun.triggering_user_subscription_id.is_(None),
+            TaskRun.triggering_remote_account_id.is_(None),
+        )
         job_stats_rows = (await self.db.execute(
             select(
                 DownloadJob.subscription_id,
@@ -3369,7 +3362,10 @@ class SearchService:
                     DownloadJob.status.in_(running_statuses)
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+            )
             .group_by(DownloadJob.subscription_id)
         )).all()
         running_stats = {
@@ -3391,6 +3387,8 @@ class SearchService:
             .where(
                 DownloadJob.subscription_id.in_(selected_ids),
                 TaskRun.attention_state == "open",
+                index_safe_job,
+                index_safe_task,
             )
             .group_by(DownloadJob.subscription_id)
         )).all()
@@ -3414,7 +3412,11 @@ class SearchService:
                     TaskRun.subject_id == DownloadJob.id,
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+                index_safe_task,
+            )
             .where(or_(
                 TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
                 TaskRun.attention_state == "open",
@@ -3725,6 +3727,7 @@ class SearchService:
         *,
         allowed_subscription_ids: set[UUID] | None = None,
         allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         """Direct DB list query for real-time listing — no index dependency.
 
@@ -3739,6 +3742,7 @@ class SearchService:
                 offset,
                 limit,
                 allowed_subscription_ids=allowed_subscription_ids,
+                user_id=user_id,
             )
         if target == "repositories" and allowed_repository_ids is not None:
             # Empty reference searches do not currently expose repositories;
@@ -3760,6 +3764,7 @@ class SearchService:
         limit: int,
         *,
         allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
         allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         """Execute source-identity reference searches against committed rows."""
@@ -4046,6 +4051,7 @@ class SearchService:
         limit: int,
         *,
         allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         # Total count
         ownership = (
@@ -4074,6 +4080,20 @@ class SearchService:
 
         sub_ids = [sub.id for sub, _ in rows]
 
+        from app.services.tasks import (
+            download_job_visibility_condition,
+            task_visibility_condition,
+        )
+
+        job_visibility = (
+            download_job_visibility_condition(user_id)
+            if user_id is not None
+            else None
+        )
+        task_visibility = (
+            task_visibility_condition(user_id) if user_id is not None else None
+        )
+
         # Sources per subscription
         source_rows = (await self.db.execute(
             select(SubscriptionSource)
@@ -4084,19 +4104,25 @@ class SearchService:
         for repo in source_rows:
             by_sub[str(repo.subscription_id)].append(repo)
 
-        running_rows = (await self.db.execute(
-            select(DownloadJob.subscription_id, func.count(DownloadJob.id))
-            .where(
-                DownloadJob.subscription_id.in_(sub_ids),
-                DownloadJob.status.in_({"enqueued", "downloading", "downloaded", "importing"}),
-            )
-            .group_by(DownloadJob.subscription_id)
-        )).all()
+        running_stmt = select(
+            DownloadJob.subscription_id,
+            func.count(DownloadJob.id),
+        ).where(
+            DownloadJob.subscription_id.in_(sub_ids),
+            DownloadJob.status.in_(
+                {"enqueued", "downloading", "downloaded", "importing"}
+            ),
+        )
+        if job_visibility is not None:
+            running_stmt = running_stmt.where(job_visibility)
+        running_rows = (
+            await self.db.execute(running_stmt.group_by(DownloadJob.subscription_id))
+        ).all()
         running_by_sub = {
             str(subscription_id): int(count)
             for subscription_id, count in running_rows
         }
-        actionable_rows = (await self.db.execute(
+        actionable_stmt = (
             select(DownloadJob, TaskRun)
             .join(
                 TaskRun,
@@ -4112,8 +4138,16 @@ class SearchService:
                     TaskRun.attention_state == "open",
                 ),
             )
-            .order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
-        )).all()
+        )
+        if job_visibility is not None:
+            actionable_stmt = actionable_stmt.where(job_visibility)
+        if task_visibility is not None:
+            actionable_stmt = actionable_stmt.where(task_visibility)
+        actionable_rows = (
+            await self.db.execute(
+                actionable_stmt.order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
+            )
+        ).all()
         actionable_by_sub: dict[str, list[tuple[DownloadJob, TaskRun]]] = defaultdict(list)
         for job, task in actionable_rows:
             actionable_by_sub[str(job.subscription_id)].append((job, task))

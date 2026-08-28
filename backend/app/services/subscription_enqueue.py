@@ -535,6 +535,11 @@ async def enqueue_subscription_source_sync(
         triggering_remote_account_id = (
             selection.account.id if selection.account is not None else None
         )
+        if (
+            selection.account is not None
+            and selection.account.user_id != selection.membership.user_id
+        ):
+            raise ValueError("download provenance resolves to mixed owners")
         triggering_credential_generation = (
             selection.account.credential_generation
             if selection.account is not None
@@ -574,6 +579,7 @@ async def enqueue_subscription_source_sync(
             triggering_user_subscription_id=triggering_user_subscription_id,
             triggering_remote_account_id=triggering_remote_account_id,
             triggering_credential_generation=triggering_credential_generation,
+            owner_user_id=selection.membership.user_id,
         )
         apply_download_progress(
             job,

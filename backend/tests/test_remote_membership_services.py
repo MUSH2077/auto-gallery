@@ -767,6 +767,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 source="pixiv",
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=first.id,
             )
             second_job = DownloadJob(
                 subscription_id=canonical.id,
@@ -775,6 +776,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 source="pixiv",
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=second.id,
             )
             db.add_all([first_job, second_job])
             await db.flush()
@@ -786,6 +788,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 status="enqueued",
                 triggering_user_subscription_id=first_member.id,
                 title="First private task",
+                owner_user_id=first.id,
             )
             second_task = TaskRun(
                 kind="download",
@@ -796,6 +799,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
                 triggering_user_subscription_id=second_member.id,
                 title="Second private task",
                 attention_state="open",
+                owner_user_id=second.id,
             )
             db.add_all([first_task, second_task])
             await db.commit()
@@ -1101,6 +1105,7 @@ async def test_null_trigger_tasks_reuse_explicit_parent_job_owner_on_shared_subs
                 status="enqueued",
                 triggering_user_subscription_id=owner_member.id,
                 triggering_remote_account_id=account.id,
+                owner_user_id=owner.id,
             )
             db.add(job)
             await db.flush()
@@ -1301,6 +1306,7 @@ async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped()
                 attention_state="open",
                 title="Scoped Trigger Batch Membership",
                 meta={"mode": "legacy"},
+                owner_user_id=owner.id,
             )
             account_task = TaskRun(
                 kind="admin",
@@ -1310,6 +1316,7 @@ async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped()
                 attention_state="open",
                 title="Scoped Trigger Batch Account",
                 meta={"mode": "legacy"},
+                owner_user_id=owner.id,
             )
             non_admin_task = TaskRun(
                 kind="download",
@@ -1562,6 +1569,7 @@ async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
                 source="pixiv",
                 source_url=source.source_url,
                 status="complete",
+                owner_user_id=first.id,
             )
             second_download = DownloadJob(
                 subscription_id=subscription.id,
@@ -1570,6 +1578,7 @@ async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
                 source="pixiv",
                 source_url=source.source_url,
                 status="complete",
+                owner_user_id=second.id,
             )
             db.add_all([first_download, second_download])
             await db.flush()

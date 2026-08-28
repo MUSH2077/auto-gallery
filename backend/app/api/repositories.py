@@ -18,7 +18,7 @@ from app.models.curation import WorkCurationState
 from app.models.work_source import WorkSource
 from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
-from app.models.remote_discovery import RemoteAccount, UserSubscription, UserSubscriptionSource
+from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
 from app.schemas.repository import RepositoryDetailResponse
@@ -352,20 +352,9 @@ async def get_repository(
         DownloadJob.status.in_(RUNNING_STATUSES),
     ]
     if member is not None:
-        job_filters.extend(
-            [
-                or_(
-                    DownloadJob.triggering_user_subscription_id.is_(None),
-                    DownloadJob.triggering_user_subscription_id == member.id,
-                ),
-                or_(
-                    DownloadJob.triggering_remote_account_id.is_(None),
-                    DownloadJob.triggering_remote_account_id.in_(
-                        select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
-                    ),
-                ),
-            ]
-        )
+        from app.services.tasks import download_job_visibility_condition
+
+        job_filters.append(download_job_visibility_condition(user_id))
     jobs_result = await db.execute(
         select(DownloadJob)
         .where(*job_filters)

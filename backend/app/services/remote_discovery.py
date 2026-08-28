@@ -280,6 +280,7 @@ class RemoteDiscoveryService:
             progress=progress,
             meta={"account_id": str(account.id), "scope": "remote_account"},
             triggering_remote_account_id=account.id,
+            owner_user_id=account.user_id,
         )
         account.last_scan_started_at = _utc(started_at)
         return task

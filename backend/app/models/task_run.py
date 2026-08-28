@@ -13,7 +13,7 @@ See ``app.services.tasks.TaskService`` for the write path and
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,6 +24,17 @@ class TaskRun(TimestampMixin, Base):
     """One trackable unit of work, regardless of which pipeline produced it."""
 
     __tablename__ = "task_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "owner_user_id IS NULL OR owner_user_id > 0",
+            name="ck_task_runs_owner_user_id_positive",
+        ),
+        CheckConstraint(
+            "(triggering_user_subscription_id IS NULL AND "
+            "triggering_remote_account_id IS NULL) OR owner_user_id IS NOT NULL",
+            name="ck_task_runs_private_trigger_has_owner",
+        ),
+    )
 
     # Classification: what kind of work and what it acts on.
     kind: Mapped[str] = mapped_column(String(50), nullable=False)        # download | import | admin
@@ -36,6 +47,12 @@ class TaskRun(TimestampMixin, Base):
     )
     triggering_remote_account_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("remote_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    # Immutable audit identity intentionally outlives a deletable User row.
+    owner_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        index=True,
     )
 
     # Lifecycle — values come from app.models.task_state (enqueued/running/complete/failed/...).

@@ -2,7 +2,7 @@ import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, select
 
 from app.config import settings
 from app.models.creator import Creator
@@ -139,31 +139,13 @@ class DownloadService:
             job = await self.repo.get(job_id)
         else:
             from app.models.download_job import DownloadJob
-            from app.models.remote_discovery import RemoteAccount, UserSubscription
+            from app.services.tasks import download_job_visibility_condition
 
             job = (
                 await self.db.execute(
                     select(DownloadJob).where(
                         DownloadJob.id == job_id,
-                        DownloadJob.subscription_id.in_(
-                            select(UserSubscription.subscription_id).where(
-                                UserSubscription.user_id == user_id
-                            )
-                        ),
-                        or_(
-                            DownloadJob.triggering_user_subscription_id.is_(None),
-                            DownloadJob.triggering_user_subscription_id.in_(
-                                select(UserSubscription.id).where(
-                                    UserSubscription.user_id == user_id
-                                )
-                            ),
-                        ),
-                        or_(
-                            DownloadJob.triggering_remote_account_id.is_(None),
-                            DownloadJob.triggering_remote_account_id.in_(
-                                select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
-                            ),
-                        ),
+                        download_job_visibility_condition(user_id),
                     )
                 )
             ).scalar_one_or_none()

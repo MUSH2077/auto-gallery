@@ -1171,6 +1171,7 @@ async def test_tampered_personal_credential_fails_once_and_allows_peer_takeover(
                 source="pixiv",
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=members[0].user_id,
             )
             db.add(job)
             await db.commit()
@@ -1443,6 +1444,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
                 source="x",
                 source_url=source.source_url,
                 status="enqueued",
+                owner_user_id=members[1].user_id,
             )
             db.add(job)
             await db.commit()
