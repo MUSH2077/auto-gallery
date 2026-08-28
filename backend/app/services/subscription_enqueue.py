@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, func, update as sql_update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,7 +95,7 @@ async def mark_source_sync_success(
     # its short claim transaction.
     ss.next_sync_at = None
     config = await get_scheduler_config(db)
-    from app.jobs.subscription_sync import next_subscription_check_at
+    from app.services.subscription_replan import next_user_subscription_check_at
 
     rows = (
         await db.execute(
@@ -116,7 +116,7 @@ async def mark_source_sync_success(
         binding.last_synced_at = when
         binding.last_attempted_at = when
         binding.next_sync_at = (
-            next_subscription_check_at(membership, config, when, when, when)
+            next_user_subscription_check_at(membership, config, when, when, when)
             if membership.sync_enabled
             else None
         )
@@ -232,6 +232,52 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+async def _restore_failed_publication_demand(
+    db: AsyncSession,
+    *,
+    source_id: UUID,
+    binding_id: UUID,
+    claimed_at: datetime,
+    claimed_next_sync_at: datetime | None,
+    previous_source_attempted_at: datetime | None,
+    previous_binding_attempted_at: datetime | None,
+    previous_binding_next_sync_at: datetime | None,
+) -> None:
+    """CAS-restore logical demand after a rejected Redis publication."""
+
+    await db.rollback()
+    source = (
+        await db.execute(
+            select(SubscriptionSource)
+            .where(SubscriptionSource.id == source_id)
+            .with_for_update(of=SubscriptionSource)
+        )
+    ).scalar_one_or_none()
+    binding = (
+        await db.execute(
+            select(UserSubscriptionSource)
+            .where(UserSubscriptionSource.id == binding_id)
+            .with_for_update(of=UserSubscriptionSource)
+        )
+    ).scalar_one_or_none()
+    if source is None or binding is None:
+        await db.rollback()
+        return
+    if (
+        _as_utc(binding.last_attempted_at) == _as_utc(claimed_at)
+        and _as_utc(binding.next_sync_at) == _as_utc(claimed_next_sync_at)
+    ):
+        binding.last_attempted_at = previous_binding_attempted_at
+        binding.next_sync_at = previous_binding_next_sync_at
+        if _as_utc(source.last_attempted_at) == _as_utc(claimed_at):
+            source.last_attempted_at = previous_source_attempted_at
+        await recompute_subscription_membership_cache(db, source.subscription_id)
+        await db.commit()
+        return
+    # A worker or another valid transition already advanced this binding.
+    await db.rollback()
 
 
 async def enqueue_subscription_source_sync(
@@ -399,9 +445,9 @@ async def enqueue_subscription_source_sync(
             source_url=normalized_url,
         )
         append_manifest_event(job, "created", trigger=trigger)
-        from app.jobs.subscription_sync import next_subscription_check_at
+        from app.services.subscription_replan import next_user_subscription_check_at
 
-        next_sync_at = next_subscription_check_at(
+        next_sync_at = next_user_subscription_check_at(
             selection.membership,
             scheduler_config,
             selection.binding.last_synced_at,
@@ -448,6 +494,13 @@ async def enqueue_subscription_source_sync(
             job_timeout=RQ_JOB_TIMEOUT,
             action=trigger,
         )
+        previous_source_attempted_at = ss.last_attempted_at
+        previous_binding_attempted_at = selection.binding.last_attempted_at
+        previous_binding_next_sync_at = selection.binding.next_sync_at
+        ss.last_attempted_at = now
+        selection.binding.last_attempted_at = now
+        selection.binding.next_sync_at = next_sync_at
+        await recompute_subscription_membership_cache(db, sub.id)
         try:
             await publish_prepared_download(
                 db,
@@ -460,6 +513,16 @@ async def enqueue_subscription_source_sync(
             from app.services.backpressure import DownloadAdmissionError
 
             logger.error("Failed to enqueue download job %s: %s", job.id, exc)
+            await _restore_failed_publication_demand(
+                db,
+                source_id=ss.id,
+                binding_id=selection.binding.id,
+                claimed_at=now,
+                claimed_next_sync_at=next_sync_at,
+                previous_source_attempted_at=previous_source_attempted_at,
+                previous_binding_attempted_at=previous_binding_attempted_at,
+                previous_binding_next_sync_at=previous_binding_next_sync_at,
+            )
             code = exc.code if isinstance(exc, DownloadAdmissionError) else "enqueue_failed"
             details = dict(exc.details) if isinstance(exc, DownloadAdmissionError) else {}
             return {
@@ -471,17 +534,9 @@ async def enqueue_subscription_source_sync(
                 "reason": {"code": code, "message": str(exc), "retryable": True, "details": details},
             }
 
-        # Publication is the scheduling boundary. A rejected Redis enqueue must
-        # leave the logical slot due; only an accepted deterministic RQ job may
-        # advance the source to its next interval/fixed-time slot.
-        await db.execute(
-            sql_update(SubscriptionSource)
-            .where(SubscriptionSource.id == ss.id)
-            .values(last_attempted_at=now, next_sync_at=next_sync_at)
-        )
-        selection.binding.last_attempted_at = now
-        selection.binding.next_sync_at = next_sync_at
-        await recompute_subscription_membership_cache(db, sub.id)
+        # The claim was part of the durable outbox transaction committed by
+        # the publisher.  Do not write stale ORM snapshots after Redis makes a
+        # fast worker visible; its success fan-out must win.
         await db.commit()
 
         try:

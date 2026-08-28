@@ -28,6 +28,7 @@ from app.models.creator import Creator
 from app.schemas.subscription import SubscriptionRead
 from app.schemas.subscription_source import SubscriptionSourceRead
 from app.providers import registry as provider_registry
+from app.services.settings import get_scheduler_config
 
 
 _MEMBERSHIP_FIELDS = {
@@ -221,8 +222,12 @@ async def recompute_subscription_membership_cache(
             if membership_source_is_usable(binding, account, source=source.source)
         ]
         source.is_enabled = bool(bindings)
-        due = [binding.next_sync_at for binding in bindings if binding.next_sync_at is not None]
-        source.next_sync_at = min(due) if due else None
+        due = [binding.next_sync_at for binding in bindings]
+        source.next_sync_at = (
+            None
+            if not due or any(value is None for value in due)
+            else min(value for value in due if value is not None)
+        )
         source.auth_healthy = bool(bindings)
     await db.flush()
 
@@ -545,7 +550,25 @@ class SubscriptionMembershipService:
             values["schedule_mode"] = None
         for key, value in values.items():
             setattr(member, key, value)
-        await recompute_subscription_membership_cache(self.db, subscription_id)
+        if {
+            "is_active",
+            "sync_enabled",
+            "sync_interval_hours",
+            "schedule_mode",
+            "schedule_rule",
+            "scheduled_times",
+        }.intersection(values):
+            from app.services.subscription_replan import (
+                replan_user_subscription_sources,
+            )
+
+            await replan_user_subscription_sources(
+                self.db,
+                member,
+                await get_scheduler_config(self.db),
+            )
+        else:
+            await recompute_subscription_membership_cache(self.db, subscription_id)
         await self.db.flush()
         return await self.get(subscription_id)
 

@@ -841,9 +841,11 @@ class RemoteDiscoveryService:
             binding.auth_status = account.auth_status
             binding.auth_error_reason = None
             if member.sync_enabled:
-                from app.jobs.subscription_sync import next_subscription_check_at
+                from app.services.subscription_replan import (
+                    next_user_subscription_check_at,
+                )
 
-                binding.next_sync_at = next_subscription_check_at(
+                binding.next_sync_at = next_user_subscription_check_at(
                     member,
                     await get_scheduler_config(self.db),
                     binding.last_synced_at,

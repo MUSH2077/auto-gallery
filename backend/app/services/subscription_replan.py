@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.jobs.subscription_sync import next_future_subscription_check_at
+from app.jobs.subscription_sync import (
+    next_future_subscription_check_at,
+    next_subscription_check_at,
+)
+from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.schemas.schedule import normalize_clock_times
+from app.services.subscription_membership import recompute_subscription_membership_cache
 
 
 def _mapping(value: Any) -> dict:
@@ -109,6 +116,77 @@ async def replan_subscription_sources(
     return len(sources)
 
 
+def next_user_subscription_check_at(
+    membership: UserSubscription,
+    config: dict,
+    last_synced_at: datetime | None,
+    last_attempted_at: datetime | None,
+    now: datetime,
+) -> datetime | None:
+    """Calculate one private due time, including whole-policy inheritance."""
+
+    subject: UserSubscription | SimpleNamespace = membership
+    if membership.schedule_mode is None:
+        # NULL is the explicit private "inherit" marker.  Do not let copied
+        # legacy interval/calendar fields shadow a later system-policy change.
+        subject = SimpleNamespace(
+            schedule_mode=None,
+            schedule_rule=None,
+            scheduled_times=None,
+            sync_interval_hours=None,
+            created_at=membership.created_at,
+        )
+    return next_subscription_check_at(
+        subject,
+        config,
+        last_synced_at,
+        last_attempted_at,
+        now,
+    )
+
+
+async def replan_user_subscription_sources(
+    db: AsyncSession,
+    membership: UserSubscription,
+    config: dict,
+    *,
+    now: datetime | None = None,
+    bindings: list[UserSubscriptionSource] | None = None,
+) -> int:
+    """Replan every private binding, then refresh the sole canonical cache."""
+
+    now = now or datetime.now(timezone.utc)
+    if bindings is None:
+        bindings = list(
+            (
+                await db.execute(
+                    select(UserSubscriptionSource)
+                    .where(
+                        UserSubscriptionSource.user_subscription_id == membership.id
+                    )
+                    .order_by(UserSubscriptionSource.id)
+                    .with_for_update(of=UserSubscriptionSource)
+                )
+            ).scalars()
+        )
+    enabled = membership.is_active and membership.sync_enabled
+    for binding in bindings:
+        binding.next_sync_at = (
+            next_user_subscription_check_at(
+                membership,
+                config,
+                binding.last_synced_at,
+                binding.last_attempted_at,
+                now,
+            )
+            if enabled and binding.is_enabled
+            else None
+        )
+    await recompute_subscription_membership_cache(db, membership.subscription_id)
+    await db.flush()
+    return len(bindings)
+
+
 async def replan_inherited_subscription_sources(
     db: AsyncSession,
     config: dict,
@@ -118,17 +196,67 @@ async def replan_inherited_subscription_sources(
     """Replan only subscriptions that inherit the changed system schedule."""
 
     now = now or datetime.now(timezone.utc)
-    rows = list((await db.execute(
-        select(Subscription, SubscriptionSource)
-        .join(
-            SubscriptionSource,
-            SubscriptionSource.subscription_id == Subscription.id,
+    private_rows = list(
+        (
+            await db.execute(
+                select(UserSubscription, UserSubscriptionSource)
+                .join(
+                    UserSubscriptionSource,
+                    UserSubscriptionSource.user_subscription_id
+                    == UserSubscription.id,
+                )
+                .where(UserSubscription.schedule_mode.is_(None))
+                .order_by(
+                    UserSubscription.subscription_id,
+                    UserSubscription.id,
+                    UserSubscriptionSource.id,
+                )
+                .with_for_update(of=UserSubscriptionSource)
+            )
+        ).all()
+    )
+    affected_subscription_ids: set[UUID] = set()
+    for membership, binding in private_rows:
+        binding.next_sync_at = (
+            next_user_subscription_check_at(
+                membership,
+                config,
+                binding.last_synced_at,
+                binding.last_attempted_at,
+                now,
+            )
+            if membership.is_active
+            and membership.sync_enabled
+            and binding.is_enabled
+            else None
         )
-        .where(Subscription.schedule_mode.is_(None))
-        .order_by(Subscription.id, SubscriptionSource.id)
-        .with_for_update(of=SubscriptionSource)
-    )).all())
-    for subscription, source in rows:
+        affected_subscription_ids.add(membership.subscription_id)
+
+    # Canonical-only rows remain supported for old deployments and focused
+    # legacy service tests.  Once a private member exists, canonical due state
+    # is exclusively the aggregate below.
+    legacy_rows = list(
+        (
+            await db.execute(
+                select(Subscription, SubscriptionSource)
+                .join(
+                    SubscriptionSource,
+                    SubscriptionSource.subscription_id == Subscription.id,
+                )
+                .where(
+                    Subscription.schedule_mode.is_(None),
+                    Subscription.id.not_in(
+                        select(UserSubscription.subscription_id)
+                    ),
+                )
+                .order_by(Subscription.id, SubscriptionSource.id)
+                .with_for_update(of=SubscriptionSource)
+            )
+        ).all()
+    )
+    for subscription, source in legacy_rows:
         source.next_sync_at = _next_replanned_at(subscription, source, config, now)
+    for subscription_id in sorted(affected_subscription_ids, key=str):
+        await recompute_subscription_membership_cache(db, subscription_id)
     await db.flush()
-    return len(rows)
+    return len(private_rows) + len(legacy_rows)

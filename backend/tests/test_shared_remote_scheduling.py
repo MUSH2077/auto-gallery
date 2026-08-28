@@ -1621,6 +1621,387 @@ async def test_shared_download_success_replans_every_member_with_its_own_schedul
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_canonical_due_cache_keeps_null_when_any_eligible_member_is_unseen():
+    """NULL private demand is immediately due and must win over future demand."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for account in accounts:
+                account.auth_status = "healthy"
+            bindings[0].next_sync_at = None
+            bindings[1].next_sync_at = now + timedelta(hours=9)
+
+            await recompute_subscription_membership_cache(db, subscription.id)
+
+            assert source.is_enabled is True
+            assert source.next_sync_at is None
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_private_schedule_mutations_replan_binding_and_canonical_cache(monkeypatch):
+    """Interval, calendar, manual, and inherited policy replan private due rows."""
+
+    from app.database import async_session, engine
+    from app.services import subscription_membership
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    async def scheduler_config(_db):
+        return {
+            "schedule_mode": "interval",
+            "default_sync_interval_hours": 4,
+            "scheduler_scan_interval_minutes": 5,
+            "timezone": "UTC",
+        }
+
+    monkeypatch.setattr(
+        subscription_membership,
+        "get_scheduler_config",
+        scheduler_config,
+        raising=False,
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            members[1].is_active = False
+            bindings[0].last_synced_at = now - timedelta(hours=3)
+            bindings[0].last_attempted_at = None
+            bindings[0].next_sync_at = now + timedelta(days=3)
+            service = SubscriptionMembershipService(db, users[0].id)
+
+            before_interval = datetime.now(timezone.utc)
+            await service.update(
+                subscription.id,
+                {"schedule_mode": "interval", "sync_interval_hours": 1},
+            )
+            assert before_interval <= bindings[0].next_sync_at <= datetime.now(timezone.utc)
+            assert source.next_sync_at == bindings[0].next_sync_at
+
+            next_hour = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(
+                minute=17,
+                second=0,
+                microsecond=0,
+            )
+            await service.update(
+                subscription.id,
+                {
+                    "schedule_mode": "calendar",
+                    "schedule_rule": {
+                        "frequency": "daily",
+                        "times": [next_hour.strftime("%H:%M:%S")],
+                    },
+                },
+            )
+            assert bindings[0].next_sync_at is not None
+            assert bindings[0].next_sync_at > datetime.now(timezone.utc)
+            assert bindings[0].next_sync_at.minute == 17
+            assert source.next_sync_at == bindings[0].next_sync_at
+
+            await service.update(subscription.id, {"schedule_mode": "manual"})
+            assert bindings[0].next_sync_at is None
+            assert source.is_enabled is False
+            assert source.next_sync_at is None
+
+            bindings[0].last_synced_at = datetime.now(timezone.utc) - timedelta(hours=1)
+            await service.update(
+                subscription.id,
+                {"schedule_mode": "inherit", "sync_enabled": True},
+            )
+            expected = bindings[0].last_synced_at + timedelta(hours=4)
+            assert bindings[0].next_sync_at == expected
+            assert source.is_enabled is True
+            assert source.next_sync_at == expected
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_system_schedule_change_replans_inherited_private_bindings():
+    """Inherited private rows, rather than the canonical cache, own system replans."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_replan import replan_inherited_subscription_sources
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    config = {
+        "schedule_mode": "interval",
+        "default_sync_interval_hours": 1,
+        "scheduler_scan_interval_minutes": 5,
+        "timezone": "UTC",
+    }
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for account in accounts:
+                account.auth_status = "healthy"
+            subscription.schedule_mode = None
+            for index, (member, binding) in enumerate(zip(members, bindings, strict=True)):
+                member.schedule_mode = None
+                member.sync_interval_hours = 9
+                binding.last_synced_at = now - timedelta(minutes=30 + index)
+                binding.last_attempted_at = None
+                binding.next_sync_at = now + timedelta(days=7)
+
+            replanned = await replan_inherited_subscription_sources(db, config, now=now)
+
+            expected = [
+                bindings[0].last_synced_at + timedelta(hours=1),
+                bindings[1].last_synced_at + timedelta(hours=1),
+            ]
+            assert replanned == 2
+            assert [binding.next_sync_at for binding in bindings] == expected
+            assert source.next_sync_at == min(expected)
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fast_success_finalization_wins_over_enqueue_claim(monkeypatch):
+    """A worker finishing before publish returns cannot be overwritten by enqueue."""
+
+    from sqlalchemy import select
+
+    from app.database import async_session, engine
+    from app.models import UserSubscriptionSource
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    completed_at = datetime.now(timezone.utc).replace(microsecond=0)
+
+    async def publish(db, job, *_args, **_kwargs):
+        await db.commit()
+        async with async_session() as worker_db:
+            await subscription_enqueue.mark_source_sync_success(
+                worker_db,
+                job.subscription_source_id,
+                completed_at,
+                triggering_user_subscription_id=job.triggering_user_subscription_id,
+                triggering_remote_account_id=job.triggering_remote_account_id,
+            )
+            await worker_db.commit()
+        return SimpleNamespace(id="rq-fast-success")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    source_id = None
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=completed_at)
+            for account in accounts:
+                account.auth_status = "healthy"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+            source_id = source.id
+
+        async with async_session() as db:
+            result = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source_id,
+                trigger="scheduler",
+                scheduler_config={
+                    "schedule_mode": "interval",
+                    "default_sync_interval_hours": 6,
+                    "scheduler_scan_interval_minutes": 5,
+                    "timezone": "UTC",
+                },
+            )
+            assert result["status"] == "enqueued"
+
+        async with async_session() as db:
+            stored = list(
+                (
+                    await db.execute(
+                        select(UserSubscriptionSource)
+                        .where(UserSubscriptionSource.subscription_source_id == source_id)
+                        .order_by(UserSubscriptionSource.id)
+                    )
+                ).scalars()
+            )
+            assert sorted(binding.next_sync_at for binding in stored) == [
+                completed_at + timedelta(hours=2),
+                completed_at + timedelta(hours=8),
+            ]
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_publication_failure_restores_original_private_demand(monkeypatch):
+    """A rejected publication must not consume the selected member's due slot."""
+
+    from sqlalchemy import select
+
+    from app.database import async_session, engine
+    from app.models import SubscriptionSource, UserSubscriptionSource
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def reject_after_durable_claim(db, *_args, **_kwargs):
+        await db.commit()
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(
+        download_dispatch,
+        "publish_prepared_download",
+        reject_after_durable_claim,
+    )
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    source_id = None
+    original_dues = None
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                _bindings,
+                dues,
+            ) = await _seed_shared_source(db, now=now)
+            for account in accounts:
+                account.auth_status = "healthy"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            await db.commit()
+            source_id = source.id
+            original_dues = list(dues)
+
+        async with async_session() as db:
+            result = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source_id,
+                trigger="scheduler",
+                scheduler_config={
+                    "schedule_mode": "interval",
+                    "default_sync_interval_hours": 6,
+                    "scheduler_scan_interval_minutes": 5,
+                    "timezone": "UTC",
+                },
+            )
+            assert result["status"] == "error"
+
+        async with async_session() as db:
+            stored_source = await db.get(SubscriptionSource, source_id)
+            stored_bindings = list(
+                (
+                    await db.execute(
+                        select(UserSubscriptionSource)
+                        .where(UserSubscriptionSource.subscription_source_id == source_id)
+                        .order_by(UserSubscriptionSource.id)
+                    )
+                ).scalars()
+            )
+            assert sorted(binding.next_sync_at for binding in stored_bindings) == sorted(
+                original_dues
+            )
+            assert stored_source.next_sync_at == min(original_dues)
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_due_discovery_admission_claims_once_and_routes_discovery_queue():
     """Repeated scheduler admission must publish one persistent scan per account."""
 

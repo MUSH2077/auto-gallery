@@ -76,12 +76,15 @@ def test_subscription_schedule_change_ignores_enablement_and_scan_cadence():
     ) is True
 
 
-def test_success_invalidates_and_enqueue_advances_persisted_due_time():
+def test_success_invalidates_and_enqueue_claims_due_before_publication():
     from app.services import subscription_enqueue
 
     success = inspect.getsource(subscription_enqueue.mark_source_sync_success)
     enqueue = inspect.getsource(subscription_enqueue.enqueue_subscription_source_sync)
     assert "ss.next_sync_at = None" in success
     assert "scheduler_config: dict | None = None" in enqueue
-    assert "next_sync_at = next_subscription_check_at" in enqueue
-    assert enqueue.index("await publish_prepared_download(") < enqueue.index(".values(last_attempted_at=now, next_sync_at=next_sync_at)")
+    assert "next_sync_at = next_user_subscription_check_at" in enqueue
+    assert enqueue.index("selection.binding.next_sync_at = next_sync_at") < enqueue.index(
+        "await publish_prepared_download("
+    )
+    assert "sql_update" not in enqueue
