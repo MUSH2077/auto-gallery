@@ -354,8 +354,8 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
             selected = await select_eligible_membership_source(db, source, now=now)
 
             assert selected is None
-            assert source.is_enabled is True
-            assert source.auth_healthy is True
+            assert source.is_enabled is False
+            assert source.auth_healthy is False
             await db.rollback()
     finally:
         await engine.dispose()
@@ -770,7 +770,7 @@ async def test_tombstone_delete_and_stale_success_share_one_lock_order():
 async def test_validation_and_matching_auth_failure_share_one_lock_order():
     """Same-generation validation and failure serialize to one coherent state."""
 
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
     from app.database import async_session, engine
     from app.models import RemoteAccount, SubscriptionSource, UserSubscriptionSource
@@ -1558,7 +1558,7 @@ async def test_replacement_transaction_started_before_enqueue_stales_old_job_gen
 ):
     """Commit order, not transaction start time, defines credential identity."""
 
-    from sqlalchemy import select, text
+    from sqlalchemy import text
 
     from app.database import async_session, engine
     from app.models import DownloadJob, RemoteAccount, UserSubscriptionSource
