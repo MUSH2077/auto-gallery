@@ -162,6 +162,252 @@ async def _seed_bound_account(db, marker: str):
     return service, account, subscription, source, member, binding
 
 
+async def _force_imported_provenance(db, account, subscription, member):
+    from app.models import DiscoveryCandidate
+
+    candidate = DiscoveryCandidate(
+        remote_account_id=account.id,
+        user_id=account.user_id,
+        source_creator_id=f"imported-{uuid4().hex}",
+        state="imported",
+        subscription_id=subscription.id,
+        user_subscription_id=member.id,
+    )
+    db.add(candidate)
+    await db.flush()
+    return candidate
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_success_cannot_revive_tombstoned_account_or_binding():
+    """A pre-delete download receipt must leave deleted private provenance quarantined."""
+
+    from datetime import datetime, timezone
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, UserSubscriptionSource
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.subscription_enqueue import mark_source_sync_success
+
+    marker = f"remote_account_stale_success_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            await _force_imported_provenance(db, account, subscription, member)
+            account_id = account.id
+            source_id = source.id
+            binding_id = binding.id
+            member_id = member.id
+            await db.commit()
+
+            await service.delete(account_id)
+            await db.commit()
+            deleted_binding = await db.get(UserSubscriptionSource, binding_id)
+            deleted_checked_at = deleted_binding.last_auth_checked_at
+
+        async with async_session() as db:
+            await mark_source_sync_success(
+                db,
+                source_id,
+                datetime.now(timezone.utc),
+                triggering_user_subscription_id=member_id,
+                triggering_remote_account_id=account_id,
+            )
+            await db.commit()
+
+        async with async_session() as db:
+            account = await db.get(RemoteAccount, account_id)
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            service = RemoteAccountService(
+                db,
+                account.user_id,
+                vault=_vault(),
+                adapters=FakeRegistry(FakeAdapter()),
+            )
+            assert account.auth_status == "deleted"
+            assert account.is_enabled is False
+            assert account.credential_ciphertext is None
+            assert binding.auth_status == "deleted"
+            assert binding.auth_healthy is False
+            assert binding.auth_error_reason == "Remote account deleted"
+            assert binding.last_auth_checked_at == deleted_checked_at
+            assert binding.last_synced_at is None
+            assert binding.next_sync_at is None
+            assert await service.list() == []
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_auth_failure_cannot_overwrite_tombstone_or_hard_delete():
+    """Deleted private provenance is immutable for both tombstone and missing-account jobs."""
+
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, UserSubscriptionSource
+    from app.services.subscription_enqueue import mark_source_auth_failure
+
+    marker = f"ra_stale_failure_{uuid4().hex[:16]}"
+    hard_marker = f"{marker}_hard"
+    try:
+        async with async_session() as db:
+            service, account, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            await _force_imported_provenance(db, account, subscription, member)
+            tombstone_job = SimpleNamespace(
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=member.id,
+                triggering_remote_account_id=account.id,
+                created_at=datetime.now(timezone.utc),
+            )
+            account_id = account.id
+            binding_id = binding.id
+            await db.commit()
+            await service.delete(account_id)
+            await db.commit()
+            deleted_binding = await db.get(UserSubscriptionSource, binding_id)
+            deleted_checked_at = deleted_binding.last_auth_checked_at
+
+        async with async_session() as db:
+            await mark_source_auth_failure(
+                db,
+                tombstone_job,
+                "HTTP 401 Unauthorized",
+            )
+            await db.commit()
+            account = await db.get(RemoteAccount, account_id)
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            assert account.auth_status == "deleted"
+            assert account.is_enabled is False
+            assert account.credential_ciphertext is None
+            assert binding.auth_status == "deleted"
+            assert binding.auth_healthy is False
+            assert binding.auth_error_reason == "Remote account deleted"
+            assert binding.last_auth_checked_at == deleted_checked_at
+            assert binding.next_sync_at is None
+
+        async with async_session() as db:
+            hard_service, hard_account, _, hard_source, hard_member, hard_binding = (
+                await _seed_bound_account(db, hard_marker)
+            )
+            hard_job = SimpleNamespace(
+                subscription_source_id=hard_source.id,
+                triggering_user_subscription_id=hard_member.id,
+                triggering_remote_account_id=hard_account.id,
+                created_at=datetime.now(timezone.utc),
+            )
+            hard_account_id = hard_account.id
+            hard_binding_id = hard_binding.id
+            await db.commit()
+            await hard_service.delete(hard_account_id)
+            await db.commit()
+
+        async with async_session() as db:
+            await mark_source_auth_failure(db, hard_job, "HTTP 403 Forbidden")
+            await db.commit()
+            assert await db.get(RemoteAccount, hard_account_id) is None
+            hard_binding = await db.get(UserSubscriptionSource, hard_binding_id)
+            assert hard_binding.remote_account_id is None
+            assert hard_binding.auth_status == "deleted"
+            assert hard_binding.auth_error_reason == "Remote account deleted"
+            assert hard_binding.auth_healthy is False
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_pre_reconnect_outcomes_cannot_corrupt_revived_account():
+    """An old job ID match is insufficient after the same account ID gets new credentials."""
+
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, UserSubscriptionSource
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.subscription_enqueue import (
+        mark_source_auth_failure,
+        mark_source_sync_success,
+    )
+
+    marker = f"remote_account_reconnect_race_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            await _force_imported_provenance(db, account, subscription, member)
+            stale_job = SimpleNamespace(
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=member.id,
+                triggering_remote_account_id=account.id,
+                created_at=datetime.now(timezone.utc),
+            )
+            account_id = account.id
+            binding_id = binding.id
+            source_id = source.id
+            member_id = member.id
+            await db.commit()
+            await service.delete(account_id)
+            await db.commit()
+
+            revived = await service.create(
+                {
+                    "source": "pixiv",
+                    "auth_method": "refresh_token",
+                    "credentials": {"refresh_token": "top-secret-refresh"},
+                }
+            )
+            await service.test(revived.id)
+            await db.commit()
+
+        async with async_session() as db:
+            await mark_source_auth_failure(db, stale_job, "HTTP 401 Unauthorized")
+            await mark_source_sync_success(
+                db,
+                source_id,
+                datetime.now(timezone.utc),
+                triggering_user_subscription_id=member_id,
+                triggering_remote_account_id=account_id,
+                provenance_created_at=stale_job.created_at,
+            )
+            await db.commit()
+
+        async with async_session() as db:
+            account = await db.get(RemoteAccount, account_id)
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            assert account.auth_status == "healthy"
+            assert account.is_enabled is True
+            assert account.credential_ciphertext is not None
+            assert binding.auth_status == "healthy"
+            assert binding.auth_healthy is True
+            assert binding.auth_error_reason is None
+            service = RemoteAccountService(
+                db,
+                account.user_id,
+                vault=_vault(),
+                adapters=FakeRegistry(FakeAdapter()),
+            )
+            assert [item.id for item in await service.list()] == [account_id]
+            assert (await service.test(account_id)).auth_status == "healthy"
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_remote_account_delete_tombstones_imported_provenance_and_create_revives_it():

@@ -16,6 +16,54 @@ from uuid import uuid4
 import pytest
 
 
+class _FirstRowLockBarrier:
+    """Pause the first locker until its peer locks or blocks on the same scope."""
+
+    def __init__(self, *, solo_release_seconds: float = 0.25):
+        self.first_arrived = asyncio.Event()
+        self._release = asyncio.Event()
+        self._guard = asyncio.Lock()
+        self._arrivals = 0
+        self._solo_release_seconds = solo_release_seconds
+
+    async def arrive(self) -> None:
+        async with self._guard:
+            self._arrivals += 1
+            self.first_arrived.set()
+            if self._arrivals >= 2:
+                self._release.set()
+        try:
+            await asyncio.wait_for(
+                self._release.wait(), timeout=self._solo_release_seconds
+            )
+        except TimeoutError:
+            # With a consistent lock order the peer blocks on the same first
+            # row, so let the owner finish and release it.
+            self._release.set()
+
+
+class _FirstForUpdateSession:
+    """AsyncSession proxy that delays only the first real PostgreSQL row lock."""
+
+    def __init__(self, db, barrier: _FirstRowLockBarrier):
+        self._db = db
+        self._barrier = barrier
+        self._paused = False
+
+    async def execute(self, statement, *args, **kwargs):
+        result = await self._db.execute(statement, *args, **kwargs)
+        if (
+            not self._paused
+            and getattr(statement, "_for_update_arg", None) is not None
+        ):
+            self._paused = True
+            await self._barrier.arrive()
+        return result
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 async def _cleanup_shared_test_rows(db) -> None:
     from sqlalchemy import text
 
@@ -575,6 +623,231 @@ async def test_stale_private_auth_failure_never_poisons_canonical_source():
             assert source.auth_status != "unhealthy"
             await db.rollback()
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tombstone_delete_and_stale_success_share_one_lock_order():
+    """Delete and finalization must complete without a RA/USS deadlock."""
+
+    from sqlalchemy import select, text
+
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount, UserSubscriptionSource
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_enqueue import mark_source_sync_success
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    barrier = _FirstRowLockBarrier()
+    source_id = None
+    account_id = None
+    binding_ids = None
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for account in accounts:
+                account.auth_status = "healthy"
+            db.add(
+                DiscoveryCandidate(
+                    remote_account_id=accounts[0].id,
+                    user_id=users[0].id,
+                    source_creator_id=f"lock-order-{uuid4().hex}",
+                    state="imported",
+                    subscription_id=subscription.id,
+                    user_subscription_id=members[0].id,
+                )
+            )
+            await db.commit()
+            source_id = source.id
+            account_id = accounts[0].id
+            member_id = members[0].id
+            binding_ids = [binding.id for binding in bindings]
+
+        vault = CredentialVault(base64.urlsafe_b64encode(b"l" * 32).decode())
+
+        async def delete_account():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET LOCAL lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await RemoteAccountService(db, users[0].id, vault=vault).delete(
+                    account_id
+                )
+                await raw_db.commit()
+
+        async def record_stale_success():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET LOCAL lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await mark_source_sync_success(
+                    db,
+                    source_id,
+                    now + timedelta(minutes=1),
+                    triggering_user_subscription_id=member_id,
+                    triggering_remote_account_id=account_id,
+                )
+                await raw_db.commit()
+
+        delete_task = asyncio.create_task(delete_account())
+        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        success_task = asyncio.create_task(record_stale_success())
+        await asyncio.wait_for(
+            asyncio.gather(delete_task, success_task), timeout=6
+        )
+
+        async with async_session() as db:
+            account = await db.get(RemoteAccount, account_id)
+            stored_bindings = list(
+                (
+                    await db.execute(
+                        select(UserSubscriptionSource)
+                        .where(UserSubscriptionSource.id.in_(binding_ids))
+                        .order_by(UserSubscriptionSource.id)
+                    )
+                ).scalars()
+            )
+            deleted = next(
+                binding
+                for binding in stored_bindings
+                if binding.remote_account_id == account_id
+            )
+            peer = next(binding for binding in stored_bindings if binding.id != deleted.id)
+            assert account.auth_status == "deleted"
+            assert account.credential_ciphertext is None
+            assert deleted.auth_status == "deleted"
+            assert deleted.auth_healthy is False
+            assert deleted.last_synced_at is None
+            assert deleted.next_sync_at is None
+            assert peer.last_synced_at == now + timedelta(minutes=1)
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_validation_and_stale_auth_failure_share_one_lock_order():
+    """Revalidation and an old failure serialize without deadlock or split health."""
+
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.models import RemoteAccount, SubscriptionSource, UserSubscriptionSource
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_enqueue import mark_source_auth_failure
+
+    class ValidAdapter:
+        source = "pixiv"
+
+        async def validate_account(self, credentials):
+            assert credentials.materialize()["refresh_token"] == "lock-order-token"
+            return RemoteCandidateIdentity(
+                source="pixiv",
+                source_creator_id="lock-order-user",
+                profile_url="https://www.pixiv.net/users/42001",
+                display_name="Lock Order User",
+            )
+
+    class ValidRegistry:
+        def get(self, source):
+            assert source == "pixiv"
+            return ValidAdapter()
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    barrier = _FirstRowLockBarrier()
+    vault = CredentialVault(base64.urlsafe_b64encode(b"v" * 32).decode())
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                _subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[0]
+            account.auth_status = "healthy"
+            account.credential_ciphertext = vault.encrypt(
+                {"refresh_token": "lock-order-token"},
+                user_id=account.user_id,
+                source=account.source,
+                account_id=account.id,
+            )
+            await db.commit()
+            await db.refresh(account)
+            job = SimpleNamespace(
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=account.id,
+                created_at=account.updated_at,
+            )
+            user_id = users[0].id
+            account_id = account.id
+            source_id = source.id
+            binding_id = bindings[0].id
+
+        async def validate_account():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET LOCAL lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                service = RemoteAccountService(
+                    db,
+                    user_id,
+                    vault=vault,
+                    adapters=ValidRegistry(),
+                )
+                await service.test(account_id)
+                await raw_db.commit()
+
+        async def record_stale_failure():
+            async with async_session() as raw_db:
+                await raw_db.execute(text("SET LOCAL lock_timeout = '3s'"))
+                db = _FirstForUpdateSession(raw_db, barrier)
+                await mark_source_auth_failure(
+                    db,
+                    job,
+                    "HTTP 401 Unauthorized",
+                    when=now + timedelta(minutes=1),
+                )
+                await raw_db.commit()
+
+        validation_task = asyncio.create_task(validate_account())
+        await asyncio.wait_for(barrier.first_arrived.wait(), timeout=2)
+        failure_task = asyncio.create_task(record_stale_failure())
+        await asyncio.wait_for(
+            asyncio.gather(validation_task, failure_task), timeout=6
+        )
+
+        async with async_session() as db:
+            account = await db.get(RemoteAccount, account_id)
+            binding = await db.get(UserSubscriptionSource, binding_id)
+            source = await db.get(SubscriptionSource, source_id)
+            assert account.auth_status == "healthy"
+            assert account.auth_error_reason is None
+            assert binding.auth_status == "healthy"
+            assert binding.auth_healthy is True
+            assert binding.auth_error_reason is None
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
         await engine.dispose()
 
 

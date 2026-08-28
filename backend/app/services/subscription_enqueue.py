@@ -81,19 +81,33 @@ async def mark_source_sync_success(
     *,
     triggering_user_subscription_id: UUID | None = None,
     triggering_remote_account_id: UUID | None = None,
+    provenance_created_at: datetime | None = None,
 ) -> None:
+    """Fan out a shared receipt without reviving stale private provenance.
+
+    Every path that can mutate personal credential health uses the same row
+    lock order: ``RemoteAccount`` (when present), then
+    ``UserSubscriptionSource`` ordered by id, then the canonical aggregate.
+    Account lifecycle operations use the same order.  Keeping the trigger
+    account lock first prevents delete/revalidation from deadlocking with a
+    fast download outcome.
+    """
+
     when = when or datetime.now(timezone.utc)
     ss = await db.get(SubscriptionSource, subscription_source_id)
     if not ss:
         return
-    ss.last_synced_at = when
-    ss.last_successful_auth = when
-    await refresh_subscription_last_synced_at(db, ss.subscription_id)
+    trigger_account = None
+    if triggering_remote_account_id is not None:
+        with db.no_autoflush:
+            trigger_account = (
+                await db.execute(
+                    select(RemoteAccount)
+                    .where(RemoteAccount.id == triggering_remote_account_id)
+                    .with_for_update(of=RemoteAccount)
+                )
+            ).scalar_one_or_none()
     sub = await db.get(Subscription, ss.subscription_id)
-    # A success changes the interval base.  NULL invalidates the old due time;
-    # the next fair coverage pass recomputes interval/fixed/manual semantics in
-    # its short claim transaction.
-    ss.next_sync_at = None
     config = await get_scheduler_config(db)
     from app.services.subscription_replan import next_user_subscription_check_at
 
@@ -108,11 +122,23 @@ async def mark_source_sync_success(
                 UserSubscriptionSource.subscription_source_id == ss.id,
                 UserSubscription.is_active.is_(True),
             )
+            .order_by(UserSubscriptionSource.id)
             .with_for_update(of=UserSubscriptionSource)
         )
     ).all()
-    successful_binding_account_id = None
+    ss.last_synced_at = when
+    ss.last_successful_auth = when
+    await refresh_subscription_last_synced_at(db, ss.subscription_id)
+    # A success changes the interval base.  NULL invalidates the old due time;
+    # the next fair coverage pass recomputes interval/fixed/manual semantics in
+    # its short claim transaction.
+    ss.next_sync_at = None
     for binding, membership in rows:
+        # Hard-deleted bindings intentionally retain a NULL account plus a
+        # deleted health marker so they cannot masquerade as migrated legacy
+        # global-auth bindings. Tombstones retain the FK with the same marker.
+        if binding.auth_status == "deleted":
+            continue
         binding.last_synced_at = when
         binding.last_attempted_at = when
         binding.next_sync_at = (
@@ -124,23 +150,20 @@ async def mark_source_sync_success(
             membership.id == triggering_user_subscription_id
             and binding.remote_account_id == triggering_remote_account_id
         )
-        if provenance_matches:
+        if provenance_matches and _binding_provenance_is_current(
+            trigger_account,
+            binding,
+            provenance_created_at=provenance_created_at,
+        ):
             binding.last_successful_auth = when
             binding.auth_healthy = True
             binding.auth_status = "healthy"
             binding.auth_error_reason = None
             binding.last_auth_checked_at = when
-            successful_binding_account_id = binding.remote_account_id
-
-    if (
-        triggering_remote_account_id is not None
-        and successful_binding_account_id == triggering_remote_account_id
-    ):
-        account = await db.get(RemoteAccount, triggering_remote_account_id)
-        if account is not None:
-            account.auth_status = "healthy"
-            account.auth_error_reason = None
-            account.last_authenticated_at = when
+            if trigger_account is not None:
+                trigger_account.auth_status = "healthy"
+                trigger_account.auth_error_reason = None
+                trigger_account.last_authenticated_at = when
     await recompute_subscription_membership_cache(db, ss.subscription_id)
     await request_search_projection(
         db,
@@ -168,6 +191,24 @@ async def mark_source_auth_failure(
         return
     membership_id = getattr(job, "triggering_user_subscription_id", None)
     account_id = getattr(job, "triggering_remote_account_id", None)
+    account = None
+    if account_id is not None:
+        with db.no_autoflush:
+            account = (
+                await db.execute(
+                    select(RemoteAccount)
+                    .where(RemoteAccount.id == account_id)
+                    .with_for_update(of=RemoteAccount)
+                )
+            ).scalar_one_or_none()
+        # A private job whose account was deleted, tombstoned, disabled, or
+        # replaced has stale provenance. It must not fall through to legacy
+        # global auth or damage a newly reconnected credential generation.
+        if not _private_account_can_accept_outcome(
+            account,
+            provenance_created_at=getattr(job, "created_at", None),
+        ):
+            return
     binding = None
     if membership_id is not None:
         conditions = [
@@ -197,15 +238,18 @@ async def mark_source_auth_failure(
     else:
         safe_reason = "Authentication failed"
     if binding is not None:
-        binding.auth_healthy = False
-        binding.auth_status = "unhealthy"
-        binding.auth_error_reason = safe_reason
-        binding.last_auth_checked_at = when
-    if account_id is not None and binding is not None:
-        account = await db.get(RemoteAccount, account_id)
-        if account is not None and account.user_id == binding.user_id:
-            account.auth_status = "unhealthy"
-            account.auth_error_reason = safe_reason
+        if _binding_provenance_is_current(
+            account,
+            binding,
+            provenance_created_at=getattr(job, "created_at", None),
+        ):
+            binding.auth_healthy = False
+            binding.auth_status = "unhealthy"
+            binding.auth_error_reason = safe_reason
+            binding.last_auth_checked_at = when
+            if account is not None:
+                account.auth_status = "unhealthy"
+                account.auth_error_reason = safe_reason
     if binding is None and membership_id is None and account_id is None:
         # Compatibility for a truly legacy job without member provenance.
         source.auth_healthy = False
@@ -214,6 +258,48 @@ async def mark_source_auth_failure(
         source.last_auth_checked_at = when
     elif binding is not None:
         await recompute_subscription_membership_cache(db, source.subscription_id)
+
+
+def _private_account_can_accept_outcome(
+    account: RemoteAccount | None,
+    *,
+    provenance_created_at: datetime | None,
+) -> bool:
+    """Check private credential generation while its account row is locked."""
+
+    if (
+        account is None
+        or not account.is_enabled
+        or account.auth_status == "deleted"
+        or not account.credential_ciphertext
+    ):
+        return False
+    account_updated_at = _as_utc(account.updated_at)
+    provenance_created_at = _as_utc(provenance_created_at)
+    return not (
+        account_updated_at is not None
+        and provenance_created_at is not None
+        and account_updated_at > provenance_created_at
+    )
+
+
+def _binding_provenance_is_current(
+    account: RemoteAccount | None,
+    binding: UserSubscriptionSource,
+    *,
+    provenance_created_at: datetime | None,
+) -> bool:
+    if account is None:
+        return binding.remote_account_id is None and binding.auth_status != "deleted"
+    return bool(
+        binding.auth_status != "deleted"
+        and binding.remote_account_id == account.id
+        and binding.user_id == account.user_id
+        and _private_account_can_accept_outcome(
+            account,
+            provenance_created_at=provenance_created_at,
+        )
+    )
 
 
 async def _latest_job_for_source(db: AsyncSession, source_id: UUID) -> DownloadJob | None:

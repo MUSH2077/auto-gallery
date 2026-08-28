@@ -286,6 +286,13 @@ class RemoteAccountService:
         self,
         account_id: UUID,
     ) -> list[UserSubscriptionSource]:
+        """Lock bindings only after the caller has locked this account row.
+
+        Credential lifecycle and download outcomes share the deterministic
+        ``RemoteAccount -> UserSubscriptionSource -> canonical aggregate``
+        order documented in ``subscription_enqueue.mark_source_sync_success``.
+        """
+
         bindings = list(
             (
                 await self.db.execute(
