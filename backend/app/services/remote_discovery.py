@@ -303,16 +303,53 @@ class RemoteDiscoveryService:
         return candidate
 
     async def run_scan(self, task_id: UUID) -> TaskRun:
-        task = await self.db.get(TaskRun, task_id)
-        if task is None or task.operation_type != "remote-discovery-scan":
-            raise ValueError("Discovery scan task not found")
-        if task.status == "complete":
-            return task
-        if not task.triggering_remote_account_id:
+        claimed_at = _now()
+        claimed = (
+            await self.db.execute(
+                update(TaskRun)
+                .where(
+                    TaskRun.id == task_id,
+                    TaskRun.operation_type == "remote-discovery-scan",
+                    TaskRun.status.in_({"enqueued", "recovering"}),
+                )
+                .values(
+                    status="running",
+                    resource_state="running",
+                    started_at=func.coalesce(TaskRun.started_at, claimed_at),
+                    finished_at=None,
+                    last_heartbeat_at=claimed_at,
+                    updated_at=claimed_at,
+                )
+                .returning(TaskRun.id, TaskRun.triggering_remote_account_id)
+            )
+        ).first()
+        if claimed is None:
+            task = await self.db.get(TaskRun, task_id)
+            if task is None or task.operation_type != "remote-discovery-scan":
+                raise ValueError("Discovery scan task not found")
+            if task.status == "complete":
+                return task
+            if task.status == "running":
+                raise DiscoveryScanInProgress(task.id)
+            # Stale/failed scans are deliberately not self-claimed: normal task
+            # recovery must transition them back to enqueued first, preserving
+            # retry accounting and preventing an abandoned worker from reviving
+            # itself behind the control plane.
+            raise ValueError("Discovery scan must be re-enqueued before execution")
+
+        account_id = claimed.triggering_remote_account_id
+        if account_id is None:
             raise ValueError("Discovery scan task has no account")
-        account = await self.db.get(RemoteAccount, task.triggering_remote_account_id)
+        account = (
+            await self.db.execute(
+                select(RemoteAccount)
+                .where(RemoteAccount.id == account_id)
+                .with_for_update(of=RemoteAccount)
+            )
+        ).scalar_one_or_none()
         if account is None:
             raise ValueError("Remote account not found")
+        task = await self.db.get(TaskRun, task_id, populate_existing=True)
         progress = dict(task.progress_data or {})
         selectors = account.collection_selectors or [{}]
         selector_index = int(progress.get("selector_index") or 0)
@@ -321,9 +358,15 @@ class RemoteDiscoveryService:
         pages_completed = int(progress.get("pages_completed") or 0)
         seen_count = int(progress.get("candidates_seen") or 0)
         task_service = TaskService(self.db)
+        await task_service.add_event(
+            task,
+            "status_changed",
+            from_status="enqueued",
+            to_status="running",
+            message="Discovery scan worker claimed task",
+        )
         await task_service.update_task(
             task,
-            status="running",
             progress={**progress, "phase": "fetching"},
             resource_state="running",
         )

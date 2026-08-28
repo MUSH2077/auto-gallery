@@ -291,6 +291,104 @@ async def test_incomplete_scan_preserves_prior_follow_state_and_checkpoint_witho
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_run_scan_atomically_claims_single_provider_execution_and_requires_stale_requeue():
+    """Concurrent workers cannot both cross the adapter boundary for one scan."""
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.models import TaskRun
+    from app.remote_discovery.contract import DiscoveryPage, RemoteCandidateIdentity
+    from app.services.remote_discovery import DiscoveryScanInProgress, RemoteDiscoveryService
+
+    class BlockingAdapter(PagedPixivAdapter):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def fetch_page(self, credentials, *, selector, cursor=None, page_size=100):
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+            return DiscoveryPage(
+                items=(
+                    RemoteCandidateIdentity(
+                        source="pixiv",
+                        source_creator_id="single-flight-candidate",
+                        profile_url="https://www.pixiv.net/users/7711",
+                        display_name="Single Flight",
+                        metadata={"has_illustration_preview": True},
+                    ),
+                ),
+                next_cursor=None,
+                done=True,
+            )
+
+    adapter = BlockingAdapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "singleflight")
+            account = await _account(db, user, adapter)
+            task = await RemoteDiscoveryService(
+                db, vault=_vault(), adapters=adapters
+            ).create_scan(user.id, account.id)
+            await db.commit()
+            task_id = task.id
+
+        async def execute_scan():
+            async with async_session() as worker_db:
+                return await RemoteDiscoveryService(
+                    worker_db, vault=_vault(), adapters=adapters
+                ).run_scan(task_id)
+
+        first_run = asyncio.create_task(execute_scan())
+        await asyncio.wait_for(adapter.started.wait(), timeout=5)
+        with pytest.raises(DiscoveryScanInProgress):
+            await asyncio.wait_for(execute_scan(), timeout=2)
+        assert adapter.calls == 1
+        adapter.release.set()
+        completed = await asyncio.wait_for(first_run, timeout=10)
+        assert completed.status == "complete"
+
+        # Complete is idempotent and does not cross the provider boundary.
+        completed_again = await execute_scan()
+        assert completed_again.status == "complete"
+        assert adapter.calls == 1
+
+        async with async_session() as db:
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            account_id = (await db.get(TaskRun, task_id)).triggering_remote_account_id
+            stale_task = await service.create_scan(user.id, account_id)
+            stale_task.status = "stale"
+            await db.commit()
+            stale_task_id = stale_task.id
+
+        async with async_session() as worker_db:
+            with pytest.raises(ValueError, match="re-enqueued"):
+                await RemoteDiscoveryService(
+                    worker_db, vault=_vault(), adapters=adapters
+                ).run_scan(stale_task_id)
+            await worker_db.rollback()
+            stale_task = await worker_db.get(TaskRun, stale_task_id)
+            stale_task.status = "enqueued"
+            await worker_db.commit()
+            retried = await RemoteDiscoveryService(
+                worker_db, vault=_vault(), adapters=adapters
+            ).run_scan(stale_task_id)
+            assert retried.status == "complete"
+        assert adapter.calls == 2
+    finally:
+        adapter.release.set()
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_automatic_import_is_opt_in_thresholded_capped_and_reported():
     """A complete scan imports only eligible pending rows up to the account cap."""
     from app.database import async_session, engine
