@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -274,21 +274,34 @@ class RemoteAccountService:
         """Update every binding for one owned account and refresh shared caches."""
 
         checked_at = checked_at or datetime.now(timezone.utc)
-        bindings = list(
-            (
-                await self.db.execute(
-                    select(UserSubscriptionSource)
-                    .where(UserSubscriptionSource.remote_account_id == account.id)
-                    .with_for_update(of=UserSubscriptionSource)
-                )
-            ).scalars()
-        )
+        bindings = await self._locked_account_bindings(account.id)
         for binding in bindings:
             binding.auth_healthy = healthy
             binding.auth_status = "healthy" if healthy else "unhealthy"
             binding.auth_error_reason = None if healthy else "Account validation failed"
             binding.last_auth_checked_at = checked_at
+        await self._recompute_binding_caches(bindings)
 
+    async def _locked_account_bindings(
+        self,
+        account_id: UUID,
+    ) -> list[UserSubscriptionSource]:
+        bindings = list(
+            (
+                await self.db.execute(
+                    select(UserSubscriptionSource)
+                    .where(UserSubscriptionSource.remote_account_id == account_id)
+                    .order_by(UserSubscriptionSource.id)
+                    .with_for_update(of=UserSubscriptionSource)
+                )
+            ).scalars()
+        )
+        return bindings
+
+    async def _recompute_binding_caches(
+        self,
+        bindings: list[UserSubscriptionSource],
+    ) -> None:
         from app.services.subscription_membership import (
             recompute_subscription_membership_cache,
         )
@@ -347,6 +360,13 @@ class RemoteAccountService:
             self.db.add(account)
         await self.db.flush()
         self._encrypt(account, credentials)
+        if existing is not None:
+            # A tombstoned account keeps imported provenance/binding ownership.
+            # Reconnection remains ineligible until explicit validation heals
+            # those bindings, but canonical caches must see the revived account.
+            await self._recompute_binding_caches(
+                await self._locked_account_bindings(account.id)
+            )
         await self.db.flush()
         await self.db.refresh(account)
         return self._read(account)
@@ -374,6 +394,7 @@ class RemoteAccountService:
 
     async def update(self, account_id: UUID, data: dict[str, Any]) -> RemoteAccountRead:
         account = await self._account(account_id, lock=True)
+        was_enabled = account.is_enabled
         credentials = data.get("credentials")
         requested_auth_method = data.get("auth_method") or account.auth_method or ""
         self._validate_auth_method(account.source, requested_auth_method)
@@ -403,6 +424,10 @@ class RemoteAccountService:
             account.auth_status = "untested"
             account.auth_error_reason = None
             await self._set_binding_health(account, healthy=True)
+        elif account.is_enabled != was_enabled:
+            await self._recompute_binding_caches(
+                await self._locked_account_bindings(account.id)
+            )
         await self.db.flush()
         await self.db.refresh(account)
         return self._read(account)
@@ -439,11 +464,7 @@ class RemoteAccountService:
 
     async def delete(self, account_id: UUID) -> None:
         account = await self._account(account_id, lock=True)
-        await self.db.execute(
-            update(UserSubscriptionSource)
-            .where(UserSubscriptionSource.remote_account_id == account.id)
-            .values(remote_account_id=None)
-        )
+        bindings = await self._locked_account_bindings(account.id)
         imported_exists = (
             await self.db.execute(
                 select(DiscoveryCandidate.id)
@@ -463,6 +484,13 @@ class RemoteAccountService:
         account.credential_ciphertext = None
         account.credential_metadata = None
         account.credential_key_version = None
+        checked_at = datetime.now(timezone.utc)
+        for binding in bindings:
+            binding.auth_healthy = False
+            binding.auth_status = "deleted"
+            binding.auth_error_reason = "Remote account deleted"
+            binding.last_auth_checked_at = checked_at
+            binding.next_sync_at = None
         if imported_exists:
             account.is_enabled = False
             account.auth_status = "deleted"
@@ -471,7 +499,14 @@ class RemoteAccountService:
             account.scan_cursor = None
             account.next_scan_at = None
             await self.db.flush()
+            await self._recompute_binding_caches(bindings)
             return
+        # Hard deletion needs the nullable FK cleared before PostgreSQL can
+        # remove the account.  The unhealthy/deleted binding state is retained
+        # so this can never masquerade as a migrated legacy NULL credential.
+        for binding in bindings:
+            binding.remote_account_id = None
         await self.db.flush()
         await self.db.delete(account)
         await self.db.flush()
+        await self._recompute_binding_caches(bindings)

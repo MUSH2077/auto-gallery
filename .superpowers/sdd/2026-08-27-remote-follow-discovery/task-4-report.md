@@ -259,3 +259,36 @@ independent discovery queue still shares the operations worker process until
 Task 6 finalizes deployment controls. Test isolation forced the dedicated
 `autogallery_test` PostgreSQL database and Redis DB 15. The pre-existing
 untracked `admin-web/node_modules` symlink was not touched or added.
+
+## Review Fix Round 2 (2026-08-28)
+
+Round 2 started from `8dacb8e` and closes the account deletion/enablement
+eligibility boundary without changing legacy migrated NULL bindings.
+
+- Account deletion locks and captures every affected private binding before
+  changing credentials or foreign keys. Each binding becomes effectively
+  disabled through `auth_healthy=false`, safe `deleted` status/reason, and a
+  NULL due time while retaining its private `is_enabled` preference.
+- Hard deletion flushes that safe state and clears `remote_account_id` before
+  deleting the account, satisfying the PostgreSQL `RESTRICT` FK without
+  converting the binding into usable legacy/global authentication.
+- Imported provenance keeps a credential-free, list-invisible tombstone and
+  retains the binding account FK. Reconnecting revives the same account and
+  remains ineligible until successful validation explicitly heals its related
+  bindings and canonical caches.
+- Account `is_enabled` changes transactionally recompute all affected
+  canonical caches. Disable/re-enable never changes binding preference and
+  never heals an auth-failed binding merely through a toggle.
+- Legacy bindings whose account ID was NULL and whose health was valid from
+  inception remain eligible for the global configuration path.
+
+TDD evidence on real PostgreSQL:
+
+- RED: tombstone deletion cleared the provenance FK; hard deletion left the
+  resulting NULL binding healthy/selectable; account disable left the
+  canonical source enabled.
+- Focused GREEN: `3 passed, 7 deselected in 1.50s`.
+- Account/delete/discovery/membership/Task 4/scheduler regression:
+  `103 passed in 113.07s`.
+- Compileall, Ruff for both changed Python files, and `git diff --check` all
+  passed. No live provider call or real credential was used.

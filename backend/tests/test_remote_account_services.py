@@ -51,6 +51,117 @@ class FakeRegistry:
         return self.adapter
 
 
+async def _cleanup_account_fixture(db, marker: str) -> None:
+    from sqlalchemy import text
+
+    params = {"marker": f"{marker}%"}
+    for table in (
+        "discovery_candidates",
+        "user_subscription_sources",
+        "remote_accounts",
+        "user_subscriptions",
+    ):
+        await db.execute(
+            text(
+                f"DELETE FROM {table} WHERE user_id IN "
+                "(SELECT id FROM users WHERE username LIKE :marker)"
+            ),
+            params,
+        )
+    await db.execute(
+        text(
+            "DELETE FROM subscription_sources WHERE subscription_id IN "
+            "(SELECT s.id FROM subscriptions s JOIN creators c ON c.id=s.creator_id "
+            "WHERE c.name LIKE :marker)"
+        ),
+        params,
+    )
+    await db.execute(
+        text(
+            "DELETE FROM subscriptions WHERE creator_id IN "
+            "(SELECT id FROM creators WHERE name LIKE :marker)"
+        ),
+        params,
+    )
+    await db.execute(
+        text("DELETE FROM creators WHERE name LIKE :marker"),
+        params,
+    )
+    await db.execute(
+        text("DELETE FROM users WHERE username LIKE :marker"),
+        params,
+    )
+    await db.commit()
+
+
+async def _seed_bound_account(db, marker: str):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import (
+        Creator,
+        Subscription,
+        SubscriptionSource,
+        User,
+        UserSubscription,
+        UserSubscriptionSource,
+    )
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+    )
+
+    user = User(username=marker, password_hash="test-only", is_active=True)
+    db.add(user)
+    creator = Creator(name=marker)
+    db.add(creator)
+    await db.flush()
+    service = RemoteAccountService(
+        db,
+        user.id,
+        vault=_vault(),
+        adapters=FakeRegistry(FakeAdapter()),
+    )
+    account = await service.create(
+        {
+            "source": "pixiv",
+            "auth_method": "refresh_token",
+            "credentials": {"refresh_token": "top-secret-refresh"},
+        }
+    )
+    await service.test(account.id)
+    subscription = Subscription(creator_id=creator.id, name=marker)
+    db.add(subscription)
+    await db.flush()
+    source = SubscriptionSource(
+        subscription_id=subscription.id,
+        source="pixiv",
+        source_creator_id="4242",
+        source_url="https://www.pixiv.net/users/4242",
+    )
+    member = UserSubscription(
+        user_id=user.id,
+        subscription_id=subscription.id,
+        name=marker,
+    )
+    db.add_all([source, member])
+    await db.flush()
+    binding = UserSubscriptionSource(
+        user_id=user.id,
+        subscription_id=subscription.id,
+        user_subscription_id=member.id,
+        subscription_source_id=source.id,
+        remote_account_id=account.id,
+        is_enabled=True,
+        auth_healthy=True,
+        auth_status="healthy",
+        next_sync_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    db.add(binding)
+    await db.flush()
+    await recompute_subscription_membership_cache(db, subscription.id)
+    return service, account, subscription, source, member, binding
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_remote_account_delete_tombstones_imported_provenance_and_create_revives_it():
@@ -69,6 +180,10 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
         UserSubscriptionSource,
     )
     from app.services.remote_accounts import RemoteAccountService
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
 
     marker = f"remote_account_test_{uuid4().hex}"
     adapter = FakeAdapter()
@@ -147,6 +262,7 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
                 user_subscription_id=member.id,
                 subscription_source_id=canonical_source.id,
                 remote_account_id=account.id,
+                next_sync_at=None,
             )
             pending = DiscoveryCandidate(
                 remote_account_id=account.id,
@@ -163,6 +279,8 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
                 user_subscription_id=member.id,
             )
             db.add_all([binding, pending, imported])
+            await recompute_subscription_membership_cache(db, subscription.id)
+            assert canonical_source.is_enabled is True
             await db.commit()
 
             await service.delete(account.id)
@@ -176,7 +294,24 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
             assert tombstone.credential_key_version is None
             assert await db.get(UserSubscription, member.id) is not None
             await db.refresh(binding)
-            assert binding.remote_account_id is None
+            assert binding.remote_account_id == account.id
+            assert binding.is_enabled is True
+            assert binding.auth_healthy is False
+            assert binding.auth_status == "deleted"
+            assert binding.auth_error_reason == "Remote account deleted"
+            assert binding.next_sync_at is None
+            await db.refresh(canonical_source)
+            assert canonical_source.is_enabled is False
+            assert canonical_source.auth_healthy is False
+            assert canonical_source.next_sync_at is None
+            assert await select_eligible_membership_source(
+                db,
+                canonical_source,
+                now=canonical_source.updated_at,
+                preferred_membership_id=member.id,
+                preferred_account_id=account.id,
+                require_due=False,
+            ) is None
             candidates = (
                 await db.execute(
                     select(DiscoveryCandidate).where(DiscoveryCandidate.user_id == user.id)
@@ -203,6 +338,28 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
             assert revived.collection_selectors == [{"restrict": "private"}]
             assert [listed.id for listed in await service.list()] == [account.id]
             assert await db.get(DiscoveryCandidate, imported.id) is not None
+            await db.refresh(binding)
+            assert binding.remote_account_id == revived.id
+            assert binding.auth_healthy is False
+            await db.refresh(canonical_source)
+            assert canonical_source.is_enabled is False
+
+            validated = await service.test(revived.id)
+            assert validated.auth_status == "healthy"
+            await db.refresh(binding)
+            await db.refresh(canonical_source)
+            assert binding.auth_healthy is True
+            assert canonical_source.is_enabled is True
+            selected = await select_eligible_membership_source(
+                db,
+                canonical_source,
+                now=canonical_source.updated_at,
+                preferred_membership_id=member.id,
+                preferred_account_id=revived.id,
+                require_due=False,
+            )
+            assert selected is not None
+            assert selected.binding.id == binding.id
     finally:
         async with async_session() as db:
             await db.execute(
@@ -238,6 +395,213 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
                 {"marker": f"{marker}%"},
             )
             await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_hard_deleted_account_binding_cannot_fall_back_to_legacy_null_auth():
+    """Clearing a deleted account FK must not convert private auth into legacy auth."""
+
+    from datetime import datetime, timezone
+
+    from app.database import async_session, engine
+    from app.models import (
+        Creator,
+        RemoteAccount,
+        Subscription,
+        SubscriptionSource,
+        User,
+        UserSubscription,
+        UserSubscriptionSource,
+    )
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    marker = f"remote_account_hard_delete_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account, _subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            await db.commit()
+
+            assert source.is_enabled is True
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+                preferred_account_id=account.id,
+            ) is not None
+
+            await service.delete(account.id)
+            await db.commit()
+
+            assert await db.get(RemoteAccount, account.id) is None
+            assert await db.get(UserSubscription, member.id) is not None
+            await db.refresh(binding)
+            await db.refresh(source)
+            assert binding.remote_account_id is None
+            assert binding.is_enabled is True
+            assert binding.auth_healthy is False
+            assert binding.auth_status == "deleted"
+            assert binding.auth_error_reason == "Remote account deleted"
+            assert binding.next_sync_at is None
+            assert source.is_enabled is False
+            assert source.auth_healthy is False
+            assert source.next_sync_at is None
+            assert await service.list() == []
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+                require_due=False,
+                require_preferred_account_match=True,
+            ) is None
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+            ) is None
+
+            # A migrated binding that was NULL and healthy from inception keeps
+            # the intentional global-config compatibility path.
+            legacy_marker = f"{marker}_l"
+            legacy_user = User(
+                username=legacy_marker,
+                password_hash="test-only",
+                is_active=True,
+            )
+            legacy_creator = Creator(name=legacy_marker)
+            db.add_all([legacy_user, legacy_creator])
+            await db.flush()
+            legacy_subscription = Subscription(
+                creator_id=legacy_creator.id,
+                name=legacy_marker,
+            )
+            db.add(legacy_subscription)
+            await db.flush()
+            legacy_source = SubscriptionSource(
+                subscription_id=legacy_subscription.id,
+                source="pixiv",
+                source_creator_id="legacy-null",
+                source_url="https://www.pixiv.net/users/999999",
+            )
+            legacy_member = UserSubscription(
+                user_id=legacy_user.id,
+                subscription_id=legacy_subscription.id,
+                name=legacy_marker,
+            )
+            db.add_all([legacy_source, legacy_member])
+            await db.flush()
+            legacy_binding = UserSubscriptionSource(
+                user_id=legacy_user.id,
+                subscription_id=legacy_subscription.id,
+                user_subscription_id=legacy_member.id,
+                subscription_source_id=legacy_source.id,
+                remote_account_id=None,
+                is_enabled=True,
+                auth_healthy=True,
+                auth_status="healthy",
+                next_sync_at=None,
+            )
+            db.add(legacy_binding)
+            await db.flush()
+            await recompute_subscription_membership_cache(db, legacy_subscription.id)
+            selected = await select_eligible_membership_source(
+                db,
+                legacy_source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=legacy_member.id,
+                require_due=False,
+                require_preferred_account_match=True,
+            )
+            assert selected is not None
+            assert selected.binding.id == legacy_binding.id
+            assert selected.account is None
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_remote_account_enablement_recomputes_cache_without_healing_binding():
+    """Account toggles affect eligibility but preserve private preference and auth."""
+
+    from datetime import datetime, timezone
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    marker = f"remote_account_toggle_{uuid4().hex}"
+    try:
+        async with async_session() as db:
+            service, account, subscription, source, member, binding = (
+                await _seed_bound_account(db, marker)
+            )
+            await db.commit()
+
+            await service.update(account.id, {"is_enabled": False})
+            assert binding.is_enabled is True
+            assert binding.auth_healthy is True
+            assert source.is_enabled is False
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+                preferred_account_id=account.id,
+                require_due=False,
+            ) is None
+
+            await service.update(account.id, {"is_enabled": True})
+            assert binding.is_enabled is True
+            assert binding.auth_healthy is True
+            assert source.is_enabled is True
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+                preferred_account_id=account.id,
+                require_due=False,
+            ) is not None
+
+            binding.auth_healthy = False
+            binding.auth_status = "unhealthy"
+            binding.auth_error_reason = "HTTP 401 Unauthorized"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            assert source.is_enabled is False
+
+            await service.update(account.id, {"is_enabled": False})
+            await service.update(account.id, {"is_enabled": True})
+            assert binding.is_enabled is True
+            assert binding.auth_healthy is False
+            assert binding.auth_error_reason == "HTTP 401 Unauthorized"
+            assert source.is_enabled is False
+            assert await select_eligible_membership_source(
+                db,
+                source,
+                now=datetime.now(timezone.utc),
+                preferred_membership_id=member.id,
+                preferred_account_id=account.id,
+                require_due=False,
+            ) is None
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _cleanup_account_fixture(db, marker)
         await engine.dispose()
 
 
