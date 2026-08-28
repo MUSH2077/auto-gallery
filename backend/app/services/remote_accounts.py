@@ -264,6 +264,41 @@ class RemoteAccountService:
             values["remote_user_id"] = account.remote_user_id
         return RedactedCredentials(values)
 
+    async def _set_binding_health(
+        self,
+        account: RemoteAccount,
+        *,
+        healthy: bool,
+        checked_at: datetime | None = None,
+    ) -> None:
+        """Update every binding for one owned account and refresh shared caches."""
+
+        checked_at = checked_at or datetime.now(timezone.utc)
+        bindings = list(
+            (
+                await self.db.execute(
+                    select(UserSubscriptionSource)
+                    .where(UserSubscriptionSource.remote_account_id == account.id)
+                    .with_for_update(of=UserSubscriptionSource)
+                )
+            ).scalars()
+        )
+        for binding in bindings:
+            binding.auth_healthy = healthy
+            binding.auth_status = "healthy" if healthy else "unhealthy"
+            binding.auth_error_reason = None if healthy else "Account validation failed"
+            binding.last_auth_checked_at = checked_at
+
+        from app.services.subscription_membership import (
+            recompute_subscription_membership_cache,
+        )
+
+        for subscription_id in sorted(
+            {binding.subscription_id for binding in bindings},
+            key=str,
+        ):
+            await recompute_subscription_membership_cache(self.db, subscription_id)
+
     async def create(self, data: dict[str, Any]) -> RemoteAccountRead:
         payload = dict(data)
         credentials = payload.pop("credentials", None)
@@ -367,6 +402,7 @@ class RemoteAccountService:
             self._encrypt(account, credentials)
             account.auth_status = "untested"
             account.auth_error_reason = None
+            await self._set_binding_health(account, healthy=True)
         await self.db.flush()
         await self.db.refresh(account)
         return self._read(account)
@@ -376,18 +412,21 @@ class RemoteAccountService:
         adapter = self.adapters.get(account.source)
         try:
             identity = await adapter.validate_account(self.credentials_for_adapter(account))
+            if identity.source != account.source:
+                raise ValueError("Remote adapter returned an identity for a different source")
         except Exception as exc:
             account.auth_status = "unhealthy"
-            account.auth_error_reason = type(exc).__name__
+            account.auth_error_reason = "Account validation failed"
+            await self._set_binding_health(account, healthy=False)
             await self.db.flush()
             raise
-        if identity.source != account.source:
-            raise ValueError("Remote adapter returned an identity for a different source")
+        checked_at = datetime.now(timezone.utc)
         account.remote_user_id = identity.source_creator_id
         account.remote_username = identity.username or identity.display_name
         account.auth_status = "healthy"
         account.auth_error_reason = None
-        account.last_authenticated_at = datetime.now(timezone.utc)
+        account.last_authenticated_at = checked_at
+        await self._set_binding_health(account, healthy=True, checked_at=checked_at)
         await self.db.flush()
         await self.db.refresh(account)
         return self._read(account)

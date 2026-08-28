@@ -311,7 +311,10 @@ async def test_membership_cache_keeps_canonical_schedule_constraint_consistent()
     """Canonical schedule fields remain a valid cache as private demand toggles."""
 
     from app.database import async_session, engine
-    from app.services.subscription_membership import recompute_subscription_membership_cache
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
 
     now = datetime.now(timezone.utc)
     try:
@@ -528,6 +531,352 @@ async def test_selected_account_auth_failure_keeps_healthy_peer_eligible():
             assert takeover.account.id == accounts[1].id
             await db.rollback()
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stale_private_auth_failure_never_poisons_canonical_source():
+    """A binding reauthenticated while its old job runs makes failure provenance stale."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_enqueue import mark_source_auth_failure
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            bindings[0].remote_account_id = None
+            await recompute_subscription_membership_cache(db, subscription.id)
+            job = SimpleNamespace(
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[0].id,
+            )
+
+            await mark_source_auth_failure(db, job, "HTTP 401 Unauthorized", when=now)
+
+            assert bindings[0].auth_healthy is True
+            assert accounts[0].auth_status == "healthy"
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+            assert source.auth_status != "unhealthy"
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_remote_account_validation_heals_bindings_and_scheduler_cache():
+    """A successful account test restores every private binding using that account."""
+
+    from app.database import async_session, engine
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    class HealthyAdapter:
+        async def validate_account(self, _credentials):
+            return RemoteCandidateIdentity(
+                source="pixiv",
+                source_creator_id="42001",
+                profile_url="https://www.pixiv.net/users/42001",
+                display_name="Task 4",
+                username="task4",
+            )
+
+    class Registry:
+        def get(self, _source):
+            return HealthyAdapter()
+
+    now = datetime.now(timezone.utc)
+    vault = CredentialVault(base64.urlsafe_b64encode(b"h" * 32).decode())
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                _members,
+                accounts,
+                bindings,
+                dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[0]
+            binding = bindings[0]
+            account.credential_ciphertext = vault.encrypt(
+                {"refresh_token": "task4-healed-token"},
+                user_id=account.user_id,
+                source=account.source,
+                account_id=account.id,
+            )
+            binding.auth_healthy = False
+            binding.auth_status = "unhealthy"
+            binding.auth_error_reason = "HTTP 401 Unauthorized"
+            await recompute_subscription_membership_cache(db, subscription.id)
+
+            await RemoteAccountService(
+                db,
+                users[0].id,
+                vault=vault,
+                adapters=Registry(),
+            ).test(account.id)
+
+            assert account.auth_status == "healthy"
+            assert binding.auth_healthy is True
+            assert binding.auth_status == "healthy"
+            assert binding.auth_error_reason is None
+            assert source.is_enabled is True
+            assert source.next_sync_at == dues[0]
+            selected = await select_eligible_membership_source(db, source, now=now)
+            assert selected is not None
+            assert selected.account is not None
+            assert selected.account.id == account.id
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_remote_account_credential_replacement_clears_binding_failure_without_trust():
+    """Replacement clears stale binding damage while the account remains untested."""
+
+    from app.database import async_session, engine
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+
+    now = datetime.now(timezone.utc)
+    vault = CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode())
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                _subscription,
+                _source,
+                _members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[0]
+            binding = bindings[0]
+            binding.auth_healthy = False
+            binding.auth_status = "unhealthy"
+            binding.auth_error_reason = "HTTP 401 Unauthorized"
+
+            await RemoteAccountService(db, users[0].id, vault=vault).update(
+                account.id,
+                {"credentials": {"refresh_token": "task4-replacement-token"}},
+            )
+
+            assert account.auth_status == "untested"
+            assert binding.auth_healthy is True
+            assert binding.auth_status == "healthy"
+            assert binding.auth_error_reason is None
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_personal_materialization_distinguishes_credentials_from_filesystem(
+    tmp_path,
+    monkeypatch,
+):
+    """Tampered auth is credential damage; an unavailable temp directory is not."""
+
+    from app.database import async_session, engine
+    from app.jobs import download as download_job
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+    from app.remote_discovery.registry import DiscoveryAdapterRegistry
+    from app.services.remote_credentials import CredentialVault
+
+    credential_failure = getattr(download_job, "PersonalCredentialFailure", None)
+    assert credential_failure is not None
+    vault = CredentialVault(base64.urlsafe_b64encode(b"m" * 32).decode())
+    adapters = DiscoveryAdapterRegistry()
+    adapters.register(PixivRemoteDiscoveryAdapter())
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            account = accounts[1]
+            job = SimpleNamespace(
+                id=uuid4(),
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=members[1].id,
+                triggering_remote_account_id=account.id,
+                source="pixiv",
+            )
+
+            account.credential_ciphertext = "v1:tampered-task4-ciphertext"
+            with pytest.raises(credential_failure):
+                await download_job._materialize_personal_download_config(
+                    db,
+                    job,
+                    {},
+                    config_root=tmp_path,
+                    vault=vault,
+                    adapters=adapters,
+                )
+
+            account.credential_ciphertext = vault.encrypt(
+                {"refresh_token": "task4-filesystem-token"},
+                user_id=account.user_id,
+                source=account.source,
+                account_id=account.id,
+            )
+            monkeypatch.setattr(
+                download_job.tempfile,
+                "mkstemp",
+                lambda **_kwargs: (_ for _ in ()).throw(OSError("read-only filesystem")),
+            )
+            with pytest.raises(download_job.PersonalDownloadConfigurationError) as failure:
+                await download_job._materialize_personal_download_config(
+                    db,
+                    job,
+                    {},
+                    config_root=tmp_path,
+                    vault=vault,
+                    adapters=adapters,
+                )
+            assert not isinstance(failure.value, credential_failure)
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tampered_personal_credential_fails_once_and_allows_peer_takeover(
+    tmp_path,
+    monkeypatch,
+):
+    """Pre-subprocess credential failure is terminal for only its selected provenance."""
+
+    from app.database import async_session, engine
+    from app.jobs import download as download_job
+    from app.models import DownloadJob
+    from app.services.remote_credentials import CredentialVault
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    retry_attempts: list[str] = []
+
+    async def defaults():
+        return {
+            "timeout_seconds": 1,
+            "stall_timeout_seconds": 1,
+            "max_retries": 3,
+            "max_posts": 1,
+        }
+
+    async def no_artifacts(_job_id):
+        return 0, 0, []
+
+    async def retry(job_id, **_kwargs):
+        retry_attempts.append(str(job_id))
+
+    raw_runner = download_job.run_download_job
+    while hasattr(raw_runner, "__wrapped__"):
+        raw_runner = raw_runner.__wrapped__
+    monkeypatch.setattr(download_job, "_read_download_defaults", defaults)
+    monkeypatch.setattr(download_job, "build_effective_gallerydl_config", lambda *_args: {})
+    monkeypatch.setattr(download_job, "staging_enabled", lambda: False)
+    monkeypatch.setattr(download_job, "_artifact_counts", no_artifacts)
+    monkeypatch.setattr(download_job, "_enqueue_download_retry", retry)
+    monkeypatch.setattr(download_job.settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr(
+        download_job.settings,
+        "gallerydl_config_root",
+        str(tmp_path / "gallerydl"),
+    )
+    monkeypatch.setattr(
+        download_job.settings,
+        "remote_credential_key",
+        base64.urlsafe_b64encode(b"m" * 32).decode(),
+    )
+    (tmp_path / "downloads").mkdir()
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                dues,
+            ) = await _seed_shared_source(db, now=now)
+            accounts[0].auth_status = "healthy"
+            accounts[0].credential_ciphertext = "v1:tampered-task4-ciphertext"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            job = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[0].id,
+                source="pixiv",
+                source_url=source.source_url,
+                status="enqueued",
+            )
+            db.add(job)
+            await db.commit()
+            job_id = job.id
+
+        await raw_runner(str(job_id))
+
+        async with async_session() as db:
+            stored = await db.get(DownloadJob, job_id)
+            source = await db.get(type(source), source.id)
+            account_rows = [await db.get(type(account), account.id) for account in accounts]
+            binding_rows = [await db.get(type(binding), binding.id) for binding in bindings]
+            assert stored.status == "failed"
+            assert stored.retry_count == 3
+            assert retry_attempts == []
+            assert account_rows[0].auth_status == "unhealthy"
+            assert binding_rows[0].auth_healthy is False
+            assert account_rows[1].auth_status == "healthy"
+            assert binding_rows[1].auth_healthy is True
+            assert source.is_enabled is True
+            assert source.auth_healthy is True
+            assert source.next_sync_at == dues[1]
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
         await engine.dispose()
 
 

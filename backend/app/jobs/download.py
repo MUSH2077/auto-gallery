@@ -74,6 +74,10 @@ class PersonalDownloadConfigurationError(RuntimeError):
     """A selected private account could not produce a safe download overlay."""
 
 
+class PersonalCredentialFailure(PersonalDownloadConfigurationError):
+    """Selected credential material cannot safely authenticate this download."""
+
+
 def _auth_config_merge(base: Mapping, override: Mapping) -> dict:
     merged = copy.deepcopy(dict(base))
     for key, value in override.items():
@@ -163,7 +167,7 @@ async def _materialize_personal_download_config(
     membership_id = getattr(job, "triggering_user_subscription_id", None)
     source_id = getattr(job, "subscription_source_id", None)
     if membership_id is None or source_id is None:
-        raise PersonalDownloadConfigurationError(
+        raise PersonalCredentialFailure(
             "personal download authentication has incomplete ownership metadata"
         )
 
@@ -179,7 +183,7 @@ async def _materialize_personal_download_config(
         )
     ).first()
     if row is None:
-        raise PersonalDownloadConfigurationError(
+        raise PersonalCredentialFailure(
             "personal download authentication ownership could not be verified"
         )
     binding, account = row
@@ -190,20 +194,30 @@ async def _materialize_personal_download_config(
     from app.services.subscription_membership import membership_source_is_usable
 
     if not membership_source_is_usable(binding, account, source=job.source):
-        raise PersonalDownloadConfigurationError(
+        raise PersonalCredentialFailure(
             "personal download authentication is not healthy"
         )
-    credential_vault = vault or configured_credential_vault()
-    service = RemoteAccountService(
-        db,
-        account.user_id,
-        vault=credential_vault,
-        adapters=adapters,
-    )
-    credentials = service.credentials_for_adapter(account)
-    adapter = service.adapters.get(account.source)
-    override = adapter.build_download_auth(credentials)
-    override_values = override.materialize() if override is not None else {}
+    try:
+        credential_vault = vault or configured_credential_vault()
+        service = RemoteAccountService(
+            db,
+            account.user_id,
+            vault=credential_vault,
+            adapters=adapters,
+        )
+        credentials = service.credentials_for_adapter(account)
+        adapter = service.adapters.get(account.source)
+        override = adapter.build_download_auth(credentials)
+        override_values = override.materialize() if override is not None else {}
+        if not isinstance(override_values, Mapping):
+            raise TypeError("download authentication override must be a mapping")
+        # Validate the credential-owned fragment before mixing it with admin
+        # configuration so malformed adapter output is classified correctly.
+        json.dumps(override_values, ensure_ascii=False)
+    except Exception as exc:
+        raise PersonalCredentialFailure(
+            "personal download credential material could not be prepared"
+        ) from exc
     effective = _auth_config_merge(base_config, override_values)
     secrets = tuple(
         dict.fromkeys(
@@ -215,12 +229,17 @@ async def _materialize_personal_download_config(
     )
 
     jobs_dir = Path(config_root or settings.gallerydl_config_root) / "jobs"
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-    fd, raw_path = tempfile.mkstemp(
-        prefix=f"auth-{job.id}-",
-        suffix=".json",
-        dir=jobs_dir,
-    )
+    try:
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        fd, raw_path = tempfile.mkstemp(
+            prefix=f"auth-{job.id}-",
+            suffix=".json",
+            dir=jobs_dir,
+        )
+    except OSError as exc:
+        raise PersonalDownloadConfigurationError(
+            "personal download authentication temp storage is unavailable"
+        ) from exc
     path = Path(raw_path)
     try:
         os.fchmod(fd, 0o600)
@@ -232,6 +251,10 @@ async def _materialize_personal_download_config(
         if fd >= 0:
             os.close(fd)
         _cleanup_temp_config(str(path))
+        if isinstance(exc, (TypeError, ValueError)):
+            raise PersonalCredentialFailure(
+                "personal download credential config is invalid"
+            ) from exc
         raise PersonalDownloadConfigurationError(
             "personal download authentication config could not be created"
         ) from exc
@@ -970,6 +993,8 @@ async def run_download_job(job_id: str):
                         job,
                         personal_base_config or {},
                     )
+            except (PersonalCredentialFailure, PersonalDownloadConfigurationError):
+                raise
             except Exception as exc:
                 raise PersonalDownloadConfigurationError(
                     "personal download authentication config could not be prepared"
@@ -1539,6 +1564,7 @@ async def run_download_job(job_id: str):
 
     except Exception as e:
         error_text = _private_safe_error(str(e), personal_download_config)[:10000]
+        personal_credential_failure = isinstance(e, PersonalCredentialFailure)
         if job.triggering_remote_account_id is not None:
             logger.error("Unexpected error in private download job %s: %s", job_id, error_text)
         else:
@@ -1568,7 +1594,22 @@ async def run_download_job(job_id: str):
             repo2 = DownloadJobRepository(db2)
             j = await repo2.get(job_uuid)
             if j:
-                if terminal_stage_error:
+                if personal_credential_failure:
+                    j.retry_count = max_retries
+                    await repo2.update_status(
+                        j,
+                        "failed",
+                        "Download authentication failed: Credential materialization failed",
+                    )
+                    apply_download_progress(
+                        j,
+                        "failed",
+                        "Download authentication requires attention",
+                    )
+                    from app.services.subscription_enqueue import mark_source_auth_failure
+
+                    await mark_source_auth_failure(db2, j, "Authentication failed")
+                elif terminal_stage_error:
                     # Retrying cannot resolve a different canonical file and
                     # cannot safely guess through a corrupt recovery manifest.
                     # Keep the stage quarantined for operator resolution.
@@ -1688,7 +1729,7 @@ async def run_download_job(job_id: str):
 
         # A staging conflict stays quarantined.  Importing older ledger rows in
         # this branch could incorrectly present the conflict as a recovered job.
-        if not terminal_stage_error:
+        if not terminal_stage_error and not personal_credential_failure:
             metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
             if metadata_count > 0:
                 logger.info("Partial recovery: found %d metadata JSONs after error for job %s", metadata_count, job_id)

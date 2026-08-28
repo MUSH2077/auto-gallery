@@ -206,13 +206,13 @@ async def mark_source_auth_failure(
         if account is not None and account.user_id == binding.user_id:
             account.auth_status = "unhealthy"
             account.auth_error_reason = safe_reason
-    if binding is None:
+    if binding is None and membership_id is None and account_id is None:
         # Compatibility for a truly legacy job without member provenance.
         source.auth_healthy = False
         source.auth_status = "unhealthy"
         source.auth_error_reason = safe_reason
         source.last_auth_checked_at = when
-    else:
+    elif binding is not None:
         await recompute_subscription_membership_cache(db, source.subscription_id)
 
 
