@@ -79,6 +79,8 @@ async def select_eligible_membership_source(
     preferred_account_id: UUID | None = None,
     require_due: bool = True,
     system_schedule_mode: str | None = None,
+    require_sync_enabled: bool = True,
+    require_preferred_account_match: bool = False,
 ) -> EligibleMembershipSource | None:
     """Lock and return the earliest usable private demand for a shared source."""
 
@@ -87,7 +89,6 @@ async def select_eligible_membership_source(
         UserSubscriptionSource.is_enabled.is_(True),
         UserSubscriptionSource.auth_healthy.is_(True),
         UserSubscription.is_active.is_(True),
-        UserSubscription.sync_enabled.is_(True),
         (
             UserSubscriptionSource.remote_account_id.is_(None)
             | and_(
@@ -99,6 +100,8 @@ async def select_eligible_membership_source(
             )
         ),
     ]
+    if require_sync_enabled:
+        conditions.append(UserSubscription.sync_enabled.is_(True))
     if require_due:
         conditions.append(
             UserSubscriptionSource.next_sync_at.is_(None)
@@ -115,6 +118,8 @@ async def select_eligible_membership_source(
         conditions.append(UserSubscription.id == preferred_membership_id)
     if preferred_account_id is not None:
         conditions.append(UserSubscriptionSource.remote_account_id == preferred_account_id)
+    elif require_preferred_account_match:
+        conditions.append(UserSubscriptionSource.remote_account_id.is_(None))
 
     row = (
         await db.execute(

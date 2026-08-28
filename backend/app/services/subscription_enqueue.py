@@ -246,6 +246,9 @@ async def enqueue_subscription_source_sync(
     triggering_remote_account_id: UUID | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
+    explicit_private_manual = (
+        trigger != "scheduler" and triggering_user_subscription_id is not None
+    )
     ss = await db.get(SubscriptionSource, subscription_source_id)
     if not ss:
         return skip_result(subscription_source_id, "source_not_found")
@@ -255,9 +258,9 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "subscription_not_found")
     if not sub.is_active:
         return skip_result(ss.id, "subscription_inactive")
-    if not force and not ss.is_enabled:
+    if not force and not ss.is_enabled and not explicit_private_manual:
         return skip_result(ss.id, "source_disabled")
-    if not force and ss.auth_healthy is False:
+    if not force and ss.auth_healthy is False and not explicit_private_manual:
         return skip_result(ss.id, "auth_unhealthy", auth_status=ss.auth_status, auth_error_reason=ss.auth_error_reason)
     if not force:
         try:
@@ -337,6 +340,8 @@ async def enqueue_subscription_source_sync(
                 if trigger == "scheduler" and not force
                 else None
             ),
+            require_sync_enabled=not explicit_private_manual,
+            require_preferred_account_match=explicit_private_manual,
         )
         if selection is None:
             return skip_result(ss.id, "no_eligible_member_source")

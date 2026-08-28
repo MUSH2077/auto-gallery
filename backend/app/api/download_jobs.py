@@ -77,7 +77,7 @@ async def create_job(
         payload = data.model_dump()
         payload["triggering_user_subscription_id"] = member.id
         payload["triggering_remote_account_id"] = remote_account_id
-        return await svc.create_job(payload)
+        return await svc.create_job(payload, user_id=user.id)
     except DownloadAdmissionError as e:
         raise HTTPException(status_code=e.status_code, detail=e.payload()) from e
     except ValueError as e:

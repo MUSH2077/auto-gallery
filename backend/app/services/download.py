@@ -173,9 +173,13 @@ class DownloadService:
         self._enrich_progress(enriched)
         return enriched[0]
 
-    async def create_job(self, data: dict) -> dict:
+    async def create_job(self, data: dict, *, user_id: int | None = None) -> dict:
         from app.services.download_orchestrator import DownloadOrchestrator
-        return await DownloadOrchestrator(self.db).create(data, self.repo)
+        return await DownloadOrchestrator(self.db).create(
+            data,
+            self.repo,
+            user_id=user_id,
+        )
 
     async def retry_job(self, job_id: UUID):
         from app.services.task_engine import TaskEngine

@@ -1223,6 +1223,270 @@ async def test_scheduler_enqueue_selects_earliest_healthy_member_and_records_onl
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_owned_manual_membership_can_sync_when_automatic_cache_is_disabled(
+    monkeypatch,
+):
+    """Explicit sync-now bypasses automatic policy, never private auth ownership."""
+
+    from sqlalchemy import delete, select
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def publish(*_args, **_kwargs):
+        return SimpleNamespace(id="rq-test")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for member in members:
+                member.sync_enabled = False
+                member.schedule_mode = "manual"
+            accounts[0].auth_status = "healthy"
+            await recompute_subscription_membership_cache(db, subscription.id)
+            assert source.is_enabled is False
+
+            result = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source.id,
+                trigger="manual_subscription",
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[0].id,
+            )
+
+            assert result["status"] == "enqueued"
+            job = (
+                await db.execute(
+                    select(DownloadJob).where(DownloadJob.id == result["job_id"])
+                )
+            ).scalar_one()
+            assert job.triggering_user_subscription_id == members[0].id
+            assert job.triggering_remote_account_id == accounts[0].id
+            await db.execute(delete(DownloadJob).where(DownloadJob.id == job.id))
+            await db.commit()
+
+            denied = await subscription_enqueue.enqueue_subscription_source_sync(
+                db,
+                source.id,
+                trigger="manual_subscription",
+                triggering_user_subscription_id=members[0].id,
+                triggering_remote_account_id=accounts[1].id,
+            )
+            assert denied["status"] == "skipped"
+            assert denied["skip_reason"] == "no_eligible_member_source"
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_download_orchestrator_preserves_authenticated_member_over_earlier_peer(
+    monkeypatch,
+):
+    """Source enqueue validates caller context and never substitutes an earlier peer."""
+
+    from sqlalchemy import select
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob
+    from app.repositories.download_job import DownloadJobRepository
+    from app.services import backpressure, download_dispatch, subscription_enqueue
+    from app.services.download_orchestrator import DownloadOrchestrator
+    from app.services.subscription_membership import recompute_subscription_membership_cache
+
+    @asynccontextmanager
+    async def acquired_lock(*_args, **_kwargs):
+        yield True
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def no_projection(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def publish(*_args, **_kwargs):
+        return SimpleNamespace(id="rq-test")
+
+    monkeypatch.setattr(subscription_enqueue, "redis_lock", acquired_lock)
+    monkeypatch.setattr(
+        subscription_enqueue,
+        "get_redis",
+        lambda: SimpleNamespace(hgetall=lambda _key: {}),
+    )
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(subscription_enqueue, "request_search_projection", no_projection)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                source,
+                members,
+                accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            for account in accounts:
+                account.auth_status = "healthy"
+            bindings[0].next_sync_at = now - timedelta(minutes=1)
+            bindings[1].next_sync_at = now - timedelta(days=1)
+            await recompute_subscription_membership_cache(db, subscription.id)
+            orchestrator = DownloadOrchestrator(db)
+
+            result = await orchestrator.create(
+                {
+                    "subscription_id": subscription.id,
+                    "subscription_source_id": source.id,
+                    "source": source.source,
+                    "source_url": source.source_url,
+                    "triggering_user_subscription_id": members[0].id,
+                    "triggering_remote_account_id": accounts[0].id,
+                },
+                DownloadJobRepository(db),
+                user_id=users[0].id,
+            )
+
+            job = (
+                await db.execute(
+                    select(DownloadJob).where(DownloadJob.id == result["job_id"])
+                )
+            ).scalar_one()
+            assert job.triggering_user_subscription_id == members[0].id
+            assert job.triggering_remote_account_id == accounts[0].id
+
+            with pytest.raises(ValueError, match="ownership"):
+                await orchestrator.create(
+                    {
+                        "subscription_id": subscription.id,
+                        "subscription_source_id": source.id,
+                        "source": source.source,
+                        "source_url": source.source_url,
+                        "triggering_user_subscription_id": members[1].id,
+                        "triggering_remote_account_id": accounts[1].id,
+                    },
+                    DownloadJobRepository(db),
+                    user_id=users[0].id,
+                )
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_generic_manual_download_persists_caller_membership(monkeypatch):
+    """A direct URL job remains private to the authenticated membership."""
+
+    from sqlalchemy import select
+
+    from app.database import async_session, engine
+    from app.models import DownloadJob
+    from app.repositories.download_job import DownloadJobRepository
+    from app.services import backpressure, download_dispatch
+    from app.services.download_orchestrator import DownloadOrchestrator
+
+    async def no_pressure(*_args, **_kwargs):
+        return None
+
+    async def prepare(_db, job, **_kwargs):
+        return SimpleNamespace(task=SimpleNamespace(id=uuid4()), job=job)
+
+    async def publish(*_args, **_kwargs):
+        return SimpleNamespace(id="rq-test")
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(download_dispatch, "prepare_download_dispatch", prepare)
+    monkeypatch.setattr(download_dispatch, "publish_prepared_download", publish)
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                users,
+                _creator,
+                subscription,
+                _source,
+                members,
+                _accounts,
+                _bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+
+            result = await DownloadOrchestrator(db).create(
+                {
+                    "subscription_id": subscription.id,
+                    "subscription_source_id": None,
+                    "source": "pixiv",
+                    "source_url": "https://www.pixiv.net/users/42001",
+                    "triggering_user_subscription_id": members[0].id,
+                    "triggering_remote_account_id": None,
+                },
+                DownloadJobRepository(db),
+                user_id=users[0].id,
+            )
+
+            job = (
+                await db.execute(
+                    select(DownloadJob).where(DownloadJob.id == result["job_id"])
+                )
+            ).scalar_one()
+            assert job.triggering_user_subscription_id == members[0].id
+            assert job.triggering_remote_account_id is None
+    finally:
+        async with async_session() as db:
+            await _cleanup_shared_test_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_concurrent_shared_source_enqueues_create_one_canonical_job(monkeypatch):
     """The canonical PostgreSQL source lock serializes competing user demand."""
 
