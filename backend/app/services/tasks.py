@@ -25,6 +25,46 @@ TERMINAL_STATUSES = {"complete", "failed", "cancelled", "stale"}
 _UNSET = object()
 
 
+def download_job_visibility_condition(user_id: int, job_model=DownloadJob):
+    """Owner predicate shared by download, import, and legacy task surfaces."""
+
+    from app.models.remote_discovery import RemoteAccount, UserSubscription
+
+    return and_(
+        job_model.subscription_id.in_(
+            select(UserSubscription.subscription_id).where(
+                UserSubscription.user_id == user_id
+            )
+        ),
+        or_(
+            job_model.triggering_user_subscription_id.is_(None),
+            job_model.triggering_user_subscription_id.in_(
+                select(UserSubscription.id).where(UserSubscription.user_id == user_id)
+            ),
+        ),
+        or_(
+            job_model.triggering_remote_account_id.is_(None),
+            job_model.triggering_remote_account_id.in_(
+                select(RemoteAccount.id).where(RemoteAccount.user_id == user_id)
+            ),
+        ),
+    )
+
+
+def import_job_visibility_condition(user_id: int):
+    """Infer import ownership through its parent DownloadJob."""
+
+    return exists(
+        select(1)
+        .select_from(DownloadJob)
+        .where(
+            DownloadJob.id == ImportJob.download_job_id,
+            download_job_visibility_condition(user_id),
+        )
+        .correlate(ImportJob)
+    )
+
+
 def task_visibility_condition(user_id: int):
     """SQL ownership predicate, including provable legacy job ownership."""
 

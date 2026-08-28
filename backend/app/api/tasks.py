@@ -149,7 +149,7 @@ async def list_task_anomalies(
     )
 
 
-@router.post("/reconcile")
+@router.post("/reconcile", dependencies=[RequirePermission("system")])
 async def reconcile_tasks(
     data: ReconcileTasksRequest,
     db: AsyncSession = Depends(get_db),

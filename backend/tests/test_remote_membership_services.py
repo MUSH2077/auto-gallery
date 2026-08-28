@@ -32,6 +32,15 @@ async def _clear(db) -> None:
     )
     await db.execute(
         text(
+            "DELETE FROM import_jobs WHERE download_job_id IN "
+            "(SELECT id FROM download_jobs WHERE triggering_user_subscription_id IN "
+            "(SELECT id FROM user_subscriptions WHERE user_id IN "
+            "(SELECT id FROM users WHERE username LIKE :prefix)))"
+        ),
+        params,
+    )
+    await db.execute(
+        text(
             "DELETE FROM download_jobs WHERE triggering_user_subscription_id IN "
             "(SELECT id FROM user_subscriptions WHERE user_id IN "
             "(SELECT id FROM users WHERE username LIKE :prefix))"
@@ -809,5 +818,155 @@ async def test_legacy_task_visibility_follows_download_and_import_membership_sub
             if job_ids:
                 await db.execute(delete(DownloadJob).where(DownloadJob.id.in_(job_ids)))
             await db.commit()
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
+    """A tasks-only user cannot read/control peer imports or run global scans."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, DownloadJob, ImportJob, Subscription, SubscriptionSource
+    from app.services.subscription_membership import SubscriptionMembershipService
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            first = await _seed_user(db, "import_route_first")
+            second = await _seed_user(db, "import_route_second")
+            creator = Creator(name="Import Route Artist")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Import Route Shared")
+            db.add(subscription)
+            await db.flush()
+            source = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id=f"import-route-{uuid4().hex}",
+                source_url="https://www.pixiv.net/users/991122",
+            )
+            db.add(source)
+            await db.flush()
+            first_member = await SubscriptionMembershipService(
+                db, first.id
+            ).ensure_membership(subscription)
+            second_member = await SubscriptionMembershipService(
+                db, second.id
+            ).ensure_membership(subscription)
+            first_download = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=first_member.id,
+                source="pixiv",
+                source_url=source.source_url,
+                status="complete",
+            )
+            second_download = DownloadJob(
+                subscription_id=subscription.id,
+                subscription_source_id=source.id,
+                triggering_user_subscription_id=second_member.id,
+                source="pixiv",
+                source_url=source.source_url,
+                status="complete",
+            )
+            db.add_all([first_download, second_download])
+            await db.flush()
+            own_import = ImportJob(download_job_id=first_download.id, status="complete")
+            peer_retry = ImportJob(download_job_id=second_download.id, status="complete")
+            peer_cancel = ImportJob(download_job_id=second_download.id, status="complete")
+            peer_priority = ImportJob(
+                download_job_id=second_download.id,
+                status="complete",
+                priority=10,
+            )
+            peer_batch = ImportJob(download_job_id=second_download.id, status="complete")
+            peer_delete = ImportJob(download_job_id=second_download.id, status="complete")
+            db.add_all(
+                [
+                    own_import,
+                    peer_retry,
+                    peer_cancel,
+                    peer_priority,
+                    peer_batch,
+                    peer_delete,
+                ]
+            )
+            await db.commit()
+            first_name = first.username
+            own_id = own_import.id
+            peer_ids = {
+                "retry": peer_retry.id,
+                "cancel": peer_cancel.id,
+                "priority": peer_priority.id,
+                "batch": peer_batch.id,
+                "delete": peer_delete.id,
+            }
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            headers = _headers(first_name)
+            listed = await client.get("/api/v1/import-jobs", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert listed.json()["total"] == 1
+            assert [item["id"] for item in listed.json()["items"]] == [str(own_id)]
+            assert (
+                await client.get(
+                    f"/api/v1/import-jobs/{peer_ids['priority']}", headers=headers
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"/api/v1/import-jobs/{peer_ids['retry']}/retry", headers=headers
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"/api/v1/import-jobs/{peer_ids['cancel']}/cancel", headers=headers
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"/api/v1/import-jobs/{peer_ids['priority']}/priority",
+                    json={"priority": 77},
+                    headers=headers,
+                )
+            ).status_code == 404
+            batch = await client.post(
+                "/api/v1/import-jobs/batch-by-filter",
+                json={
+                    "filters": {"ids": [str(peer_ids["batch"])]},
+                    "action": "pause",
+                },
+                headers=headers,
+            )
+            assert batch.status_code == 200, batch.text
+            assert batch.json()["total_matched"] == 0
+            assert (
+                await client.delete(
+                    f"/api/v1/import-jobs/{peer_ids['delete']}", headers=headers
+                )
+            ).status_code == 404
+            assert (
+                await client.post("/api/v1/import-jobs/scan", headers=headers)
+            ).status_code == 403
+            assert (
+                await client.post(
+                    "/api/v1/tasks/reconcile",
+                    json={"dry_run": True, "limit": 1},
+                    headers=headers,
+                )
+            ).status_code == 403
+
+        async with async_session() as db:
+            stored = await db.get(ImportJob, peer_ids["priority"])
+            assert stored is not None
+            assert stored.priority == 10
+            assert await db.get(ImportJob, peer_ids["delete"]) is not None
+    finally:
+        async with async_session() as db:
             await _clear(db)
         await engine.dispose()

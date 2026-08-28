@@ -99,7 +99,11 @@ from app.services.source_search_identity import (
     parse_source_identity,
     parse_source_url,
 )
-from app.services.tasks import task_payload, task_visibility_condition
+from app.services.tasks import (
+    import_job_visibility_condition,
+    task_payload,
+    task_visibility_condition,
+)
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
@@ -2471,12 +2475,15 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
     ) -> tuple[int, list[ImportJob]]:
         """Return import-domain rows using the canonical task search AST."""
 
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if user_id is not None:
+            conditions.append(import_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
