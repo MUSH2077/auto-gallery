@@ -89,7 +89,7 @@ type FixtureOptions = {
   userBPrivateStatus?: number;
   collectionsFailures?: number;
   collectionsShouldFail?: () => boolean;
-  candidateDelay?: (url: URL) => number;
+  candidateWait?: (url: URL) => Promise<void>;
   oauthCallbackStatus?: number;
   oauthCallbackDelayMs?: number;
   accountConnectStatus?: number;
@@ -221,8 +221,7 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, { total: 1, items: [{ id: "scan-task", kind: "discovery", operation_type: "remote-discovery-scan", status: "complete", progress_data: { stage: "complete", current: 1, total: 1 }, created_at: now, updated_at: now }] });
     }
     if (path === "/api/v1/discovery/candidates" && request.method() === "GET") {
-      const delay = options.candidateDelay?.(url) || 0;
-      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      await options.candidateWait?.(url);
       if (options.candidatesStatus) return json(route, { detail: "not available" }, options.candidatesStatus);
       const state = url.searchParams.get("state");
       const confidence = url.searchParams.get("confidence");
@@ -558,13 +557,15 @@ test("paginates candidates without carrying selection across pages", async ({ co
 
 test("clears selection and makes placeholder rows inert while a server filter changes", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  let releaseMediumResponse!: () => void;
+  const mediumResponse = new Promise<void>((resolve) => { releaseMediumResponse = resolve; });
   await installFixtures(context, {
     accounts: [account()],
     candidates: [
       candidate("stale-high"),
       candidate("fresh-medium", { confidence: "medium", confidence_reasons: ["single_creator_evidence"] }),
     ],
-    candidateDelay: (url) => url.searchParams.get("confidence") === "medium" ? 800 : 0,
+    candidateWait: (url) => url.searchParams.get("confidence") === "medium" ? mediumResponse : Promise.resolve(),
     onMutation: (path, body) => mutations.push({ path, body }),
   });
   await page.goto("/admin/discovery");
@@ -578,6 +579,7 @@ test("clears selection and makes placeholder rows inert while a server filter ch
   await expect(table.getByRole("button", { name: "Import Artist stale-high" })).toBeDisabled();
   expect(mutations.filter((mutation) => mutation.path.endsWith("batch-actions"))).toEqual([]);
 
+  releaseMediumResponse();
   await expect(table.getByText("Artist fresh-medium")).toBeVisible();
   await expect(table.getByText("Artist stale-high")).toHaveCount(0);
   await expect(table).toHaveAttribute("aria-busy", "false");
