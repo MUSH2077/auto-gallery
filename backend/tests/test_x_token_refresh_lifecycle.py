@@ -829,3 +829,258 @@ async def test_concurrent_sessions_preserve_single_rotated_refresh_token(monkeyp
         async with async_session() as db:
             await _cleanup(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "outcome", "concurrent_change"),
+    (
+        ("test", "success", "replace"),
+        ("test", "failure", "delete"),
+        ("collections", "success", "delete"),
+        ("collections", "failure", "replace"),
+    ),
+)
+async def test_post_refresh_provider_window_rejects_concurrent_account_change(
+    monkeypatch,
+    operation,
+    outcome,
+    concurrent_change,
+):
+    """A rotated retry cannot mutate or return across replace/delete."""
+
+    import asyncio
+
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount, UserSubscriptionSource
+    from app.remote_discovery.common import RemoteHTTPResponse
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+    from app.services.remote_accounts import (
+        RemoteAccountService,
+        RemoteCredentialGenerationChanged,
+    )
+
+    old_access = f"race-{operation}-{outcome}-old-access"
+    old_refresh = f"race-{operation}-{outcome}-old-refresh"
+    rotated_access = f"race-{operation}-{outcome}-rotated-access"
+    rotated_refresh = f"race-{operation}-{outcome}-rotated-refresh"
+    client_id = f"race-{operation}-{outcome}-client"
+
+    class BlockingTransport:
+        def __init__(self):
+            self.retry_started = asyncio.Event()
+            self.release_retry = asyncio.Event()
+
+        async def _finish_retry(self, success_payload):
+            self.retry_started.set()
+            await self.release_retry.wait()
+            if outcome == "failure":
+                return RemoteHTTPResponse(401, {"title": "stale unauthorized"})
+            return RemoteHTTPResponse(200, success_payload)
+
+        async def request(self, method, url, **kwargs):
+            authorization = (kwargs.get("headers") or {}).get("Authorization")
+            if url.endswith("/oauth2/token"):
+                return RemoteHTTPResponse(
+                    200,
+                    {
+                        "access_token": rotated_access,
+                        "refresh_token": rotated_refresh,
+                    },
+                )
+            if url.endswith("/users/me"):
+                fields = (kwargs.get("params") or {}).get("user.fields")
+                if authorization == f"Bearer {old_access}":
+                    return RemoteHTTPResponse(401, {"title": "expired"})
+                if authorization != f"Bearer {rotated_access}":
+                    raise AssertionError("unexpected access-token generation")
+                if fields == "id":
+                    return RemoteHTTPResponse(200, {"data": {"id": "42"}})
+                return await self._finish_retry(
+                    {
+                        "data": {
+                            "id": "42",
+                            "name": "Stale Owner",
+                            "username": "stale_owner",
+                        }
+                    }
+                )
+            if url.endswith("/users/42/owned_lists"):
+                if authorization == f"Bearer {old_access}":
+                    return RemoteHTTPResponse(401, {"title": "expired"})
+                if authorization != f"Bearer {rotated_access}":
+                    raise AssertionError("unexpected access-token generation")
+                return await self._finish_retry({"data": [], "meta": {}})
+            raise AssertionError(f"unexpected X request: {method} {url}")
+
+    transport = BlockingTransport()
+    adapter = XRemoteDiscoveryAdapter(transport)
+    adapters = Registry(adapter)
+    monkeypatch.setattr(settings, "remote_discovery_private_members_enabled", True)
+    monkeypatch.setattr(settings, "remote_discovery_x_enabled", True)
+    invocation = None
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user, account, _ = await _create_x_account(
+                db,
+                adapter,
+                suffix=f"pw_{operation[:3]}_{outcome[:1]}_{concurrent_change[:1]}",
+                credentials={
+                    "access_token": old_access,
+                    "refresh_token": old_refresh,
+                    "client_id": client_id,
+                },
+            )
+            binding = await _bind_account(
+                db,
+                user,
+                account,
+                suffix=f"pw_{operation[:3]}_{outcome[:1]}_{concurrent_change[:1]}",
+            )
+            if concurrent_change == "delete":
+                db.add(
+                    DiscoveryCandidate(
+                        remote_account_id=account.id,
+                        user_id=user.id,
+                        source_creator_id=f"retained-{uuid4().hex}",
+                        state="imported",
+                        subscription_id=binding.subscription_id,
+                        user_subscription_id=binding.user_subscription_id,
+                    )
+                )
+            await db.commit()
+            user_id = user.id
+            account_id = account.id
+            binding_id = binding.id
+
+        async def invoke_stale_request():
+            async with async_session() as request_db:
+                service = RemoteAccountService(
+                    request_db,
+                    user_id,
+                    vault=_vault(),
+                    adapters=adapters,
+                )
+                method = getattr(service, operation)
+                with pytest.raises(RemoteCredentialGenerationChanged):
+                    await method(account_id)
+                await request_db.rollback()
+
+        invocation = asyncio.create_task(invoke_stale_request())
+        await asyncio.wait_for(transport.retry_started.wait(), timeout=10)
+
+        async with async_session() as concurrent_db:
+            service = RemoteAccountService(
+                concurrent_db,
+                user_id,
+                vault=_vault(),
+                adapters=adapters,
+            )
+            if concurrent_change == "replace":
+                await service.update(
+                    account_id,
+                    {
+                        "remote_user_id": "84",
+                        "credentials": {
+                            "access_token": "replacement-access",
+                            "refresh_token": "replacement-refresh",
+                            "client_id": "replacement-client",
+                        },
+                    },
+                )
+            else:
+                await service.delete(account_id)
+            await concurrent_db.commit()
+
+        transport.release_retry.set()
+        await asyncio.wait_for(invocation, timeout=10)
+
+        async with async_session() as db:
+            stored = await db.get(RemoteAccount, account_id)
+            stored_binding = await db.get(UserSubscriptionSource, binding_id)
+            assert stored is not None
+            assert stored.credential_generation == 3
+            if concurrent_change == "replace":
+                assert stored.remote_user_id == "84"
+                assert stored.auth_status == "untested"
+                assert stored_binding.auth_status == "healthy"
+                decrypted = _vault().decrypt(
+                    stored.credential_ciphertext,
+                    user_id=user_id,
+                    source="x",
+                    account_id=account_id,
+                ).materialize()
+                assert decrypted == {
+                    "access_token": "replacement-access",
+                    "refresh_token": "replacement-refresh",
+                    "client_id": "replacement-client",
+                }
+            else:
+                assert stored.auth_status == "deleted"
+                assert stored.credential_ciphertext is None
+                assert stored_binding.auth_status == "deleted"
+                assert stored_binding.auth_error_reason == "Remote account deleted"
+    finally:
+        transport.release_retry.set()
+        if invocation is not None and not invocation.done():
+            invocation.cancel()
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("test", "collections"))
+async def test_remote_account_api_maps_stale_provider_result_to_conflict(
+    monkeypatch,
+    operation,
+):
+    """A superseded provider result is an explicit rollback-only conflict."""
+
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.api import remote_accounts as accounts_api
+    from app.services.remote_accounts import RemoteCredentialGenerationChanged
+
+    class StaleService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def test(self, _account_id):
+            raise RemoteCredentialGenerationChanged("stale provider result")
+
+        async def collections(self, _account_id):
+            raise RemoteCredentialGenerationChanged("stale provider result")
+
+    class RecordingDB:
+        def __init__(self):
+            self.commits = 0
+            self.rollbacks = 0
+
+        async def commit(self):
+            self.commits += 1
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    monkeypatch.setattr(accounts_api, "RemoteAccountService", StaleService)
+    db = RecordingDB()
+    endpoint = (
+        accounts_api.test_remote_account
+        if operation == "test"
+        else accounts_api.list_remote_account_collections
+    )
+    with pytest.raises(HTTPException) as conflict:
+        await endpoint(uuid4(), db=db, user=SimpleNamespace(id=1))
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == {
+        "code": "remote_account_stale",
+        "message": "Remote account changed while the provider request was running",
+    }
+    assert db.rollbacks == 1
+    assert db.commits == 0

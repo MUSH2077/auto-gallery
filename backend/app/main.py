@@ -84,6 +84,64 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+_VALIDATION_REDACTED = "***REDACTED***"
+_VALIDATION_SENSITIVE_SUBSTRINGS = (
+    "password",
+    "token",
+    "secret",
+    "key",
+    "credential",
+    "cookie",
+)
+_X_OAUTH_CALLBACK_PATH = "/api/v1/remote-accounts/x/oauth/callback"
+
+
+def _validation_field_is_sensitive(field: object, *, oauth_callback: bool) -> bool:
+    name = str(field).casefold()
+    if any(marker in name for marker in _VALIDATION_SENSITIVE_SUBSTRINGS):
+        return True
+    return oauth_callback and name in {"state", "code"}
+
+
+def _redact_validation_value(value, *, oauth_callback: bool):
+    """Recursively redact secret-bearing fields without removing their location."""
+
+    if isinstance(value, dict):
+        return {
+            key: (
+                _VALIDATION_REDACTED
+                if _validation_field_is_sensitive(key, oauth_callback=oauth_callback)
+                else _redact_validation_value(item, oauth_callback=oauth_callback)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_validation_value(item, oauth_callback=oauth_callback)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_validation_value(item, oauth_callback=oauth_callback)
+            for item in value
+        )
+    return value
+
+
+def _redact_validation_errors(errors, *, oauth_callback: bool):
+    redacted = []
+    for error in errors:
+        safe_error = _redact_validation_value(error, oauth_callback=oauth_callback)
+        location = error.get("loc", ()) if isinstance(error, dict) else ()
+        if isinstance(safe_error, dict) and any(
+            _validation_field_is_sensitive(field, oauth_callback=oauth_callback)
+            for field in location
+        ):
+            safe_error["input"] = _VALIDATION_REDACTED
+        redacted.append(safe_error)
+    return redacted
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Critical service secrets are validated at config load time; the admin
@@ -476,23 +534,28 @@ async def foreground_latency_feedback(request: Request, call_next):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     safe_body = "<redacted>"
     raw = b""
+    oauth_callback = request.url.path.rstrip("/") == _X_OAUTH_CALLBACK_PATH
     try:
         raw = await request.body()
         import json as _json
+
         data = _json.loads(raw[:2000])
-        # Redact any key whose name contains a sensitive substring
-        _sensitive_substrings = (
-            "password", "token", "secret", "key", "credential", "cookie",
+        safe_body = str(
+            _redact_validation_value(data, oauth_callback=oauth_callback)
         )
-        for key in list(data.keys()):
-            if any(ss in key.lower() for ss in _sensitive_substrings):
-                data[key] = "***REDACTED***"
-        safe_body = str(data)
     except Exception:
         safe_body = f"<{len(raw)} bytes, parse error>"
-    logger.warning("Validation error on %s %s: %s | body: %s",
-                   request.method, request.url.path, exc.errors(), safe_body)
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    safe_errors = _redact_validation_errors(
+        exc.errors(), oauth_callback=oauth_callback
+    )
+    logger.warning(
+        "Validation error on %s %s: %s | body: %s",
+        request.method,
+        request.url.path,
+        safe_errors,
+        safe_body,
+    )
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
 @app.exception_handler(DanbooruUnavailableError)

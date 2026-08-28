@@ -410,6 +410,44 @@ class RemoteAccountService:
 
         return RefreshableCredentials(values, rotate)
 
+    @staticmethod
+    def _credential_use_identity(account: RemoteAccount) -> tuple[Any, ...]:
+        return (
+            account.id,
+            account.user_id,
+            account.source,
+            account.auth_method,
+            account.remote_user_id,
+        )
+
+    async def _relock_provider_result(
+        self,
+        account_id: UUID,
+        *,
+        pinned_identity: tuple[Any, ...],
+        pinned_generation: int,
+    ) -> RemoteAccount:
+        """Reject a provider result superseded while an OAuth retry was in flight."""
+
+        current = (
+            await self.db.execute(
+                select(RemoteAccount)
+                .where(RemoteAccount.id == account_id)
+                .with_for_update(of=RemoteAccount)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if (
+            current is None
+            or current.auth_status == "deleted"
+            or self._credential_use_identity(current) != pinned_identity
+            or int(current.credential_generation or 0) != pinned_generation
+        ):
+            raise RemoteCredentialGenerationChanged(
+                "remote account changed while provider request was running"
+            )
+        return current
+
     async def _set_binding_health(
         self,
         account: RemoteAccount,
@@ -596,13 +634,30 @@ class RemoteAccountService:
         account = await self._account(account_id, lock=True)
         require_preview(account.source)
         adapter = self.adapters.get(account.source)
+        pinned_identity = self._credential_use_identity(account)
+        pinned_generation = int(account.credential_generation or 0)
+
+        async def advance_generation(generation: int) -> None:
+            nonlocal pinned_generation
+            pinned_generation = generation
+
         try:
-            identity = await adapter.validate_account(self.credentials_for_adapter(account))
+            credentials = self.credentials_for_adapter(
+                account,
+                expected_generation=pinned_generation,
+                on_generation_advanced=advance_generation,
+            )
+            identity = await adapter.validate_account(credentials)
             if identity.source != account.source:
                 raise ValueError("Remote adapter returned an identity for a different source")
         except RemoteCredentialGenerationChanged:
             raise
         except Exception as exc:
+            account = await self._relock_provider_result(
+                account_id,
+                pinned_identity=pinned_identity,
+                pinned_generation=pinned_generation,
+            )
             reauthentication = isinstance(exc, RemoteReauthenticationRequired)
             account.auth_status = "unhealthy"
             account.auth_error_reason = (
@@ -617,6 +672,11 @@ class RemoteAccountService:
             )
             await self.db.flush()
             raise
+        account = await self._relock_provider_result(
+            account_id,
+            pinned_identity=pinned_identity,
+            pinned_generation=pinned_generation,
+        )
         checked_at = datetime.now(timezone.utc)
         account.remote_user_id = identity.source_creator_id
         account.remote_username = identity.username or identity.display_name
@@ -631,11 +691,29 @@ class RemoteAccountService:
     async def collections(self, account_id: UUID):
         account = await self._account(account_id, lock=True)
         require_preview(account.source)
+        pinned_identity = self._credential_use_identity(account)
+        pinned_generation = int(account.credential_generation or 0)
+
+        async def advance_generation(generation: int) -> None:
+            nonlocal pinned_generation
+            pinned_generation = generation
+
         try:
-            return await self.adapters.get(account.source).list_collections(
-                self.credentials_for_adapter(account)
+            collections = await self.adapters.get(account.source).list_collections(
+                self.credentials_for_adapter(
+                    account,
+                    expected_generation=pinned_generation,
+                    on_generation_advanced=advance_generation,
+                )
             )
+        except RemoteCredentialGenerationChanged:
+            raise
         except RemoteReauthenticationRequired:
+            account = await self._relock_provider_result(
+                account_id,
+                pinned_identity=pinned_identity,
+                pinned_generation=pinned_generation,
+            )
             account.auth_status = "unhealthy"
             account.auth_error_reason = "reauthentication_required"
             await self._set_binding_health(
@@ -648,6 +726,12 @@ class RemoteAccountService:
             # account-local failure before returning its generic 502.
             await self.db.commit()
             raise
+        await self._relock_provider_result(
+            account_id,
+            pinned_identity=pinned_identity,
+            pinned_generation=pinned_generation,
+        )
+        return collections
 
     async def delete(self, account_id: UUID) -> None:
         account = await self._account(account_id, lock=True)

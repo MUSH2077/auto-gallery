@@ -1705,3 +1705,91 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay(caplog):
             )
             await db.commit()
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_x_oauth_callback_validation_redacts_nested_state_and_code(caplog):
+    """Pre-endpoint validation logs and responses never echo OAuth material."""
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import User
+
+    marker = f"x_oauth_validation_{uuid4().hex}"
+    state_canary = "r2-state-x"
+    code_canary = "r2-code-malformed-x"
+    nested_state_canary = "r2-nested-state-x"
+    nested_code_canary = "r2-nested-code-x"
+    long_state_canary = "r2-overlong-state-x"
+    long_code_canary = "r2-overlong-code-x"
+    diagnostic_canary = "r2-safe-diagnostic-x"
+    try:
+        async with async_session() as db:
+            user = User(
+                username=marker,
+                password_hash="test-only",
+                is_active=True,
+                permissions=["subscriptions"],
+            )
+            db.add(user)
+            await db.commit()
+
+        caplog.clear()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            malformed = await client.post(
+                "/api/v1/remote-accounts/x/oauth/callback",
+                json={
+                    "state": state_canary,
+                    "code": {"value": code_canary},
+                    "diagnostic_label": diagnostic_canary,
+                    "nested": {
+                        "state": nested_state_canary,
+                        "code": nested_code_canary,
+                    },
+                },
+                headers=_headers(marker),
+            )
+            overlong = await client.post(
+                "/api/v1/remote-accounts/x/oauth/callback",
+                json={
+                    "state": long_state_canary + ("s" * 200),
+                    "code": long_code_canary + ("c" * 2000),
+                },
+                headers=_headers(marker),
+            )
+
+        assert malformed.status_code == 422
+        assert overlong.status_code == 422
+        evidence = "\n".join(
+            [
+                *(record.getMessage() for record in caplog.records),
+                malformed.text,
+                overlong.text,
+            ]
+        )
+        for secret in (
+            state_canary,
+            code_canary,
+            nested_state_canary,
+            nested_code_canary,
+            long_state_canary,
+            long_code_canary,
+        ):
+            assert secret not in evidence
+        assert diagnostic_canary in evidence
+        assert "state" in malformed.text
+        assert "code" in malformed.text
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                text("DELETE FROM users WHERE username = :marker"),
+                {"marker": marker},
+            )
+            await db.commit()
+        await engine.dispose()

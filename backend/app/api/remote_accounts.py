@@ -17,7 +17,10 @@ from app.schemas.remote_discovery import (
     XOAuthCallbackRequest,
 )
 from app.services.redis_client import get_redis
-from app.services.remote_accounts import RemoteAccountService
+from app.services.remote_accounts import (
+    RemoteAccountService,
+    RemoteCredentialGenerationChanged,
+)
 from app.services.remote_discovery_rollout import (
     RemoteDiscoveryUnavailable,
     require_preview,
@@ -40,6 +43,16 @@ def _not_found_or_bad_request(exc: Exception) -> HTTPException:
         )
     status = 404 if "not found" in str(exc).casefold() else 400
     return HTTPException(status_code=status, detail=str(exc))
+
+
+def _stale_provider_result() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "remote_account_stale",
+            "message": "Remote account changed while the provider request was running",
+        },
+    )
 
 
 @router.get("", response_model=list[RemoteAccountRead])
@@ -206,6 +219,9 @@ async def test_remote_account(
         result = await RemoteAccountService(db, user.id).test(account_id)
         await db.commit()
         return result
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
     except RemoteDiscoveryUnavailable as exc:
         await db.commit()
         raise _not_found_or_bad_request(exc) from exc
@@ -229,6 +245,9 @@ async def list_remote_account_collections(
             {"id": item.id, "name": item.name, "selector": dict(item.selector)}
             for item in collections
         ]
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
     except RemoteDiscoveryUnavailable as exc:
         raise _not_found_or_bad_request(exc) from exc
     except ValueError as exc:
