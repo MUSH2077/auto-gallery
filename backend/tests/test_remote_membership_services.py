@@ -628,6 +628,16 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
             titles = {item["title"] for item in tasks_response.json()["items"]}
             assert "First private task" in titles
             assert "Second private task" not in titles
+            anomalies_response = await client.get(
+                "/api/v1/tasks/anomalies", headers=headers
+            )
+            assert anomalies_response.status_code == 200, anomalies_response.text
+            anomaly_task_ids = {
+                item["task_id"]
+                for item in anomalies_response.json()["items"]
+                if item.get("task_id")
+            }
+            assert str(second_task.id) not in anomaly_task_ids
             jobs_response = await client.get("/api/v1/download-jobs", headers=headers)
             assert jobs_response.status_code == 200, jobs_response.text
             assert [item["id"] for item in jobs_response.json()] == [str(first_job_id)]

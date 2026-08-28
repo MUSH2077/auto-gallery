@@ -145,6 +145,7 @@ async def list_task_anomalies(
         offset=max(0, offset),
         limit=max(1, min(limit, 100)),
         excluded_admin_operation_types=inaccessible_admin_operation_types(user),
+        user_id=user.id,
     )
 
 

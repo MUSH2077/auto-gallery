@@ -24,7 +24,12 @@ from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
 from app.services.job_manifest import get_manifest
 from app.services.sync_outcome import download_job_outcome
-from app.services.tasks import TaskService, normalize_task_status, task_payload
+from app.services.tasks import (
+    TaskService,
+    normalize_task_status,
+    task_payload,
+    task_visibility_condition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1059,6 +1064,7 @@ async def operations_overview(
     offset: int = 0,
     limit: int = 50,
     excluded_admin_operation_types: frozenset[str] = frozenset(),
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Return one compact operations feed for desktop and mobile clients."""
 
@@ -1075,29 +1081,61 @@ async def operations_overview(
             int(scheduler_config.get("scheduler_scan_interval_minutes") or 60),
         )
         overdue_cutoff = _now() - timedelta(minutes=scan_minutes * 2)
+        source_stmt = select(SubscriptionSource, Subscription).join(
+            Subscription, Subscription.id == SubscriptionSource.subscription_id
+        )
+        if user_id is None:
+            source_stmt = source_stmt.where(
+                SubscriptionSource.is_enabled.is_(True),
+                Subscription.is_active.is_(True),
+                Subscription.sync_enabled.is_(True),
+            )
+        else:
+            from app.models.remote_discovery import (
+                UserSubscription,
+                UserSubscriptionSource,
+            )
+
+            source_stmt = (
+                source_stmt.add_columns(UserSubscriptionSource, UserSubscription)
+                .join(
+                    UserSubscriptionSource,
+                    UserSubscriptionSource.subscription_source_id
+                    == SubscriptionSource.id,
+                )
+                .join(
+                    UserSubscription,
+                    UserSubscription.id
+                    == UserSubscriptionSource.user_subscription_id,
+                )
+                .where(
+                    UserSubscription.user_id == user_id,
+                    UserSubscription.is_active.is_(True),
+                    UserSubscription.sync_enabled.is_(True),
+                    UserSubscriptionSource.is_enabled.is_(True),
+                )
+            )
         source_rows = (
             await db.execute(
-                select(SubscriptionSource, Subscription)
-                .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
-                .where(
-                    SubscriptionSource.is_enabled.is_(True),
-                    Subscription.is_active.is_(True),
-                    Subscription.sync_enabled.is_(True),
-                )
-                .order_by(SubscriptionSource.updated_at.desc(), SubscriptionSource.id.desc())
-                .limit(500)
+                source_stmt.order_by(
+                    SubscriptionSource.updated_at.desc(),
+                    SubscriptionSource.id.desc(),
+                ).limit(500)
             )
         ).all()
-        for repository, subscription in source_rows:
+        for row in source_rows:
+            repository, subscription = row[:2]
+            source_policy = row[2] if user_id is not None else repository
+            member = row[3] if user_id is not None else subscription
             reason_code = None
             severity = "warning"
             summary = None
-            occurred_at = repository.updated_at or repository.created_at or _now()
-            if repository.auth_healthy is False:
+            occurred_at = source_policy.updated_at or repository.created_at or _now()
+            if source_policy.auth_healthy is False:
                 reason_code = "auth_unhealthy"
                 severity = "critical"
-                summary = repository.auth_error_reason or "Repository authentication is unhealthy"
-                occurred_at = repository.last_auth_checked_at or occurred_at
+                summary = source_policy.auth_error_reason or "Repository authentication is unhealthy"
+                occurred_at = source_policy.last_auth_checked_at or occurred_at
             else:
                 try:
                     provider = registry.get(repository.source)
@@ -1119,12 +1157,12 @@ async def operations_overview(
             if (
                 reason_code is None
                 and scheduler_config.get("scheduler_enabled", True)
-                and repository.next_sync_at is not None
-                and repository.next_sync_at < overdue_cutoff
+                and source_policy.next_sync_at is not None
+                and source_policy.next_sync_at < overdue_cutoff
             ):
                 reason_code = "scheduler_overdue"
                 summary = "Repository synchronization is overdue"
-                occurred_at = repository.next_sync_at
+                occurred_at = source_policy.next_sync_at
             if reason_code is None:
                 continue
             source_anomalies.append({
@@ -1133,7 +1171,7 @@ async def operations_overview(
                 "severity": severity,
                 "status": "open",
                 "reason_code": reason_code,
-                "title": subscription.name or repository.source,
+                "title": member.name or repository.source,
                 "summary": summary,
                 "repository_id": str(repository.id),
                 "task_id": None,
@@ -1151,7 +1189,8 @@ async def operations_overview(
         if excluded_admin_operation_types
         else True
     )
-    filters = [TaskRun.kind != "account", visible_task]
+    ownership = task_visibility_condition(user_id) if user_id is not None else True
+    filters = [TaskRun.kind != "account", visible_task, ownership]
     if view == "attention":
         filters.append(TaskRun.attention_state == "open")
     elif view == "resolved":
@@ -1182,7 +1221,7 @@ async def operations_overview(
         (
             await db.execute(
                 select(TaskRun.attention_state, func.count(TaskRun.id))
-                .where(TaskRun.kind != "account", visible_task)
+                .where(TaskRun.kind != "account", visible_task, ownership)
                 .group_by(TaskRun.attention_state)
             )
         ).all()
@@ -1193,6 +1232,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                 )
             )
@@ -1210,6 +1250,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.attention_state == "open",
                     TaskRun.reason_code.in_(severe_reason_codes),
                 )
@@ -1222,6 +1263,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                     TaskRun.resource_state == "waiting",
                     TaskRun.resource_reason.is_not(None),
