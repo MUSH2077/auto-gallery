@@ -39,8 +39,13 @@ class BilibiliRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         )
         payload = self._api_payload(response, operation="account validation")
         user = payload.get("data")
-        if not isinstance(user, Mapping) or not user.get("mid"):
+        if not isinstance(user, Mapping):
             raise MalformedRemoteResponse("Bilibili account validation response has invalid data")
+        if user.get("isLogin") is False or not user.get("mid"):
+            raise RemoteReauthenticationRequired(
+                401,
+                "Bilibili SESSDATA requires reauthentication",
+            )
         source_creator_id = str(user["mid"])
         return RemoteCandidateIdentity(
             source="bilibili",

@@ -79,6 +79,25 @@ def checked_payload(response: RemoteHTTPResponse, *, provider: str) -> Mapping[s
     return response.payload
 
 
+def checked_oauth_token_payload(
+    response: RemoteHTTPResponse,
+    *,
+    provider: str,
+) -> Mapping[str, Any]:
+    """Map the OAuth refresh invalid_grant envelope to account health."""
+
+    if (
+        response.status_code == 400
+        and isinstance(response.payload, Mapping)
+        and response.payload.get("error") == "invalid_grant"
+    ):
+        raise RemoteReauthenticationRequired(
+            400,
+            f"{provider} refresh token requires reauthentication",
+        )
+    return checked_payload(response, provider=provider)
+
+
 def required_text(credentials: Mapping[str, Any], key: str, *, provider: str) -> str:
     value = credentials.get(key)
     if not isinstance(value, str) or not value.strip():

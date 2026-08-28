@@ -1,4 +1,5 @@
 from collections import deque
+import json
 
 import pytest
 
@@ -146,10 +147,20 @@ async def test_x_oauth_collections_include_following_and_owned_lists():
                 "data": [
                     {"id": "77", "name": "Illustrators", "private": True, "member_count": 12}
                 ],
+                "meta": {"result_count": 1, "next_token": "owned-list-page-2"},
+            },
+            {},
+        ),
+        response(
+            200,
+            {
+                "data": [
+                    {"id": "88", "name": "Photographers", "private": False, "member_count": 8}
+                ],
                 "meta": {"result_count": 1},
             },
             {},
-        )
+        ),
     )
     adapter = XRemoteDiscoveryAdapter(transport)
 
@@ -160,6 +171,7 @@ async def test_x_oauth_collections_include_following_and_owned_lists():
     assert [(item.id, item.name) for item in collections] == [
         ("following", "Following"),
         ("list:77", "Illustrators"),
+        ("list:88", "Photographers"),
     ]
     assert adapter.required_oauth_scopes == (
         "users.read",
@@ -167,6 +179,7 @@ async def test_x_oauth_collections_include_following_and_owned_lists():
         "list.read",
         "offline.access",
     )
+    assert transport.requests[1][2]["params"]["pagination_token"] == "owned-list-page-2"
 
 
 @pytest.mark.asyncio
@@ -214,7 +227,7 @@ async def test_x_oauth_following_is_normalized_and_paged_with_official_api():
 
 
 @pytest.mark.asyncio
-async def test_x_cookie_fallback_normalizes_legacy_following_cursor():
+async def test_x_cookie_fallback_uses_gallery_dl_web_graphql_protocol():
     from app.remote_discovery.x import XRemoteDiscoveryAdapter
 
     response = _common().RemoteHTTPResponse
@@ -222,21 +235,55 @@ async def test_x_cookie_fallback_normalizes_legacy_following_cursor():
         response(
             200,
             {
-                "users": [
-                    {
-                        "id_str": "901",
-                        "name": "Cookie Artist",
-                        "screen_name": "cookie_artist",
-                        "description": "fixture",
-                        "profile_image_url_https": "https://pbs.twimg.com/cookie.jpg",
-                        "protected": False,
-                        "verified": False,
+                "data": {
+                    "user": {
+                        "result": {
+                            "timeline": {
+                                "timeline": {
+                                    "instructions": [
+                                        {
+                                            "type": "TimelineAddEntries",
+                                            "entries": [
+                                                {
+                                                    "entryId": "user-901",
+                                                    "content": {
+                                                        "itemContent": {
+                                                            "user_results": {
+                                                                "result": {
+                                                                    "__typename": "User",
+                                                                    "rest_id": "901",
+                                                                    "core": {
+                                                                        "name": "Cookie Artist",
+                                                                        "screen_name": "cookie_artist",
+                                                                        "created_at": "Mon Jan 01 00:00:00 +0000 2024",
+                                                                    },
+                                                                    "legacy": {
+                                                                        "description": "fixture",
+                                                                        "profile_image_url_https": "https://pbs.twimg.com/cookie.jpg",
+                                                                        "url": "https://t.co/example",
+                                                                        "protected": False,
+                                                                        "verified": False,
+                                                                    },
+                                                                    "avatar": {"image_url": "https://pbs.twimg.com/cookie.jpg"},
+                                                                    "privacy": {"protected": False},
+                                                                    "verification": {"verified": False},
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                },
+                                                {
+                                                    "entryId": "cursor-bottom-0",
+                                                    "content": {"value": "next|web-cursor", "cursorType": "Bottom"},
+                                                },
+                                            ],
+                                        }
+                                    ]
+                                }
+                            }
+                        }
                     }
-                ],
-                "next_cursor": 12345,
-                "next_cursor_str": "12345",
-                "previous_cursor": 0,
-                "previous_cursor_str": "0",
+                }
             },
             {},
         )
@@ -249,8 +296,112 @@ async def test_x_cookie_fallback_normalizes_legacy_following_cursor():
     )
 
     assert page.items[0].username == "cookie_artist"
-    assert dict(page.next_cursor) == {"cursor": "12345"}
-    assert transport.requests[0][2]["headers"]["Cookie"].startswith("auth_token=")
+    assert dict(page.next_cursor) == {"cursor": "next|web-cursor"}
+    method, url, kwargs = transport.requests[0]
+    assert method == "GET"
+    assert url == "https://x.com/i/api/graphql/SaWqzw0TFAWMx1nXWjXoaQ/Following"
+    assert kwargs["headers"]["Cookie"] == "auth_token=secret; ct0=csrf"
+    assert kwargs["headers"]["x-csrf-token"] == "csrf"
+    assert kwargs["headers"]["x-twitter-auth-type"] == "OAuth2Session"
+    assert kwargs["headers"]["authorization"].startswith("Bearer ")
+    variables = json.loads(kwargs["params"]["variables"])
+    assert variables == {
+        "userId": "42",
+        "count": 100,
+        "includePromotedContent": False,
+        "withGrokTranslatedBio": False,
+    }
+    assert json.loads(kwargs["params"]["features"])[
+        "responsive_web_graphql_timeline_navigation_enabled"
+    ] is True
+
+
+@pytest.mark.asyncio
+async def test_x_cookie_fallback_requires_auth_and_csrf_cookies():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    adapter = XRemoteDiscoveryAdapter(FixtureTransport())
+
+    with pytest.raises(_common().RemoteReauthenticationRequired, match="auth_token.*ct0"):
+        await adapter.fetch_page(
+            {"auth_method": "cookie", "cookie": "auth_token=secret", "remote_user_id": "42"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_x_cookie_fallback_sends_cursor_and_stops_at_terminal_cursor():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(
+            200,
+            {
+                "data": {
+                    "user": {
+                        "result": {
+                            "timeline": {
+                                "timeline": {
+                                    "instructions": [
+                                        {
+                                            "type": "TimelineAddEntries",
+                                            "entries": [
+                                                {
+                                                    "entryId": "cursor-bottom-0",
+                                                    "content": {
+                                                        "value": "0|terminal",
+                                                        "cursorType": "Bottom",
+                                                    },
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            {},
+        )
+    )
+
+    page = await XRemoteDiscoveryAdapter(transport).fetch_page(
+        {
+            "auth_method": "cookie",
+            "cookie": "auth_token=secret; ct0=csrf",
+            "remote_user_id": "42",
+        },
+        cursor={"cursor": "current|web-cursor"},
+    )
+
+    variables = json.loads(transport.requests[0][2]["params"]["variables"])
+    assert variables["cursor"] == "current|web-cursor"
+    assert page.items == ()
+    assert page.next_cursor is None
+    assert page.done is True
+
+
+@pytest.mark.asyncio
+async def test_x_list_members_cap_max_results_at_official_limit_and_keep_cursor():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(200, {"data": [], "meta": {"result_count": 0, "next_token": "next-list-page"}}, {})
+    )
+    adapter = XRemoteDiscoveryAdapter(transport)
+
+    page = await adapter.fetch_page(
+        {"auth_method": "oauth2", "access_token": "access"},
+        selector={"kind": "list", "list_id": "77"},
+        cursor={"pagination_token": "current-list-page"},
+        page_size=500,
+    )
+
+    assert dict(page.next_cursor) == {"pagination_token": "next-list-page"}
+    assert transport.requests[0][2]["params"]["max_results"] == 100
+    assert transport.requests[0][2]["params"]["pagination_token"] == "current-list-page"
 
 
 @pytest.mark.asyncio
@@ -419,6 +570,68 @@ async def test_malformed_provider_payload_fails_closed():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["pixiv", "x"])
+async def test_refresh_invalid_grant_maps_to_reauthentication(source):
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = (
+        PixivRemoteDiscoveryAdapter(
+            FixtureTransport(response(400, {"error": "invalid_grant", "error_description": "refresh expired"}, {}))
+        )
+        if source == "pixiv"
+        else XRemoteDiscoveryAdapter(
+            FixtureTransport(response(400, {"error": "invalid_grant", "error_description": "refresh expired"}, {}))
+        )
+    )
+    credentials = (
+        {"refresh_token": "expired", "remote_user_id": "42"}
+        if source == "pixiv"
+        else {"auth_method": "oauth2", "refresh_token": "expired", "client_id": "client", "remote_user_id": "42"}
+    )
+
+    with pytest.raises(_common().RemoteReauthenticationRequired) as caught:
+        await adapter.fetch_page(credentials)
+
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_noncredential_refresh_http_400_stays_generic_remote_error():
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = PixivRemoteDiscoveryAdapter(
+        FixtureTransport(response(400, {"error": "invalid_request", "error_description": "bad request"}, {}))
+    )
+
+    with pytest.raises(_common().RemoteDiscoveryError) as caught:
+        await adapter.fetch_page({"refresh_token": "refresh", "remote_user_id": "42"})
+
+    assert not isinstance(caught.value, _common().RemoteReauthenticationRequired)
+
+
+@pytest.mark.asyncio
+async def test_bilibili_logged_out_nav_maps_to_reauthentication():
+    from app.remote_discovery.bilibili import BilibiliRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = BilibiliRemoteDiscoveryAdapter(
+        FixtureTransport(
+            response(
+                200,
+                {"code": 0, "message": "0", "ttl": 1, "data": {"isLogin": False, "mid": 0, "uname": ""}},
+                {},
+            )
+        )
+    )
+
+    with pytest.raises(_common().RemoteReauthenticationRequired):
+        await adapter.validate_account({"SESSDATA": "expired"})
+
+
+@pytest.mark.asyncio
 async def test_validate_account_normalizes_each_provider_identity():
     from app.remote_discovery.bilibili import BilibiliRemoteDiscoveryAdapter
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
@@ -486,3 +699,34 @@ def test_provider_download_auth_builders_return_secret_data_without_paths():
     assert bilibili["extractor"]["bilibili"]["cookies"]["SESSDATA"] == "bili-secret"
     assert "/gallerydl-config" not in repr((pixiv, x, bilibili))
     assert "secret" not in repr((pixiv, x, bilibili))
+
+
+def test_x_oauth_is_discovery_only_without_explicit_download_cookie():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    adapter = XRemoteDiscoveryAdapter(FixtureTransport())
+
+    assert adapter.build_download_auth(
+        {"auth_method": "oauth2", "access_token": "official-api-token"}
+    ) is None
+    assert adapter.build_download_auth(
+        {"auth_method": "oauth2", "refresh_token": "official-refresh", "client_id": "client"}
+    ) is None
+
+
+def test_x_oauth_uses_only_explicit_download_cookie_for_gallery_dl_auth():
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    override = XRemoteDiscoveryAdapter(FixtureTransport()).build_download_auth(
+        {
+            "auth_method": "oauth2",
+            "access_token": "official-api-token",
+            "download_cookie": "auth_token=download-secret; ct0=download-csrf",
+        }
+    )
+
+    assert override["extractor"]["twitter"]["cookies"] == {
+        "auth_token": "download-secret",
+        "ct0": "download-csrf",
+    }
+    assert "official-api-token" not in repr(override)

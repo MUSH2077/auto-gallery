@@ -12,6 +12,7 @@ from app.remote_discovery.common import (
     HttpxRemoteTransport,
     MalformedRemoteResponse,
     RemoteHTTPTransport,
+    checked_oauth_token_payload,
     checked_payload,
     required_text,
     validate_page_size,
@@ -81,7 +82,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
                 "get_secure_url": "1",
             },
         )
-        payload = checked_payload(response, provider="Pixiv")
+        payload = checked_oauth_token_payload(response, provider="Pixiv")
         if isinstance(payload.get("response"), Mapping):
             payload = payload["response"]
         token = payload.get("access_token")
