@@ -111,7 +111,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => {
+    const initialFocusFrame = window.requestAnimationFrame(() => {
       document.querySelector<HTMLElement>("#admin-mobile-sidebar button, #admin-mobile-sidebar a")?.focus();
     });
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -139,6 +139,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(initialFocusFrame);
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
       if (restoreDrawerFocusRef.current) {

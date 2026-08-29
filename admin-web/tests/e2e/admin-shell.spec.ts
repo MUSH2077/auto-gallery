@@ -3864,3 +3864,48 @@ test("mobile drawer is discoverable, dismissible, and the task page stays in bou
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-mobile.png", fullPage: true });
 });
+
+test("Escape ignores a queued drawer autofocus after focus restoration", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/jobs?tab=downloads");
+  await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __drawerFocusFrames?: Map<number, FrameRequestCallback>;
+      __flushDrawerFocusFrames?: () => void;
+    };
+    let nextFrame = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    testWindow.__drawerFocusFrames = frames;
+    window.requestAnimationFrame = (callback) => {
+      const frame = ++nextFrame;
+      frames.set(frame, callback);
+      return frame;
+    };
+    window.cancelAnimationFrame = (frame) => {
+      frames.delete(frame);
+    };
+    testWindow.__flushDrawerFocusFrames = () => {
+      const queued = [...frames.values()];
+      frames.clear();
+      for (const callback of queued) callback(performance.now());
+    };
+  });
+
+  const trigger = page.locator("header button[aria-controls]").first();
+  const drawer = page.locator("#admin-mobile-sidebar");
+  await trigger.click();
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const testWindow = window as Window & { __drawerFocusFrames?: Map<number, FrameRequestCallback> };
+    return testWindow.__drawerFocusFrames?.size ?? 0;
+  })).toBe(1);
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveClass(/drawer-left-exit/);
+  await page.evaluate(() => {
+    const testWindow = window as Window & { __flushDrawerFocusFrames?: () => void };
+    testWindow.__flushDrawerFocusFrames?.();
+  });
+  await expect(drawer).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
