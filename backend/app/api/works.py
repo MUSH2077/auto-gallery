@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from app.auth import RequirePermission
 from app.models.user import User
 from sqlalchemy import delete as sql_delete
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.schemas.work import WorkRead, WorkList, WorkListResponse
+from app.schemas.work import RemoteWorkStateRead, WorkRead, WorkList, WorkListResponse
 from app.schemas.asset import PlaybackTicketRead, WorkAssetRead
 from app.schemas.curation import BatchCurateRequest, CurationCommitRead
 from app.repositories.work import WorkRepository
@@ -31,6 +31,14 @@ from app.services.curation import CurationService
 from app.services.search import SearchBackendUnavailable, SearchPermissionError, SearchService
 from app.services.search_language import SearchQueryError
 from app.services.search_projection_outbox import request_search_projection
+from app.remote_discovery.common import RemoteRateLimited, RemoteReauthenticationRequired
+from app.services.remote_accounts import (
+    RemoteAccountService,
+    RemoteCredentialGenerationChanged,
+    RemoteWorkStateAccountRequired,
+    RemoteWorkStateAccountUnhealthy,
+)
+from app.services.remote_discovery_rollout import RemoteDiscoveryUnavailable
 
 # Reused as-is (same closure) for both the router-level gate and the
 # per-route parameter below — FastAPI's per-request dependency cache keys on
@@ -91,6 +99,88 @@ async def get_work(work_id: UUID, user: User = _require_library, db: AsyncSessio
     svc = CurationService(db)
     work.curation_state = svc.work_state_payload(await svc.work_state(work_id))
     return work
+
+
+def _remote_work_state_error(status_code: int, code: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code})
+
+
+def _sanitized_retry_after(value: object) -> str:
+    try:
+        return str(max(1, int(value)))
+    except (TypeError, ValueError):
+        return "1"
+
+
+@router.get("/{work_id}/remote-state", response_model=RemoteWorkStateRead)
+async def get_remote_work_state(
+    work_id: UUID,
+    response: Response,
+    user: User = _require_library,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return volatile Pixiv state for a locally visible work without caching it."""
+
+    # Match the normal work detail route before looking up any local source or
+    # account. This keeps invisible NSFW works and unknown IDs indistinguishable
+    # and prevents an unauthorized request from reaching account/provider state.
+    work = await WorkRepository(db).get(work_id, force_sfw=not user.nsfw_visible)
+    if not work:
+        raise HTTPException(status_code=404, detail="Work not found")
+
+    work_source = (
+        await db.execute(
+            select(WorkSource)
+            .where(WorkSource.work_id == work.id, WorkSource.source == "pixiv")
+            .order_by(WorkSource.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if work_source is None:
+        raise _remote_work_state_error(409, "remote_work_state_unsupported")
+
+    try:
+        state = await RemoteAccountService(db, user.id).fetch_work_state(
+            "pixiv", work_source.source_work_id
+        )
+    except RemoteWorkStateAccountRequired as exc:
+        raise _remote_work_state_error(409, "remote_account_required") from exc
+    except RemoteWorkStateAccountUnhealthy as exc:
+        raise _remote_work_state_error(
+            409, "remote_account_reauthentication_required"
+        ) from exc
+    except RemoteDiscoveryUnavailable as exc:
+        raise _remote_work_state_error(503, "remote_discovery_unavailable") from exc
+    except RemoteRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "remote_provider_rate_limited"},
+            headers={"Retry-After": _sanitized_retry_after(exc.retry_after_seconds)},
+        ) from exc
+    except RemoteReauthenticationRequired as exc:
+        # fetch_work_state marks just the selected account/bindings unhealthy;
+        # this read endpoint owns persisting that account-health transition.
+        await db.commit()
+        raise _remote_work_state_error(
+            409, "remote_account_reauthentication_required"
+        ) from exc
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _remote_work_state_error(409, "remote_account_stale") from exc
+    except Exception as exc:
+        # Provider messages may contain remote payloads or credentials. Keep
+        # the public vocabulary deliberately opaque.
+        raise _remote_work_state_error(502, "remote_provider_unavailable") from exc
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return RemoteWorkStateRead(
+        source="pixiv",
+        source_work_id=state.source_work_id,
+        fetched_at=state.fetched_at,
+        total_views=state.total_views,
+        total_bookmarks=state.total_bookmarks,
+        is_bookmarked=state.is_bookmarked,
+    )
 
 
 @curation_router.post("/{work_id}/favorite", response_model=WorkRead)
