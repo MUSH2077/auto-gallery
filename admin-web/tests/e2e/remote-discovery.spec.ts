@@ -759,6 +759,45 @@ test("backend rollout disables provider execution but keeps cleanup actions", as
   await expect(page.getByRole("button", { name: /Ignore Artist rollout/i }).first()).toBeEnabled();
 });
 
+test("manual preview rollout hides disabled provider cards at desktop and mobile", async ({ context, page }) => {
+  const providerRequests: string[] = [];
+  await context.route(/https:\/\/(?:www\.pixiv\.net|api\.x\.com|api\.bilibili\.com)\//, async (route) => {
+    providerRequests.push(route.request().url());
+    await route.abort();
+  });
+  await installFixtures(context, {
+    accounts: [account()],
+    rollout: {
+      pixiv: { manual_preview: true, auto_import: false, unavailable_reason: "auto_import_disabled" },
+      x: { manual_preview: false, auto_import: false, unavailable_reason: "manual_preview_disabled" },
+      bilibili: { manual_preview: false, auto_import: false, unavailable_reason: "manual_preview_disabled" },
+    },
+  });
+
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/admin/discovery");
+    await expect(page.getByRole("heading", { name: "Pixiv" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "X", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Bilibili" })).toHaveCount(0);
+  }
+  expect(providerRequests).toEqual([]);
+});
+
+test("candidate avatar is requested once across responsive layouts", async ({ context, page }) => {
+  const avatarRequests: string[] = [];
+  await installFixtures(context, { accounts: [account()], candidates: [candidate("avatar")] });
+  await context.route("https://images.example/avatar.png", async (route) => {
+    avatarRequests.push(route.request().url());
+    await route.fulfill({ status: 404, contentType: "image/png", body: "" });
+  });
+
+  await page.goto("/admin/discovery");
+  await expect(page.getByText("Artist avatar", { exact: true }).first()).toBeVisible();
+  await expect(page.locator('img[alt="Avatar for Artist avatar"]')).toHaveCount(0);
+  expect(avatarRequests).toEqual(["https://images.example/avatar.png"]);
+});
+
 test("closed auto gate shows a configured policy as paused and preserves it on save", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   await installFixtures(context, {

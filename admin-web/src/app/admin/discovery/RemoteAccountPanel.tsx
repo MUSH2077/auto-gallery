@@ -588,6 +588,10 @@ export default function RemoteAccountPanel({
   const [deleteAccount, setDeleteAccount] = useState<RemoteAccountRead | null>(null);
   const providersBySource = useMemo(() => new Map(providers.map((provider) => [provider.source_name, provider])), [providers]);
   const accountsBySource = useMemo(() => new Map(accounts.map((account) => [account.source, account])), [accounts]);
+  const previewSources = useMemo(() => DISCOVERY_SOURCES.filter((source) => (
+    providersBySource.get(source)?.capabilities.remote_discovery_rollout?.manual_preview === true
+    || accountsBySource.has(source)
+  )), [accountsBySource, providersBySource]);
   const latestScanByAccount = useMemo(() => {
     const result = new Map<string, TaskRun>();
     for (const scan of scans) {
@@ -632,7 +636,7 @@ export default function RemoteAccountPanel({
     <>
       <SectionPanel title={t("discovery.accounts_title")} description={t("discovery.accounts_desc")}>
         <div className="grid gap-4 xl:grid-cols-3">
-          {DISCOVERY_SOURCES.map((source) => {
+          {previewSources.map((source) => {
             const account = accountsBySource.get(source);
             return (
               <AccountCard
