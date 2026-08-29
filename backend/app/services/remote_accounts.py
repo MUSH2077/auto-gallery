@@ -754,7 +754,10 @@ class RemoteAccountService:
                 .where(
                     RemoteAccount.user_id == self.user_id,
                     RemoteAccount.source == source,
-                    RemoteAccount.auth_status != "deleted",
+                    or_(
+                        RemoteAccount.auth_status.is_(None),
+                        RemoteAccount.auth_status != "deleted",
+                    ),
                 )
                 .order_by(RemoteAccount.id)
             )

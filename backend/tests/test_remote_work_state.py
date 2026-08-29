@@ -241,6 +241,7 @@ async def test_work_state_uses_only_current_users_enabled_healthy_pixiv_account(
     [
         (None, "RemoteWorkStateAccountRequired"),
         ({"is_enabled": False}, "RemoteWorkStateAccountRequired"),
+        ({"auth_status": None}, "RemoteWorkStateAccountUnhealthy"),
         ({"auth_status": "untested"}, "RemoteWorkStateAccountUnhealthy"),
         ({"auth_status": "unhealthy"}, "RemoteWorkStateAccountUnhealthy"),
         ({"auth_status": "deleted"}, "RemoteWorkStateAccountRequired"),
@@ -339,6 +340,63 @@ async def test_work_state_non_reauthentication_provider_failures_do_not_mutate_a
             )
 
             with pytest.raises(exception_type):
+                await RemoteAccountService(
+                    db, owner.id, vault=vault, adapters=Registry(adapter)
+                ).fetch_work_state("pixiv", "38362603")
+
+            assert adapter.tokens == ["owner-token"]
+            assert (
+                account.auth_status,
+                account.auth_error_reason,
+                account.credential_generation,
+            ) == original
+    finally:
+        async with async_session() as db:
+            await cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("returned_source", "returned_work_id"),
+    [
+        ("x", "38362603"),
+        ("pixiv", "different-work-id"),
+    ],
+)
+async def test_work_state_rejects_mismatched_adapter_identity_without_mutating_account(
+    returned_source, returned_work_id
+):
+    from app.database import async_session, engine
+    from app.remote_discovery.contract import RemoteWorkState
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_credentials import CredentialVault
+
+    async def mismatched_state(_credentials, _source_work_id):
+        return RemoteWorkState(
+            source=returned_source,
+            source_work_id=returned_work_id,
+            fetched_at=datetime.now(timezone.utc),
+            total_views=11,
+            total_bookmarks=7,
+            is_bookmarked=True,
+        )
+
+    adapter = RecordingWorkStateAdapter(outcome=mismatched_state)
+    try:
+        async with async_session() as db:
+            await cleanup(db)
+            vault = CredentialVault(TEST_REMOTE_KEY)
+            owner = await seed_user(db, "mismatched_identity")
+            account = await seed_pixiv_account(db, owner.id, vault)
+            original = (
+                account.auth_status,
+                account.auth_error_reason,
+                account.credential_generation,
+            )
+
+            with pytest.raises(ValueError, match="different work"):
                 await RemoteAccountService(
                     db, owner.id, vault=vault, adapters=Registry(adapter)
                 ).fetch_work_state("pixiv", "38362603")
