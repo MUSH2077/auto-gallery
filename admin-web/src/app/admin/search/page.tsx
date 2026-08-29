@@ -48,22 +48,38 @@ function SearchContent() {
   const [query, setQuery] = useState(initialQuery);
   const [page, setPage] = useState(Math.max(0, Number(searchParams.get("page") || 1) - 1));
   const pushNextComposedQuery = useRef(false);
+  const urlSyncTimer = useRef<number | null>(null);
+  const latestQuery = useRef(initialQuery);
   const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
-    setQuery(searchParams.get("q") || "");
+    const nextQuery = searchParams.get("q") || "";
+    latestQuery.current = nextQuery;
+    setQuery(nextQuery);
     setPage(Math.max(0, Number(searchParams.get("page") || 1) - 1));
   }, [searchParams]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (deferredQuery.trim() !== latestQuery.current.trim()) return;
       const next = new URLSearchParams();
       if (deferredQuery.trim()) next.set("q", deferredQuery.trim());
       if (page > 0) next.set("page", String(page + 1));
       router.replace(next.size ? `${pathname}?${next.toString()}` : pathname, { scroll: false });
     }, 250);
-    return () => window.clearTimeout(timer);
+    urlSyncTimer.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (urlSyncTimer.current === timer) urlSyncTimer.current = null;
+    };
   }, [deferredQuery, page, pathname, router]);
+
+  const cancelPendingUrlSync = () => {
+    if (urlSyncTimer.current !== null) {
+      window.clearTimeout(urlSyncTimer.current);
+      urlSyncTimer.current = null;
+    }
+  };
 
   const results = useQuery({
     queryKey: ["compound-search", deferredQuery, page],
@@ -80,6 +96,8 @@ function SearchContent() {
     value: query,
     scope: "global",
     onChange: (value) => {
+      cancelPendingUrlSync();
+      latestQuery.current = value;
       setQuery(value);
       setPage(0);
       if (pushNextComposedQuery.current) {
@@ -151,6 +169,8 @@ function SearchContent() {
         <SmartSearchInput
           value={query}
           onChange={(value) => {
+            cancelPendingUrlSync();
+            latestQuery.current = value;
             setQuery(value);
             setPage(0);
           }}
