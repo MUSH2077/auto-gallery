@@ -2133,6 +2133,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
     await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
+    await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
