@@ -1185,6 +1185,15 @@ export interface Work {
   updated_at: string;
 }
 
+export interface RemoteWorkState {
+  source: "pixiv";
+  source_work_id: string;
+  fetched_at: string;
+  total_views: number;
+  total_bookmarks: number;
+  is_bookmarked: boolean;
+}
+
 export type Tag = components["schemas"]["TagRead"];
 
 export type TagSourceUsage = components["schemas"]["TagSourceUsage"];

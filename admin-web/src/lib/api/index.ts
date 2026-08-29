@@ -1017,6 +1017,7 @@ export const queryKeys = {
     all: ["works"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
+    remoteState: (id: string) => ["works", id, "remote-state"] as const,
     assets: (id: string) => ["works", id, "assets"] as const,
     tags: (id: string) => ["works", id, "tags"] as const,
   },
