@@ -1019,7 +1019,11 @@ test("desktop sidebar is the sole peer-page navigation and command palette remai
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
   const sidebar = page.locator("#admin-sidebar");
-  await expect(sidebar.locator("nav a")).toHaveCount(11);
+  await expect(sidebar.locator("nav a")).toHaveCount(12);
+  await expect(sidebar.getByRole("link", { name: "Remote Discovery", exact: true })).toHaveAttribute(
+    "href",
+    "/admin/discovery",
+  );
   await expect(sidebar.locator("nav").getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAttribute("href", "/admin");
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAccessibleName("Go to dashboard");
