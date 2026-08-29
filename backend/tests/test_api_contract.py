@@ -84,6 +84,13 @@ def test_contract_declares_remote_work_state_errors_and_response_headers():
     assert {"200", "409", "429", "502", "503"} <= set(responses)
     assert responses["200"]["headers"]["Cache-Control"]["schema"] == {"type": "string"}
     assert responses["429"]["headers"]["Retry-After"]["schema"] == {"type": "string"}
+    for status_code in ("409", "429", "502", "503"):
+        schema = responses[status_code]["content"]["application/json"]["schema"]
+        assert schema["allOf"][0]["$ref"] == "#/components/schemas/ApiError"
+        detail = schema["allOf"][1]["properties"]["detail"]
+        assert detail["type"] == "object"
+        assert detail["required"] == ["code"]
+        assert detail["properties"]["code"] == {"type": "string"}
 
 
 def test_contract_exposes_structured_data_center_and_repository_detail_responses():

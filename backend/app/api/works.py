@@ -112,6 +112,30 @@ def _sanitized_retry_after(value: object) -> str:
         return "1"
 
 
+_REMOTE_WORK_STATE_ERROR_CONTENT = {
+    "content": {
+        "application/json": {
+            "schema": {
+                "allOf": [
+                    {"$ref": "#/components/schemas/ApiError"},
+                    {
+                        "type": "object",
+                        "required": ["detail"],
+                        "properties": {
+                            "detail": {
+                                "type": "object",
+                                "required": ["code"],
+                                "properties": {"code": {"type": "string"}},
+                            }
+                        },
+                    },
+                ]
+            }
+        }
+    }
+}
+
+
 _REMOTE_WORK_STATE_RESPONSES = {
     200: {
         "description": "Live Pixiv work state.",
@@ -122,7 +146,10 @@ _REMOTE_WORK_STATE_RESPONSES = {
             }
         },
     },
-    409: {"description": "Remote work state is unsupported or the account requires attention."},
+    409: {
+        "description": "Remote work state is unsupported or the account requires attention.",
+        **_REMOTE_WORK_STATE_ERROR_CONTENT,
+    },
     429: {
         "description": "Remote provider rate limit reached.",
         "headers": {
@@ -131,9 +158,16 @@ _REMOTE_WORK_STATE_RESPONSES = {
                 "schema": {"type": "string"},
             }
         },
+        **_REMOTE_WORK_STATE_ERROR_CONTENT,
     },
-    502: {"description": "Remote provider is unavailable."},
-    503: {"description": "Remote discovery is unavailable in this deployment."},
+    502: {
+        "description": "Remote provider is unavailable.",
+        **_REMOTE_WORK_STATE_ERROR_CONTENT,
+    },
+    503: {
+        "description": "Remote discovery is unavailable in this deployment.",
+        **_REMOTE_WORK_STATE_ERROR_CONTENT,
+    },
 }
 
 
