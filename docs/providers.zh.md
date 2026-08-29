@@ -106,6 +106,18 @@ X/Bilibili 在“艺术简介、近期视觉内容、受支持站点链接”三
 每次 25 个，可配置 1–200；只有完整扫描才执行。远端取关只更新候选状态，绝不禁用或删除
 本地订阅。
 
+### Pixiv 作品实时状态
+
+Pixiv 作品详情页可显示**实时**总浏览数、总收藏数以及当前浏览用户是否已收藏该插画。
+每次页面 mount 都会使用该浏览用户已启用且健康的 Pixiv 账号，向 Pixiv App API 发起一次
+新的详情请求；响应为 `private, no-store`，不会在窗口重新获得焦点时刷新，也没有服务端或
+客户端缓存。绝不以本地 `raw_metadata` 作为回退，因此实时请求不可用时只显示不可用状态，
+本地作品页面仍可正常浏览。
+
+该端点只读，绝不会创建或移除 Pixiv 收藏。当前 rollout **仅允许 Pixiv 手动预览**；保持
+Pixiv 自动导入、X 发现/自动导入，以及 Bilibili 发现/自动导入关闭。不要以真实 provider
+执行 smoke test；自动化验证应使用 fixture transport 与注入的 adapter。
+
 ## Provider 注册表
 
 `backend/app/providers/registry.py` 维护 `source_name → provider 实例` 的映射。查找方式：
@@ -126,6 +138,7 @@ downloadable = registry.list_downloadable()
 - `capabilities.supports_gallerydl`：True
 - URL 模式：`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`（可选 `/en/` 语言前缀）
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
+- 实时作品状态使用为浏览用户选择的 App API refresh-token 账号；它与 gallery-dl 下载认证分离。
 
 ### X / Twitter (`x.py`)
 - **状态**：可下载

@@ -114,6 +114,22 @@ candidates, defaults to high confidence and 25 candidates, and is capped at
 1–200 per completed scan. Remote unfollow only updates candidate state and
 never disables or deletes a local subscription.
 
+### Live Pixiv work state
+
+Pixiv work detail pages can show **live** total views, total bookmarks, and
+whether the viewing user has bookmarked the illustration. Each page mount makes
+a fresh Pixiv App API detail request with that viewing user's enabled, healthy
+Pixiv account; the response is `private, no-store`, is not refetched on window
+focus, and has no server or client cache. Local `raw_metadata` is never used as
+a fallback, so an unavailable live request shows an unavailable state while the
+local work page remains readable.
+
+This endpoint is read-only: it never creates or removes a Pixiv bookmark. The
+current rollout is **Pixiv manual preview only**. Keep Pixiv automatic import,
+X discovery/automatic import, and Bilibili discovery/automatic import disabled.
+Do not use a real provider as a smoke test; use fixture transports and injected
+adapters in automated verification.
+
 ## Provider Registry
 
 `backend/app/providers/registry.py` maintains a dict of `source_name → provider instance`. Resolution:
@@ -134,6 +150,8 @@ downloadable = registry.list_downloadable()
 - `capabilities.supports_gallerydl`: True
 - URL patterns: `pixiv.net/artworks/<id>`, `pixiv.net/users/<id>` (optionally with `/en/` locale prefix)
 - Uses gallery-dl Pixiv extractor with cookie-based auth
+- Live work-state reads use the App API refresh-token account selected for the
+  viewing user; this is separate from gallery-dl download authentication.
 
 ### X / Twitter (`x.py`)
 - **Status**: Downloadable

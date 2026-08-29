@@ -687,7 +687,7 @@ async def test_remote_work_state_api_sanitizes_provider_failures(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypatch):
+async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypatch, caplog):
     from app.config import settings
     from app.database import async_session, engine
     from app.main import app
@@ -695,6 +695,8 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
     from app.remote_discovery.common import RemoteReauthenticationRequired
     from app.services.remote_credentials import CredentialVault
 
+    token_canary = "owner-token-canary"
+    payload_canary = "remote-payload-canary"
     old_key = settings.remote_credential_key
     old_adapter = registry._adapters.get("pixiv")
     old_private_members = settings.remote_discovery_private_members_enabled
@@ -728,22 +730,34 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
             assert unhealthy_response.status_code == 409
             assert unhealthy_response.json()["detail"]["code"] == "remote_account_reauthentication_required"
 
-            registry.register(ApiWorkStateAdapter(RemoteReauthenticationRequired(401, "owner-token-canary")))
+            registry.register(
+                ApiWorkStateAdapter(
+                    RemoteReauthenticationRequired(401, f"{token_canary} {payload_canary}")
+                )
+            )
             reauth_response = await client.get(
                 f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(reauth.username)
             )
             assert reauth_response.status_code == 409
             assert reauth_response.json()["detail"]["code"] == "remote_account_reauthentication_required"
-            assert "owner-token-canary" not in reauth_response.text
+            assert token_canary not in reauth_response.text
+            assert payload_canary not in reauth_response.text
 
             from app.services.remote_accounts import RemoteCredentialGenerationChanged
-            registry.register(ApiWorkStateAdapter(RemoteCredentialGenerationChanged("owner-token-canary")))
+            registry.register(
+                ApiWorkStateAdapter(
+                    RemoteCredentialGenerationChanged(f"{token_canary} {payload_canary}")
+                )
+            )
             stale_response = await client.get(
                 f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(stale.username)
             )
             assert stale_response.status_code == 409
             assert stale_response.json()["detail"]["code"] == "remote_account_stale"
-            assert "owner-token-canary" not in stale_response.text
+            assert token_canary not in stale_response.text
+            assert payload_canary not in stale_response.text
+            assert token_canary not in caplog.text
+            assert payload_canary not in caplog.text
 
             settings.remote_discovery_private_members_enabled = False
             unavailable = await client.get(

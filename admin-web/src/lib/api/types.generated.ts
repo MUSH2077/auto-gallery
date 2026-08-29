@@ -4271,6 +4271,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/works/{work_id}/remote-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Remote Work State
+         * @description Return volatile Pixiv state for a locally visible work without caching it.
+         */
+        get: operations["get_api_v1_works_work_id_remote_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/works/{work_id}/sources": {
         parameters: {
             query?: never;
@@ -6379,6 +6399,27 @@ export interface components {
             manual_preview: boolean;
             /** Unavailable Reason */
             unavailable_reason: string | null;
+        };
+        /** RemoteWorkStateRead */
+        RemoteWorkStateRead: {
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /** Is Bookmarked */
+            is_bookmarked: boolean;
+            /**
+             * Source
+             * @constant
+             */
+            source: "pixiv";
+            /** Source Work Id */
+            source_work_id: string;
+            /** Total Bookmarks */
+            total_bookmarks: number;
+            /** Total Views */
+            total_views: number;
         };
         /** RepositoryCapabilities */
         RepositoryCapabilities: {
@@ -19620,6 +19661,87 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    get_api_v1_works_work_id_remote_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live Pixiv work state. */
+            200: {
+                headers: {
+                    /** @description Private response that must not be stored. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteWorkStateRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Remote work state is unsupported or the account requires attention. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Remote provider rate limit reached. */
+            429: {
+                headers: {
+                    /** @description Positive number of seconds before retrying. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Remote provider is unavailable. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Remote discovery is unavailable in this deployment. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

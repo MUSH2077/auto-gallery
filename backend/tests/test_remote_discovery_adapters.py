@@ -76,6 +76,31 @@ def test_remote_work_state_is_frozen_and_validates_typed_fields():
 
 
 @pytest.mark.asyncio
+async def test_remote_discovery_adapter_work_state_default_fails_closed():
+    """Providers must opt in explicitly before a live work-state read is possible."""
+    from app.remote_discovery.contract import RemoteDiscoveryAdapter
+
+    class FailClosedAdapter(RemoteDiscoveryAdapter):
+        source = "pixiv"
+        auth_methods = ()
+
+        async def list_collections(self, _credentials):
+            raise AssertionError("not used")
+
+        async def fetch_page(self, _credentials, **_kwargs):
+            raise AssertionError("not used")
+
+        def build_download_auth(self, _credentials):
+            raise AssertionError("not used")
+
+        async def validate_account(self, _credentials):
+            raise AssertionError("not used")
+
+    with pytest.raises(NotImplementedError, match="pixiv does not support remote work state"):
+        await FailClosedAdapter().fetch_work_state({}, source_work_id="38362603")
+
+
+@pytest.mark.asyncio
 async def test_pixiv_work_state_uses_live_illust_detail_and_maps_volatile_fields():
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
 
@@ -105,6 +130,7 @@ async def test_pixiv_work_state_uses_live_illust_detail_and_maps_volatile_fields
     assert kwargs["params"] == {"illust_id": "38362603"}
     assert kwargs["headers"]["Authorization"] == "Bearer short-lived-access"
     assert kwargs["timeout"] == 10
+    assert "timeout" not in transport.requests[0][2]
 
 
 @pytest.mark.asyncio
@@ -245,6 +271,10 @@ async def test_pixiv_refresh_token_following_is_normalized_and_paged():
     assert dict(page.next_cursor) == {"offset": 30, "restrict": "public"}
     assert transport.requests[1][2]["params"]["restrict"] == "public"
     assert transport.requests[1][2]["params"]["offset"] == 0
+    # The short timeout is exclusively for a live illust-detail read. Existing
+    # authentication and following requests retain their prior timeout policy.
+    assert "timeout" not in transport.requests[0][2]
+    assert "timeout" not in transport.requests[1][2]
 
 
 @pytest.mark.asyncio

@@ -5386,6 +5386,48 @@
         "title": "RemoteDiscoveryRolloutRead",
         "type": "object"
       },
+      "RemoteWorkStateRead": {
+        "properties": {
+          "fetched_at": {
+            "format": "date-time",
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "is_bookmarked": {
+            "title": "Is Bookmarked",
+            "type": "boolean"
+          },
+          "source": {
+            "const": "pixiv",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_work_id": {
+            "title": "Source Work Id",
+            "type": "string"
+          },
+          "total_bookmarks": {
+            "minimum": 0.0,
+            "title": "Total Bookmarks",
+            "type": "integer"
+          },
+          "total_views": {
+            "minimum": 0.0,
+            "title": "Total Views",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "source_work_id",
+          "fetched_at",
+          "total_views",
+          "total_bookmarks",
+          "is_bookmarked"
+        ],
+        "title": "RemoteWorkStateRead",
+        "type": "object"
+      },
       "RepositoryCapabilities": {
         "properties": {
           "can_download": {
@@ -29089,6 +29131,111 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "curation"
+        ]
+      }
+    },
+    "/api/v1/works/{work_id}/remote-state": {
+      "get": {
+        "description": "Return volatile Pixiv state for a locally visible work without caching it.",
+        "operationId": "get_api_v1_works_work_id_remote_state",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteWorkStateRead"
+                }
+              }
+            },
+            "description": "Live Pixiv work state.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Private response that must not be stored.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "409": {
+            "description": "Remote work state is unsupported or the account requires attention."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "Remote provider rate limit reached.",
+            "headers": {
+              "Retry-After": {
+                "description": "Positive number of seconds before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Remote provider is unavailable."
+          },
+          "503": {
+            "description": "Remote discovery is unavailable in this deployment."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Remote Work State",
+        "tags": [
+          "works"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
         ]
       }
     },

@@ -361,6 +361,38 @@ opt-in is `AUTO_GALLERY_LIVE_REMOTE_DISCOVERY=explicitly-enabled` plus one of
 `LIVE_PIXIV_REFRESH_TOKEN`, `LIVE_X_COOKIE`, or `LIVE_BILIBILI_SESSDATA`.
 Credential values are hidden from parameter IDs and failure output.
 
+### Pixiv live work-state recovery
+
+`GET /api/v1/works/{work_id}/remote-state` is a live, read-only App API lookup
+for the local Pixiv work page. Every page mount requests current views,
+bookmark count, and the viewing account's bookmark state; it has no cache and
+never falls back to `raw_metadata`. It never changes a Pixiv bookmark. Closing
+Pixiv preview (`REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=false`) also disables
+this live work state, but does not affect local work-detail pages, stored media,
+or other local browsing.
+
+Keep the production posture at **Pixiv manual preview only**: leave Pixiv
+automatic import, X discovery/automatic import, and Bilibili
+discovery/automatic import disabled. Do not perform a smoke test against a
+real provider during recovery; use the deterministic fixture/injected-adapter
+tests below instead.
+
+| Status | Meaning | Safe operator action |
+|---|---|---|
+| `409` | The work is not Pixiv-backed, no enabled healthy account is available, an account must reauthenticate, or credentials changed during the read. | Keep the local page available; connect/reconnect the viewing user's Pixiv account and retry from a new page mount. |
+| `429` | Pixiv rate limited the live read. | Honor the positive `Retry-After` response header; do not retry in a loop. |
+| `502` | Pixiv returned a malformed/unavailable/timeout provider response. | Treat as transient, inspect sanitized service logs, and retry later. Never paste provider payloads or tokens into tickets. |
+| `503` | The deployment-level Pixiv preview gate is closed. | Confirm the intended manual-preview rollout setting; reopen only Pixiv preview when approved. |
+
+The normal checks must not contact Pixiv, X, or Bilibili. Run focused tests with
+a dedicated database whose name ends in `_test`, for example:
+
+```bash
+cd backend
+TEST_DATABASE_URL='postgresql+asyncpg://autogallery:test-db@postgres:5432/autogallery_pixiv_live_state_test' \
+  .venv/bin/python -m pytest tests/test_remote_work_state.py -q
+```
+
 ## Alerting & Escalation
 
 ### What to watch
