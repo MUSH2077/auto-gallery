@@ -112,7 +112,36 @@ def _sanitized_retry_after(value: object) -> str:
         return "1"
 
 
-@router.get("/{work_id}/remote-state", response_model=RemoteWorkStateRead)
+_REMOTE_WORK_STATE_RESPONSES = {
+    200: {
+        "description": "Live Pixiv work state.",
+        "headers": {
+            "Cache-Control": {
+                "description": "Private response that must not be stored.",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+    409: {"description": "Remote work state is unsupported or the account requires attention."},
+    429: {
+        "description": "Remote provider rate limit reached.",
+        "headers": {
+            "Retry-After": {
+                "description": "Positive number of seconds before retrying.",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+    502: {"description": "Remote provider is unavailable."},
+    503: {"description": "Remote discovery is unavailable in this deployment."},
+}
+
+
+@router.get(
+    "/{work_id}/remote-state",
+    response_model=RemoteWorkStateRead,
+    responses=_REMOTE_WORK_STATE_RESPONSES,
+)
 async def get_remote_work_state(
     work_id: UUID,
     response: Response,
