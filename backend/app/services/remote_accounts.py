@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import DiscoveryCandidate, RemoteAccount, UserSubscriptionSource
+from app.remote_discovery.contract import RemoteWorkState
 from app.remote_discovery.common import RemoteReauthenticationRequired
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.schemas.remote_discovery import RemoteAccountRead
@@ -58,6 +59,14 @@ _NUMERIC_REMOTE_ID = re.compile(r"-?[0-9]{1,32}\Z")
 
 class RemoteCredentialGenerationChanged(RuntimeError):
     """A credential consumer no longer owns the account generation it pinned."""
+
+
+class RemoteWorkStateAccountRequired(RuntimeError):
+    """No enabled credential-bearing remote account is available for this user."""
+
+
+class RemoteWorkStateAccountUnhealthy(RuntimeError):
+    """The user's remote account must be reauthenticated before use."""
 
 
 def validate_remote_account_policy(
@@ -734,6 +743,88 @@ class RemoteAccountService:
             pinned_generation=pinned_generation,
         )
         return collections
+
+    async def fetch_work_state(self, source: str, source_work_id: str) -> RemoteWorkState:
+        """Fetch volatile work state using only this user's healthy account."""
+
+        require_preview(source)
+        account = (
+            await self.db.execute(
+                select(RemoteAccount)
+                .where(
+                    RemoteAccount.user_id == self.user_id,
+                    RemoteAccount.source == source,
+                    RemoteAccount.auth_status != "deleted",
+                )
+                .order_by(RemoteAccount.id)
+            )
+        ).scalar_one_or_none()
+        if account is None or not account.is_enabled or not account.credential_ciphertext:
+            raise RemoteWorkStateAccountRequired
+        if account.auth_status != "healthy":
+            raise RemoteWorkStateAccountUnhealthy
+
+        account_id = account.id
+        pinned_identity = self._credential_use_identity(account)
+        pinned_generation = int(account.credential_generation or 0)
+
+        async def advance_generation(generation: int) -> None:
+            nonlocal pinned_generation
+            pinned_generation = generation
+
+        try:
+            state = await self.adapters.get(source).fetch_work_state(
+                self.credentials_for_adapter(
+                    account,
+                    expected_generation=pinned_generation,
+                    on_generation_advanced=advance_generation,
+                ),
+                source_work_id=source_work_id,
+            )
+            if state.source != source or state.source_work_id != source_work_id:
+                raise ValueError("Remote adapter returned work state for a different work")
+        except RemoteCredentialGenerationChanged:
+            raise
+        except Exception as exc:
+            account = await self._relock_provider_result(
+                account_id,
+                pinned_identity=pinned_identity,
+                pinned_generation=pinned_generation,
+            )
+            if (
+                not account.is_enabled
+                or not account.credential_ciphertext
+                or account.auth_status != "healthy"
+            ):
+                raise RemoteCredentialGenerationChanged(
+                    "remote account eligibility changed while provider request was running"
+                )
+            if not isinstance(exc, RemoteReauthenticationRequired):
+                raise
+            account.auth_status = "unhealthy"
+            account.auth_error_reason = "reauthentication_required"
+            await self._set_binding_health(
+                account,
+                healthy=False,
+                failure_reason="reauthentication_required",
+            )
+            await self.db.flush()
+            raise
+
+        account = await self._relock_provider_result(
+            account_id,
+            pinned_identity=pinned_identity,
+            pinned_generation=pinned_generation,
+        )
+        if (
+            not account.is_enabled
+            or not account.credential_ciphertext
+            or account.auth_status != "healthy"
+        ):
+            raise RemoteCredentialGenerationChanged(
+                "remote account eligibility changed while provider request was running"
+            )
+        return state
 
     async def delete(self, account_id: UUID) -> None:
         account = await self._account(account_id, lock=True)
