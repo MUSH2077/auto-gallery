@@ -19709,7 +19709,13 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"] & {
+                        detail: {
+                            code: string;
+                        };
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
@@ -19727,21 +19733,39 @@ export interface operations {
                     "Retry-After"?: string;
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"] & {
+                        detail: {
+                            code: string;
+                        };
+                    };
+                };
             };
             /** @description Remote provider is unavailable. */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"] & {
+                        detail: {
+                            code: string;
+                        };
+                    };
+                };
             };
             /** @description Remote discovery is unavailable in this deployment. */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"] & {
+                        detail: {
+                            code: string;
+                        };
+                    };
+                };
             };
         };
     };

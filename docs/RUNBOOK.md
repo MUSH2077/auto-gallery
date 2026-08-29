@@ -367,9 +367,10 @@ Credential values are hidden from parameter IDs and failure output.
 for the local Pixiv work page. Every page mount requests current views,
 bookmark count, and the viewing account's bookmark state; it has no cache and
 never falls back to `raw_metadata`. It never changes a Pixiv bookmark. Closing
-Pixiv preview (`REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=false`) also disables
-this live work state, but does not affect local work-detail pages, stored media,
-or other local browsing.
+Pixiv preview (`REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=false`) or the
+private-members foundation (`REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=false`)
+also disables this live work state, so either gate can produce a `503`. Neither
+gate affects local work-detail pages, stored media, or other local browsing.
 
 Keep the production posture at **Pixiv manual preview only**: leave Pixiv
 automatic import, X discovery/automatic import, and Bilibili
@@ -382,7 +383,7 @@ tests below instead.
 | `409` | The work is not Pixiv-backed, no enabled healthy account is available, an account must reauthenticate, or credentials changed during the read. | Keep the local page available; connect/reconnect the viewing user's Pixiv account and retry from a new page mount. |
 | `429` | Pixiv rate limited the live read. | Honor the positive `Retry-After` response header; do not retry in a loop. |
 | `502` | Pixiv returned a malformed/unavailable/timeout provider response. | Treat as transient, inspect sanitized service logs, and retry later. Never paste provider payloads or tokens into tickets. |
-| `503` | The deployment-level Pixiv preview gate is closed. | Confirm the intended manual-preview rollout setting; reopen only Pixiv preview when approved. |
+| `503` | Either the deployment-level private-members foundation or the Pixiv preview gate is closed. | Confirm the approved manual-preview rollout. Restore `REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=true` and/or `REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=true` for the gate(s) that were intentionally closed; restore both when the approved rollout requires both. Keep automatic import and X/B discovery gates closed. |
 
 The normal checks must not contact Pixiv, X, or Bilibili. Run focused tests with
 a dedicated database whose name ends in `_test`, for example:

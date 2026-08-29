@@ -88,7 +88,9 @@ def test_contract_declares_remote_work_state_errors_and_response_headers():
         schema = responses[status_code]["content"]["application/json"]["schema"]
         assert schema["allOf"][0]["$ref"] == "#/components/schemas/ApiError"
         specialized = schema["allOf"][1]
+        assert specialized["type"] == "object"
         assert specialized["additionalProperties"] is False
+        assert specialized["required"] == ["detail"]
         detail = specialized["properties"]["detail"]
         assert detail["type"] == "object"
         assert detail["additionalProperties"] is False

@@ -116,7 +116,9 @@ Pixiv 作品详情页可显示**实时**总浏览数、总收藏数以及当前�
 
 该端点只读，绝不会创建或移除 Pixiv 收藏。当前 rollout **仅允许 Pixiv 手动预览**；保持
 Pixiv 自动导入、X 发现/自动导入，以及 Bilibili 发现/自动导入关闭。不要以真实 provider
-执行 smoke test；自动化验证应使用 fixture transport 与注入的 adapter。
+执行 smoke test；自动化验证应使用 fixture transport 与注入的 adapter。实时状态同时依赖
+private-members 基础开关和 Pixiv preview 开关；任一关闭都会返回 `503`，但本地作品页仍可
+访问。rollout 恢复时只恢复已获批准的一个或两个开关，并保持自动导入以及 X/B 开关关闭。
 
 ## Provider 注册表
 

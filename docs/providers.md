@@ -127,6 +127,10 @@ local work page remains readable.
 This endpoint is read-only: it never creates or removes a Pixiv bookmark. The
 current rollout is **Pixiv manual preview only**. Keep Pixiv automatic import,
 X discovery/automatic import, and Bilibili discovery/automatic import disabled.
+The live state requires both the private-members foundation and the Pixiv
+preview gate; if either is closed, it returns `503` while the local work page
+remains available. Restore only the approved gate or gates during rollout
+recovery, and keep the automatic-import and X/B gates closed.
 Do not use a real provider as a smoke test; use fixture transports and injected
 adapters in automated verification.
 
