@@ -44,6 +44,151 @@ def test_remote_response_repr_redacts_payload_and_headers():
     assert "redacted" in repr(response).lower()
 
 
+def test_remote_work_state_is_frozen_and_validates_typed_fields():
+    from dataclasses import FrozenInstanceError
+    from datetime import UTC, datetime
+
+    from app.remote_discovery.contract import RemoteWorkState
+
+    state = RemoteWorkState(
+        source="pixiv",
+        source_work_id="38362603",
+        fetched_at=datetime.now(UTC),
+        total_views=123456,
+        total_bookmarks=7890,
+        is_bookmarked=True,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        state.total_views = 1
+    with pytest.raises(ValueError, match="source is not supported"):
+        RemoteWorkState("unknown", "1", datetime.now(UTC), 0, 0, False)
+    with pytest.raises(ValueError, match="source_work_id must not be empty"):
+        RemoteWorkState("pixiv", " ", datetime.now(UTC), 0, 0, False)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        RemoteWorkState("pixiv", "1", datetime.now(), 0, 0, False)
+    with pytest.raises(ValueError, match="total_views"):
+        RemoteWorkState("pixiv", "1", datetime.now(UTC), True, 0, False)
+    with pytest.raises(ValueError, match="total_bookmarks"):
+        RemoteWorkState("pixiv", "1", datetime.now(UTC), 0, -1, False)
+    with pytest.raises(ValueError, match="is_bookmarked"):
+        RemoteWorkState("pixiv", "1", datetime.now(UTC), 0, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_pixiv_work_state_uses_live_illust_detail_and_maps_volatile_fields():
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(200, {"access_token": "short-lived-access", "expires_in": 3600}, {}),
+        response(200, {"illust": {
+            "id": 38362603,
+            "total_view": 123456,
+            "total_bookmarks": 7890,
+            "is_bookmarked": True,
+        }}, {}),
+    )
+
+    state = await PixivRemoteDiscoveryAdapter(transport).fetch_work_state(
+        {"refresh_token": "refresh"}, source_work_id="38362603"
+    )
+
+    assert state.source == "pixiv"
+    assert state.source_work_id == "38362603"
+    assert state.total_views == 123456
+    assert state.total_bookmarks == 7890
+    assert state.is_bookmarked is True
+    method, url, kwargs = transport.requests[1]
+    assert method == "GET"
+    assert url == "https://app-api.pixiv.net/v1/illust/detail"
+    assert kwargs["params"] == {"illust_id": "38362603"}
+    assert kwargs["headers"]["Authorization"] == "Bearer short-lived-access"
+    assert kwargs["timeout"] == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [("total_view", -1), ("total_view", True), ("total_bookmarks", "9"),
+     ("is_bookmarked", 1)],
+)
+async def test_pixiv_work_state_rejects_malformed_volatile_fields(field, value):
+    from app.remote_discovery.common import MalformedRemoteResponse
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    payload = {
+        "id": 38362603,
+        "total_view": 10,
+        "total_bookmarks": 2,
+        "is_bookmarked": False,
+    }
+    payload[field] = value
+    response = _common().RemoteHTTPResponse
+    adapter = PixivRemoteDiscoveryAdapter(FixtureTransport(
+        response(200, {"access_token": "access"}, {}),
+        response(200, {"illust": payload}, {}),
+    ))
+
+    with pytest.raises(MalformedRemoteResponse, match="Pixiv"):
+        await adapter.fetch_work_state({"refresh_token": "refresh"}, source_work_id="38362603")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail_response, expected_exception",
+    [
+        pytest.param((401, {}, {}), "RemoteReauthenticationRequired", id="unauthorized"),
+        pytest.param((429, {}, {"Retry-After": "27"}), "RemoteRateLimited", id="rate-limited"),
+    ],
+)
+async def test_pixiv_work_state_maps_detail_provider_errors(detail_response, expected_exception):
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(200, {"access_token": "access"}, {}),
+        response(*detail_response),
+    )
+    expected = getattr(_common(), expected_exception)
+
+    with pytest.raises(expected):
+        await PixivRemoteDiscoveryAdapter(transport).fetch_work_state(
+            {"refresh_token": "refresh"}, source_work_id="38362603"
+        )
+    if expected_exception == "RemoteRateLimited":
+        with pytest.raises(expected) as caught:
+            await PixivRemoteDiscoveryAdapter(FixtureTransport(
+                response(200, {"access_token": "access"}, {}),
+                response(*detail_response),
+            )).fetch_work_state({"refresh_token": "refresh"}, source_work_id="38362603")
+        assert caught.value.retry_after_seconds == 27
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"illust": None},
+        {"illust": {"id": 99, "total_view": 1, "total_bookmarks": 1, "is_bookmarked": False}},
+    ],
+    ids=["missing-illust", "null-illust", "wrong-id"],
+)
+async def test_pixiv_work_state_rejects_missing_or_mismatched_illust(payload):
+    from app.remote_discovery.common import MalformedRemoteResponse
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = PixivRemoteDiscoveryAdapter(FixtureTransport(
+        response(200, {"access_token": "access"}, {}),
+        response(200, payload, {}),
+    ))
+
+    with pytest.raises(MalformedRemoteResponse, match="Pixiv"):
+        await adapter.fetch_work_state({"refresh_token": "refresh"}, source_work_id="38362603")
+
+
 @pytest.mark.asyncio
 async def test_pixiv_lists_public_and_private_follow_collections_without_network():
     from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter

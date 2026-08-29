@@ -22,6 +22,7 @@ from app.remote_discovery.contract import (
     RemoteCandidateIdentity,
     RemoteCollection,
     RemoteDiscoveryAdapter,
+    RemoteWorkState,
 )
 from app.services.remote_credentials import DownloadAuthenticationOverride
 
@@ -31,6 +32,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
     auth_methods = ("refresh_token",)
     TOKEN_URL = "https://oauth.secure.pixiv.net/auth/token"
     FOLLOWING_URL = "https://app-api.pixiv.net/v1/user/following"
+    ILLUST_DETAIL_URL = "https://app-api.pixiv.net/v1/illust/detail"
     APP_HEADERS = {
         "App-OS": "ios",
         "App-OS-Version": "16.7.2",
@@ -182,6 +184,47 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
                 raise MalformedRemoteResponse("Pixiv next_url is missing a valid offset") from exc
             next_cursor = {"offset": next_offset, "restrict": restrict}
         return DiscoveryPage(items=items, next_cursor=next_cursor, done=next_cursor is None)
+
+    @staticmethod
+    def _required_nonnegative_int(illust: Mapping[str, Any], field: str) -> int:
+        value = illust.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise MalformedRemoteResponse(f"Pixiv illust detail has invalid {field}")
+        return value
+
+    async def fetch_work_state(
+        self,
+        credentials: Mapping[str, Any],
+        *,
+        source_work_id: str,
+    ) -> RemoteWorkState:
+        access_token, _user = await self._authentication(credentials)
+        response = await self.transport.request(
+            "GET",
+            self.ILLUST_DETAIL_URL,
+            headers={**self.APP_HEADERS, "Authorization": f"Bearer {access_token}"},
+            params={"illust_id": source_work_id},
+            timeout=10,
+        )
+        payload = checked_payload(response, provider="Pixiv")
+        illust = payload.get("illust")
+        if not isinstance(illust, Mapping):
+            raise MalformedRemoteResponse("Pixiv illust detail response has invalid illust")
+        if str(illust.get("id")) != source_work_id:
+            raise MalformedRemoteResponse("Pixiv illust detail response has mismatched id")
+        total_views = self._required_nonnegative_int(illust, "total_view")
+        total_bookmarks = self._required_nonnegative_int(illust, "total_bookmarks")
+        is_bookmarked = illust.get("is_bookmarked")
+        if not isinstance(is_bookmarked, bool):
+            raise MalformedRemoteResponse("Pixiv illust detail has invalid is_bookmarked")
+        return RemoteWorkState(
+            source="pixiv",
+            source_work_id=source_work_id,
+            fetched_at=datetime.now(UTC),
+            total_views=total_views,
+            total_bookmarks=total_bookmarks,
+            is_bookmarked=is_bookmarked,
+        )
 
     def build_download_auth(self, credentials: Mapping[str, Any]) -> DownloadAuthenticationOverride:
         refresh_token = required_text(credentials, "refresh_token", provider="Pixiv")

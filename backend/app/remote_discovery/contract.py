@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -66,6 +67,30 @@ class RemoteCandidateIdentity:
 
 
 @dataclass(frozen=True)
+class RemoteWorkState:
+    source: RemoteSource
+    source_work_id: str
+    fetched_at: datetime
+    total_views: int
+    total_bookmarks: int
+    is_bookmarked: bool
+
+    def __post_init__(self) -> None:
+        if self.source not in {"pixiv", "x", "bilibili"}:
+            raise ValueError("remote work state source is not supported")
+        if not self.source_work_id.strip():
+            raise ValueError("source_work_id must not be empty")
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("fetched_at must be timezone-aware")
+        for name in ("total_views", "total_bookmarks"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if not isinstance(self.is_bookmarked, bool):
+            raise ValueError("is_bookmarked must be a boolean")
+
+
+@dataclass(frozen=True)
 class DiscoveryPage:
     items: tuple[RemoteCandidateIdentity, ...] | list[RemoteCandidateIdentity]
     done: bool
@@ -113,6 +138,14 @@ class RemoteDiscoveryAdapter(ABC):
         cursor: Mapping[str, Any] | None = None,
         page_size: int = 100,
     ) -> DiscoveryPage: ...
+
+    async def fetch_work_state(
+        self,
+        credentials: RedactedCredentials | Mapping[str, Any],
+        *,
+        source_work_id: str,
+    ) -> RemoteWorkState:
+        raise NotImplementedError(f"{self.source} does not support remote work state")
 
     async def discover(
         self,
