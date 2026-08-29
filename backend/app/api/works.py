@@ -120,10 +120,12 @@ _REMOTE_WORK_STATE_ERROR_CONTENT = {
                     {"$ref": "#/components/schemas/ApiError"},
                     {
                         "type": "object",
+                        "additionalProperties": False,
                         "required": ["detail"],
                         "properties": {
                             "detail": {
                                 "type": "object",
+                                "additionalProperties": False,
                                 "required": ["code"],
                                 "properties": {"code": {"type": "string"}},
                             }
