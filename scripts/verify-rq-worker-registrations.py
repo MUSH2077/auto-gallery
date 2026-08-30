@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import math
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Any
-
 
 ROLE_QUEUES = {
     "download": {
@@ -63,38 +62,61 @@ def evaluate_registrations(
     if not isinstance(payload, dict):
         return False, "registration payload is not an object"
     observed_at = _parse_timestamp(payload.get("observed_at"))
+    expected_hostnames = payload.get("expected_hostnames")
     workers = payload.get("workers")
-    if observed_at is None or not isinstance(workers, list):
+    if (
+        observed_at is None
+        or not isinstance(expected_hostnames, dict)
+        or not isinstance(workers, list)
+    ):
         return False, "registration payload is incomplete"
 
-    fresh_queues: set[str] = set()
-    stale_queues: set[str] = set()
+    role_hostnames: dict[str, str] = {}
+    for role in ROLE_QUEUES:
+        hostname = expected_hostnames.get(role)
+        if not isinstance(hostname, str) or not hostname:
+            return False, f"{role} current container hostname is missing"
+        role_hostnames[role] = hostname
+    if len(set(role_hostnames.values())) != len(role_hostnames):
+        return False, "current worker container hostnames are not unique"
+
+    fresh_queues: dict[str, set[str]] = {}
+    stale_queues: dict[str, set[str]] = {}
     for worker in workers:
         if not isinstance(worker, dict):
             continue
+        hostname = worker.get("hostname")
         queues = worker.get("queues")
         heartbeat = _parse_timestamp(worker.get("last_heartbeat"))
-        if not isinstance(queues, list) or heartbeat is None:
+        if (
+            not isinstance(hostname, str)
+            or not isinstance(queues, list)
+            or heartbeat is None
+        ):
             continue
         normalized = {name for name in queues if isinstance(name, str) and name}
         age = (observed_at - heartbeat).total_seconds()
         if -30.0 <= age <= float(max_age_seconds):
-            fresh_queues.update(normalized)
+            fresh_queues.setdefault(hostname, set()).update(normalized)
         else:
-            stale_queues.update(normalized)
+            stale_queues.setdefault(hostname, set()).update(normalized)
 
     failures: list[str] = []
     for role, required in ROLE_QUEUES.items():
-        missing = sorted(required - fresh_queues)
+        hostname = role_hostnames[role]
+        missing = sorted(required - fresh_queues.get(hostname, set()))
         if missing:
-            stale = sorted(set(missing) & stale_queues)
+            stale = sorted(set(missing) & stale_queues.get(hostname, set()))
             detail = f"{role} missing fresh queues: {','.join(missing)}"
             if stale:
                 detail += f" (stale: {','.join(stale)})"
             failures.append(detail)
     if failures:
         return False, "; ".join(failures)
-    return True, f"fresh RQ queue coverage complete ({len(fresh_queues)} queues)"
+    covered = set().union(
+        *(fresh_queues.get(host, set()) for host in role_hostnames.values())
+    )
+    return True, f"fresh RQ queue coverage complete ({len(covered)} queues)"
 
 
 def main() -> int:

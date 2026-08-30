@@ -56,19 +56,25 @@ docker compose stop -t 120 admin-web backend
 docker compose up --no-deps migrate
 docker compose up -d --wait --wait-timeout 180 backend admin-web
 
-# 5. Enforce both per-probe and overall recovery deadlines in a subshell.
-# Continue only if this exits 0; a timeout leaves every worker stopped.
-(
+# 5. Enforce both per-probe and overall recovery deadlines. An explicit exit
+# prevents an ordinary interactive shell from continuing after a failure.
+if ! (
   recovery_deadline=$((SECONDS + 180))
   until timeout --signal=TERM --kill-after=1s 6s \
     bash scripts/probe-resource-recovery.sh; do
     (( SECONDS < recovery_deadline )) || exit 1
     sleep 5
   done
-)
+); then
+  echo "Controller recovery failed; workers remain stopped" >&2
+  exit 1
+fi
 
 # 6. Only after the bounded gate succeeds, start and verify worker listeners
-VERIFY_SCOPE=core bash scripts/verify-runtime.sh
+if ! VERIFY_SCOPE=core bash scripts/verify-runtime.sh; then
+  echo "Core verification failed; workers remain stopped" >&2
+  exit 1
+fi
 docker compose up -d worker-download worker-import worker-operations scheduler
 VERIFY_SCOPE=full bash scripts/verify-runtime.sh
 ```

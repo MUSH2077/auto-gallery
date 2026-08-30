@@ -298,7 +298,32 @@ compose exec -T -e REDISCLI_AUTH="${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
 echo "ok: redis ping"
 
 if [[ "$verify_scope" == "full" ]]; then
-  compose exec -T backend python3 - <<'PY' \
+  current_container_hostname() {
+    local service="$1" container_id hostname
+    container_id="$(compose ps -q "$service")"
+    if [[ -z "$container_id" ]]; then
+      echo "Cannot resolve current container for $service" >&2
+      return 1
+    fi
+    hostname="$(docker inspect "$container_id" --format '{{.Config.Hostname}}')"
+    if [[ ! "$hostname" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "Current container for $service has an invalid hostname" >&2
+      return 1
+    fi
+    printf '%s\n' "$hostname"
+  }
+
+  rq_download_hostname="$(current_container_hostname worker-download)"
+  rq_import_hostname="$(current_container_hostname worker-import)"
+  rq_operations_hostname="$(current_container_hostname worker-operations)"
+  rq_scheduler_hostname="$(current_container_hostname scheduler)"
+
+  compose exec -T \
+    -e VERIFY_RQ_DOWNLOAD_HOSTNAME="$rq_download_hostname" \
+    -e VERIFY_RQ_IMPORT_HOSTNAME="$rq_import_hostname" \
+    -e VERIFY_RQ_OPERATIONS_HOSTNAME="$rq_operations_hostname" \
+    -e VERIFY_RQ_SCHEDULER_HOSTNAME="$rq_scheduler_hostname" \
+    backend python3 - <<'PY' \
     | VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS="${VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS:-480}" \
       python3 scripts/verify-rq-worker-registrations.py
 import json
@@ -314,6 +339,7 @@ for worker in Worker.all(connection=connection):
     last_heartbeat = getattr(worker, "last_heartbeat", None)
     workers.append(
         {
+            "hostname": getattr(worker, "hostname", None),
             "queues": list(worker.queue_names()),
             "last_heartbeat": (
                 last_heartbeat.isoformat() if last_heartbeat is not None else None
@@ -324,6 +350,12 @@ print(
     json.dumps(
         {
             "observed_at": datetime.now(timezone.utc).isoformat(),
+            "expected_hostnames": {
+                "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
+                "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
+                "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
+                "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
+            },
             "workers": workers,
         },
         separators=(",", ":"),

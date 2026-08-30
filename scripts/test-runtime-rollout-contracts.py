@@ -6,13 +6,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import time
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -183,37 +182,45 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
     def _payload(*, stale_queue=None, omit_queue=None):
         fresh = "2026-08-30T10:00:00+00:00"
         stale = "2026-08-30T09:50:00+00:00"
-        queues = (
-            [
-                "downloads",
-                "downloads:pixiv",
-                "downloads:danbooru",
-                "downloads:iwara",
-                "downloads:weibo",
-                "downloads:bilibili",
-                "downloads:pinterest",
-                "downloads:lofter",
-                "downloads:x",
-            ],
-            ["imports"],
-            ["maintenance"],
-            ["operations"],
-            ["discovery"],
-            ["scheduled"],
+        role_queues = (
+            (
+                "download",
+                [
+                    "downloads",
+                    "downloads:pixiv",
+                    "downloads:danbooru",
+                    "downloads:iwara",
+                    "downloads:weibo",
+                    "downloads:bilibili",
+                    "downloads:pinterest",
+                    "downloads:lofter",
+                    "downloads:x",
+                ],
+            ),
+            ("import", ["imports"]),
+            ("import", ["maintenance"]),
+            ("operations", ["operations"]),
+            ("operations", ["discovery"]),
+            ("scheduler", ["scheduled"]),
         )
         workers = []
-        for registered in queues:
+        for role, registered in role_queues:
             remaining = [name for name in registered if name != omit_queue]
             if not remaining:
                 continue
             workers.append(
                 {
+                    "hostname": f"current-{role}",
                     "queues": remaining,
                     "last_heartbeat": stale if stale_queue in registered else fresh,
                 }
             )
         return {
             "observed_at": "2026-08-30T10:05:00+00:00",
+            "expected_hostnames": {
+                role: f"current-{role}"
+                for role in ("download", "import", "operations", "scheduler")
+            },
             "workers": workers,
         }
 
@@ -238,6 +245,18 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
         self.assertFalse(ready)
         self.assertIn("scheduled", summary)
 
+    def test_fresh_old_container_registrations_cannot_cover_current_container(self):
+        payload = self._payload(omit_queue="maintenance")
+        old_workers = self._payload()["workers"]
+        for worker in old_workers:
+            worker["hostname"] = f"old-{worker['hostname']}"
+        payload["workers"].extend(old_workers)
+
+        ready, summary = self.verifier.evaluate_registrations(payload)
+
+        self.assertFalse(ready)
+        self.assertIn("maintenance", summary)
+
     def test_full_runtime_verification_queries_rq_and_runs_coverage_check(self):
         runtime = (ROOT / "scripts" / "verify-runtime.sh").read_text(
             encoding="utf-8"
@@ -247,6 +266,9 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
         self.assertIn("Worker.all(connection=connection)", full_check)
         self.assertIn("verify-rq-worker-registrations.py", full_check)
         self.assertIn("VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS", full_check)
+        self.assertIn("current_container_hostname", full_check)
+        self.assertIn('"hostname": getattr(worker, "hostname", None)', full_check)
+        self.assertIn('"expected_hostnames":', full_check)
 
     def test_expected_queue_roles_match_resolved_compose_topology(self):
         compose_verifier = _load_script("verify-compose-resources.py")
@@ -332,6 +354,25 @@ class RunbookSafetyContractTests(unittest.TestCase):
         self.assertLess(recovery_gate, core_verification)
         self.assertLess(core_verification, worker_start)
         self.assertLess(recovery_gate, worker_start)
+
+    def test_break_glass_failures_exit_before_worker_start(self):
+        runbook = (ROOT / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
+        section = runbook.split("### Manual Deploy (break-glass only)", 1)[1]
+        section = section.split("### Deploying Only Infrastructure Changes", 1)[0]
+
+        self.assertIn("if ! (", section)
+        self.assertIn("if ! VERIFY_SCOPE=core", section)
+
+        recovery_guard = section.index("if ! (")
+        recovery_exit = section.index("exit 1", recovery_guard)
+        core_guard = section.index("if ! VERIFY_SCOPE=core")
+        core_exit = section.index("exit 1", core_guard)
+        worker_start = section.index("docker compose up -d worker-download")
+
+        self.assertLess(recovery_guard, recovery_exit)
+        self.assertLess(recovery_exit, core_guard)
+        self.assertLess(core_guard, core_exit)
+        self.assertLess(core_exit, worker_start)
 
 
 if __name__ == "__main__":
