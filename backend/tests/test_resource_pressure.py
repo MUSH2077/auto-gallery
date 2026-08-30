@@ -329,6 +329,49 @@ def test_foreground_p95_does_not_count_an_unchanged_sample_window_repeatedly(
     assert "foreground_latency_high" not in snapshot["soft_reasons"]
 
 
+def test_foreground_p95_clears_when_its_rolling_window_ages_out(monkeypatch):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
+    machine = ResourcePressureStateMachine()
+    slow = _sample(foreground_p95=750.0, foreground_count=30)
+
+    for generation, timestamp in enumerate((0, 5, 10), start=1):
+        snapshot = machine.update(
+            replace(slow, foreground_sample_generation=generation), now=timestamp
+        )
+    assert "foreground_latency_high" in snapshot["soft_reasons"]
+
+    expired = _sample(
+        foreground_p95=None,
+        foreground_count=0,
+    )
+    snapshot = machine.update(
+        replace(expired, foreground_sample_generation=3), now=15
+    )
+
+    assert "foreground_latency_high" not in snapshot["soft_reasons"]
+
+
+def test_foreground_p95_always_requires_three_new_slow_evaluations(monkeypatch):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 1)
+    machine = ResourcePressureStateMachine()
+    slow = _sample(foreground_p95=750.0, foreground_count=30)
+
+    for generation, timestamp in enumerate((1, 2), start=1):
+        snapshot = machine.update(
+            replace(slow, foreground_sample_generation=generation), now=timestamp
+        )
+        assert "foreground_latency_high" not in snapshot["soft_reasons"]
+
+    snapshot = machine.update(
+        replace(slow, foreground_sample_generation=3), now=3
+    )
+    assert "foreground_latency_high" in snapshot["soft_reasons"]
+
+
 def test_foreground_latency_recorder_excludes_derivative_progress(monkeypatch):
     from app.services import resource_pressure as pressure_module
 

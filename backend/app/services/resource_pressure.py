@@ -1129,7 +1129,9 @@ class ResourcePressureStateMachine:
         self._failure_count = 0
         hard_reasons = self._hard_reasons(sample)
         soft_reasons = self._soft_reasons(sample)
-        if (
+        if sample.foreground_sample_count == 0:
+            self._foreground_slow_count = 0
+        elif (
             self._foreground_last_sample_generation is None
             or sample.foreground_sample_generation
             > self._foreground_last_sample_generation
@@ -1146,7 +1148,7 @@ class ResourcePressureStateMachine:
             else:
                 self._foreground_slow_count = 0
         if self._foreground_slow_count >= max(
-            1,
+            3,
             int(settings.resource_foreground_slow_samples),
         ):
             soft_reasons.append("foreground_latency_high")
