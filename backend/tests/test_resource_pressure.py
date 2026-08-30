@@ -920,13 +920,13 @@ class _FakeRedis:
         return 1
 
     def eval(self, script, numkeys, *values):
-        assert numkeys in {3, 4}
+        assert numkeys in {4, 5}
         if self.before_eval is not None:
             self.before_eval()
 
         if "HGETALL" in script:
-            latch_key, ack_key, recovered_key, seen_key = values[:4]
-            expected_event, retention, _now = values[4:]
+            latch_key, ack_key, recovered_key, seen_key, event_key = values[:5]
+            expected_event, retention, _now = values[5:]
             raw_latch = self.get(latch_key)
             if raw_latch is None:
                 return 0
@@ -937,34 +937,58 @@ class _FakeRedis:
             if current_event != expected_event:
                 return 0
             if current_event:
+                controller = latch.get("controller") or {}
+                current_cgroup = controller.get("external_cgroup_id")
+                try:
+                    current_counter = int(controller["external_oom_kill_counter"])
+                except (KeyError, TypeError, ValueError):
+                    return 0
+                acknowledged = int(self.hget(ack_key, current_cgroup) or 0)
+                recovered = int(self.hget(recovered_key, current_cgroup) or 0)
+                acknowledged_event = self.hget(event_key, current_cgroup)
+                if (
+                    not isinstance(current_cgroup, str)
+                    or not current_cgroup
+                    or acknowledged != current_counter
+                    or recovered >= current_counter
+                    or acknowledged_event != current_event
+                ):
+                    return 0
                 self.hashes.setdefault(recovered_key, {}).update(
                     self.hashes.get(ack_key, {})
                 )
                 self.expire(ack_key, int(retention))
                 self.expire(recovered_key, int(retention))
                 self.expire(seen_key, int(retention))
+                self.expire(event_key, int(retention))
             self.delete(latch_key)
             return 1
 
-        if numkeys == 3:
-            ack_key, seen_key, recovered_key = values[:3]
-            cgroup_id, counter, now, retention = values[3:]
+        if numkeys == 4:
+            ack_key, seen_key, recovered_key, event_key = values[:4]
+            cgroup_id, counter, now, retention = values[4:]
             acknowledged = int(self.hget(ack_key, cgroup_id) or 0)
             if acknowledged < int(counter):
                 return 0
             seen = self.sorted_sets.setdefault(seen_key, {})
             seen[cgroup_id] = float(now)
             self._prune_acknowledgments(
-                ack_key, seen_key, recovered_key, float(now), float(retention)
+                ack_key,
+                seen_key,
+                recovered_key,
+                event_key,
+                float(now),
+                float(retention),
             )
             self.expire(ack_key, int(retention))
             self.expire(seen_key, int(retention))
             self.expire(recovered_key, int(retention))
+            self.expire(event_key, int(retention))
             recovered = int(self.hget(recovered_key, cgroup_id) or 0)
             return 2 if recovered >= int(counter) else 1
 
-        ack_key, latch_key, seen_key, recovered_key = values[:4]
-        cgroup_id, counter, payload, ttl, now, retention = values[4:]
+        ack_key, latch_key, seen_key, recovered_key, event_key = values[:5]
+        cgroup_id, counter, payload, ttl, now, retention = values[5:]
         if seen_key not in self.sorted_sets and self.hashes.get(ack_key):
             self.sorted_sets[seen_key] = {
                 identity: float(now) for identity in self.hashes[ack_key]
@@ -975,32 +999,41 @@ class _FakeRedis:
         if acknowledged >= int(counter):
             self.sorted_sets.setdefault(seen_key, {})[cgroup_id] = float(now)
             self._prune_acknowledgments(
-                ack_key, seen_key, recovered_key, float(now), float(retention)
+                ack_key,
+                seen_key,
+                recovered_key,
+                event_key,
+                float(now),
+                float(retention),
             )
             self.expire(ack_key, int(retention))
             self.expire(seen_key, int(retention))
             self.expire(recovered_key, int(retention))
+            self.expire(event_key, int(retention))
             recovered = int(self.hget(recovered_key, cgroup_id) or 0)
             if recovered >= int(counter):
                 return 2
+            acknowledged_event = self.hget(event_key, cgroup_id)
+            candidate_latch = json.loads(payload)
+            candidate_controller = candidate_latch.get("controller")
+            if (
+                acknowledged_event is None
+                and int(acknowledged) == int(counter)
+                and candidate_controller.get("external_cgroup_id") == cgroup_id
+                and int(candidate_controller.get("external_oom_kill_counter"))
+                == int(counter)
+                and isinstance(candidate_controller.get("external_event_id"), str)
+                and candidate_controller["external_event_id"]
+            ):
+                acknowledged_event = candidate_controller["external_event_id"]
+                self.hset(event_key, cgroup_id, acknowledged_event)
             raw_latch = self.get(latch_key)
             if raw_latch is not None:
                 try:
                     latch = json.loads(raw_latch)
                 except (TypeError, ValueError):
                     latch = None
-                candidate_latch = json.loads(payload)
                 controller = latch.get("controller") if isinstance(latch, dict) else None
-                candidate_controller = candidate_latch.get("controller")
-                matches_candidate = (
-                    isinstance(controller, dict)
-                    and controller.get("external_event_id")
-                    == candidate_controller.get("external_event_id")
-                    and controller.get("external_cgroup_id")
-                    == candidate_controller.get("external_cgroup_id")
-                    and controller.get("external_oom_kill_counter")
-                    == candidate_controller.get("external_oom_kill_counter")
-                )
                 current_cgroup = (
                     controller.get("external_cgroup_id")
                     if isinstance(controller, dict)
@@ -1014,6 +1047,7 @@ class _FakeRedis:
                 current_recovered = int(
                     self.hget(recovered_key, current_cgroup) or 0
                 )
+                current_event = self.hget(event_key, current_cgroup)
                 represents_active_ack = (
                     isinstance(controller, dict)
                     and isinstance(controller.get("external_event_id"), str)
@@ -1024,28 +1058,45 @@ class _FakeRedis:
                     and current_counter > 0
                     and current_ack == current_counter
                     and current_recovered < current_counter
+                    and current_event == controller.get("external_event_id")
                 )
                 if (
                     isinstance(latch, dict)
                     and latch.get("status") == "paused"
-                    and (matches_candidate or represents_active_ack)
+                    and represents_active_ack
                 ):
                     return 0
-            self.set(latch_key, payload, ex=int(ttl))
+            repaired_payload = json.loads(payload)
+            if acknowledged_event:
+                repaired_controller = repaired_payload["controller"]
+                repaired_controller["external_event_id"] = acknowledged_event
+                repaired_controller["external_cgroup_id"] = cgroup_id
+                repaired_controller["external_oom_kill_counter"] = int(acknowledged)
+            self.set(latch_key, json.dumps(repaired_payload), ex=int(ttl))
             return 1
         self.set(latch_key, payload, ex=int(ttl))
         self.hset(ack_key, cgroup_id, int(counter))
+        candidate_controller = json.loads(payload).get("controller") or {}
+        candidate_event = candidate_controller.get("external_event_id")
+        if isinstance(candidate_event, str) and candidate_event:
+            self.hset(event_key, cgroup_id, candidate_event)
         self.sorted_sets.setdefault(seen_key, {})[cgroup_id] = float(now)
         self._prune_acknowledgments(
-            ack_key, seen_key, recovered_key, float(now), float(retention)
+            ack_key,
+            seen_key,
+            recovered_key,
+            event_key,
+            float(now),
+            float(retention),
         )
         self.expire(ack_key, int(retention))
         self.expire(seen_key, int(retention))
         self.expire(recovered_key, int(retention))
+        self.expire(event_key, int(retention))
         return 1
 
     def _prune_acknowledgments(
-        self, ack_key, seen_key, recovered_key, now, retention
+        self, ack_key, seen_key, recovered_key, event_key, now, retention
     ):
         seen = self.sorted_sets.setdefault(seen_key, {})
         cutoff = now - retention
@@ -1053,6 +1104,7 @@ class _FakeRedis:
             if score <= cutoff:
                 self.hashes.get(ack_key, {}).pop(stale_id, None)
                 self.hashes.get(recovered_key, {}).pop(stale_id, None)
+                self.hashes.get(event_key, {}).pop(stale_id, None)
                 seen.pop(stale_id, None)
 
     def info(self, section):
@@ -1409,6 +1461,11 @@ def test_concurrent_older_worker_oom_event_cannot_regress_acknowledgment():
     def publish_newer_between_precheck_and_atomic_commit():
         redis.before_eval = None
         redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/shared", 8)
+        redis.hset(
+            pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+            "/docker/shared",
+            newer_event_id,
+        )
         redis.set(
             PRESSURE_LATCH_KEY,
             json.dumps(
@@ -1474,6 +1531,11 @@ def test_cross_cgroup_duplicate_cannot_replace_latest_active_oom_latch():
             latest_cgroup,
             latest_counter,
         )
+        redis.hset(
+            pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+            latest_cgroup,
+            latest_event_id,
+        )
         redis.set(
             PRESSURE_LATCH_KEY,
             json.dumps(
@@ -1515,11 +1577,137 @@ def test_cross_cgroup_duplicate_cannot_replace_latest_active_oom_latch():
     ) is None
 
 
+def test_stale_same_cgroup_candidate_repairs_latch_to_ack_high_water():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    cgroup_id = "/docker/same-cgroup"
+    stale_counter = 7
+    current_counter = 8
+    stale_event_id = pressure_module.cgroup_oom_kill_event_id(
+        cgroup_id,
+        stale_counter,
+    )
+    current_event_id = pressure_module.cgroup_oom_kill_event_id(
+        cgroup_id,
+        current_counter,
+    )
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, current_counter)
+    redis.hset(
+        "resource:cgroup:oom-kill-event-id:v1",
+        cgroup_id,
+        current_event_id,
+    )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": stale_event_id,
+                    "external_cgroup_id": cgroup_id,
+                    "external_oom_kill_counter": stale_counter,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    observed = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=stale_event_id,
+        cgroup_id=cgroup_id,
+        oom_kill_counter=stale_counter,
+    )
+
+    latch = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert observed is not None
+    assert latch["controller"]["external_event_id"] == current_event_id
+    assert latch["controller"]["external_cgroup_id"] == cgroup_id
+    assert latch["controller"]["external_oom_kill_counter"] == current_counter
+    assert pressure_module._clear_pressure_latch(
+        redis_client=redis,
+        expected_external_event_id=stale_event_id,
+    ) is False
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        cgroup_id,
+    ) is None
+
+
+def test_forged_cross_cgroup_latch_is_replaced_before_it_can_recover_ack():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    candidate_cgroup = "/docker/candidate-a"
+    candidate_counter = 7
+    candidate_event_id = pressure_module.cgroup_oom_kill_event_id(
+        candidate_cgroup,
+        candidate_counter,
+    )
+    current_cgroup = "/docker/current-b"
+    current_counter = 3
+    current_event_id = pressure_module.cgroup_oom_kill_event_id(
+        current_cgroup,
+        current_counter,
+    )
+    forged_event_id = "forged-current-event"
+    for cgroup_id, counter, event_id in (
+        (candidate_cgroup, candidate_counter, candidate_event_id),
+        (current_cgroup, current_counter, current_event_id),
+    ):
+        redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, counter)
+        redis.hset(
+            "resource:cgroup:oom-kill-event-id:v1",
+            cgroup_id,
+            event_id,
+        )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": forged_event_id,
+                    "external_cgroup_id": current_cgroup,
+                    "external_oom_kill_counter": current_counter,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=candidate_event_id,
+        cgroup_id=candidate_cgroup,
+        oom_kill_counter=candidate_counter,
+    )
+
+    latch = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert latch["controller"]["external_event_id"] == candidate_event_id
+    assert pressure_module._clear_pressure_latch(
+        redis_client=redis,
+        expected_external_event_id=forged_event_id,
+    ) is False
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        current_cgroup,
+    ) is None
+
+
 def test_cgroup_acknowledgments_expire_and_prune_inactive_identities(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     redis = _FakeRedis()
     redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/expired", 4)
+    redis.hset(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        "/docker/expired",
+        pressure_module.cgroup_oom_kill_event_id("/docker/expired", 4),
+    )
     redis.sorted_sets[pressure_module.CGROUP_OOM_ACK_SEEN_KEY] = {
         "/docker/expired": 1.0
     }
@@ -1539,7 +1727,14 @@ def test_cgroup_acknowledgments_expire_and_prune_inactive_identities(monkeypatch
     assert redis.hget(
         pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/current"
     ) == 1
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY, "/docker/expired"
+    ) is None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY, "/docker/current"
+    ) == pressure_module.cgroup_oom_kill_event_id("/docker/current", 1)
     assert redis.ttl(pressure_module.CGROUP_OOM_ACK_HASH_KEY) >= 24 * 60 * 60
+    assert redis.ttl(pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY) >= 24 * 60 * 60
 
 
 def test_active_cgroup_duplicate_touch_survives_retention_without_replay(monkeypatch):
@@ -1620,6 +1815,9 @@ def test_active_touch_prunes_only_identity_absent_beyond_retention(monkeypatch):
     ) is None
     assert redis.hget(
         pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY, "/docker/inactive"
+    ) is None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY, "/docker/inactive"
     ) is None
 
 
@@ -1840,6 +2038,61 @@ def test_pause_latch_survives_process_restart_and_snapshot_expiry(monkeypatch):
     now["value"] = 160
     assert pressure_module.sample_and_publish_resource_pressure(redis)["status"] == "normal"
     assert redis.get(PRESSURE_LATCH_KEY) is None
+
+
+def test_invalid_external_latch_cannot_publish_normal_when_compare_clear_fails(
+    monkeypatch,
+):
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    now = {"value": 0.0}
+    cgroup_id = "/docker/unseen-high-water"
+    stale_event_id = pressure_module.cgroup_oom_kill_event_id(cgroup_id, 7)
+    current_event_id = pressure_module.cgroup_oom_kill_event_id(cgroup_id, 8)
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, 8)
+    redis.hset(
+        "resource:cgroup:oom-kill-event-id:v1",
+        cgroup_id,
+        current_event_id,
+    )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "reasons": ["worker_cgroup_oom_kill"],
+                "trigger_reasons": ["worker_cgroup_oom_kill"],
+                "controller": {
+                    "external_source": "worker-test",
+                    "external_event_id": stale_event_id,
+                    "external_cgroup_id": cgroup_id,
+                    "external_oom_kill_counter": 7,
+                },
+            }
+        ),
+        ex=60,
+    )
+    monitor = ResourcePressureMonitor(
+        ResourcePressureStateMachine(
+            PressureThresholds(resume_seconds=60),
+            clock=lambda: now["value"],
+        ),
+        sampler=lambda: _sample(),
+    )
+    monkeypatch.setattr(pressure_module, "_monitor", monitor)
+
+    assert pressure_module.sample_and_publish_resource_pressure(redis)["status"] == "paused"
+    now["value"] = 60.0
+    snapshot = pressure_module.sample_and_publish_resource_pressure(redis)
+
+    assert snapshot["status"] == "paused"
+    assert json.loads(redis.get(PRESSURE_SNAPSHOT_KEY))["status"] == "paused"
+    assert redis.get(PRESSURE_LATCH_KEY) is not None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        cgroup_id,
+    ) is None
 
 
 def test_pause_latch_overrides_an_older_nonpaused_snapshot(monkeypatch):

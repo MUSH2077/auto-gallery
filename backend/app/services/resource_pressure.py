@@ -36,6 +36,7 @@ PRESSURE_LATCH_KEY = "resource:pressure:latch"
 CGROUP_OOM_ACK_HASH_KEY = "resource:cgroup:oom-kill-ack:v1"
 CGROUP_OOM_ACK_SEEN_KEY = "resource:cgroup:oom-kill-seen:v1"
 CGROUP_OOM_RECOVERED_HASH_KEY = "resource:cgroup:oom-kill-recovered:v1"
+CGROUP_OOM_EVENT_ID_HASH_KEY = "resource:cgroup:oom-kill-event-id:v1"
 RESOURCE_CONTROL_CHANNEL = "resource:control"
 PRESSURE_LATCH_TTL_SECONDS = 24 * 60 * 60
 CGROUP_OOM_ACK_RETENTION_SECONDS = 2 * PRESSURE_LATCH_TTL_SECONDS
@@ -53,6 +54,14 @@ MIB = 1024 ** 2
 _CGROUP_OOM_LATCH_ACK_LUA = """
 local now = tonumber(ARGV[5])
 local retention = tonumber(ARGV[6])
+local candidate_ok, candidate_latch = pcall(cjson.decode, ARGV[3])
+local candidate_controller = candidate_ok
+    and type(candidate_latch) == 'table'
+    and candidate_latch['controller']
+    or nil
+local candidate_event = type(candidate_controller) == 'table'
+    and candidate_controller['external_event_id']
+    or nil
 if redis.call('EXISTS', KEYS[3]) == 0 and redis.call('EXISTS', KEYS[1]) == 1 then
     local legacy_ids = redis.call('HKEYS', KEYS[1])
     for _, legacy_id in ipairs(legacy_ids) do
@@ -69,29 +78,33 @@ if acknowledged >= candidate then
     for _, expired_id in ipairs(expired_ids) do
         redis.call('HDEL', KEYS[1], expired_id)
         redis.call('HDEL', KEYS[4], expired_id)
+        redis.call('HDEL', KEYS[5], expired_id)
         redis.call('ZREM', KEYS[3], expired_id)
     end
     redis.call('EXPIRE', KEYS[1], retention)
     redis.call('EXPIRE', KEYS[3], retention)
     redis.call('EXPIRE', KEYS[4], retention)
+    redis.call('EXPIRE', KEYS[5], retention)
     local recovered = tonumber(redis.call('HGET', KEYS[4], ARGV[1]) or '0')
     if recovered >= candidate then
         return 2
     end
+    local acknowledged_event = redis.call('HGET', KEYS[5], ARGV[1])
+    if not acknowledged_event
+        and acknowledged == candidate
+        and type(candidate_controller) == 'table'
+        and candidate_controller['external_cgroup_id'] == ARGV[1]
+        and tonumber(candidate_controller['external_oom_kill_counter']) == candidate
+        and type(candidate_event) == 'string'
+        and candidate_event ~= ''
+    then
+        redis.call('HSET', KEYS[5], ARGV[1], candidate_event)
+        acknowledged_event = candidate_event
+    end
     local raw_latch = redis.call('GET', KEYS[2])
     if raw_latch then
         local ok, latch = pcall(cjson.decode, raw_latch)
-        local candidate_ok, candidate_latch = pcall(cjson.decode, ARGV[3])
         local controller = ok and type(latch) == 'table' and latch['controller'] or nil
-        local candidate_controller = candidate_ok
-            and type(candidate_latch) == 'table'
-            and candidate_latch['controller']
-            or nil
-        local matches_candidate = type(controller) == 'table'
-            and type(candidate_controller) == 'table'
-            and controller['external_event_id'] == candidate_controller['external_event_id']
-            and controller['external_cgroup_id'] == candidate_controller['external_cgroup_id']
-            and controller['external_oom_kill_counter'] == candidate_controller['external_oom_kill_counter']
         local current_cgroup = type(controller) == 'table'
             and controller['external_cgroup_id']
             or nil
@@ -104,6 +117,9 @@ if acknowledged >= candidate then
         local current_recovered = type(current_cgroup) == 'string'
             and tonumber(redis.call('HGET', KEYS[4], current_cgroup) or '0')
             or 0
+        local current_event = type(current_cgroup) == 'string'
+            and redis.call('HGET', KEYS[5], current_cgroup)
+            or nil
         local represents_active_ack = type(controller) == 'table'
             and type(controller['external_event_id']) == 'string'
             and controller['external_event_id'] ~= ''
@@ -113,29 +129,46 @@ if acknowledged >= candidate then
             and current_counter > 0
             and current_ack == current_counter
             and current_recovered < current_counter
+            and current_event == controller['external_event_id']
         if ok
             and type(latch) == 'table'
             and latch['status'] == 'paused'
-            and (matches_candidate or represents_active_ack)
+            and represents_active_ack
         then
             return 0
         end
     end
-    redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
+    local repaired_payload = ARGV[3]
+    if acknowledged_event
+        and candidate_ok
+        and type(candidate_latch) == 'table'
+        and type(candidate_controller) == 'table'
+    then
+        candidate_controller['external_event_id'] = acknowledged_event
+        candidate_controller['external_cgroup_id'] = ARGV[1]
+        candidate_controller['external_oom_kill_counter'] = acknowledged
+        repaired_payload = cjson.encode(candidate_latch)
+    end
+    redis.call('SET', KEYS[2], repaired_payload, 'EX', ARGV[4])
     return 1
 end
 redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+if type(candidate_event) == 'string' and candidate_event ~= '' then
+    redis.call('HSET', KEYS[5], ARGV[1], candidate_event)
+end
 redis.call('ZADD', KEYS[3], now, ARGV[1])
 local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now - retention)
 for _, expired_id in ipairs(expired_ids) do
     redis.call('HDEL', KEYS[1], expired_id)
     redis.call('HDEL', KEYS[4], expired_id)
+    redis.call('HDEL', KEYS[5], expired_id)
     redis.call('ZREM', KEYS[3], expired_id)
 end
 redis.call('EXPIRE', KEYS[1], retention)
 redis.call('EXPIRE', KEYS[3], retention)
 redis.call('EXPIRE', KEYS[4], retention)
+redis.call('EXPIRE', KEYS[5], retention)
 return 1
 """
 
@@ -152,11 +185,13 @@ local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now - retention
 for _, expired_id in ipairs(expired_ids) do
     redis.call('HDEL', KEYS[1], expired_id)
     redis.call('HDEL', KEYS[3], expired_id)
+    redis.call('HDEL', KEYS[4], expired_id)
     redis.call('ZREM', KEYS[2], expired_id)
 end
 redis.call('EXPIRE', KEYS[1], retention)
 redis.call('EXPIRE', KEYS[2], retention)
 redis.call('EXPIRE', KEYS[3], retention)
+redis.call('EXPIRE', KEYS[4], retention)
 local recovered = tonumber(redis.call('HGET', KEYS[3], ARGV[1]) or '0')
 if recovered >= candidate then
     return 2
@@ -179,6 +214,20 @@ if current_event ~= ARGV[1] then
     return 0
 end
 if current_event ~= '' then
+    local current_cgroup = controller['external_cgroup_id']
+    local current_counter = tonumber(controller['external_oom_kill_counter'])
+    if type(current_cgroup) ~= 'string' or current_cgroup == '' or not current_counter then
+        return 0
+    end
+    local acknowledged = tonumber(redis.call('HGET', KEYS[2], current_cgroup) or '0')
+    local recovered = tonumber(redis.call('HGET', KEYS[3], current_cgroup) or '0')
+    local acknowledged_event = redis.call('HGET', KEYS[5], current_cgroup)
+    if acknowledged ~= current_counter
+        or recovered >= current_counter
+        or acknowledged_event ~= current_event
+    then
+        return 0
+    end
     local acknowledgments = redis.call('HGETALL', KEYS[2])
     for index = 1, #acknowledgments, 2 do
         redis.call('HSET', KEYS[3], acknowledgments[index], acknowledgments[index + 1])
@@ -187,6 +236,7 @@ if current_event ~= '' then
         redis.call('EXPIRE', KEYS[2], ARGV[2])
         redis.call('EXPIRE', KEYS[3], ARGV[2])
         redis.call('EXPIRE', KEYS[4], ARGV[2])
+        redis.call('EXPIRE', KEYS[5], ARGV[2])
     end
 end
 redis.call('DEL', KEYS[1])
@@ -2378,11 +2428,12 @@ def _persist_cgroup_oom_latch_and_ack(
     )
     accepted = redis_client.eval(
         _CGROUP_OOM_LATCH_ACK_LUA,
-        4,
+        5,
         CGROUP_OOM_ACK_HASH_KEY,
         PRESSURE_LATCH_KEY,
         CGROUP_OOM_ACK_SEEN_KEY,
         CGROUP_OOM_RECOVERED_HASH_KEY,
+        CGROUP_OOM_EVENT_ID_HASH_KEY,
         str(cgroup_id),
         max(0, int(oom_kill_counter)),
         payload,
@@ -2405,10 +2456,11 @@ def touch_cgroup_oom_kill_ack(
 
     state = redis_client.eval(
         _CGROUP_OOM_ACK_TOUCH_LUA,
-        3,
+        4,
         CGROUP_OOM_ACK_HASH_KEY,
         CGROUP_OOM_ACK_SEEN_KEY,
         CGROUP_OOM_RECOVERED_HASH_KEY,
+        CGROUP_OOM_EVENT_ID_HASH_KEY,
         str(cgroup_id),
         max(0, int(oom_kill_counter)),
         int(time.time()),
@@ -2547,11 +2599,12 @@ def _clear_pressure_latch(
     try:
         cleared = _redis_client(redis_client).eval(
             _CLEAR_PRESSURE_LATCH_LUA,
-            4,
+            5,
             PRESSURE_LATCH_KEY,
             CGROUP_OOM_ACK_HASH_KEY,
             CGROUP_OOM_RECOVERED_HASH_KEY,
             CGROUP_OOM_ACK_SEEN_KEY,
+            CGROUP_OOM_EVENT_ID_HASH_KEY,
             str(expected_external_event_id or ""),
             CGROUP_OOM_ACK_RETENTION_SECONDS,
             int(time.time()),
@@ -2611,10 +2664,43 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
         # The state machine can only make this transition after all recovery
         # thresholds remained satisfied for the full resume interval.
         latch_controller = (latched or {}).get("controller") or {}
-        _clear_pressure_latch(
+        cleared = _clear_pressure_latch(
             redis_client=redis_client,
             expected_external_event_id=latch_controller.get("external_event_id"),
         )
+        if not cleared:
+            # A failed compare-clear means the sampled normal state is not
+            # authoritative: the latch may have been replaced concurrently or
+            # its durable OOM identity may not match the ACK high water.
+            retained_latch = (
+                read_resource_pressure_latch(redis_client=redis_client)
+                or latched
+                or {
+                    "status": "paused",
+                    "reasons": ["pressure_latch_clear_failed"],
+                    "trigger_reasons": ["pressure_latch_clear_failed"],
+                }
+            )
+            _monitor.enforce_external_pause(retained_latch)
+            snapshot = _monitor.snapshot()
+            snapshot["reasons"] = list(
+                retained_latch.get("reasons") or ["pressure_latch_clear_failed"]
+            )
+            snapshot["trigger_reasons"] = list(
+                retained_latch.get("trigger_reasons") or snapshot["reasons"]
+            )
+            retained_controller = retained_latch.get("controller") or {}
+            snapshot_controller = snapshot.setdefault("controller", {})
+            for key in (
+                "external_source",
+                "external_event_id",
+                "external_cgroup_id",
+                "external_oom_kill_counter",
+            ):
+                if retained_controller.get(key) is not None:
+                    snapshot_controller[key] = retained_controller[key]
+            snapshot.setdefault("budget", {})["reservation"] = dict(reservation)
+            _refresh_pressure_latch(snapshot, redis_client=redis_client)
     publish_resource_pressure_snapshot(snapshot, redis_client=redis_client)
     return snapshot
 
