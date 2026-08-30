@@ -12,10 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MIB = 1024 * 1024
 
-SERVICE_NAMES = (
+PROTECTED_SERVICE_NAMES = (
     "postgres",
     "redis",
     "meilisearch",
+    "migrate",
+)
+
+APPLICATION_SERVICE_NAMES = (
     "backend",
     "worker-download",
     "worker-import",
@@ -72,7 +76,7 @@ def require(condition: bool, message: str) -> None:
 
 def verify_base(config: dict) -> None:
     services = config["services"]
-    for name in SERVICE_NAMES:
+    for name in PROTECTED_SERVICE_NAMES:
         service = services[name]
         memory = int(service["mem_limit"])
         require(memory >= 64 * MIB, f"{name}: mem_limit is too small")
@@ -90,10 +94,18 @@ def verify_base(config: dict) -> None:
             f"{name}: bad log rotation",
         )
 
-    # The heaviest unit that can execute in each worker must fit its cgroup.
-    require(int(services["worker-download"]["mem_limit"]) >= 128 * MIB, "download profile cannot fit")
-    require(int(services["worker-import"]["mem_limit"]) >= 384 * MIB, "video profile cannot fit import worker")
-    require(int(services["worker-operations"]["mem_limit"]) >= 384 * MIB, "video profile cannot fit operations worker")
+    for name in APPLICATION_SERVICE_NAMES:
+        service = services[name]
+        for limit in ("mem_limit", "memswap_limit", "cpus"):
+            require(limit not in service, f"{name}: {limit} must be unset")
+        require(int(service["pids_limit"]) >= 16, f"{name}: PID limit is too small")
+        require(-1000 <= service.get("oom_score_adj", 0) <= 1000, f"{name}: bad OOM score")
+        logging = service["logging"]
+        require(logging["driver"] == "json-file", f"{name}: bad log driver")
+        require(
+            logging["options"] == {"max-file": "3", "max-size": "10m"},
+            f"{name}: bad log rotation",
+        )
 
     for name in ("worker-download", "worker-import", "worker-operations", "scheduler"):
         service = services[name]
@@ -149,6 +161,18 @@ def verify_base(config: dict) -> None:
         require(
             services[name]["environment"]["RESOURCE_MEMORY_RESERVE_MODE"] == "auto",
             f"{name}: device-relative reserve must default to auto",
+        )
+        require(
+            services[name]["environment"]["RESOURCE_MEMORY_RESERVE_RATIO"] == "0.15",
+            f"{name}: reserve ratio changed",
+        )
+        require(
+            services[name]["environment"]["RESOURCE_MEMORY_RESERVE_MIN_MB"] == "384",
+            f"{name}: reserve minimum changed",
+        )
+        require(
+            services[name]["environment"]["RESOURCE_MEMORY_RESERVE_MAX_MB"] == "2560",
+            f"{name}: reserve maximum must default to 2560 MiB",
         )
     require(download["command"][-2:] == ["1", "--with-scheduler"], "download CLI fallback must be one")
     require(

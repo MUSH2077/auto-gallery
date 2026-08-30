@@ -61,3 +61,14 @@ def test_remote_discovery_settings_defaults_are_really_fail_closed(monkeypatch) 
     assert {field: getattr(isolated, field) for field in fields} == {
         field: False for field in fields
     }
+
+
+def test_default_automatic_memory_reserve_keeps_the_2560_mib_ceiling(monkeypatch) -> None:
+    monkeypatch.delenv("RESOURCE_MEMORY_RESERVE_MAX_MB", raising=False)
+
+    isolated = Settings(_env_file=None, **_settings_kwargs())
+
+    assert isolated.resource_memory_reserve_mode == "auto"
+    assert isolated.resource_memory_reserve_ratio == 0.15
+    assert isolated.resource_memory_reserve_min_mb == 384
+    assert isolated.resource_memory_reserve_max_mb == 2560

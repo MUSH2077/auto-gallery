@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     resource_memory_reserve_mode: str = "auto"  # auto | fixed
     resource_memory_reserve_ratio: float = 0.15
     resource_memory_reserve_min_mb: int = 384
-    resource_memory_reserve_max_mb: int = 1280
+    resource_memory_reserve_max_mb: int = 2560
     resource_pressure_warning_available_mb: int = 1536
     resource_pressure_pause_available_mb: int = 1280
     resource_pressure_resume_available_mb: int = 1792
@@ -140,8 +140,8 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 10
 
     # Memory monitor: log backend RSS every N seconds, WARN past the threshold.
-    # Set memory_warn_mb below the container mem_limit so the logs capture the
-    # climb (and the last activity) BEFORE the OOM killer fires.
+    # Set memory_warn_mb below the expected backend process budget so the logs
+    # capture a climb and its last activity before host pressure becomes critical.
     memory_warn_mb: int = 700
     memory_log_interval_seconds: int = 60
 

@@ -105,11 +105,9 @@ def main() -> int:
     compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     for variable in (
         "POSTGRES_MEM_LIMIT",
-        "BACKEND_MEM_LIMIT",
-        "DOWNLOAD_WORKER_MEM_LIMIT",
-        "IMPORT_WORKER_MEM_LIMIT",
-        "OPERATIONS_WORKER_MEM_LIMIT",
-        "ADMIN_WEB_MEM_LIMIT",
+        "REDIS_MEM_LIMIT",
+        "MEILI_MEM_LIMIT",
+        "MIGRATE_MEM_LIMIT",
     ):
         if f"${{{variable}:-" not in compose:
             failures.append(f"Compose resource cap is not device-overridable: {variable}")

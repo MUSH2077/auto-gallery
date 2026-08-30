@@ -27,6 +27,15 @@ from app.services.resource_pressure import (
 GIB = 1024 ** 3
 
 
+@pytest.fixture(autouse=True)
+def _use_explicit_small_host_reserve_for_state_machine_scenarios(monkeypatch):
+    """Keep scenario samples deterministic instead of reading the Compose default."""
+
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_memory_reserve_max_mb", 1280)
+
+
 @pytest.mark.parametrize(
     ("total_gib", "expected_mib"),
     ((2, 384), (4, 614), (8, 1228), (16, 1280)),

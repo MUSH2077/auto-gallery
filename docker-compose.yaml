@@ -193,7 +193,7 @@ services:
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
-      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000}
@@ -225,9 +225,6 @@ services:
       retries: 3
       start_period: 90s
     restart: unless-stopped
-    mem_limit: ${BACKEND_MEM_LIMIT:-1G}
-    memswap_limit: ${BACKEND_MEM_LIMIT:-1G}
-    cpus: ${BACKEND_CPU_LIMIT:-0.55}
     pids_limit: ${BACKEND_PIDS_LIMIT:-128}
     oom_score_adj: 100
     logging: *default-logging
@@ -269,7 +266,7 @@ services:
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
-      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
@@ -300,9 +297,6 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${DOWNLOAD_WORKER_MEM_LIMIT:-512M}
-    memswap_limit: ${DOWNLOAD_WORKER_MEM_LIMIT:-512M}
-    cpus: ${DOWNLOAD_WORKER_CPU_LIMIT:-0.35}
     pids_limit: ${DOWNLOAD_WORKER_PIDS_LIMIT:-96}
     oom_score_adj: 500
     logging: *default-logging
@@ -311,7 +305,7 @@ services:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
     # Single import worker: pyvips thumbnail bursts are the biggest memory
-    # spike — keep the ceiling NAS-safe (8GB box) at the cost of throughput.
+    # spike, so queue concurrency and adaptive slice budgets remain conservative.
     # Promote delayed import retries from the imports scheduled registry.
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports 1 --with-scheduler
     environment:
@@ -335,7 +329,7 @@ services:
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
-      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       # A second RQ parent shares this container/cgroup but listens only for
@@ -370,9 +364,6 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${IMPORT_WORKER_MEM_LIMIT:-1G}
-    memswap_limit: ${IMPORT_WORKER_MEM_LIMIT:-1G}
-    cpus: ${IMPORT_WORKER_CPU_LIMIT:-0.65}
     pids_limit: ${IMPORT_WORKER_PIDS_LIMIT:-64}
     oom_score_adj: 500
     logging: *default-logging
@@ -412,7 +403,7 @@ services:
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
-      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       WORKER_EXTRA_QUEUES: discovery
@@ -437,9 +428,6 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${OPERATIONS_WORKER_MEM_LIMIT:-1G}
-    memswap_limit: ${OPERATIONS_WORKER_MEM_LIMIT:-1G}
-    cpus: ${OPERATIONS_WORKER_CPU_LIMIT:-0.25}
     pids_limit: ${OPERATIONS_WORKER_PIDS_LIMIT:-64}
     oom_score_adj: 500
     logging: *default-logging
@@ -476,7 +464,7 @@ services:
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
-      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-1280}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
@@ -503,9 +491,6 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 60s
-    mem_limit: ${SCHEDULER_MEM_LIMIT:-512M}
-    memswap_limit: ${SCHEDULER_MEM_LIMIT:-512M}
-    cpus: ${SCHEDULER_CPU_LIMIT:-0.10}
     pids_limit: ${SCHEDULER_PIDS_LIMIT:-32}
     oom_score_adj: 500
     logging: *default-logging
@@ -525,7 +510,7 @@ services:
     environment:
       HOSTNAME: "0.0.0.0"
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
-      # Leave headroom for native allocations inside the default 256M cgroup.
+      # Keep the Node.js heap below its internal process budget for native allocations.
       NODE_OPTIONS: "--max-old-space-size=${NODE_MAX_OLD_SPACE_MB:-160}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/admin/login"]
@@ -537,9 +522,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    mem_limit: ${ADMIN_WEB_MEM_LIMIT:-512M}
-    memswap_limit: ${ADMIN_WEB_MEM_LIMIT:-512M}
-    cpus: ${ADMIN_WEB_CPU_LIMIT:-0.15}
     pids_limit: ${ADMIN_WEB_PIDS_LIMIT:-64}
     oom_score_adj: 100
     logging: *default-logging
