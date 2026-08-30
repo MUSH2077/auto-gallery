@@ -989,11 +989,31 @@ class _FakeRedis:
                     latch = json.loads(raw_latch)
                 except (TypeError, ValueError):
                     latch = None
+                candidate_latch = json.loads(payload)
                 controller = latch.get("controller") if isinstance(latch, dict) else None
+                candidate_controller = candidate_latch.get("controller")
+                matches_candidate = (
+                    isinstance(controller, dict)
+                    and controller.get("external_event_id")
+                    == candidate_controller.get("external_event_id")
+                    and controller.get("external_cgroup_id")
+                    == candidate_controller.get("external_cgroup_id")
+                    and controller.get("external_oom_kill_counter")
+                    == candidate_controller.get("external_oom_kill_counter")
+                )
+                represents_newer_ack = (
+                    int(acknowledged) > int(counter)
+                    and isinstance(controller, dict)
+                    and isinstance(controller.get("external_event_id"), str)
+                    and bool(controller["external_event_id"])
+                    and controller.get("external_cgroup_id") == cgroup_id
+                    and controller.get("external_oom_kill_counter")
+                    == int(acknowledged)
+                )
                 if (
                     isinstance(latch, dict)
                     and latch.get("status") == "paused"
-                    and (controller is None or isinstance(controller, dict))
+                    and (matches_candidate or represents_newer_ack)
                 ):
                     return 0
             self.set(latch_key, payload, ex=int(ttl))
@@ -1202,6 +1222,57 @@ def test_ack_with_non_authoritative_latch_is_repaired(stale_latch):
     assert persisted["controller"]["external_oom_kill_counter"] == 4
 
 
+def test_ack_with_paused_wrong_event_identity_is_repaired_before_recovery():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    cgroup_id = "/docker/backend-unrecovered"
+    counter = 4
+    event_id = pressure_module.cgroup_oom_kill_event_id(cgroup_id, counter)
+    stale_event_id = pressure_module.cgroup_oom_kill_event_id(
+        "/docker/different",
+        9,
+    )
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, counter)
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": stale_event_id,
+                    "external_cgroup_id": "/docker/different",
+                    "external_oom_kill_counter": 9,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    repaired = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-restarted",
+        event_id=event_id,
+        cgroup_id=cgroup_id,
+        oom_kill_counter=counter,
+    )
+
+    persisted = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert repaired is not None
+    assert persisted["controller"]["external_event_id"] == event_id
+    assert persisted["controller"]["external_cgroup_id"] == cgroup_id
+    assert persisted["controller"]["external_oom_kill_counter"] == counter
+    assert pressure_module._clear_pressure_latch(
+        redis_client=redis,
+        expected_external_event_id=stale_event_id,
+    ) is False
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        cgroup_id,
+    ) is None
+
+
 def test_controller_recovery_marker_allows_acknowledged_restart_to_clear():
     from app.services import resource_pressure as pressure_module
 
@@ -1330,7 +1401,11 @@ def test_concurrent_older_worker_oom_event_cannot_regress_acknowledgment():
                     "status": "paused",
                     "reasons": ["worker_cgroup_oom_kill"],
                     "trigger_reasons": ["worker_cgroup_oom_kill"],
-                    "controller": {"external_event_id": newer_event_id},
+                    "controller": {
+                        "external_event_id": newer_event_id,
+                        "external_cgroup_id": "/docker/shared",
+                        "external_oom_kill_counter": 8,
+                    },
                 }
             ),
             ex=60,

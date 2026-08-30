@@ -81,11 +81,27 @@ if acknowledged >= candidate then
     local raw_latch = redis.call('GET', KEYS[2])
     if raw_latch then
         local ok, latch = pcall(cjson.decode, raw_latch)
+        local candidate_ok, candidate_latch = pcall(cjson.decode, ARGV[3])
         local controller = ok and type(latch) == 'table' and latch['controller'] or nil
+        local candidate_controller = candidate_ok
+            and type(candidate_latch) == 'table'
+            and candidate_latch['controller']
+            or nil
+        local matches_candidate = type(controller) == 'table'
+            and type(candidate_controller) == 'table'
+            and controller['external_event_id'] == candidate_controller['external_event_id']
+            and controller['external_cgroup_id'] == candidate_controller['external_cgroup_id']
+            and controller['external_oom_kill_counter'] == candidate_controller['external_oom_kill_counter']
+        local represents_newer_ack = acknowledged > candidate
+            and type(controller) == 'table'
+            and type(controller['external_event_id']) == 'string'
+            and controller['external_event_id'] ~= ''
+            and controller['external_cgroup_id'] == ARGV[1]
+            and controller['external_oom_kill_counter'] == acknowledged
         if ok
             and type(latch) == 'table'
             and latch['status'] == 'paused'
-            and (controller == nil or type(controller) == 'table')
+            and (matches_candidate or represents_newer_ack)
         then
             return 0
         end
