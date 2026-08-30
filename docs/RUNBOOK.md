@@ -15,33 +15,47 @@ This single command:
 1. Builds immutable source-digest images serially without reading acceptance state
 2. Stops background writers and creates checksummed database/config backups
 3. Tags the live backend and web images for rollback
-4. Runs the one-shot migration and force-recreates the protected core stack
-5. Requires core services to become healthy before starting background workers
-6. Verifies project-local cgroup, migration, queue and health invariants
+4. Runs the protected one-shot migration and recreates foreground application services while workers stay stopped
+5. Waits for the enforced controller to clear any inherited hard latch after its full stable recovery window
+6. Verifies the core, starts workers, then verifies worker health, listeners, cgroups, migration, and queues
 
-Host memory, Swap and PSI are recorded in the rollback report but do not veto a
-deployment. If the device cannot start the core containers healthily, deployment
-still fails and preserves the rollback point. Use `--core-only` to deploy browsing
-without workers. A formal release instead uses an already accepted candidate:
+Raw host memory, Swap and PSI are recorded in the rollback report rather than
+used as device-specific preflight thresholds. The project controller still
+fails closed: critical pressure or an inherited hard latch keeps workers stopped
+until the controller has observed its configured stable recovery interval and
+clears the latch naturally. The deploy script never deletes that latch. If the
+device cannot start the core containers healthily or recovery times out,
+deployment fails and preserves the rollback point. Use `--core-only` to deploy
+browsing without workers. A formal release instead uses an already accepted candidate:
 
 ```bash
 bash scripts/deploy.sh --verified /path/to/acceptance.json
 ```
 
-### Manual Deploy
+### Manual Deploy (break-glass only)
+
+Prefer `scripts/deploy.sh`; it preserves the rollback point and enforces the
+workers-last recovery gate. If a reviewed incident procedure requires manual
+commands, keep workers stopped until `/api/v1/system/health` reports a
+noncritical enforced controller, empty `hard_reasons` and `trigger_reasons`,
+`hard_gate_active=false`, and zero/none `recovery_remaining_seconds`.
 
 ```bash
 # 1. Build images
 docker compose build backend admin-web
 
-# 2. Restart all app containers
-docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler admin-web
+# 2. Stop publishers, then restart foreground app containers
+docker compose stop -t 120 worker-download worker-import worker-operations scheduler
+docker compose up --force-recreate --no-deps migrate
+docker compose up -d --force-recreate backend admin-web
 
-# 3. Wait for healthy (up to 90s)
+# 3. Wait for core health and controller-enforced recovery; do not delete its latch
 docker compose ps --format "table {{.Name}}\t{{.Status}}"
+curl -sSf http://localhost:8818/api/v1/system/health | jq .resource_pressure
 
-# 4. Verify
-bash scripts/debug.sh quick
+# 4. After the recovery fields above are clear, start and verify worker listeners
+docker compose up -d --force-recreate worker-download worker-import worker-operations scheduler
+VERIFY_SCOPE=full bash scripts/verify-runtime.sh
 ```
 
 ### Deploying Only Infrastructure Changes
@@ -140,21 +154,27 @@ bash scripts/debug.sh proxy     # Proxy connectivity + DNS checks
 
 ## Common Issues
 
-### Backend memory pressure
+### Application memory pressure
 
-**Symptom:** `docker stats` shows backend near memory limit, API slow to respond.
+**Symptom:** `docker stats` shows an application service growing unexpectedly,
+or the health endpoint reports soft resource reasons and reduced profile grants.
 
 **Fix:**
 ```bash
 # Check current usage
 docker stats --no-stream | grep backend
 
-# If >80%, restart backend to clear Python memory fragmentation
-docker compose up -d --force-recreate backend
+# Inspect controller scope/reasons and container OOM/restart evidence
+curl -sSf http://localhost:8818/api/v1/system/health | jq .resource_pressure
+bash scripts/verify-runtime.sh
 ```
 
-Current config: `mem_limit: 512M`. Do not increase it before the 24–48 hour
-mixed-load algorithm-governance soak identifies the responsible stage.
+Backend, workers, scheduler, and admin-web intentionally have no Docker hard
+memory/swap/CPU quota. They retain PID, OOM-score, restart, log, bounded-work,
+and adaptive controller protections. PostgreSQL, Redis, Meilisearch, and
+`migrate` retain positive CPU/memory limits with container Swap disabled. Do
+not add an application hard quota to mask a leak; capture the health snapshot,
+container OOM/restart counters, and workload before a reviewed restart.
 
 ### Download jobs stalling (proxy)
 

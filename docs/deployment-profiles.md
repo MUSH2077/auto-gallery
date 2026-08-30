@@ -40,9 +40,10 @@ whole application.
 rotation (`10m`, 3 files). Download concurrency has a
 deployment ceiling of one; raising the UI setting alone cannot exceed it.
 
-Redis remains `96mb/noeviction` because it stores RQ queues as well as cache
-data. Its container health check performs a short-lived `SET EX` and `DEL`, so a
-server that answers `PING` but rejects writes is not considered healthy.
+Redis remains `192mb/noeviction` inside its protected 256M container because it
+stores RQ queues as well as cache data. Its container health check performs a
+short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
+writes is not considered healthy.
 
 ## Adaptive algorithm governance · 自适应算法治理
 
@@ -150,10 +151,15 @@ mapper stacks may charge I/O to a lower physical device than the mounted path.
    checksummed `deployment_scope=core` acceptance manifest for the exact image
    digests.
 3. Deploy the accepted images with `scripts/deploy.sh --verified <manifest>`.
-   The script creates a checked rollback point, migrates, verifies the core,
-   then starts adaptive workers unless `--core-only` is supplied. Host metrics
-   are observational; backup, migration, image identity and project health are
-   fail-closed.
+   The script creates a checked rollback point, stops old worker publishers,
+   migrates and recreates the foreground application, then waits for the new
+   enforced controller to clear any inherited hard latch after its full stable
+   recovery window. It never deletes the latch manually. Only after the core
+   runtime check passes does it recreate adaptive workers (unless `--core-only`
+   is supplied), then verify worker health and queue listeners. Idle queues and
+   previews are valid, so rollout does not require a progress counter to move.
+   Host metrics are observational; backup, migration, image identity and
+   project health are fail-closed.
 4. Observe the deployment before increasing any environment-overridden caps:
    starting the import rollout:
 
