@@ -905,6 +905,12 @@ class _FakeRedis:
         return self.ttls.get(key, -2)
 
     def expire(self, key, seconds):
+        if (
+            key not in self.values
+            and key not in self.hashes
+            and key not in self.sorted_sets
+        ):
+            return False
         self.ttls[key] = int(seconds)
         return True
 
@@ -926,7 +932,14 @@ class _FakeRedis:
 
         if "HGETALL" in script:
             latch_key, ack_key, recovered_key, seen_key, event_key = values[:5]
-            expected_event, retention, _now = values[5:]
+            (
+                expected_event,
+                retention,
+                _now,
+                adoptable_event,
+                adoptable_cgroup,
+                adoptable_counter,
+            ) = values[5:]
             raw_latch = self.get(latch_key)
             if raw_latch is None:
                 return 0
@@ -946,6 +959,17 @@ class _FakeRedis:
                 acknowledged = int(self.hget(ack_key, current_cgroup) or 0)
                 recovered = int(self.hget(recovered_key, current_cgroup) or 0)
                 acknowledged_event = self.hget(event_key, current_cgroup)
+                if (
+                    acknowledged_event is None
+                    and current_event == adoptable_event
+                    and current_cgroup == adoptable_cgroup
+                    and current_counter == int(adoptable_counter)
+                    and acknowledged == current_counter
+                    and recovered < current_counter
+                ):
+                    acknowledged_event = current_event
+                    self.hset(event_key, current_cgroup, current_event)
+                    self.expire(event_key, int(retention))
                 if (
                     not isinstance(current_cgroup, str)
                     or not current_cgroup
@@ -988,7 +1012,18 @@ class _FakeRedis:
             return 2 if recovered >= int(counter) else 1
 
         ack_key, latch_key, seen_key, recovered_key, event_key = values[:5]
-        cgroup_id, counter, payload, ttl, now, retention = values[5:]
+        (
+            cgroup_id,
+            counter,
+            payload,
+            ttl,
+            now,
+            retention,
+            adoptable_event,
+            adoptable_cgroup,
+            adoptable_counter,
+            adoption_checked,
+        ) = values[5:]
         if seen_key not in self.sorted_sets and self.hashes.get(ack_key):
             self.sorted_sets[seen_key] = {
                 identity: float(now) for identity in self.hashes[ack_key]
@@ -1027,6 +1062,7 @@ class _FakeRedis:
             ):
                 acknowledged_event = candidate_controller["external_event_id"]
                 self.hset(event_key, cgroup_id, acknowledged_event)
+                self.expire(event_key, int(retention))
             raw_latch = self.get(latch_key)
             if raw_latch is not None:
                 try:
@@ -1048,6 +1084,34 @@ class _FakeRedis:
                     self.hget(recovered_key, current_cgroup) or 0
                 )
                 current_event = self.hget(event_key, current_cgroup)
+                legacy_event_missing = (
+                    current_event is None
+                    and isinstance(latch, dict)
+                    and latch.get("status") == "paused"
+                    and isinstance(controller, dict)
+                    and isinstance(controller.get("external_event_id"), str)
+                    and bool(controller["external_event_id"])
+                    and isinstance(current_cgroup, str)
+                    and bool(current_cgroup)
+                    and current_counter is not None
+                    and current_counter > 0
+                    and current_ack == current_counter
+                    and current_recovered < current_counter
+                )
+                if (
+                    current_event is None
+                    and isinstance(controller, dict)
+                    and controller.get("external_event_id") == adoptable_event
+                    and current_cgroup == adoptable_cgroup
+                    and current_counter == int(adoptable_counter)
+                    and current_ack == current_counter
+                    and current_recovered < current_counter
+                ):
+                    current_event = controller["external_event_id"]
+                    self.hset(event_key, current_cgroup, current_event)
+                    self.expire(event_key, int(retention))
+                if legacy_event_missing and current_event is None and not int(adoption_checked):
+                    return 3
                 represents_active_ack = (
                     isinstance(controller, dict)
                     and isinstance(controller.get("external_event_id"), str)
@@ -1695,6 +1759,219 @@ def test_forged_cross_cgroup_latch_is_replaced_before_it_can_recover_ack():
     assert redis.hget(
         pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
         current_cgroup,
+    ) is None
+
+
+def test_compare_clear_adopts_matching_legacy_latch_event_high_water():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    cgroup_id = "/docker/legacy-retired"
+    counter = 4
+    event_id = pressure_module.cgroup_oom_kill_event_id(cgroup_id, counter)
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, counter)
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": event_id,
+                    "external_cgroup_id": cgroup_id,
+                    "external_oom_kill_counter": counter,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    assert pressure_module._clear_pressure_latch(
+        redis_client=redis,
+        expected_external_event_id=event_id,
+    )
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        cgroup_id,
+    ) == event_id
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        cgroup_id,
+    ) == counter
+    assert redis.ttl(pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY) > 0
+
+
+def test_duplicate_adopts_matching_cross_cgroup_legacy_latch():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    candidate_cgroup = "/docker/current-a"
+    candidate_counter = 7
+    candidate_event = pressure_module.cgroup_oom_kill_event_id(
+        candidate_cgroup,
+        candidate_counter,
+    )
+    legacy_cgroup = "/docker/legacy-b"
+    legacy_counter = 3
+    legacy_event = pressure_module.cgroup_oom_kill_event_id(
+        legacy_cgroup,
+        legacy_counter,
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY,
+        mapping={candidate_cgroup: candidate_counter, legacy_cgroup: legacy_counter},
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        candidate_cgroup,
+        candidate_event,
+    )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": legacy_event,
+                    "external_cgroup_id": legacy_cgroup,
+                    "external_oom_kill_counter": legacy_counter,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    observed = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=candidate_event,
+        cgroup_id=candidate_cgroup,
+        oom_kill_counter=candidate_counter,
+    )
+
+    assert observed is not None
+    assert observed["controller"]["external_event_id"] == legacy_event
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        legacy_cgroup,
+    ) == legacy_event
+    assert redis.ttl(pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY) > 0
+
+
+def test_duplicate_adopts_legacy_latch_published_after_its_preread():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    candidate_cgroup = "/docker/current-a"
+    candidate_counter = 7
+    candidate_event = pressure_module.cgroup_oom_kill_event_id(
+        candidate_cgroup,
+        candidate_counter,
+    )
+    legacy_cgroup = "/docker/concurrent-legacy-b"
+    legacy_counter = 3
+    legacy_event = pressure_module.cgroup_oom_kill_event_id(
+        legacy_cgroup,
+        legacy_counter,
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY,
+        candidate_cgroup,
+        candidate_counter,
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        candidate_cgroup,
+        candidate_event,
+    )
+
+    def publish_legacy_before_atomic_commit():
+        redis.before_eval = None
+        redis.hset(
+            pressure_module.CGROUP_OOM_ACK_HASH_KEY,
+            legacy_cgroup,
+            legacy_counter,
+        )
+        redis.set(
+            PRESSURE_LATCH_KEY,
+            json.dumps(
+                {
+                    "status": "paused",
+                    "controller": {
+                        "external_event_id": legacy_event,
+                        "external_cgroup_id": legacy_cgroup,
+                        "external_oom_kill_counter": legacy_counter,
+                    },
+                }
+            ),
+            ex=60,
+        )
+
+    redis.before_eval = publish_legacy_before_atomic_commit
+    observed = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=candidate_event,
+        cgroup_id=candidate_cgroup,
+        oom_kill_counter=candidate_counter,
+    )
+
+    assert observed is not None
+    assert observed["controller"]["external_event_id"] == legacy_event
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        legacy_cgroup,
+    ) == legacy_event
+
+
+def test_duplicate_does_not_adopt_forged_legacy_latch_event():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    candidate_cgroup = "/docker/current-a"
+    candidate_counter = 7
+    candidate_event = pressure_module.cgroup_oom_kill_event_id(
+        candidate_cgroup,
+        candidate_counter,
+    )
+    legacy_cgroup = "/docker/forged-b"
+    legacy_counter = 3
+    redis.hset(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY,
+        mapping={candidate_cgroup: candidate_counter, legacy_cgroup: legacy_counter},
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        candidate_cgroup,
+        candidate_event,
+    )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps(
+            {
+                "status": "paused",
+                "controller": {
+                    "external_event_id": "forged-legacy-event",
+                    "external_cgroup_id": legacy_cgroup,
+                    "external_oom_kill_counter": legacy_counter,
+                },
+            }
+        ),
+        ex=60,
+    )
+
+    publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=candidate_event,
+        cgroup_id=candidate_cgroup,
+        oom_kill_counter=candidate_counter,
+    )
+
+    latch = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert latch["controller"]["external_event_id"] == candidate_event
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        legacy_cgroup,
     ) is None
 
 

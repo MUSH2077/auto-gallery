@@ -99,6 +99,7 @@ if acknowledged >= candidate then
         and candidate_event ~= ''
     then
         redis.call('HSET', KEYS[5], ARGV[1], candidate_event)
+        redis.call('EXPIRE', KEYS[5], retention)
         acknowledged_event = candidate_event
     end
     local raw_latch = redis.call('GET', KEYS[2])
@@ -120,6 +121,35 @@ if acknowledged >= candidate then
         local current_event = type(current_cgroup) == 'string'
             and redis.call('HGET', KEYS[5], current_cgroup)
             or nil
+        local adoptable_counter = tonumber(ARGV[9])
+        local legacy_event_missing = not current_event
+            and ok
+            and type(latch) == 'table'
+            and latch['status'] == 'paused'
+            and type(controller) == 'table'
+            and type(controller['external_event_id']) == 'string'
+            and controller['external_event_id'] ~= ''
+            and type(current_cgroup) == 'string'
+            and current_cgroup ~= ''
+            and current_counter ~= nil
+            and current_counter > 0
+            and current_ack == current_counter
+            and current_recovered < current_counter
+        if not current_event
+            and type(controller) == 'table'
+            and controller['external_event_id'] == ARGV[7]
+            and current_cgroup == ARGV[8]
+            and current_counter == adoptable_counter
+            and current_ack == current_counter
+            and current_recovered < current_counter
+        then
+            redis.call('HSET', KEYS[5], current_cgroup, controller['external_event_id'])
+            redis.call('EXPIRE', KEYS[5], retention)
+            current_event = controller['external_event_id']
+        end
+        if legacy_event_missing and not current_event and tonumber(ARGV[10]) == 0 then
+            return 3
+        end
         local represents_active_ack = type(controller) == 'table'
             and type(controller['external_event_id']) == 'string'
             and controller['external_event_id'] ~= ''
@@ -222,6 +252,18 @@ if current_event ~= '' then
     local acknowledged = tonumber(redis.call('HGET', KEYS[2], current_cgroup) or '0')
     local recovered = tonumber(redis.call('HGET', KEYS[3], current_cgroup) or '0')
     local acknowledged_event = redis.call('HGET', KEYS[5], current_cgroup)
+    local adoptable_counter = tonumber(ARGV[6])
+    if not acknowledged_event
+        and current_event == ARGV[4]
+        and current_cgroup == ARGV[5]
+        and current_counter == adoptable_counter
+        and acknowledged == current_counter
+        and recovered < current_counter
+    then
+        redis.call('HSET', KEYS[5], current_cgroup, current_event)
+        redis.call('EXPIRE', KEYS[5], ARGV[2])
+        acknowledged_event = current_event
+    end
     if acknowledged ~= current_counter
         or recovered >= current_counter
         or acknowledged_event ~= current_event
@@ -253,6 +295,26 @@ def cgroup_oom_kill_event_id(cgroup_id: str, oom_kill_counter: int) -> str:
         uuid.NAMESPACE_URL,
         f"auto-gallery:cgroup-oom-kill:{identity}:{counter}",
     ).hex
+
+
+def _adoptable_legacy_cgroup_oom_latch_identity(
+    snapshot: dict[str, Any] | None,
+) -> tuple[str, str, int] | None:
+    controller = (snapshot or {}).get("controller") or {}
+    if not isinstance(controller, dict):
+        return None
+    cgroup_id = controller.get("external_cgroup_id")
+    event_id = controller.get("external_event_id")
+    try:
+        counter = int(controller.get("external_oom_kill_counter"))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(cgroup_id, str) or not cgroup_id or counter <= 0:
+        return None
+    expected_event_id = cgroup_oom_kill_event_id(cgroup_id, counter)
+    if not isinstance(event_id, str) or event_id != expected_event_id:
+        return None
+    return event_id, cgroup_id, counter
 
 
 DEFAULT_QUEUE_NAMES = (
@@ -2290,10 +2352,11 @@ def publish_external_resource_critical(
         else None
     )
     if tracked_counter is not None:
-        event_id = event_id or cgroup_oom_kill_event_id(cgroup_id, tracked_counter)
+        event_id = cgroup_oom_kill_event_id(cgroup_id, tracked_counter)
 
     shared = read_shared_resource_pressure_snapshot(redis_client=client)
     latch = read_resource_pressure_latch(redis_client=client)
+    adoptable_latch_identity = _adoptable_legacy_cgroup_oom_latch_identity(latch)
     snapshot = deepcopy(shared or latch or {})
     if latch is not None:
         snapshot["reasons"] = list(
@@ -2367,6 +2430,7 @@ def publish_external_resource_critical(
                 str(cgroup_id),
                 tracked_counter,
                 snapshot,
+                adoptable_latch_identity=adoptable_latch_identity,
             )
         except Exception as exc:
             raise RuntimeError("unable to persist worker cgroup OOM latch") from exc
@@ -2418,6 +2482,8 @@ def _persist_cgroup_oom_latch_and_ack(
     cgroup_id: str,
     oom_kill_counter: int,
     snapshot: dict[str, Any],
+    *,
+    adoptable_latch_identity: tuple[str, str, int] | None = None,
 ) -> str:
     """Atomically advance one cgroup counter and its authoritative latch."""
 
@@ -2426,21 +2492,38 @@ def _persist_cgroup_oom_latch_and_ack(
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    accepted = redis_client.eval(
-        _CGROUP_OOM_LATCH_ACK_LUA,
-        5,
-        CGROUP_OOM_ACK_HASH_KEY,
-        PRESSURE_LATCH_KEY,
-        CGROUP_OOM_ACK_SEEN_KEY,
-        CGROUP_OOM_RECOVERED_HASH_KEY,
-        CGROUP_OOM_EVENT_ID_HASH_KEY,
-        str(cgroup_id),
-        max(0, int(oom_kill_counter)),
-        payload,
-        PRESSURE_LATCH_TTL_SECONDS,
-        int(time.time()),
-        CGROUP_OOM_ACK_RETENTION_SECONDS,
+    adoptable_event, adoptable_cgroup, adoptable_counter = (
+        adoptable_latch_identity or ("", "", 0)
     )
+    accepted = 3
+    for adoption_checked in (0, 1):
+        accepted = redis_client.eval(
+            _CGROUP_OOM_LATCH_ACK_LUA,
+            5,
+            CGROUP_OOM_ACK_HASH_KEY,
+            PRESSURE_LATCH_KEY,
+            CGROUP_OOM_ACK_SEEN_KEY,
+            CGROUP_OOM_RECOVERED_HASH_KEY,
+            CGROUP_OOM_EVENT_ID_HASH_KEY,
+            str(cgroup_id),
+            max(0, int(oom_kill_counter)),
+            payload,
+            PRESSURE_LATCH_TTL_SECONDS,
+            int(time.time()),
+            CGROUP_OOM_ACK_RETENTION_SECONDS,
+            adoptable_event,
+            adoptable_cgroup,
+            adoptable_counter,
+            adoption_checked,
+        )
+        if int(accepted or 0) != 3:
+            break
+        adoptable_event, adoptable_cgroup, adoptable_counter = (
+            _adoptable_legacy_cgroup_oom_latch_identity(
+                read_resource_pressure_latch(redis_client=redis_client)
+            )
+            or ("", "", 0)
+        )
     return {0: "active", 1: "promoted", 2: "recovered"}.get(
         int(accepted or 0),
         "active",
@@ -2597,7 +2680,14 @@ def _clear_pressure_latch(
     """Atomically record controller recovery before removing its matching latch."""
 
     try:
-        cleared = _redis_client(redis_client).eval(
+        client = _redis_client(redis_client)
+        adoptable_event, adoptable_cgroup, adoptable_counter = (
+            _adoptable_legacy_cgroup_oom_latch_identity(
+                read_resource_pressure_latch(redis_client=client)
+            )
+            or ("", "", 0)
+        )
+        cleared = client.eval(
             _CLEAR_PRESSURE_LATCH_LUA,
             5,
             PRESSURE_LATCH_KEY,
@@ -2608,6 +2698,9 @@ def _clear_pressure_latch(
             str(expected_external_event_id or ""),
             CGROUP_OOM_ACK_RETENTION_SECONDS,
             int(time.time()),
+            adoptable_event,
+            adoptable_cgroup,
+            adoptable_counter,
         )
         return bool(int(cleared or 0))
     except Exception:
