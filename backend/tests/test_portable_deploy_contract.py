@@ -117,8 +117,8 @@ def test_local_builder_is_serialized_and_prefers_a_no_swap_project_cgroup():
 
     assert "COMPOSE_PARALLEL_LIMIT=1" in source
     assert '--driver docker-container' in source
-    assert '--driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}"' in source
-    assert '--driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}"' in source
+    assert '--driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}"' in source
+    assert '--driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}"' in source
     assert 'docker buildx rm "$builder_name"' in source
 
 

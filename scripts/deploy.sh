@@ -256,8 +256,8 @@ build_local_candidate() {
         && docker buildx version >/dev/null 2>&1 && docker buildx create \
         --name "$builder_name" \
         --driver docker-container \
-        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}" \
-        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}" \
+        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}" \
+        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}" \
         --driver-opt "cpu-period=100000" \
         --driver-opt "cpu-quota=${LOCAL_BUILD_CPU_QUOTA:-50000}" \
         >/dev/null; then
