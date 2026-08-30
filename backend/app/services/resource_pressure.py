@@ -78,8 +78,17 @@ if acknowledged >= candidate then
     if recovered >= candidate then
         return 2
     end
-    if redis.call('EXISTS', KEYS[2]) == 1 then
-        return 0
+    local raw_latch = redis.call('GET', KEYS[2])
+    if raw_latch then
+        local ok, latch = pcall(cjson.decode, raw_latch)
+        local controller = ok and type(latch) == 'table' and latch['controller'] or nil
+        if ok
+            and type(latch) == 'table'
+            and latch['status'] == 'paused'
+            and (controller == nil or type(controller) == 'table')
+        then
+            return 0
+        end
     end
     redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
     return 1

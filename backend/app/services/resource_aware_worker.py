@@ -197,6 +197,7 @@ class ResourceAwareWorker(Worker):
             }
             self._pending_cgroup_oom_event = previous_pending
             self._local_cgroup_oom_kill_latched = True
+            self._local_cgroup_oom_acknowledged = False
             self._local_cgroup_oom_kill_at = now
             self._local_cgroup_hard_reason = hard_event_reason
 
@@ -216,6 +217,7 @@ class ResourceAwareWorker(Worker):
                 )
             else:
                 self._pending_cgroup_oom_event = None
+                self._local_cgroup_oom_acknowledged = True
                 self._last_cgroup_ack_touch_at = now
                 if external is not None:
                     self._local_cgroup_oom_kill_latched = True
@@ -239,9 +241,12 @@ class ResourceAwareWorker(Worker):
             )
             if (
                 shared_recovered
+                and getattr(self, "_pending_cgroup_oom_event", None) is None
+                and bool(getattr(self, "_local_cgroup_oom_acknowledged", False))
                 and now - event_at >= max(0.0, settings.resource_pressure_resume_seconds)
             ):
                 self._local_cgroup_oom_kill_latched = False
+                self._local_cgroup_oom_acknowledged = False
                 self._local_cgroup_hard_reason = None
                 local_latched = False
             else:

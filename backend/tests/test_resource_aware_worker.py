@@ -275,6 +275,74 @@ def test_worker_retries_unacknowledged_oom_event_with_the_same_identity(monkeypa
     assert calls[0][1]["oom_kill_counter"] == 1
 
 
+def test_worker_keeps_local_gate_closed_past_recovery_while_oom_is_unacknowledged(
+    monkeypatch,
+):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 1},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unacknowledged",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: (_ for _ in ()).throw(
+            ConnectionError("promotion unavailable")
+        ),
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    first = worker._publish_pressure_state(dict(normal))
+    now["value"] += 61.0
+    second = worker._publish_pressure_state(dict(normal))
+
+    assert first["hard_gate_active"] is True
+    assert second["hard_gate_active"] is True
+    assert worker._pending_cgroup_oom_event is not None
+
+
+def test_worker_local_recovery_requires_confirmed_oom_acknowledgment(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    worker._last_cgroup_events = {"max": 0, "oom": 0, "oom_kill": 0}
+    worker._local_cgroup_oom_kill_latched = True
+    worker._local_cgroup_oom_kill_at = 10.0
+    worker._local_cgroup_oom_acknowledged = False
+    worker._pending_cgroup_oom_event = None
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: 71.0)
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 0, "oom_kill": 0},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unconfirmed",
+        },
+    )
+
+    feedback = worker._publish_pressure_state(
+        {"status": "normal", "controller_mode": "normal", "reasons": []}
+    )
+
+    assert feedback["hard_gate_active"] is True
+
+
 def test_restarted_worker_does_not_latch_an_acknowledged_historical_oom(monkeypatch):
     from app.services import resource_aware_worker
 

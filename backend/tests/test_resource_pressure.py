@@ -983,8 +983,19 @@ class _FakeRedis:
             recovered = int(self.hget(recovered_key, cgroup_id) or 0)
             if recovered >= int(counter):
                 return 2
-            if self.get(latch_key) is not None:
-                return 0
+            raw_latch = self.get(latch_key)
+            if raw_latch is not None:
+                try:
+                    latch = json.loads(raw_latch)
+                except (TypeError, ValueError):
+                    latch = None
+                controller = latch.get("controller") if isinstance(latch, dict) else None
+                if (
+                    isinstance(latch, dict)
+                    and latch.get("status") == "paused"
+                    and (controller is None or isinstance(controller, dict))
+                ):
+                    return 0
             self.set(latch_key, payload, ex=int(ttl))
             return 1
         self.set(latch_key, payload, ex=int(ttl))
@@ -1158,6 +1169,37 @@ def test_ack_without_latch_is_reasserted_until_controller_records_recovery():
     assert restarted["status"] == "paused"
     assert restarted["controller"]["hard_gate_active"] is True
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+@pytest.mark.parametrize(
+    "stale_latch",
+    (
+        "not-json",
+        json.dumps({"status": "normal", "controller": {}}),
+    ),
+)
+def test_ack_with_non_authoritative_latch_is_repaired(stale_latch):
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    cgroup_id = "/docker/backend-corrupt-latch"
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, 4)
+    redis.set(PRESSURE_LATCH_KEY, stale_latch, ex=60)
+
+    repaired = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-restarted",
+        cgroup_id=cgroup_id,
+        oom_kill_counter=4,
+    )
+
+    persisted = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert repaired is not None
+    assert repaired["status"] == "paused"
+    assert persisted["status"] == "paused"
+    assert persisted["controller"]["external_cgroup_id"] == cgroup_id
+    assert persisted["controller"]["external_oom_kill_counter"] == 4
 
 
 def test_controller_recovery_marker_allows_acknowledged_restart_to_clear():
