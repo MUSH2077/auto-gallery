@@ -34,8 +34,10 @@ logger = logging.getLogger(__name__)
 PRESSURE_SNAPSHOT_KEY = "resource:pressure:snapshot"
 PRESSURE_LATCH_KEY = "resource:pressure:latch"
 CGROUP_OOM_ACK_HASH_KEY = "resource:cgroup:oom-kill-ack:v1"
+CGROUP_OOM_ACK_SEEN_KEY = "resource:cgroup:oom-kill-seen:v1"
 RESOURCE_CONTROL_CHANNEL = "resource:control"
 PRESSURE_LATCH_TTL_SECONDS = 24 * 60 * 60
+CGROUP_OOM_ACK_RETENTION_SECONDS = 2 * PRESSURE_LATCH_TTL_SECONDS
 PRESSURE_BASELINE_KEY = "resource:pressure:baseline:v1"
 PRESSURE_BASELINE_WINDOW_SECONDS = 24 * 60 * 60
 PRESSURE_BASELINE_SAMPLE_SECONDS = 60.0
@@ -47,6 +49,16 @@ GIB = 1024 ** 3
 MIB = 1024 ** 2
 
 _CGROUP_OOM_LATCH_ACK_LUA = """
+local now = tonumber(ARGV[5])
+local retention = tonumber(ARGV[6])
+if redis.call('EXISTS', KEYS[3]) == 0 and redis.call('EXISTS', KEYS[1]) == 1 then
+    local legacy_ids = redis.call('HKEYS', KEYS[1])
+    for _, legacy_id in ipairs(legacy_ids) do
+        redis.call('ZADD', KEYS[3], now, legacy_id)
+    end
+    redis.call('EXPIRE', KEYS[1], retention)
+    redis.call('EXPIRE', KEYS[3], retention)
+end
 local acknowledged = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
 local candidate = tonumber(ARGV[2])
 if acknowledged >= candidate then
@@ -54,6 +66,14 @@ if acknowledged >= candidate then
 end
 redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[3], now, ARGV[1])
+local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now - retention)
+for _, expired_id in ipairs(expired_ids) do
+    redis.call('HDEL', KEYS[1], expired_id)
+    redis.call('ZREM', KEYS[3], expired_id)
+end
+redis.call('EXPIRE', KEYS[1], retention)
+redis.call('EXPIRE', KEYS[3], retention)
 return 1
 """
 
@@ -766,17 +786,19 @@ def sample_cgroup_contribution(
     root = Path(cgroup_root)
     cgroup_id = str(root)
     if root == Path("/sys/fs/cgroup"):
+        hostname = socket.gethostname()
+        cgroup_id = f"{hostname}:{root}"
         try:
             membership = Path("/proc/self/cgroup").read_text(encoding="utf-8")
-            cgroup_id = next(
+            membership_id = next(
                 (
                     line.split("::", 1)[1].strip()
                     for line in membership.splitlines()
                     if "::" in line
                 ),
-                cgroup_id,
+                str(root),
             )
-            cgroup_id = f"{socket.gethostname()}:{cgroup_id}"
+            cgroup_id = f"{hostname}:{membership_id}"
         except (FileNotFoundError, PermissionError, OSError, IndexError):
             pass
     cpu = _read_cgroup_stat(root / "cpu.stat")
@@ -2117,8 +2139,23 @@ def publish_external_resource_critical(
                     return existing
             return None
 
-    snapshot = read_shared_resource_pressure_snapshot(redis_client=client) or {}
-    snapshot = deepcopy(snapshot)
+    shared = read_shared_resource_pressure_snapshot(redis_client=client)
+    latch = read_resource_pressure_latch(redis_client=client)
+    snapshot = deepcopy(shared or latch or {})
+    if latch is not None:
+        snapshot["reasons"] = list(
+            dict.fromkeys(
+                [*(latch.get("reasons") or []), *(snapshot.get("reasons") or [])]
+            )
+        )
+        snapshot["trigger_reasons"] = list(
+            dict.fromkeys(
+                [
+                    *(latch.get("trigger_reasons") or []),
+                    *(snapshot.get("trigger_reasons") or []),
+                ]
+            )
+        )
     snapshot["status"] = "paused"
     snapshot["controller_mode"] = "critical"
     snapshot["sampled_at"] = datetime.now(timezone.utc).isoformat()
@@ -2210,23 +2247,29 @@ def _cgroup_oom_kill_acknowledged(
     return int(raw_ack or 0) >= max(0, int(oom_kill_counter))
 
 
-def _pressure_latch_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _pressure_latch_payload(
+    snapshot: dict[str, Any],
+    *,
+    inherited_controller: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     snapshot_controller = snapshot.get("controller") or {}
+    external_controller: dict[str, Any] = {}
+    for controller in (inherited_controller or {}, snapshot_controller):
+        for key in (
+            "external_source",
+            "external_event_id",
+            "external_cgroup_id",
+            "external_oom_kill_counter",
+        ):
+            value = controller.get(key)
+            if value is not None:
+                external_controller[key] = value
     return {
         "status": "paused",
         "reasons": list(snapshot.get("reasons") or []),
         "trigger_reasons": list(snapshot.get("trigger_reasons") or []),
         "sampled_at": snapshot.get("sampled_at"),
-        "controller": {
-            key: snapshot_controller.get(key)
-            for key in (
-                "external_source",
-                "external_event_id",
-                "external_cgroup_id",
-                "external_oom_kill_counter",
-            )
-            if snapshot_controller.get(key) is not None
-        },
+        "controller": external_controller,
     }
 
 
@@ -2245,13 +2288,16 @@ def _persist_cgroup_oom_latch_and_ack(
     )
     accepted = redis_client.eval(
         _CGROUP_OOM_LATCH_ACK_LUA,
-        2,
+        3,
         CGROUP_OOM_ACK_HASH_KEY,
         PRESSURE_LATCH_KEY,
+        CGROUP_OOM_ACK_SEEN_KEY,
         str(cgroup_id),
         max(0, int(oom_kill_counter)),
         payload,
         PRESSURE_LATCH_TTL_SECONDS,
+        int(time.time()),
+        CGROUP_OOM_ACK_RETENTION_SECONDS,
     )
     return bool(int(accepted or 0))
 
@@ -2350,7 +2396,11 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool
         ttl = client.ttl(PRESSURE_LATCH_KEY) if current else -2
         reasons_changed = bool(current) and current.get("reasons") != snapshot.get("reasons")
         current_controller = (current or {}).get("controller") or {}
-        snapshot_controller = snapshot.get("controller") or {}
+        payload = _pressure_latch_payload(
+            snapshot,
+            inherited_controller=current_controller,
+        )
+        snapshot_controller = payload["controller"]
         external_event_changed = current_controller.get(
             "external_event_id"
         ) != snapshot_controller.get("external_event_id")
@@ -2360,7 +2410,6 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool
             or external_event_changed
             or ttl < PRESSURE_LATCH_TTL_SECONDS // 2
         ):
-            payload = _pressure_latch_payload(snapshot)
             client.set(
                 PRESSURE_LATCH_KEY,
                 json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
