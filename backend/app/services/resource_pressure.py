@@ -136,6 +136,7 @@ if acknowledged >= candidate then
             and current_ack == current_counter
             and current_recovered < current_counter
         if not current_event
+            and legacy_event_missing
             and type(controller) == 'table'
             and controller['external_event_id'] == ARGV[7]
             and current_cgroup == ARGV[8]
@@ -235,7 +236,7 @@ if not raw_latch then
     return 0
 end
 local ok, latch = pcall(cjson.decode, raw_latch)
-if not ok or type(latch) ~= 'table' then
+if not ok or type(latch) ~= 'table' or latch['status'] ~= 'paused' then
     return 0
 end
 local controller = latch['controller'] or {}

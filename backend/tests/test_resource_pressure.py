@@ -944,6 +944,8 @@ class _FakeRedis:
             if raw_latch is None:
                 return 0
             latch = json.loads(raw_latch)
+            if not isinstance(latch, dict) or latch.get("status") != "paused":
+                return 0
             current_event = str(
                 (latch.get("controller") or {}).get("external_event_id") or ""
             )
@@ -1100,6 +1102,7 @@ class _FakeRedis:
                 )
                 if (
                     current_event is None
+                    and legacy_event_missing
                     and isinstance(controller, dict)
                     and controller.get("external_event_id") == adoptable_event
                     and current_cgroup == adoptable_cgroup
@@ -1800,6 +1803,50 @@ def test_compare_clear_adopts_matching_legacy_latch_event_high_water():
     assert redis.ttl(pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY) > 0
 
 
+def test_compare_clear_does_not_adopt_latch_changed_to_wrong_status_before_eval():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    cgroup_id = "/docker/legacy-clear-race"
+    counter = 4
+    event_id = pressure_module.cgroup_oom_kill_event_id(cgroup_id, counter)
+    controller = {
+        "external_event_id": event_id,
+        "external_cgroup_id": cgroup_id,
+        "external_oom_kill_counter": counter,
+    }
+    redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, cgroup_id, counter)
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps({"status": "paused", "controller": controller}),
+        ex=60,
+    )
+
+    def replace_latch_before_atomic_clear():
+        redis.before_eval = None
+        redis.set(
+            PRESSURE_LATCH_KEY,
+            json.dumps({"status": "normal", "controller": controller}),
+            ex=60,
+        )
+
+    redis.before_eval = replace_latch_before_atomic_clear
+
+    assert pressure_module._clear_pressure_latch(
+        redis_client=redis,
+        expected_external_event_id=event_id,
+    ) is False
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        cgroup_id,
+    ) is None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_RECOVERED_HASH_KEY,
+        cgroup_id,
+    ) is None
+    assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
 def test_duplicate_adopts_matching_cross_cgroup_legacy_latch():
     from app.services import resource_pressure as pressure_module
 
@@ -1855,6 +1902,68 @@ def test_duplicate_adopts_matching_cross_cgroup_legacy_latch():
         legacy_cgroup,
     ) == legacy_event
     assert redis.ttl(pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY) > 0
+
+
+def test_duplicate_does_not_adopt_latch_changed_to_wrong_status_before_eval():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    candidate_cgroup = "/docker/current-race-a"
+    candidate_counter = 7
+    candidate_event = pressure_module.cgroup_oom_kill_event_id(
+        candidate_cgroup,
+        candidate_counter,
+    )
+    legacy_cgroup = "/docker/legacy-race-b"
+    legacy_counter = 3
+    legacy_event = pressure_module.cgroup_oom_kill_event_id(
+        legacy_cgroup,
+        legacy_counter,
+    )
+    legacy_controller = {
+        "external_event_id": legacy_event,
+        "external_cgroup_id": legacy_cgroup,
+        "external_oom_kill_counter": legacy_counter,
+    }
+    redis.hset(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY,
+        mapping={candidate_cgroup: candidate_counter, legacy_cgroup: legacy_counter},
+    )
+    redis.hset(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        candidate_cgroup,
+        candidate_event,
+    )
+    redis.set(
+        PRESSURE_LATCH_KEY,
+        json.dumps({"status": "paused", "controller": legacy_controller}),
+        ex=60,
+    )
+
+    def replace_latch_before_atomic_promotion():
+        redis.before_eval = None
+        redis.set(
+            PRESSURE_LATCH_KEY,
+            json.dumps({"status": "normal", "controller": legacy_controller}),
+            ex=60,
+        )
+
+    redis.before_eval = replace_latch_before_atomic_promotion
+    publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        event_id=candidate_event,
+        cgroup_id=candidate_cgroup,
+        oom_kill_counter=candidate_counter,
+    )
+
+    latch = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert latch["status"] == "paused"
+    assert latch["controller"]["external_event_id"] == candidate_event
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_EVENT_ID_HASH_KEY,
+        legacy_cgroup,
+    ) is None
 
 
 def test_duplicate_adopts_legacy_latch_published_after_its_preread():
