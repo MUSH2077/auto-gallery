@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -175,7 +176,7 @@ def test_active_swap_or_absolute_swap_floor_is_a_hard_gate():
     assert "swap_free_critical" in exhausted_snapshot["reasons"]
 
 
-@pytest.mark.parametrize("field", ("cgroup_max", "cgroup_oom", "cgroup_oom_kill"))
+@pytest.mark.parametrize("field", ("cgroup_max", "cgroup_oom"))
 def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
     machine = ResourcePressureStateMachine()
 
@@ -185,6 +186,16 @@ def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
     assert snapshot["status"] == "normal"
     assert snapshot["hard_reasons"] == []
     assert snapshot["soft_reasons"] == []
+
+
+def test_backend_cgroup_oom_kill_fails_closed_immediately():
+    machine = ResourcePressureStateMachine()
+
+    snapshot = machine.update(_sample(cgroup_oom_kill=1), now=0)
+
+    assert snapshot["controller_mode"] == "critical"
+    assert snapshot["status"] == "paused"
+    assert snapshot["hard_reasons"] == ["cgroup_oom_kill"]
 
 
 def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause(monkeypatch):
@@ -671,6 +682,47 @@ def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is False
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+def test_external_worker_oom_kill_completes_stable_recovery_without_marker_resets():
+    now = {"value": 0.0}
+    healthy_sample = replace(_sample(), sampled_at=None)
+    monitor = ResourcePressureMonitor(
+        ResourcePressureStateMachine(
+            PressureThresholds(resume_seconds=60),
+            clock=lambda: now["value"],
+        ),
+        sampler=lambda: healthy_sample,
+    )
+    monitor.enforce_external_pause(
+        {
+            "status": "paused",
+            "sampled_at": "2026-08-09T00:00:00+00:00",
+            "reasons": ["worker_cgroup_oom_kill"],
+            "trigger_reasons": ["worker_cgroup_oom_kill"],
+            "controller": {
+                "external_source": "worker-test",
+                "external_event_id": "oom-event-1",
+            },
+        }
+    )
+
+    _, snapshot = monitor.sample_with_previous_status()
+    assert snapshot["status"] == "paused"
+    assert snapshot["recovery_remaining_seconds"] == 60.0
+
+    for timestamp in (10, 20, 30, 40, 50):
+        now["value"] = float(timestamp)
+        monitor.enforce_external_pause(snapshot)
+        _, snapshot = monitor.sample_with_previous_status()
+        assert snapshot["status"] == "paused"
+
+    now["value"] = 60.0
+    monitor.enforce_external_pause(snapshot)
+    _, snapshot = monitor.sample_with_previous_status()
+
+    assert snapshot["status"] == "normal"
+    assert snapshot["trigger_reasons"] == []
 
 
 def test_only_worker_oom_kill_can_be_promoted_to_the_shared_latch():

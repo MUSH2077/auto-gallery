@@ -1048,6 +1048,8 @@ class ResourcePressureStateMachine:
             and sample.memory_available_change_bytes_per_second < 0
         ):
             reasons.append("swap_activity_critical")
+        if sample.cgroup_memory_oom_kill_delta and sample.cgroup_memory_oom_kill_delta > 0:
+            reasons.append("cgroup_oom_kill")
         return reasons
 
     def _soft_reasons(self, sample: ResourceSample) -> list[str]:
@@ -1153,7 +1155,7 @@ class ResourcePressureStateMachine:
                 self._decrease_budget()
             else:
                 # Leaving critical starts at the minimum safe trickle.  Further
-                # additive recovery requires a new full stable minute.
+                # additive recovery requires a new full stable interval.
                 floor = max(0.01, min(1.0, float(settings.resource_budget_min_scale)))
                 self._set_scale(floor)
                 self._stable_since = now
@@ -1162,7 +1164,10 @@ class ResourcePressureStateMachine:
 
         if hard_reasons:
             self._reset_stable_window()
-            self._pause_count += 1
+            if "cgroup_oom_kill" in hard_reasons:
+                self._pause_count = self.thresholds.pause_samples
+            else:
+                self._pause_count += 1
             self.reasons = hard_reasons
             if self._pause_count >= self.thresholds.pause_samples:
                 self._set_mode("critical")
@@ -1830,8 +1835,11 @@ class ResourcePressureMonitor:
         controller = snapshot.get("controller") or {}
         source = controller.get("external_source")
         reasons = tuple(snapshot.get("trigger_reasons") or snapshot.get("reasons") or [])
-        if not source and "worker_cgroup_oom_kill" not in reasons:
+        if not source:
             return None
+        event_id = controller.get("external_event_id")
+        if event_id:
+            return (source, str(event_id))
         return (source, snapshot.get("sampled_at"), reasons)
 
     def hydrate_paused_once(self, snapshot: dict[str, Any] | None) -> None:
@@ -2012,6 +2020,7 @@ def publish_external_resource_critical(
         throughput_scale=0.0,
         computed_throughput_scale=0.0,
         effective_throughput_scale=0.0,
+        external_event_id=uuid.uuid4().hex,
     )
     budget = snapshot.setdefault("budget", {})
     try:
