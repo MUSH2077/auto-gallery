@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +106,116 @@ def verify_resource_limits(services: dict) -> None:
             logging["options"] == {"max-file": "3", "max-size": "10m"},
             f"{name}: bad log rotation",
         )
+
+
+def verify_runtime_resource_contract(config: dict) -> None:
+    """Exercise the live verifier against inspect data derived from Compose.
+
+    This keeps the resolved base/overlay configuration and the post-deploy
+    Docker inspection contract independent: a change to either side must still
+    satisfy the other side's actual behavior.
+    """
+
+    fixtures: dict[str, dict[str, int | str]] = {}
+    services = config["services"]
+    for name in (*PROTECTED_SERVICE_NAMES, *APPLICATION_SERVICE_NAMES):
+        service = services[name]
+        fixtures[name] = {
+            "memory": int(service.get("mem_limit") or 0),
+            "memory_swap": int(service.get("memswap_limit") or 0),
+            "nano_cpus": int(float(service.get("cpus") or 0) * 1_000_000_000),
+            "pids": int(service.get("pids_limit") or 0),
+            "oom_score": int(service.get("oom_score_adj") or 0),
+            "oom_killed": "false",
+            "restart_count": 0,
+        }
+
+    with tempfile.TemporaryDirectory(prefix="auto-gallery-runtime-contract-") as raw_dir:
+        directory = Path(raw_dir)
+        fixture_path = directory / "inspect.json"
+        inspect_log = directory / "inspect.log"
+        fixture_path.write_text(json.dumps(fixtures), encoding="utf-8")
+        docker = directory / "docker"
+        docker.write_text(
+            """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+fixtures = json.load(open(os.environ["RUNTIME_CONTRACT_FIXTURE"], encoding="utf-8"))
+args = sys.argv[1:]
+if args and args[0] == "compose":
+    if "ps" in args:
+        service = args[args.index("ps") + 1]
+        if "-q" in args:
+            service = args[-1]
+            if service in fixtures:
+                print(service)
+                raise SystemExit(0)
+            raise SystemExit(1)
+        if "{{.State}}" in args:
+            print("running")
+            raise SystemExit(0)
+        if "{{.Health}}" in args:
+            print("healthy")
+            raise SystemExit(0)
+        raise SystemExit(2)
+    if "exec" in args:
+        raise SystemExit(0)
+elif len(args) >= 2 and args[0] == "inspect":
+    with open(os.environ["RUNTIME_CONTRACT_LOG"], "a", encoding="utf-8") as log:
+        log.write(args[1] + "\\n")
+    values = fixtures[args[1]]
+    print(
+        values["memory"],
+        values["memory_swap"],
+        values["nano_cpus"],
+        values["pids"],
+        values["oom_score"],
+        values["oom_killed"],
+        values["restart_count"],
+    )
+    raise SystemExit(0)
+raise SystemExit(2)
+""",
+            encoding="utf-8",
+        )
+        docker.chmod(0o700)
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{directory}:{env['PATH']}",
+                "COMPOSE_ENV_FILE": str(directory / "absent.env"),
+                "RUNTIME_CONTRACT_FIXTURE": str(fixture_path),
+                "RUNTIME_CONTRACT_LOG": str(inspect_log),
+                "VERIFY_RESOURCES_ONLY": "1",
+                "VERIFY_SCOPE": "full",
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts/verify-runtime.sh")],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=20,
+        )
+        inspected = (
+            set(inspect_log.read_text(encoding="utf-8").splitlines())
+            if inspect_log.exists()
+            else set()
+        )
+    require(
+        result.returncode == 0,
+        "runtime verifier disagrees with resolved Compose:\n"
+        + (result.stderr or result.stdout).strip(),
+    )
+    require(
+        inspected == set(fixtures),
+        "runtime verifier did not inspect every Compose service: "
+        f"missing={sorted(set(fixtures) - inspected)} extra={sorted(inspected - set(fixtures))}",
+    )
 
 
 def verify_base(config: dict) -> None:
@@ -286,40 +397,42 @@ def verify_test_override(config: dict) -> None:
 
 def main() -> int:
     try:
-        verify_base(compose_config("docker-compose.yaml"))
-        verify_io_override(
-            compose_config(
-                "docker-compose.yaml",
-                "docker-compose.nas-io.yaml",
-                extra_env={"NAS_BLOCK_DEVICE": "/dev/sdb"},
-            )
+        base = compose_config("docker-compose.yaml")
+        verify_base(base)
+        verify_runtime_resource_contract(base)
+        io_override = compose_config(
+            "docker-compose.yaml",
+            "docker-compose.nas-io.yaml",
+            extra_env={"NAS_BLOCK_DEVICE": "/dev/sdb"},
         )
+        verify_io_override(io_override)
+        verify_runtime_resource_contract(io_override)
         test_root = "/tmp/auto-gallery-compose-test/run"
-        verify_test_override(
-            compose_config(
-                "docker-compose.yaml",
-                "docker-compose.test.yaml",
-                profiles=("load",),
-                extra_env={
-                    "TEST_RUN_ID": "contract",
-                    "TEST_ROOT": test_root,
-                    "TEST_FIXTURES": f"{test_root}/fixtures",
-                    "HOST_POSTGRES": f"{test_root}/postgres",
-                    "HOST_REDIS": f"{test_root}/redis",
-                    "HOST_MEILISEARCH": f"{test_root}/meilisearch",
-                    "HOST_DOWNLOADS": f"{test_root}/downloads",
-                    "HOST_LIBRARY": f"{test_root}/library",
-                    "HOST_CONFIG_GALLERYDL": f"{test_root}/gallery-dl",
-                    "HOST_CONFIG_APP": f"{test_root}/app-config",
-                    "HOST_RESTORE_STAGING": f"{test_root}/restore-staging",
-                    "HOST_RESTORE_RECEIPTS": f"{test_root}/restore-receipts",
-                    "BACKEND_IMAGE": "auto-gallery-backend:candidate-contract",
-                    "ADMIN_IMAGE": "auto-gallery-admin-web:candidate-contract",
-                    "BACKEND_PORT": "18818",
-                    "ADMIN_WEB_PORT": "13080",
-                },
-            )
+        test_override = compose_config(
+            "docker-compose.yaml",
+            "docker-compose.test.yaml",
+            profiles=("load",),
+            extra_env={
+                "TEST_RUN_ID": "contract",
+                "TEST_ROOT": test_root,
+                "TEST_FIXTURES": f"{test_root}/fixtures",
+                "HOST_POSTGRES": f"{test_root}/postgres",
+                "HOST_REDIS": f"{test_root}/redis",
+                "HOST_MEILISEARCH": f"{test_root}/meilisearch",
+                "HOST_DOWNLOADS": f"{test_root}/downloads",
+                "HOST_LIBRARY": f"{test_root}/library",
+                "HOST_CONFIG_GALLERYDL": f"{test_root}/gallery-dl",
+                "HOST_CONFIG_APP": f"{test_root}/app-config",
+                "HOST_RESTORE_STAGING": f"{test_root}/restore-staging",
+                "HOST_RESTORE_RECEIPTS": f"{test_root}/restore-receipts",
+                "BACKEND_IMAGE": "auto-gallery-backend:candidate-contract",
+                "ADMIN_IMAGE": "auto-gallery-admin-web:candidate-contract",
+                "BACKEND_PORT": "18818",
+                "ADMIN_WEB_PORT": "13080",
+            },
         )
+        verify_test_override(test_override)
+        verify_runtime_resource_contract(test_override)
     except (AssertionError, FileNotFoundError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"compose resource verification failed: {exc}", file=sys.stderr)
         return 1

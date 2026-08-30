@@ -92,6 +92,25 @@ def main() -> int:
             failures.append(f"deployment still contains a host-specific veto: {forbidden}")
     if 'if [[ "$DEPLOY_MODE" == "verified" ]]' not in deploy:
         failures.append("default deploy must not read acceptance state")
+    rollout = deploy.split(
+        "# ── 7. Project-local verification and background startup", 1
+    )[-1]
+    rollout_markers = (
+        "wait_for_resource_recovery",
+        "VERIFY_SCOPE=core",
+        "Starting adaptive background workers",
+        "VERIFY_SCOPE=full",
+    )
+    if not all(marker in rollout for marker in rollout_markers):
+        failures.append("deployment recovery/worker rollout contract is incomplete")
+    elif [rollout.index(marker) for marker in rollout_markers] != sorted(
+        rollout.index(marker) for marker in rollout_markers
+    ):
+        failures.append("workers must start only after recovery and core verification")
+    if "VERIFY_ALLOW_CRITICAL_PRESSURE=1" in rollout:
+        failures.append("deployment must not allow critical pressure during rollout")
+    if "resource:pressure:latch" in deploy:
+        failures.append("deployment must never mutate the controller hard latch")
     logical_deploy = re.sub(r"\\\n[ \t]*", " ", deploy)
     for line in logical_deploy.splitlines():
         if not re.search(r"\bcompose\b.*\bup\b", line) or "--force-recreate" not in line:

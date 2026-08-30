@@ -498,6 +498,38 @@ all_services_ready() {
     done
 }
 
+wait_for_resource_recovery() {
+    local timeout_seconds interval_seconds deadline remaining sleep_seconds
+    timeout_seconds="${DEPLOY_RECOVERY_TIMEOUT_SECONDS:-180}"
+    interval_seconds="${DEPLOY_RECOVERY_POLL_SECONDS:-5}"
+    if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Recovery timeout and poll interval must be positive whole seconds" >&2
+        return 2
+    fi
+
+    deadline=$((SECONDS + timeout_seconds))
+    while (( SECONDS <= deadline )); do
+        if compose exec -T backend \
+            curl -sf http://localhost:8000/api/v1/system/health \
+            | python3 scripts/verify-resource-recovery.py; then
+            echo -e "${GREEN}  Controller-enforced hard recovery complete${NC}"
+            return 0
+        fi
+        remaining=$((deadline - SECONDS))
+        (( remaining > 0 )) || break
+        sleep_seconds="$interval_seconds"
+        if (( sleep_seconds > remaining )); then
+            sleep_seconds="$remaining"
+        fi
+        echo "  Waiting for the controller to clear its hard latch naturally (${remaining}s remaining)..."
+        sleep "$sleep_seconds"
+    done
+
+    echo "Timed out waiting for controller-enforced hard recovery; workers remain stopped" >&2
+    return 1
+}
+
 deploy_failed() {
     local status=$?
     trap - ERR
@@ -599,8 +631,11 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 # ── 7. Project-local verification and background startup ─────────────
+echo -e "${YELLOW}[7/7] Waiting for controller-enforced recovery...${NC}"
+wait_for_resource_recovery
+
 echo -e "${YELLOW}[7/7] Verifying project runtime behavior...${NC}"
-VERIFY_SCOPE=core VERIFY_ALLOW_CRITICAL_PRESSURE=1 \
+VERIFY_SCOPE=core \
     VERIFY_EXPECT_GOVERNANCE_MODE=enforce \
     VERIFY_EXPECT_ENFORCED_PROFILES="$GOVERNED_PROFILES" \
     bash scripts/verify-runtime.sh
@@ -623,7 +658,7 @@ if [[ "$CORE_ONLY" -eq 0 ]]; then
         compose logs --tail=50 worker-download worker-import worker-operations scheduler >&2 || true
         false
     }
-    VERIFY_SCOPE=full VERIFY_ALLOW_CRITICAL_PRESSURE=1 \
+    VERIFY_SCOPE=full \
         VERIFY_EXPECT_GOVERNANCE_MODE=enforce \
         VERIFY_EXPECT_ENFORCED_PROFILES="$GOVERNED_PROFILES" \
         bash scripts/verify-runtime.sh
