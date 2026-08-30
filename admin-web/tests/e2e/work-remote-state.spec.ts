@@ -120,7 +120,25 @@ test("work detail renders live Pixiv state and never renders stale metadata stat
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installWorkFixtures(page.context(), {
-    rawMetadata: { total_view: 11, total_bookmarks: 12 },
+    rawMetadata: {
+      total_view: 110011,
+      total_bookmarks: 120012,
+      is_bookmarked: false,
+      raw_caption: "preserved root metadata",
+      nested: {
+        total_view: 130013,
+        total_views: 140014,
+        total_bookmarks: 150015,
+        is_bookmarked: true,
+        favorite_context: "preserved nested metadata",
+      },
+      pages: [{
+        total_view: 160016,
+        total_bookmarks: 170017,
+        is_bookmarked: true,
+        page_label: "preserved array metadata",
+      }],
+    },
     remoteState: {
       source: "pixiv", source_work_id: "38362603", fetched_at: "2026-08-30T00:00:00Z",
       total_views: 987654, total_bookmarks: 4321, is_bookmarked: true,
@@ -132,8 +150,19 @@ test("work detail renders live Pixiv state and never renders stale metadata stat
   await expect(page.getByText("987,654")).toBeVisible();
   await expect(page.getByText("4,321")).toBeVisible();
   await expect(page.getByText("Pixiv bookmarked")).toBeVisible();
-  await expect(page.getByText("11", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("12", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: /Source Records/ }).click();
+  await page.getByRole("button", { name: "Show raw metadata" }).click();
+  const rawMetadata = page.locator("pre");
+  await expect(rawMetadata).toContainText('"raw_caption": "preserved root metadata"');
+  await expect(rawMetadata).toContainText('"favorite_context": "preserved nested metadata"');
+  await expect(rawMetadata).toContainText('"page_label": "preserved array metadata"');
+  for (const forbiddenKey of ["total_view", "total_views", "total_bookmarks", "is_bookmarked"]) {
+    await expect(rawMetadata).not.toContainText(`"${forbiddenKey}"`);
+  }
+  for (const forbiddenValue of ["110011", "120012", "130013", "140014", "150015", "160016", "170017"]) {
+    await expect(rawMetadata).not.toContainText(forbiddenValue);
+  }
+  await expect(page.getByRole("button", { name: "Local library favorite" })).toBeVisible();
   await expect.poll(() => remoteCalls).toBe(1);
   await expect(page.getByText("Something went wrong")).toHaveCount(0);
   expect(pageErrors).toEqual([]);

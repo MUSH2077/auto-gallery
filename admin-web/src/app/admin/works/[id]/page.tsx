@@ -27,6 +27,25 @@ interface WorkSourceData {
   raw_metadata?: Record<string, unknown>;
 }
 
+const PIXIV_REMOTE_STATE_METADATA_KEYS = new Set([
+  "total_view",
+  "total_views",
+  "total_bookmarks",
+  "is_bookmarked",
+]);
+
+function sanitizePixivMetadataForDisplay(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizePixivMetadataForDisplay);
+  if (!value || typeof value !== "object") return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (PIXIV_REMOTE_STATE_METADATA_KEYS.has(key)) continue;
+    sanitized[key] = sanitizePixivMetadataForDisplay(nestedValue);
+  }
+  return sanitized;
+}
+
 function WorkViewerShell({ workId }: { workId: string }) {
   const t = useT();
   const assets = useQuery({
@@ -494,7 +513,7 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
           </button>
           {showRaw && (
             <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs">
-              {JSON.stringify(s.raw_metadata, null, 2)}
+              {JSON.stringify(s.source === "pixiv" ? sanitizePixivMetadataForDisplay(s.raw_metadata) : s.raw_metadata, null, 2)}
             </pre>
           )}
         </div>
