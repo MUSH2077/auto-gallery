@@ -297,13 +297,65 @@ echo "ok: alembic current $current_revision"
 compose exec -T -e REDISCLI_AUTH="${REDIS_PASSWORD:?REDIS_PASSWORD is required}" redis redis-cli ping >/dev/null
 echo "ok: redis ping"
 
+if [[ "$verify_scope" == "full" ]]; then
+  compose exec -T backend python3 - <<'PY' \
+    | VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS="${VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS:-480}" \
+      python3 scripts/verify-rq-worker-registrations.py
+import json
+import os
+from datetime import datetime, timezone
+
+from redis import Redis
+from rq import Worker
+
+connection = Redis.from_url(os.environ["REDIS_URL"])
+workers = []
+for worker in Worker.all(connection=connection):
+    last_heartbeat = getattr(worker, "last_heartbeat", None)
+    workers.append(
+        {
+            "queues": list(worker.queue_names()),
+            "last_heartbeat": (
+                last_heartbeat.isoformat() if last_heartbeat is not None else None
+            ),
+        }
+    )
+print(
+    json.dumps(
+        {
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "workers": workers,
+        },
+        separators=(",", ":"),
+    )
+)
+PY
+  echo "ok: fresh RQ registrations cover all service-owned queues"
+fi
+
 compose exec -T backend python3 - <<'PY'
 import os
 from redis import Redis
 from rq import Queue
 
 connection = Redis.from_url(os.environ["REDIS_URL"])
-for name in ("default", "downloads", "imports", "operations", "maintenance", "scheduled"):
+for name in (
+    "default",
+    "downloads",
+    "downloads:pixiv",
+    "downloads:danbooru",
+    "downloads:iwara",
+    "downloads:weibo",
+    "downloads:bilibili",
+    "downloads:pinterest",
+    "downloads:lofter",
+    "downloads:x",
+    "imports",
+    "maintenance",
+    "operations",
+    "discovery",
+    "scheduled",
+):
     queue = Queue(name, connection=connection)
     len(queue)
     queue.scheduled_job_registry.count

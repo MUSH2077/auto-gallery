@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from typing import Any
 
@@ -30,6 +31,7 @@ def evaluate_recovery(health: Any) -> tuple[bool, str]:
     hard_gate = controller.get("hard_gate_active")
     hard_reasons = pressure.get("hard_reasons")
     trigger_reasons = pressure.get("trigger_reasons")
+    remaining_present = "recovery_remaining_seconds" in pressure
     remaining = pressure.get("recovery_remaining_seconds")
 
     failures: list[str] = []
@@ -47,11 +49,15 @@ def evaluate_recovery(health: Any) -> tuple[bool, str]:
     if not isinstance(trigger_reasons, list) or trigger_reasons:
         count = len(trigger_reasons) if isinstance(trigger_reasons, list) else "missing"
         failures.append(f"trigger_reasons={count}")
-    if remaining is not None:
-        if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
-            failures.append("recovery_remaining_seconds=invalid")
-        elif float(remaining) != 0.0:
-            failures.append(f"recovery_remaining_seconds={float(remaining):.3f}")
+    if (
+        not remaining_present
+        or isinstance(remaining, bool)
+        or not isinstance(remaining, (int, float))
+        or not math.isfinite(float(remaining))
+    ):
+        failures.append("recovery_remaining_seconds=invalid")
+    elif float(remaining) != 0.0:
+        failures.append(f"recovery_remaining_seconds={float(remaining):.3f}")
 
     if failures:
         return False, ", ".join(failures)

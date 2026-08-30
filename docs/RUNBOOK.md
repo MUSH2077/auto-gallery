@@ -34,38 +34,57 @@ bash scripts/deploy.sh --verified /path/to/acceptance.json
 
 ### Manual Deploy (break-glass only)
 
-Prefer `scripts/deploy.sh`; it preserves the rollback point and enforces the
-workers-last recovery gate. If a reviewed incident procedure requires manual
-commands, keep workers stopped until `/api/v1/system/health` reports a
-noncritical enforced controller, empty `hard_reasons` and `trigger_reasons`,
-`hard_gate_active=false`, and zero/none `recovery_remaining_seconds`.
+All normal changes, including Compose-only and migration changes, must use
+`scripts/deploy.sh`; it preserves the rollback point and enforces the
+workers-last recovery gate. The outline below is break-glass sequencing for an
+already-declared incident, not an alternate deployment path. Never delete the
+controller latch key.
 
 ```bash
-# 1. Build images
+# 1. Build images before beginning downtime
 docker compose build backend admin-web
 
-# 2. Stop publishers, then restart foreground app containers
+# 2. Freeze every writer, then the foreground application
 docker compose stop -t 120 worker-download worker-import worker-operations scheduler
-docker compose up --force-recreate --no-deps migrate
-docker compose up -d --force-recreate backend admin-web
+docker compose stop -t 120 admin-web backend
 
-# 3. Wait for core health and controller-enforced recovery; do not delete its latch
-docker compose ps --format "table {{.Name}}\t{{.Status}}"
-curl -sSf http://localhost:8818/api/v1/system/health | jq .resource_pressure
+# 3. Create and verify the checksummed rollback point before any migration.
+# Follow backup_frozen_state() in scripts/deploy.sh; abort if snapshot.complete
+# and its SHA256SUMS cannot both be verified.
 
-# 4. After the recovery fields above are clear, start and verify worker listeners
-docker compose up -d --force-recreate worker-download worker-import worker-operations scheduler
+# 4. Run the one-shot migration, then start only the foreground application
+docker compose up --no-deps migrate
+docker compose up -d --wait --wait-timeout 180 backend admin-web
+
+# 5. Enforce both per-probe and overall recovery deadlines in a subshell.
+# Continue only if this exits 0; a timeout leaves every worker stopped.
+(
+  recovery_deadline=$((SECONDS + 180))
+  until timeout --signal=TERM --kill-after=1s 6s \
+    bash scripts/probe-resource-recovery.sh; do
+    (( SECONDS < recovery_deadline )) || exit 1
+    sleep 5
+  done
+)
+
+# 6. Only after the bounded gate succeeds, start and verify worker listeners
+VERIFY_SCOPE=core bash scripts/verify-runtime.sh
+docker compose up -d worker-download worker-import worker-operations scheduler
 VERIFY_SCOPE=full bash scripts/verify-runtime.sh
 ```
 
 ### Deploying Only Infrastructure Changes
 
-If only `docker-compose.yaml` changed (no code changes):
+Compose-only changes use the same backup, workers-last, controller-recovery,
+verification, and automatic rollback path as application changes:
 
 ```bash
-docker compose up -d --force-recreate
-bash scripts/debug.sh quick
+bash scripts/deploy.sh
 ```
+
+Do not apply normal infrastructure changes with a direct `compose up` or a
+service-local migration command; those bypass the frozen rollback point and
+worker recovery gate.
 
 ## Health Check Endpoints
 
@@ -230,8 +249,8 @@ PostgreSQL `max_connections=40` budget. If exhausting:
 # Check active connections
 docker compose exec postgres psql -U autogallery -c "SELECT count(*) FROM pg_stat_activity WHERE datname='autogallery';"
 
-# Restart all Python containers to free connections
-docker compose up -d --force-recreate backend worker-download worker-import worker-operations scheduler
+# If a restart is actually required, use the safe workers-last deploy path
+bash scripts/deploy.sh
 ```
 
 ### Health check failures after deploy
@@ -243,14 +262,14 @@ docker compose up -d --force-recreate backend worker-download worker-import work
 # Check backend first (dependency for admin-web)
 docker compose logs --tail=30 backend
 
-# If backend shows "database … does not exist", run migrations
-docker compose exec backend alembic upgrade head
+# If backend shows "database … does not exist", inspect the migration service
+docker compose logs --tail=100 migrate
 
 # If Redis auth fails, verify REDIS_PASSWORD in .env matches
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping
 
-# Restart all
-docker compose up -d --force-recreate
+# Apply migration/application repair through the safe deploy path
+bash scripts/deploy.sh
 ```
 
 ## Rollback
@@ -303,8 +322,8 @@ cp .env.backup .env
 # Restore gallery-dl config
 cp -r data/config/gallery-dl.backup/* data/config/gallery-dl/
 
-# Restart
-docker compose up -d --force-recreate
+# Restart through the workers-last rollback-protected path
+bash scripts/deploy.sh
 ```
 
 ## Remote discovery rollout and recovery
@@ -432,8 +451,8 @@ TEST_DATABASE_URL='postgresql+asyncpg://autogallery:test-db@postgres:5432/autoga
 1. **Check debug toolkit:** `bash scripts/debug.sh <mode>`
 2. **Check service logs:** `docker compose logs --tail=100 <service>`
 3. **Check workbench:** `curl localhost:8818/api/v1/system/workbench` (with auth)
-4. **Restart affected service:** `docker compose up -d --force-recreate <service>`
-5. **Full restart:** `bash scripts/deploy.sh`
+4. **Safe restart/deploy:** `bash scripts/deploy.sh`
+5. **Break-glass only:** follow the frozen-writer, backup, migration, recovery-gate order above
 6. **If all else fails:** Check host system resources (NAS DSM Resource Monitor), verify network connectivity, check for Docker daemon issues
 
 ### Backup verification

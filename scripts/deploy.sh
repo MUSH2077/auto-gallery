@@ -499,20 +499,42 @@ all_services_ready() {
 }
 
 wait_for_resource_recovery() {
-    local timeout_seconds interval_seconds deadline remaining sleep_seconds
+    local timeout_seconds interval_seconds probe_timeout_seconds
+    local connect_timeout_seconds curl_max_time_seconds
+    local deadline remaining sleep_seconds current_probe_timeout
     timeout_seconds="${DEPLOY_RECOVERY_TIMEOUT_SECONDS:-180}"
     interval_seconds="${DEPLOY_RECOVERY_POLL_SECONDS:-5}"
+    probe_timeout_seconds="${DEPLOY_RECOVERY_PROBE_TIMEOUT_SECONDS:-6}"
+    connect_timeout_seconds="${DEPLOY_RECOVERY_CONNECT_TIMEOUT_SECONDS:-2}"
+    curl_max_time_seconds="${DEPLOY_RECOVERY_CURL_MAX_TIME_SECONDS:-4}"
     if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ || \
-          ! "$interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Recovery timeout and poll interval must be positive whole seconds" >&2
+          ! "$interval_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$probe_timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$connect_timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$curl_max_time_seconds" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Recovery timeouts and poll interval must be positive whole seconds" >&2
+        return 2
+    fi
+    if (( connect_timeout_seconds > curl_max_time_seconds || \
+          curl_max_time_seconds >= probe_timeout_seconds || \
+          probe_timeout_seconds > timeout_seconds )); then
+        echo "Recovery deadlines must satisfy connect <= curl max < probe <= overall timeout" >&2
         return 2
     fi
 
     deadline=$((SECONDS + timeout_seconds))
-    while (( SECONDS <= deadline )); do
-        if compose exec -T backend \
-            curl -sf http://localhost:8000/api/v1/system/health \
-            | python3 scripts/verify-resource-recovery.py; then
+    while (( SECONDS < deadline )); do
+        remaining=$((deadline - SECONDS))
+        current_probe_timeout="$probe_timeout_seconds"
+        if (( current_probe_timeout > remaining )); then
+            current_probe_timeout="$remaining"
+        fi
+        if timeout --signal=TERM --kill-after=1s \
+            "${current_probe_timeout}s" \
+            env COMPOSE_ENV_FILE=.env \
+                RECOVERY_CURL_CONNECT_TIMEOUT_SECONDS="$connect_timeout_seconds" \
+                RECOVERY_CURL_MAX_TIME_SECONDS="$curl_max_time_seconds" \
+            bash scripts/probe-resource-recovery.sh; then
             echo -e "${GREEN}  Controller-enforced hard recovery complete${NC}"
             return 0
         fi
@@ -566,6 +588,7 @@ if (( (8#$env_mode & 8#022) != 0 )); then
     false
 fi
 command -v docker >/dev/null
+command -v timeout >/dev/null
 docker info >/dev/null
 compose config --quiet
 install -d -m 700 "$ROLLBACK_ROOT"
