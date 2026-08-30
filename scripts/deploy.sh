@@ -247,6 +247,8 @@ build_local_candidate() {
     echo "Building immutable local candidates for source $CANDIDATE_SOURCE_DIGEST"
     builder_name="auto-gallery-local-${CANDIDATE_SOURCE_DIGEST:0:12}-$$"
     # A docker-container BuildKit worker gives local builds their own cgroup.
+    # Next/Turbopack uses native memory in addition to the bounded Node heap,
+    # so the builder needs more headroom than an application container.
     # memory-swap == memory prevents this project build from consuming host
     # swap. Older/minimal Docker installations may lack buildx; those devices
     # retain the serialized low-priority fallback instead of being rejected.
@@ -254,8 +256,8 @@ build_local_candidate() {
         && docker buildx version >/dev/null 2>&1 && docker buildx create \
         --name "$builder_name" \
         --driver docker-container \
-        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-1024m}" \
-        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-1024m}" \
+        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}" \
+        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-2048m}" \
         --driver-opt "cpu-period=100000" \
         --driver-opt "cpu-quota=${LOCAL_BUILD_CPU_QUOTA:-50000}" \
         >/dev/null; then
