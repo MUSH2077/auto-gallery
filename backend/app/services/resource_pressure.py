@@ -92,16 +92,31 @@ if acknowledged >= candidate then
             and controller['external_event_id'] == candidate_controller['external_event_id']
             and controller['external_cgroup_id'] == candidate_controller['external_cgroup_id']
             and controller['external_oom_kill_counter'] == candidate_controller['external_oom_kill_counter']
-        local represents_newer_ack = acknowledged > candidate
-            and type(controller) == 'table'
+        local current_cgroup = type(controller) == 'table'
+            and controller['external_cgroup_id']
+            or nil
+        local current_counter = type(controller) == 'table'
+            and tonumber(controller['external_oom_kill_counter'])
+            or nil
+        local current_ack = type(current_cgroup) == 'string'
+            and tonumber(redis.call('HGET', KEYS[1], current_cgroup) or '0')
+            or 0
+        local current_recovered = type(current_cgroup) == 'string'
+            and tonumber(redis.call('HGET', KEYS[4], current_cgroup) or '0')
+            or 0
+        local represents_active_ack = type(controller) == 'table'
             and type(controller['external_event_id']) == 'string'
             and controller['external_event_id'] ~= ''
-            and controller['external_cgroup_id'] == ARGV[1]
-            and controller['external_oom_kill_counter'] == acknowledged
+            and type(current_cgroup) == 'string'
+            and current_cgroup ~= ''
+            and current_counter ~= nil
+            and current_counter > 0
+            and current_ack == current_counter
+            and current_recovered < current_counter
         if ok
             and type(latch) == 'table'
             and latch['status'] == 'paused'
-            and (matches_candidate or represents_newer_ack)
+            and (matches_candidate or represents_active_ack)
         then
             return 0
         end
