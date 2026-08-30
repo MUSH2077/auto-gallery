@@ -16,6 +16,7 @@ from app.remote_discovery.common import MalformedRemoteResponse, RemoteRateLimit
 
 PREFIX = "remote_work_state_"
 TEST_REMOTE_KEY = base64.urlsafe_b64encode(b"w" * 32).decode()
+OTHER_REMOTE_KEY = base64.urlsafe_b64encode(b"x" * 32).decode()
 
 
 class Registry:
@@ -676,6 +677,127 @@ async def test_remote_work_state_api_sanitizes_provider_failures(
         assert "remote-payload-canary" not in caplog.text
     finally:
         settings.remote_credential_key = old_key
+        if old_adapter is None:
+            registry._adapters.pop("pixiv", None)
+        else:
+            registry.register(old_adapter)
+        async with async_session() as db:
+            await _cleanup_api_work_state(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vault_failure",
+    [
+        "missing_key",
+        "invalid_key",
+        "wrong_key",
+        "tampered_ciphertext",
+        "unavailable_vault",
+    ],
+)
+async def test_remote_work_state_api_maps_pre_provider_vault_failures_to_503(
+    monkeypatch, caplog, vault_failure
+):
+    """Credential storage failures are deployment failures, not provider failures."""
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import RemoteAccount, UserSubscriptionSource
+    from app.remote_discovery import registry
+    from app.services import remote_accounts
+    from app.services.remote_credentials import CredentialVault
+
+    adapter = ApiWorkStateAdapter()
+    old_adapter = registry._adapters.get("pixiv")
+    registry.register(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup_api_work_state(db)
+            user = await seed_user(db, f"api_vault_{vault_failure}")
+            user.permissions = ["library"]
+            await db.flush()
+            account = await seed_pixiv_account(
+                db,
+                user.id,
+                CredentialVault(TEST_REMOTE_KEY),
+                token="owner-token-canary",
+            )
+            binding = await seed_binding(db, user, account, f"api_vault_{vault_failure}")
+            if vault_failure == "tampered_ciphertext":
+                account.credential_ciphertext = "v1:" + base64.urlsafe_b64encode(
+                    b"ciphertext-canary"
+                ).decode()
+            work, _ = await _seed_api_work_state(db)
+            account_id, binding_id = account.id, binding.id
+            expected_account_health = (
+                account.auth_status,
+                account.auth_error_reason,
+                account.credential_generation,
+                account.is_enabled,
+            )
+            expected_binding_health = (
+                binding.auth_healthy,
+                binding.auth_status,
+                binding.auth_error_reason,
+                binding.is_enabled,
+            )
+
+        if vault_failure == "missing_key":
+            monkeypatch.setattr(settings, "remote_credential_key", "")
+        elif vault_failure == "invalid_key":
+            monkeypatch.setattr(settings, "remote_credential_key", "invalid-key-canary")
+        elif vault_failure == "wrong_key":
+            monkeypatch.setattr(settings, "remote_credential_key", OTHER_REMOTE_KEY)
+        else:
+            monkeypatch.setattr(settings, "remote_credential_key", TEST_REMOTE_KEY)
+
+        if vault_failure == "unavailable_vault":
+            def unavailable_vault():
+                raise RuntimeError("vault-unavailable-canary")
+
+            monkeypatch.setattr(remote_accounts, "configured_credential_vault", unavailable_vault)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                f"/api/v1/works/{work.id}/remote-state",
+                headers=_api_headers(user.username),
+            )
+
+        assert response.status_code == 503, response.text
+        assert response.json() == {
+            "detail": {"code": "remote_discovery_unavailable"}
+        }
+        assert "cache-control" not in response.headers
+        assert "retry-after" not in response.headers
+        assert adapter.calls == 0
+        for canary in (
+            "owner-token-canary",
+            "invalid-key-canary",
+            "vault-unavailable-canary",
+            "ciphertext-canary",
+        ):
+            assert canary not in response.text
+            assert canary not in caplog.text
+
+        async with async_session() as db:
+            stored_account = await db.get(RemoteAccount, account_id)
+            stored_binding = await db.get(UserSubscriptionSource, binding_id)
+            assert (
+                stored_account.auth_status,
+                stored_account.auth_error_reason,
+                stored_account.credential_generation,
+                stored_account.is_enabled,
+            ) == expected_account_health
+            assert (
+                stored_binding.auth_healthy,
+                stored_binding.auth_status,
+                stored_binding.auth_error_reason,
+                stored_binding.is_enabled,
+            ) == expected_binding_health
+    finally:
         if old_adapter is None:
             registry._adapters.pop("pixiv", None)
         else:

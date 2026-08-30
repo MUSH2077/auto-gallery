@@ -19,6 +19,8 @@ from app.remote_discovery.common import RemoteReauthenticationRequired
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.schemas.remote_discovery import RemoteAccountRead
 from app.services.remote_credentials import (
+    CredentialDecryptionError,
+    CredentialKeyError,
     CredentialVault,
     RedactedCredentials,
     RefreshableCredentials,
@@ -59,6 +61,10 @@ _NUMERIC_REMOTE_ID = re.compile(r"-?[0-9]{1,32}\Z")
 
 class RemoteCredentialGenerationChanged(RuntimeError):
     """A credential consumer no longer owns the account generation it pinned."""
+
+
+class RemoteCredentialVaultUnavailable(RuntimeError):
+    """The credential vault cannot provide credentials for a remote operation."""
 
 
 class RemoteWorkStateAccountRequired(RuntimeError):
@@ -776,12 +782,20 @@ class RemoteAccountService:
             pinned_generation = generation
 
         try:
+            credentials = self.credentials_for_adapter(
+                account,
+                expected_generation=pinned_generation,
+                on_generation_advanced=advance_generation,
+            )
+        except (CredentialKeyError, CredentialDecryptionError, RuntimeError) as exc:
+            # Credential configuration/decryption happens before provider I/O.
+            # Keep it distinct from provider failures and never expose the
+            # underlying key/ciphertext diagnostic outside this boundary.
+            raise RemoteCredentialVaultUnavailable from exc
+
+        try:
             state = await self.adapters.get(source).fetch_work_state(
-                self.credentials_for_adapter(
-                    account,
-                    expected_generation=pinned_generation,
-                    on_generation_advanced=advance_generation,
-                ),
+                credentials,
                 source_work_id=source_work_id,
             )
             if state.source != source or state.source_work_id != source_work_id:

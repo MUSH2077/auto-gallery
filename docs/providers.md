@@ -129,8 +129,14 @@ current rollout is **Pixiv manual preview only**. Keep Pixiv automatic import,
 X discovery/automatic import, and Bilibili discovery/automatic import disabled.
 The live state requires both the private-members foundation and the Pixiv
 preview gate; if either is closed, it returns `503` while the local work page
-remains available. Restore only the approved gate or gates during rollout
-recovery, and keep the automatic-import and X/B gates closed.
+remains available. A missing or invalid `REMOTE_CREDENTIAL_KEY`, or ciphertext
+that the configured vault cannot authenticate, returns the same sanitized
+`503` without contacting Pixiv or changing account/binding health. Restore the
+protected key used to encrypt existing accounts rather than generating a new
+one; reconnect only an affected account if its stored ciphertext is damaged.
+Never copy keys, ciphertext, or decryptor diagnostics into logs or tickets.
+Restore only the approved gate or gates during rollout recovery, and keep the
+automatic-import and X/B gates closed.
 Do not use a real provider as a smoke test; use fixture transports and injected
 adapters in automated verification.
 

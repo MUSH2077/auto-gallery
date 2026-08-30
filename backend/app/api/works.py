@@ -35,6 +35,7 @@ from app.remote_discovery.common import RemoteRateLimited, RemoteReauthenticatio
 from app.services.remote_accounts import (
     RemoteAccountService,
     RemoteCredentialGenerationChanged,
+    RemoteCredentialVaultUnavailable,
     RemoteWorkStateAccountRequired,
     RemoteWorkStateAccountUnhealthy,
 )
@@ -215,6 +216,8 @@ async def get_remote_work_state(
             409, "remote_account_reauthentication_required"
         ) from exc
     except RemoteDiscoveryUnavailable as exc:
+        raise _remote_work_state_error(503, "remote_discovery_unavailable") from exc
+    except RemoteCredentialVaultUnavailable as exc:
         raise _remote_work_state_error(503, "remote_discovery_unavailable") from exc
     except RemoteRateLimited as exc:
         raise HTTPException(
