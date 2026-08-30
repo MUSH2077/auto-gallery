@@ -27,6 +27,7 @@ from app.services.heavy_io import (
 from app.services.resource_pressure import get_resource_pressure_snapshot_sync
 from app.services.resource_pressure import (
     RESOURCE_CONTROL_CHANNEL,
+    cgroup_oom_kill_event_id,
     profile_slice_cooldown_seconds,
     publish_external_resource_critical,
     resource_profile_permit,
@@ -158,25 +159,51 @@ class ResourceAwareWorker(Worker):
                 now + 60.0,
             )
 
-        hard_event_reason = (
-            "worker_cgroup_oom_kill" if cgroup_deltas["oom_kill"] > 0 else None
+        hard_event_reason = "worker_cgroup_oom_kill"
+        previous_pending = getattr(self, "_pending_cgroup_oom_event", None)
+        new_oom_event = cgroup_deltas["oom_kill"] > 0
+        had_local_latch = bool(
+            getattr(self, "_local_cgroup_oom_kill_latched", False)
         )
-        if hard_event_reason is not None:
+        if new_oom_event:
+            cgroup_id = str(cgroup_contribution.get("cgroup_id") or "unknown")
+            oom_kill_counter = max(0, int(cgroup_events.get("oom_kill") or 0))
+            previous_pending = {
+                "event_id": cgroup_oom_kill_event_id(cgroup_id, oom_kill_counter),
+                "cgroup_id": cgroup_id,
+                "oom_kill_counter": oom_kill_counter,
+            }
+            self._pending_cgroup_oom_event = previous_pending
             self._local_cgroup_oom_kill_latched = True
             self._local_cgroup_oom_kill_at = now
             self._local_cgroup_hard_reason = hard_event_reason
+
+        if previous_pending is not None:
             try:
                 external = publish_external_resource_critical(
                     hard_event_reason,
                     redis_client=self.connection,
                     source=str(self.name),
+                    event_id=str(previous_pending["event_id"]),
+                    cgroup_id=str(previous_pending["cgroup_id"]),
+                    oom_kill_counter=int(previous_pending["oom_kill_counter"]),
                 )
-                snapshot.clear()
-                snapshot.update(external)
             except Exception:
                 self.log.exception(
                     "Unable to promote worker cgroup memory event; local gate remains closed"
                 )
+            else:
+                self._pending_cgroup_oom_event = None
+                if external is not None:
+                    self._local_cgroup_oom_kill_latched = True
+                    self._local_cgroup_hard_reason = hard_event_reason
+                    snapshot.clear()
+                    snapshot.update(external)
+                elif new_oom_event and not had_local_latch:
+                    # Another process already acknowledged this cumulative
+                    # event and its global latch has completed recovery.
+                    self._local_cgroup_oom_kill_latched = False
+                    self._local_cgroup_hard_reason = None
 
         local_latched = bool(
             getattr(self, "_local_cgroup_oom_kill_latched", False)

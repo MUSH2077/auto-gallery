@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 PRESSURE_SNAPSHOT_KEY = "resource:pressure:snapshot"
 PRESSURE_LATCH_KEY = "resource:pressure:latch"
+CGROUP_OOM_ACK_HASH_KEY = "resource:cgroup:oom-kill-ack:v1"
 RESOURCE_CONTROL_CHANNEL = "resource:control"
 PRESSURE_LATCH_TTL_SECONDS = 24 * 60 * 60
 PRESSURE_BASELINE_KEY = "resource:pressure:baseline:v1"
@@ -44,6 +45,29 @@ WORKER_SUPERVISOR_PREFIX = "worker:supervisor:"
 WORKER_SUPERVISOR_HASH_KEY = "worker:supervisors:v1"
 GIB = 1024 ** 3
 MIB = 1024 ** 2
+
+_CGROUP_OOM_LATCH_ACK_LUA = """
+local acknowledged = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
+local candidate = tonumber(ARGV[2])
+if acknowledged >= candidate then
+    return 0
+end
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+return 1
+"""
+
+
+def cgroup_oom_kill_event_id(cgroup_id: str, oom_kill_counter: int) -> str:
+    """Return one stable identity for a cumulative cgroup OOM-kill event."""
+
+    identity = str(cgroup_id or "unknown")
+    counter = max(0, int(oom_kill_counter))
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"auto-gallery:cgroup-oom-kill:{identity}:{counter}",
+    ).hex
+
 
 DEFAULT_QUEUE_NAMES = (
     "default",
@@ -812,6 +836,7 @@ _foreground_latency_lock = threading.Lock()
 _foreground_latencies: deque[tuple[float, float]] = deque(maxlen=4096)
 _foreground_latency_generation = 0
 FOREGROUND_LATENCY_WINDOW_SECONDS = 5 * 60
+LOCAL_CGROUP_WARNING_SECONDS = 60.0
 
 
 def record_foreground_latency(path: str, duration_ms: float) -> None:
@@ -984,6 +1009,10 @@ class ResourcePressureStateMachine:
         self._sampled_at: str | None = None
         self._trigger_reasons: list[str] = []
         self._snapshot_now: float | None = None
+        self._local_cgroup_max_until = 0.0
+        self._local_cgroup_oom_until = 0.0
+        self._local_cgroup_max_delta = 0
+        self._local_cgroup_oom_delta = 0
 
     @staticmethod
     def _legacy_status(mode: str) -> str:
@@ -1106,8 +1135,18 @@ class ResourcePressureStateMachine:
         now = self.clock() if now is None else now
         self._snapshot_now = now
         self._sampled_at = datetime.now(timezone.utc).isoformat()
+        if sample is not None:
+            max_delta = max(0, int(sample.cgroup_memory_max_delta or 0))
+            oom_delta = max(0, int(sample.cgroup_memory_oom_delta or 0))
+            if max_delta:
+                self._local_cgroup_max_until = now + LOCAL_CGROUP_WARNING_SECONDS
+                self._local_cgroup_max_delta = max_delta
+            if oom_delta:
+                self._local_cgroup_oom_until = now + LOCAL_CGROUP_WARNING_SECONDS
+                self._local_cgroup_oom_delta = oom_delta
 
         if sample is None:
+            was_critical = self.controller_mode == "critical"
             self._sample = None
             self._failure_count += 1
             self._pause_count = 0
@@ -1118,7 +1157,8 @@ class ResourcePressureStateMachine:
             if self._failure_count >= self.thresholds.failure_samples:
                 self._set_mode("critical")
                 self._set_scale(0.0)
-                self._trigger_reasons = ["resource_metrics_unavailable"]
+                if not was_critical:
+                    self._trigger_reasons = ["resource_metrics_unavailable"]
             elif self.controller_mode != "critical":
                 self._set_mode("constrained")
                 self._decrease_budget()
@@ -1159,7 +1199,6 @@ class ResourcePressureStateMachine:
                 self._recovery_started_at = None
                 self._reset_stable_window()
                 self.reasons = hard_reasons
-                self._trigger_reasons = list(hard_reasons)
                 return self.snapshot()
             if not self._hard_recovered(sample):
                 self._recovery_started_at = None
@@ -1341,10 +1380,11 @@ class ResourcePressureStateMachine:
                 ),
                 3,
             )
+        snapshot_now = self.clock() if self._snapshot_now is None else self._snapshot_now
         local_cgroup_warning_reasons: list[str] = []
-        if sample and sample.cgroup_memory_max_delta:
+        if snapshot_now < self._local_cgroup_max_until:
             local_cgroup_warning_reasons.append("cgroup_memory_max")
-        if sample and sample.cgroup_memory_oom_delta:
+        if snapshot_now < self._local_cgroup_oom_until:
             local_cgroup_warning_reasons.append("cgroup_memory_oom")
         return {
             "status": self.status,
@@ -1427,8 +1467,16 @@ class ResourcePressureStateMachine:
             "local_cgroup_warnings": {
                 "scope": "current_cgroup",
                 "reasons": local_cgroup_warning_reasons,
-                "max_delta": sample.cgroup_memory_max_delta if sample else None,
-                "oom_delta": sample.cgroup_memory_oom_delta if sample else None,
+                "max_delta": (
+                    self._local_cgroup_max_delta
+                    if snapshot_now < self._local_cgroup_max_until
+                    else 0
+                ),
+                "oom_delta": (
+                    self._local_cgroup_oom_delta
+                    if snapshot_now < self._local_cgroup_oom_until
+                    else 0
+                ),
             },
             "sampled_at": self._sampled_at,
             "memory": {
@@ -1968,6 +2016,9 @@ def publish_resource_pressure_snapshot(snapshot: dict[str, Any], redis_client=No
             snapshot.get("status"),
             snapshot.get("controller_mode"),
             tuple(snapshot.get("reasons") or []),
+            tuple((snapshot.get("local_cgroup_warnings") or {}).get("reasons") or []),
+            (snapshot.get("local_cgroup_warnings") or {}).get("max_delta"),
+            (snapshot.get("local_cgroup_warnings") or {}).get("oom_delta"),
             budget.get("generation"),
             budget.get("throughput_scale"),
             budget.get("governance_mode"),
@@ -2035,13 +2086,38 @@ def publish_external_resource_critical(
     *,
     redis_client=None,
     source: str = "worker_cgroup",
-) -> dict[str, Any]:
+    event_id: str | None = None,
+    cgroup_id: str | None = None,
+    oom_kill_counter: int | None = None,
+) -> dict[str, Any] | None:
     """Merge a worker-local OOM kill into the shared hard safety latch."""
 
     if reason != "worker_cgroup_oom_kill":
         raise ValueError("only worker_cgroup_oom_kill may be promoted as resource critical")
 
-    snapshot = read_shared_resource_pressure_snapshot(redis_client=redis_client) or {}
+    client = _redis_client(redis_client)
+    tracked_counter = (
+        max(0, int(oom_kill_counter))
+        if cgroup_id is not None and oom_kill_counter is not None
+        else None
+    )
+    if tracked_counter is not None:
+        event_id = event_id or cgroup_oom_kill_event_id(cgroup_id, tracked_counter)
+        if _cgroup_oom_kill_acknowledged(client, str(cgroup_id), tracked_counter):
+            for existing in (
+                read_shared_resource_pressure_snapshot(redis_client=client),
+                read_resource_pressure_latch(redis_client=client),
+            ):
+                controller = (existing or {}).get("controller") or {}
+                if (
+                    existing
+                    and existing.get("status") == "paused"
+                    and controller.get("external_event_id") == event_id
+                ):
+                    return existing
+            return None
+
+    snapshot = read_shared_resource_pressure_snapshot(redis_client=client) or {}
     snapshot = deepcopy(snapshot)
     snapshot["status"] = "paused"
     snapshot["controller_mode"] = "critical"
@@ -2066,7 +2142,9 @@ def publish_external_resource_critical(
         throughput_scale=0.0,
         computed_throughput_scale=0.0,
         effective_throughput_scale=0.0,
-        external_event_id=uuid.uuid4().hex,
+        external_event_id=event_id or uuid.uuid4().hex,
+        external_cgroup_id=cgroup_id,
+        external_oom_kill_counter=tracked_counter,
     )
     budget = snapshot.setdefault("budget", {})
     try:
@@ -2092,9 +2170,143 @@ def publish_external_resource_critical(
     for grant in (budget.get("profile_grants") or {}).values():
         if isinstance(grant, dict) and grant.get("memory_reservation_bytes", 0) > 0:
             grant.update(allowed=False, grant="denied", reason=reason)
-    _refresh_pressure_latch(snapshot, redis_client=redis_client)
-    publish_resource_pressure_snapshot(snapshot, redis_client=redis_client)
+    if tracked_counter is not None:
+        try:
+            accepted = _persist_cgroup_oom_latch_and_ack(
+                client,
+                str(cgroup_id),
+                tracked_counter,
+                snapshot,
+            )
+        except Exception as exc:
+            raise RuntimeError("unable to persist worker cgroup OOM latch") from exc
+        if not accepted:
+            for existing in (
+                read_shared_resource_pressure_snapshot(redis_client=client),
+                read_resource_pressure_latch(redis_client=client),
+            ):
+                controller = (existing or {}).get("controller") or {}
+                if (
+                    existing
+                    and existing.get("status") == "paused"
+                    and controller.get("external_event_id") == event_id
+                ):
+                    return existing
+            return None
+    elif not _refresh_pressure_latch(snapshot, redis_client=client):
+        raise RuntimeError("unable to persist worker cgroup OOM latch")
+    publish_resource_pressure_snapshot(snapshot, redis_client=client)
     return snapshot
+
+
+def _cgroup_oom_kill_acknowledged(
+    redis_client,
+    cgroup_id: str,
+    oom_kill_counter: int,
+) -> bool:
+    raw_ack = redis_client.hget(CGROUP_OOM_ACK_HASH_KEY, str(cgroup_id))
+    if isinstance(raw_ack, bytes):
+        raw_ack = raw_ack.decode("utf-8", "replace")
+    return int(raw_ack or 0) >= max(0, int(oom_kill_counter))
+
+
+def _pressure_latch_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    snapshot_controller = snapshot.get("controller") or {}
+    return {
+        "status": "paused",
+        "reasons": list(snapshot.get("reasons") or []),
+        "trigger_reasons": list(snapshot.get("trigger_reasons") or []),
+        "sampled_at": snapshot.get("sampled_at"),
+        "controller": {
+            key: snapshot_controller.get(key)
+            for key in (
+                "external_source",
+                "external_event_id",
+                "external_cgroup_id",
+                "external_oom_kill_counter",
+            )
+            if snapshot_controller.get(key) is not None
+        },
+    }
+
+
+def _persist_cgroup_oom_latch_and_ack(
+    redis_client,
+    cgroup_id: str,
+    oom_kill_counter: int,
+    snapshot: dict[str, Any],
+) -> bool:
+    """Atomically advance one cgroup counter and its authoritative latch."""
+
+    payload = json.dumps(
+        _pressure_latch_payload(snapshot),
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    accepted = redis_client.eval(
+        _CGROUP_OOM_LATCH_ACK_LUA,
+        2,
+        CGROUP_OOM_ACK_HASH_KEY,
+        PRESSURE_LATCH_KEY,
+        str(cgroup_id),
+        max(0, int(oom_kill_counter)),
+        payload,
+        PRESSURE_LATCH_TTL_SECONDS,
+    )
+    return bool(int(accepted or 0))
+
+
+def promote_worker_cgroup_oom_kills(
+    contributions,
+    *,
+    redis_client=None,
+) -> int:
+    """Promote each newly observed worker-cgroup OOM counter at most once."""
+
+    client = _redis_client(redis_client)
+    latest_by_cgroup: dict[str, dict[str, Any]] = {}
+    for contribution in contributions:
+        if not isinstance(contribution, dict):
+            continue
+        memory_events = contribution.get("memory_events") or {}
+        counter = max(0, int(memory_events.get("oom_kill") or 0))
+        delta = max(0, int(memory_events.get("oom_kill_delta") or 0))
+        if not counter or not delta:
+            continue
+        cgroup_id = str(contribution.get("cgroup_id") or "unknown")
+        previous = latest_by_cgroup.get(cgroup_id)
+        previous_events = (previous or {}).get("memory_events") or {}
+        previous_counter = max(0, int(previous_events.get("oom_kill") or 0))
+        if previous is None or counter > previous_counter or (
+            counter == previous_counter
+            and str(contribution.get("sampled_at") or "")
+            > str(previous.get("sampled_at") or "")
+        ):
+            latest_by_cgroup[cgroup_id] = contribution
+
+    promoted = 0
+    for cgroup_id, contribution in sorted(latest_by_cgroup.items()):
+        memory_events = contribution.get("memory_events") or {}
+        counter = max(0, int(memory_events.get("oom_kill") or 0))
+        try:
+            if _cgroup_oom_kill_acknowledged(client, cgroup_id, counter):
+                continue
+            snapshot = publish_external_resource_critical(
+                "worker_cgroup_oom_kill",
+                redis_client=client,
+                source="worker_health_aggregate",
+                event_id=cgroup_oom_kill_event_id(cgroup_id, counter),
+                cgroup_id=cgroup_id,
+                oom_kill_counter=counter,
+            )
+            if snapshot is not None:
+                promoted += 1
+        except Exception:
+            logger.warning(
+                "Unable to promote aggregated worker cgroup memory event",
+                exc_info=True,
+            )
+    return promoted
 
 
 def read_shared_resource_pressure_snapshot(redis_client=None) -> dict[str, Any] | None:
@@ -2129,7 +2341,7 @@ def read_resource_pressure_latch(redis_client=None) -> dict[str, Any] | None:
         return None
 
 
-def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> None:
+def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool:
     """Persist paused state without adding a Redis/AOF write every 10 seconds."""
 
     try:
@@ -2137,20 +2349,27 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> None
         current = read_resource_pressure_latch(redis_client=client)
         ttl = client.ttl(PRESSURE_LATCH_KEY) if current else -2
         reasons_changed = bool(current) and current.get("reasons") != snapshot.get("reasons")
-        if current is None or reasons_changed or ttl < PRESSURE_LATCH_TTL_SECONDS // 2:
-            payload = {
-                "status": "paused",
-                "reasons": list(snapshot.get("reasons") or []),
-                "trigger_reasons": list(snapshot.get("trigger_reasons") or []),
-                "sampled_at": snapshot.get("sampled_at"),
-            }
+        current_controller = (current or {}).get("controller") or {}
+        snapshot_controller = snapshot.get("controller") or {}
+        external_event_changed = current_controller.get(
+            "external_event_id"
+        ) != snapshot_controller.get("external_event_id")
+        if (
+            current is None
+            or reasons_changed
+            or external_event_changed
+            or ttl < PRESSURE_LATCH_TTL_SECONDS // 2
+        ):
+            payload = _pressure_latch_payload(snapshot)
             client.set(
                 PRESSURE_LATCH_KEY,
                 json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
                 ex=PRESSURE_LATCH_TTL_SECONDS,
             )
+        return True
     except Exception:
         logger.debug("Unable to refresh resource pressure latch", exc_info=True)
+        return False
 
 
 def _clear_pressure_latch(redis_client=None) -> None:
@@ -2706,23 +2925,10 @@ def collect_queue_worker_health(
         # shared hard latch.  memory.max and allocation-only oom events stay
         # worker-local soft feedback so one constrained container cannot pause
         # every queue.
-        hard_memory_reason = (
-            "worker_cgroup_oom_kill"
-            if workers["cgroup_memory_events"]["oom_kill_delta"] > 0
-            else None
+        promote_worker_cgroup_oom_kills(
+            cgroup_reports.values(),
+            redis_client=client,
         )
-        if hard_memory_reason is not None:
-            try:
-                publish_external_resource_critical(
-                    hard_memory_reason,
-                    redis_client=client,
-                    source="worker_health_aggregate",
-                )
-            except Exception:
-                logger.warning(
-                    "Unable to promote aggregated worker cgroup memory event",
-                    exc_info=True,
-                )
 
         try:
             raw_supervisors = client.hgetall(WORKER_SUPERVISOR_HASH_KEY) or {}

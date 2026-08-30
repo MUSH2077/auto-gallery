@@ -131,6 +131,33 @@ def test_pressure_requires_three_samples_and_stable_recovery():
     assert resumed["recovery_remaining_seconds"] == 0.0
 
 
+def test_critical_latch_preserves_original_trigger_when_current_hazard_changes():
+    machine = ResourcePressureStateMachine(PressureThresholds())
+    memory_critical = _sample(available=GIB)
+    for timestamp in (0, 10, 20):
+        paused = machine.update(memory_critical, now=timestamp)
+
+    swap_critical = _sample(swap_free=int(0.05 * 6 * GIB))
+    changed = machine.update(swap_critical, now=30)
+
+    assert paused["trigger_reasons"] == ["memory_available_critical"]
+    assert changed["trigger_reasons"] == ["memory_available_critical"]
+    assert changed["hard_reasons"] == ["swap_free_critical"]
+
+
+def test_critical_latch_preserves_original_trigger_during_sampling_failures():
+    machine = ResourcePressureStateMachine(PressureThresholds())
+    memory_critical = _sample(available=GIB)
+    for timestamp in (0, 10, 20):
+        machine.update(memory_critical, now=timestamp)
+
+    for timestamp in (30, 40, 50):
+        failed = machine.update(None, error="OSError", now=timestamp)
+
+    assert failed["trigger_reasons"] == ["memory_available_critical"]
+    assert failed["hard_reasons"] == ["resource_metrics_unavailable"]
+
+
 def test_pressure_fails_closed_after_three_core_metric_failures():
     machine = ResourcePressureStateMachine(PressureThresholds())
 
@@ -186,6 +213,24 @@ def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
     assert snapshot["status"] == "normal"
     assert snapshot["hard_reasons"] == []
     assert snapshot["soft_reasons"] == []
+
+
+def test_backend_cgroup_warning_remains_local_and_observable_for_sixty_seconds():
+    machine = ResourcePressureStateMachine(PressureThresholds())
+
+    warning = machine.update(_sample(cgroup_max=2, cgroup_oom=1), now=0)
+    still_warning = machine.update(_sample(), now=59)
+    expired = machine.update(_sample(), now=60)
+
+    assert warning["controller_mode"] == "normal"
+    assert warning["reasons"] == []
+    assert still_warning["local_cgroup_warnings"] == {
+        "scope": "current_cgroup",
+        "reasons": ["cgroup_memory_max", "cgroup_memory_oom"],
+        "max_delta": 2,
+        "oom_delta": 1,
+    }
+    assert expired["local_cgroup_warnings"]["reasons"] == []
 
 
 def test_backend_cgroup_oom_kill_fails_closed_immediately():
@@ -800,8 +845,10 @@ def test_cgroup_v2_contribution_counters_and_psi_are_sampled(tmp_path):
 class _FakeRedis:
     def __init__(self):
         self.values = {}
+        self.hashes = {}
         self.ttls = {}
         self.deleted = []
+        self.before_eval = None
 
     def get(self, key):
         return self.values.get(key)
@@ -820,12 +867,59 @@ class _FakeRedis:
     def ttl(self, key):
         return self.ttls.get(key, -2)
 
+    def hget(self, key, field):
+        return self.hashes.get(key, {}).get(field)
+
+    def hset(self, key, field=None, value=None, mapping=None):
+        values = self.hashes.setdefault(key, {})
+        if mapping is not None:
+            values.update(mapping)
+        elif field is not None:
+            values[field] = value
+        return 1
+
+    def eval(self, _script, numkeys, *values):
+        assert numkeys == 2
+        ack_key, latch_key, cgroup_id, counter, payload, ttl = values
+        if self.before_eval is not None:
+            self.before_eval()
+        acknowledged = int(self.hget(ack_key, cgroup_id) or 0)
+        if acknowledged >= int(counter):
+            return 0
+        self.set(latch_key, payload, ex=int(ttl))
+        self.hset(ack_key, cgroup_id, int(counter))
+        return 1
+
     def info(self, section):
         if section == "memory":
             return {"used_memory": 80, "maxmemory": 100}
         if section == "errorstats":
             return {"errorstat_OOM": {"count": 7}}
         return {}
+
+
+def test_backend_cgroup_warning_forces_shared_health_snapshot_publish(monkeypatch):
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    machine = ResourcePressureStateMachine(PressureThresholds())
+    monkeypatch.setattr(pressure_module, "_last_published_signature", None)
+    monkeypatch.setattr(pressure_module, "_last_published_at", 0.0)
+    monkeypatch.setattr(pressure_module, "_last_publish_client_id", None)
+
+    assert pressure_module.publish_resource_pressure_snapshot(
+        machine.update(_sample(), now=0), redis
+    )
+    assert pressure_module.publish_resource_pressure_snapshot(
+        machine.update(_sample(cgroup_max=1, cgroup_oom=1), now=1), redis
+    )
+
+    published = json.loads(redis.get(PRESSURE_SNAPSHOT_KEY))
+    assert published["status"] == "normal"
+    assert published["local_cgroup_warnings"]["reasons"] == [
+        "cgroup_memory_max",
+        "cgroup_memory_oom",
+    ]
 
 
 def test_shared_snapshot_and_redis_write_probe():
@@ -863,6 +957,177 @@ def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is False
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+def test_worker_oom_event_identity_depends_only_on_cgroup_and_counter():
+    from app.services import resource_pressure as pressure_module
+
+    first = pressure_module.cgroup_oom_kill_event_id("/docker/shared", 7)
+
+    assert first == pressure_module.cgroup_oom_kill_event_id("/docker/shared", 7)
+    assert first != pressure_module.cgroup_oom_kill_event_id("/docker/shared", 8)
+    assert first != pressure_module.cgroup_oom_kill_event_id("/docker/other", 7)
+
+
+def test_acknowledged_worker_oom_event_is_not_replayed_after_recovery():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
+    ).encode()
+    event_id = pressure_module.cgroup_oom_kill_event_id("/docker/shared", 7)
+    first = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-a",
+        event_id=event_id,
+        cgroup_id="/docker/shared",
+        oom_kill_counter=7,
+    )
+
+    assert first is not None
+    assert first["controller"]["external_event_id"] == event_id
+
+    redis.delete(PRESSURE_LATCH_KEY)
+    redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=60)
+    ).encode()
+    replay = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-restarted",
+        event_id=event_id,
+        cgroup_id="/docker/shared",
+        oom_kill_counter=7,
+    )
+
+    assert replay is None
+    assert redis.get(PRESSURE_LATCH_KEY) is None
+
+    next_event = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-restarted",
+        event_id=pressure_module.cgroup_oom_kill_event_id("/docker/shared", 8),
+        cgroup_id="/docker/shared",
+        oom_kill_counter=8,
+    )
+    assert next_event is not None
+    assert next_event["status"] == "paused"
+
+
+def test_worker_oom_event_is_not_acknowledged_until_latch_persists():
+    from app.services import resource_pressure as pressure_module
+
+    class LatchFailsOnceRedis(_FakeRedis):
+        def __init__(self):
+            super().__init__()
+            self.fail_latch = True
+
+        def set(self, key, value, **kwargs):
+            if key == PRESSURE_LATCH_KEY and self.fail_latch:
+                self.fail_latch = False
+                raise ConnectionError("redis unavailable")
+            return super().set(key, value, **kwargs)
+
+    redis = LatchFailsOnceRedis()
+    event_id = pressure_module.cgroup_oom_kill_event_id("/docker/shared", 3)
+    kwargs = {
+        "redis_client": redis,
+        "source": "worker-a",
+        "event_id": event_id,
+        "cgroup_id": "/docker/shared",
+        "oom_kill_counter": 3,
+    }
+
+    with pytest.raises(RuntimeError, match="persist worker cgroup OOM latch"):
+        publish_external_resource_critical("worker_cgroup_oom_kill", **kwargs)
+    assert redis.hget(pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/shared") is None
+
+    retried = publish_external_resource_critical("worker_cgroup_oom_kill", **kwargs)
+
+    assert retried is not None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/shared"
+    ) == 3
+
+
+def test_concurrent_older_worker_oom_event_cannot_regress_acknowledgment():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
+    ).encode()
+    newer_event_id = pressure_module.cgroup_oom_kill_event_id("/docker/shared", 8)
+
+    def publish_newer_between_precheck_and_atomic_commit():
+        redis.before_eval = None
+        redis.hset(pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/shared", 8)
+        redis.set(
+            PRESSURE_LATCH_KEY,
+            json.dumps(
+                {
+                    "status": "paused",
+                    "reasons": ["worker_cgroup_oom_kill"],
+                    "trigger_reasons": ["worker_cgroup_oom_kill"],
+                    "controller": {"external_event_id": newer_event_id},
+                }
+            ),
+            ex=60,
+        )
+
+    redis.before_eval = publish_newer_between_precheck_and_atomic_commit
+    stale = publish_external_resource_critical(
+        "worker_cgroup_oom_kill",
+        redis_client=redis,
+        source="worker-stale",
+        event_id=pressure_module.cgroup_oom_kill_event_id("/docker/shared", 7),
+        cgroup_id="/docker/shared",
+        oom_kill_counter=7,
+    )
+
+    assert stale is None
+    assert redis.hget(
+        pressure_module.CGROUP_OOM_ACK_HASH_KEY, "/docker/shared"
+    ) == 8
+    latch = json.loads(redis.get(PRESSURE_LATCH_KEY))
+    assert latch["controller"]["external_event_id"] == newer_event_id
+
+
+def test_duplicate_aggregate_reports_from_shared_cgroup_are_promoted_once():
+    from app.services import resource_pressure as pressure_module
+
+    redis = _FakeRedis()
+    redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
+    ).encode()
+    stale = {
+        "cgroup_id": "/docker/shared",
+        "sampled_at": "2026-08-09T00:00:00+00:00",
+        "memory_events": {"oom_kill": 7, "oom_kill_delta": 1},
+    }
+    current = {
+        "cgroup_id": "/docker/shared",
+        "sampled_at": "2026-08-09T00:00:30+00:00",
+        "memory_events": {"oom_kill": 7, "oom_kill_delta": 1},
+    }
+
+    promoted = pressure_module.promote_worker_cgroup_oom_kills(
+        [stale, current], redis_client=redis
+    )
+    redis.delete(PRESSURE_LATCH_KEY)
+    redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=60)
+    ).encode()
+    replayed_after_restart = pressure_module.promote_worker_cgroup_oom_kills(
+        [stale, current], redis_client=redis
+    )
+
+    assert promoted == 1
+    assert replayed_after_restart == 0
+    assert redis.get(PRESSURE_LATCH_KEY) is None
 
 
 def test_external_worker_oom_kill_completes_stable_recovery_without_marker_resets():
