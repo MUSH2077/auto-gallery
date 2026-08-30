@@ -122,10 +122,10 @@ class ResourceAwareWorker(Worker):
         """Publish a low-write worker view and close worker-local cgroup gaps.
 
         The backend monitor can only see its own cgroup.  Every worker therefore
-        treats a newly observed ``oom_kill`` or ``max`` event in its cgroup as
-        an immediate hard gate and promotes it into the shared latch.  A plain
-        ``oom`` allocation failure without either boundary event remains soft
-        evidence and temporarily halves bounded work slices.
+        treats a newly observed ``oom_kill`` event in its cgroup as an
+        immediate hard gate and promotes it into the shared latch.  ``max``
+        and allocation-only ``oom`` events remain local soft evidence and
+        temporarily halve bounded work slices.
         """
 
         now = time.monotonic()
@@ -152,18 +152,14 @@ class ResourceAwareWorker(Worker):
         # the same cumulative event would otherwise cause a publish storm.
         self._last_cgroup_events = cgroup_events
 
-        if cgroup_deltas["oom"] > 0:
+        if cgroup_deltas["max"] > 0 or cgroup_deltas["oom"] > 0:
             self._local_cgroup_soft_until = max(
                 getattr(self, "_local_cgroup_soft_until", 0.0),
                 now + 60.0,
             )
 
         hard_event_reason = (
-            "worker_cgroup_oom_kill"
-            if cgroup_deltas["oom_kill"] > 0
-            else "worker_cgroup_memory_max"
-            if cgroup_deltas["max"] > 0
-            else None
+            "worker_cgroup_oom_kill" if cgroup_deltas["oom_kill"] > 0 else None
         )
         if hard_event_reason is not None:
             self._local_cgroup_oom_kill_latched = True
@@ -222,16 +218,6 @@ class ResourceAwareWorker(Worker):
             if now < float(getattr(self, "_local_cgroup_soft_until", 0.0))
             else 1.0
         )
-        if local_soft_scale < 1.0:
-            snapshot["reasons"] = list(
-                dict.fromkeys(
-                    [
-                        *(snapshot.get("reasons") or []),
-                        "worker_cgroup_memory_pressure",
-                    ]
-                )
-            )
-
         budget = snapshot.get("budget") or {}
         cgroup_signature = tuple(cgroup_events.get(name) for name in ("max", "oom", "oom_kill"))
         signature = (

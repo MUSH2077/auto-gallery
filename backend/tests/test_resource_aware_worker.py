@@ -224,6 +224,51 @@ def test_worker_cgroup_oom_kill_is_immediately_fail_closed_and_promoted(monkeypa
     assert promoted == [("worker_cgroup_oom_kill", "test-worker")]
 
 
+def test_worker_cgroup_max_and_oom_only_apply_local_soft_feedback(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    samples = iter(
+        [
+            {"max": 0, "oom": 0, "oom_kill": 0},
+            {"max": 1, "oom": 1, "oom_kill": 0},
+        ]
+    )
+    promoted = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": next(samples),
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "worker-test",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda reason, **kwargs: promoted.append((reason, kwargs["source"])),
+    )
+
+    shared_snapshot = {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert worker._publish_pressure_state(shared_snapshot)["soft_scale"] == 1.0
+    feedback = worker._publish_pressure_state(shared_snapshot)
+
+    assert feedback == {
+        "hard_gate_active": False,
+        "soft_scale": 0.5,
+        "cgroup_deltas": {"max": 1, "oom": 1, "oom_kill": 0},
+    }
+    assert shared_snapshot == {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert promoted == []
+    assert worker._local_cgroup_soft_until == 70.0
+
+
 def test_worker_soft_cgroup_feedback_halves_an_enforced_slice():
     worker = _bare_worker()
     worker._local_cgroup_soft_until = float("inf")

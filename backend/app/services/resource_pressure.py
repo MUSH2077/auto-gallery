@@ -966,6 +966,8 @@ class ResourcePressureStateMachine:
         self._foreground_slow_count = 0
         self._sample: ResourceSample | None = None
         self._sampled_at: str | None = None
+        self._trigger_reasons: list[str] = []
+        self._snapshot_now: float | None = None
 
     @staticmethod
     def _legacy_status(mode: str) -> str:
@@ -1023,6 +1025,7 @@ class ResourcePressureStateMachine:
         self._set_mode("critical")
         self._set_scale(0.0)
         self.reasons = list(reasons or ["restored_pressure_latch"])
+        self._trigger_reasons = list(self.reasons)
         self._pause_count = self.thresholds.pause_samples
         self._failure_count = 0
         self._recovery_started_at = None
@@ -1045,12 +1048,6 @@ class ResourcePressureStateMachine:
             and sample.memory_available_change_bytes_per_second < 0
         ):
             reasons.append("swap_activity_critical")
-        if sample.cgroup_memory_oom_kill_delta and sample.cgroup_memory_oom_kill_delta > 0:
-            reasons.append("cgroup_oom_kill")
-        if sample.cgroup_memory_max_delta and sample.cgroup_memory_max_delta > 0:
-            reasons.append("cgroup_memory_max")
-        if sample.cgroup_memory_oom_delta and sample.cgroup_memory_oom_delta > 0:
-            reasons.append("cgroup_memory_oom")
         return reasons
 
     def _soft_reasons(self, sample: ResourceSample) -> list[str]:
@@ -1089,6 +1086,7 @@ class ResourcePressureStateMachine:
     ) -> dict[str, Any]:
         del error  # the stable public reason intentionally avoids exception text
         now = self.clock() if now is None else now
+        self._snapshot_now = now
         self._sampled_at = datetime.now(timezone.utc).isoformat()
 
         if sample is None:
@@ -1102,6 +1100,7 @@ class ResourcePressureStateMachine:
             if self._failure_count >= self.thresholds.failure_samples:
                 self._set_mode("critical")
                 self._set_scale(0.0)
+                self._trigger_reasons = ["resource_metrics_unavailable"]
             elif self.controller_mode != "critical":
                 self._set_mode("constrained")
                 self._decrease_budget()
@@ -1133,6 +1132,7 @@ class ResourcePressureStateMachine:
                 self._recovery_started_at = None
                 self._reset_stable_window()
                 self.reasons = hard_reasons
+                self._trigger_reasons = list(hard_reasons)
                 return self.snapshot()
             if not self._hard_recovered(sample):
                 self._recovery_started_at = None
@@ -1147,6 +1147,7 @@ class ResourcePressureStateMachine:
             self._recovery_started_at = None
             self._set_mode("constrained" if soft_reasons else "normal")
             self.reasons = soft_reasons
+            self._trigger_reasons = []
             if soft_reasons:
                 self._reset_stable_window()
                 self._decrease_budget()
@@ -1161,21 +1162,12 @@ class ResourcePressureStateMachine:
 
         if hard_reasons:
             self._reset_stable_window()
-            if any(
-                reason in {
-                    "cgroup_oom_kill",
-                    "cgroup_memory_max",
-                    "cgroup_memory_oom",
-                }
-                for reason in hard_reasons
-            ):
-                self._pause_count = self.thresholds.pause_samples
-            else:
-                self._pause_count += 1
+            self._pause_count += 1
             self.reasons = hard_reasons
             if self._pause_count >= self.thresholds.pause_samples:
                 self._set_mode("critical")
                 self._set_scale(0.0)
+                self._trigger_reasons = list(hard_reasons)
             else:
                 self._set_mode("constrained")
                 self._decrease_budget()
@@ -1183,6 +1175,7 @@ class ResourcePressureStateMachine:
 
         self._pause_count = 0
         self._recovery_started_at = None
+        self._trigger_reasons = []
         if soft_reasons:
             self._reset_stable_window()
             self._set_mode("constrained")
@@ -1307,6 +1300,17 @@ class ResourcePressureStateMachine:
             name: self._profile_budget(profile)
             for name, profile in RESOURCE_PROFILES.items()
         }
+        recovery_remaining_seconds = 0.0
+        if self.controller_mode == "critical" and self._recovery_started_at is not None:
+            snapshot_now = self.clock() if self._snapshot_now is None else self._snapshot_now
+            recovery_remaining_seconds = round(
+                max(
+                    0.0,
+                    self.thresholds.resume_seconds
+                    - (snapshot_now - self._recovery_started_at),
+                ),
+                3,
+            )
         return {
             "status": self.status,
             "controller_mode": self.controller_mode,
@@ -1374,8 +1378,10 @@ class ResourcePressureStateMachine:
                 },
             },
             "reasons": list(dict.fromkeys(self.reasons)),
+            "trigger_reasons": list(dict.fromkeys(self._trigger_reasons)),
             "hard_reasons": list(dict.fromkeys(hard_reasons)),
             "soft_reasons": list(dict.fromkeys(soft_reasons)),
+            "recovery_remaining_seconds": recovery_remaining_seconds,
             "sampled_at": self._sampled_at,
             "memory": {
                 "available_bytes": sample.memory_available_bytes if sample else None,
@@ -1823,7 +1829,7 @@ class ResourcePressureMonitor:
     def _external_pause_marker(snapshot: dict[str, Any]) -> tuple[Any, ...] | None:
         controller = snapshot.get("controller") or {}
         source = controller.get("external_source")
-        reasons = tuple(snapshot.get("reasons") or [])
+        reasons = tuple(snapshot.get("trigger_reasons") or snapshot.get("reasons") or [])
         if not source and "worker_cgroup_oom_kill" not in reasons:
             return None
         return (source, snapshot.get("sampled_at"), reasons)
@@ -1836,7 +1842,9 @@ class ResourcePressureMonitor:
                 return
             self._hydrated = True
             if snapshot and snapshot.get("status") == "paused":
-                self.state_machine.restore_paused(snapshot.get("reasons") or None)
+                self.state_machine.restore_paused(
+                    snapshot.get("trigger_reasons") or snapshot.get("reasons") or None
+                )
                 self._last_external_pause_marker = self._external_pause_marker(snapshot)
 
     def enforce_external_pause(self, snapshot: dict[str, Any]) -> None:
@@ -1848,7 +1856,9 @@ class ResourcePressureMonitor:
             if self.state_machine.status != "paused" or (
                 marker is not None and marker != self._last_external_pause_marker
             ):
-                self.state_machine.restore_paused(snapshot.get("reasons") or None)
+                self.state_machine.restore_paused(
+                    snapshot.get("trigger_reasons") or snapshot.get("reasons") or None
+                )
             if marker is not None:
                 self._last_external_pause_marker = marker
 
@@ -1974,6 +1984,9 @@ def publish_external_resource_critical(
 ) -> dict[str, Any]:
     """Merge a worker-local OOM kill into the shared hard safety latch."""
 
+    if reason != "worker_cgroup_oom_kill":
+        raise ValueError("only worker_cgroup_oom_kill may be promoted as resource critical")
+
     snapshot = read_shared_resource_pressure_snapshot(redis_client=redis_client) or {}
     snapshot = deepcopy(snapshot)
     snapshot["status"] = "paused"
@@ -1985,6 +1998,10 @@ def publish_external_resource_critical(
     snapshot["hard_reasons"] = list(
         dict.fromkeys([*(snapshot.get("hard_reasons") or []), reason])
     )
+    snapshot["trigger_reasons"] = list(
+        dict.fromkeys([*(snapshot.get("trigger_reasons") or []), reason])
+    )
+    snapshot["recovery_remaining_seconds"] = 0.0
     snapshot.setdefault("soft_reasons", [])
     controller = snapshot.setdefault("controller", {})
     controller.update(
@@ -2069,6 +2086,7 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> None
             payload = {
                 "status": "paused",
                 "reasons": list(snapshot.get("reasons") or []),
+                "trigger_reasons": list(snapshot.get("trigger_reasons") or []),
                 "sampled_at": snapshot.get("sampled_at"),
             }
             client.set(
@@ -2629,14 +2647,13 @@ def collect_queue_worker_health(
                         )
         aggregate["memory_events"] = dict(workers["cgroup_memory_events"])
 
-        # Worker processes see their own cgroups, while this backend process may
-        # not. Promote max/oom-kill boundaries as a hard shared latch even if
-        # the originating worker crashed between HSET and snapshot publication.
+        # A worker OOM kill is the only cgroup event that crosses into the
+        # shared hard latch.  memory.max and allocation-only oom events stay
+        # worker-local soft feedback so one constrained container cannot pause
+        # every queue.
         hard_memory_reason = (
             "worker_cgroup_oom_kill"
             if workers["cgroup_memory_events"]["oom_kill_delta"] > 0
-            else "worker_cgroup_memory_max"
-            if workers["cgroup_memory_events"]["max_delta"] > 0
             else None
         )
         if hard_memory_reason is not None:

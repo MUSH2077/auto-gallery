@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     resource_budget_min_scale: float = 0.10
     resource_budget_decrease_factor: float = 0.50
     resource_budget_increase_step: float = 0.10
-    resource_budget_increase_stable_seconds: float = 60.0
+    resource_budget_increase_stable_seconds: float = 30.0
     resource_governance_max_scale: float = 1.0
     resource_budget_base_read_mb_per_second: float = 20.0
     resource_budget_base_write_mb_per_second: float = 10.0

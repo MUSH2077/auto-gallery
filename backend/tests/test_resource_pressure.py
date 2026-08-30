@@ -112,12 +112,22 @@ def test_pressure_requires_three_samples_and_stable_recovery():
 
     assert machine.update(critical, now=0)["status"] == "warning"
     assert machine.update(critical, now=10)["status"] == "warning"
-    assert machine.update(critical, now=20)["status"] == "paused"
+    paused = machine.update(critical, now=20)
+    assert paused["status"] == "paused"
+    assert paused["trigger_reasons"] == ["memory_available_critical"]
 
     recovered = _sample()
-    assert machine.update(recovered, now=30)["status"] == "paused"
-    assert machine.update(recovered, now=89)["status"] == "paused"
-    assert machine.update(recovered, now=90)["status"] == "normal"
+    stabilizing = machine.update(recovered, now=30)
+    assert stabilizing["status"] == "paused"
+    assert stabilizing["trigger_reasons"] == ["memory_available_critical"]
+    assert stabilizing["hard_reasons"] == []
+    assert stabilizing["soft_reasons"] == []
+    assert stabilizing["recovery_remaining_seconds"] == 60.0
+    assert machine.update(recovered, now=89)["recovery_remaining_seconds"] == 1.0
+    resumed = machine.update(recovered, now=90)
+    assert resumed["status"] == "normal"
+    assert resumed["trigger_reasons"] == []
+    assert resumed["recovery_remaining_seconds"] == 0.0
 
 
 def test_pressure_fails_closed_after_three_core_metric_failures():
@@ -165,22 +175,16 @@ def test_active_swap_or_absolute_swap_floor_is_a_hard_gate():
     assert "swap_free_critical" in exhausted_snapshot["reasons"]
 
 
-@pytest.mark.parametrize(
-    ("field", "reason"),
-    (
-        ("cgroup_max", "cgroup_memory_max"),
-        ("cgroup_oom", "cgroup_memory_oom"),
-        ("cgroup_oom_kill", "cgroup_oom_kill"),
-    ),
-)
-def test_new_cgroup_memory_events_fail_closed_immediately(field, reason):
+@pytest.mark.parametrize("field", ("cgroup_max", "cgroup_oom", "cgroup_oom_kill"))
+def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
     machine = ResourcePressureStateMachine()
 
     snapshot = machine.update(_sample(**{field: 1}), now=0)
 
-    assert snapshot["controller_mode"] == "critical"
-    assert snapshot["status"] == "paused"
-    assert reason in snapshot["hard_reasons"]
+    assert snapshot["controller_mode"] == "normal"
+    assert snapshot["status"] == "normal"
+    assert snapshot["hard_reasons"] == []
+    assert snapshot["soft_reasons"] == []
 
 
 def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause(monkeypatch):
@@ -199,15 +203,10 @@ def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause(monkeypatch):
     assert snapshots[-1]["budget"]["profiles"]["download_network"]["allowed"] is True
 
 
-def test_aimd_additive_recovery_waits_a_full_stable_minute(monkeypatch):
+def test_aimd_additive_recovery_waits_a_full_stable_thirty_seconds(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_budget_increase_step", 0.10)
-    monkeypatch.setattr(
-        pressure_module.settings,
-        "resource_budget_increase_stable_seconds",
-        60.0,
-    )
     machine = ResourcePressureStateMachine()
     pressured = _sample(io_psi=40.0)
     for timestamp in (0, 5, 10, 15):
@@ -215,10 +214,10 @@ def test_aimd_additive_recovery_waits_a_full_stable_minute(monkeypatch):
     assert snapshot["budget"]["computed_throughput_scale"] == pytest.approx(0.1)
 
     assert machine.update(_sample(), now=20)["budget"]["computed_throughput_scale"] == pytest.approx(0.1)
-    assert machine.update(_sample(), now=79)["budget"]["computed_throughput_scale"] == pytest.approx(0.1)
-    assert machine.update(_sample(), now=80)["budget"]["computed_throughput_scale"] == pytest.approx(0.2)
-    assert machine.update(_sample(), now=139)["budget"]["computed_throughput_scale"] == pytest.approx(0.2)
-    assert machine.update(_sample(), now=140)["budget"]["computed_throughput_scale"] == pytest.approx(0.3)
+    assert machine.update(_sample(), now=49)["budget"]["computed_throughput_scale"] == pytest.approx(0.1)
+    assert machine.update(_sample(), now=50)["budget"]["computed_throughput_scale"] == pytest.approx(0.2)
+    assert machine.update(_sample(), now=79)["budget"]["computed_throughput_scale"] == pytest.approx(0.2)
+    assert machine.update(_sample(), now=80)["budget"]["computed_throughput_scale"] == pytest.approx(0.3)
 
 
 def test_idle_baseline_calibrates_soft_psi_but_never_learns_pathology(monkeypatch):
@@ -672,6 +671,11 @@ def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is False
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+def test_only_worker_oom_kill_can_be_promoted_to_the_shared_latch():
+    with pytest.raises(ValueError, match="worker_cgroup_oom_kill"):
+        publish_external_resource_critical("worker_cgroup_memory_max", redis_client=_FakeRedis())
 
 
 def test_new_external_worker_oom_resets_an_existing_recovery_window():
