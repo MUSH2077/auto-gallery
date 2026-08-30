@@ -69,7 +69,11 @@ class _ReservationRedis(_FakeLeaseRedis):
 
 def test_aggregate_reservation_counts_network_and_disk_before_grant(monkeypatch):
     from app.services import heavy_io
-    from app.services.resource_pressure import ResourcePressureStateMachine, ResourceSample
+    from app.services.resource_pressure import (
+        PressureThresholds,
+        ResourcePressureStateMachine,
+        ResourceSample,
+    )
 
     mib = 1024 ** 2
     gib = 1024 ** 3
@@ -77,7 +81,13 @@ def test_aggregate_reservation_counts_network_and_disk_before_grant(monkeypatch)
         "app.services.resource_pressure.current_memory_available_bytes",
         lambda: 8 * gib,
     )
-    snapshot = ResourcePressureStateMachine().update(
+    snapshot = ResourcePressureStateMachine(
+        PressureThresholds(
+            warning_available_bytes=1536 * mib,
+            pause_available_bytes=1280 * mib,
+            resume_available_bytes=1792 * mib,
+        )
+    ).update(
         ResourceSample(
             memory_total_bytes=8 * gib,
             memory_available_bytes=int(1.45 * gib),
