@@ -35,9 +35,11 @@ PRESSURE_SNAPSHOT_KEY = "resource:pressure:snapshot"
 PRESSURE_LATCH_KEY = "resource:pressure:latch"
 CGROUP_OOM_ACK_HASH_KEY = "resource:cgroup:oom-kill-ack:v1"
 CGROUP_OOM_ACK_SEEN_KEY = "resource:cgroup:oom-kill-seen:v1"
+CGROUP_OOM_RECOVERED_HASH_KEY = "resource:cgroup:oom-kill-recovered:v1"
 RESOURCE_CONTROL_CHANNEL = "resource:control"
 PRESSURE_LATCH_TTL_SECONDS = 24 * 60 * 60
 CGROUP_OOM_ACK_RETENTION_SECONDS = 2 * PRESSURE_LATCH_TTL_SECONDS
+CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS = 60 * 60
 PRESSURE_BASELINE_KEY = "resource:pressure:baseline:v1"
 PRESSURE_BASELINE_WINDOW_SECONDS = 24 * 60 * 60
 PRESSURE_BASELINE_SAMPLE_SECONDS = 60.0
@@ -62,7 +64,25 @@ end
 local acknowledged = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
 local candidate = tonumber(ARGV[2])
 if acknowledged >= candidate then
-    return 0
+    redis.call('ZADD', KEYS[3], now, ARGV[1])
+    local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now - retention)
+    for _, expired_id in ipairs(expired_ids) do
+        redis.call('HDEL', KEYS[1], expired_id)
+        redis.call('HDEL', KEYS[4], expired_id)
+        redis.call('ZREM', KEYS[3], expired_id)
+    end
+    redis.call('EXPIRE', KEYS[1], retention)
+    redis.call('EXPIRE', KEYS[3], retention)
+    redis.call('EXPIRE', KEYS[4], retention)
+    local recovered = tonumber(redis.call('HGET', KEYS[4], ARGV[1]) or '0')
+    if recovered >= candidate then
+        return 2
+    end
+    if redis.call('EXISTS', KEYS[2]) == 1 then
+        return 0
+    end
+    redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
+    return 1
 end
 redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
@@ -70,10 +90,66 @@ redis.call('ZADD', KEYS[3], now, ARGV[1])
 local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now - retention)
 for _, expired_id in ipairs(expired_ids) do
     redis.call('HDEL', KEYS[1], expired_id)
+    redis.call('HDEL', KEYS[4], expired_id)
     redis.call('ZREM', KEYS[3], expired_id)
 end
 redis.call('EXPIRE', KEYS[1], retention)
 redis.call('EXPIRE', KEYS[3], retention)
+redis.call('EXPIRE', KEYS[4], retention)
+return 1
+"""
+
+_CGROUP_OOM_ACK_TOUCH_LUA = """
+local acknowledged = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
+local candidate = tonumber(ARGV[2])
+if acknowledged < candidate then
+    return 0
+end
+local now = tonumber(ARGV[3])
+local retention = tonumber(ARGV[4])
+redis.call('ZADD', KEYS[2], now, ARGV[1])
+local expired_ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now - retention)
+for _, expired_id in ipairs(expired_ids) do
+    redis.call('HDEL', KEYS[1], expired_id)
+    redis.call('HDEL', KEYS[3], expired_id)
+    redis.call('ZREM', KEYS[2], expired_id)
+end
+redis.call('EXPIRE', KEYS[1], retention)
+redis.call('EXPIRE', KEYS[2], retention)
+redis.call('EXPIRE', KEYS[3], retention)
+local recovered = tonumber(redis.call('HGET', KEYS[3], ARGV[1]) or '0')
+if recovered >= candidate then
+    return 2
+end
+return 1
+"""
+
+_CLEAR_PRESSURE_LATCH_LUA = """
+local raw_latch = redis.call('GET', KEYS[1])
+if not raw_latch then
+    return 0
+end
+local ok, latch = pcall(cjson.decode, raw_latch)
+if not ok or type(latch) ~= 'table' then
+    return 0
+end
+local controller = latch['controller'] or {}
+local current_event = tostring(controller['external_event_id'] or '')
+if current_event ~= ARGV[1] then
+    return 0
+end
+if current_event ~= '' then
+    local acknowledgments = redis.call('HGETALL', KEYS[2])
+    for index = 1, #acknowledgments, 2 do
+        redis.call('HSET', KEYS[3], acknowledgments[index], acknowledgments[index + 1])
+    end
+    if #acknowledgments > 0 then
+        redis.call('EXPIRE', KEYS[2], ARGV[2])
+        redis.call('EXPIRE', KEYS[3], ARGV[2])
+        redis.call('EXPIRE', KEYS[4], ARGV[2])
+    end
+end
+redis.call('DEL', KEYS[1])
 return 1
 """
 
@@ -2125,19 +2201,6 @@ def publish_external_resource_critical(
     )
     if tracked_counter is not None:
         event_id = event_id or cgroup_oom_kill_event_id(cgroup_id, tracked_counter)
-        if _cgroup_oom_kill_acknowledged(client, str(cgroup_id), tracked_counter):
-            for existing in (
-                read_shared_resource_pressure_snapshot(redis_client=client),
-                read_resource_pressure_latch(redis_client=client),
-            ):
-                controller = (existing or {}).get("controller") or {}
-                if (
-                    existing
-                    and existing.get("status") == "paused"
-                    and controller.get("external_event_id") == event_id
-                ):
-                    return existing
-            return None
 
     shared = read_shared_resource_pressure_snapshot(redis_client=client)
     latch = read_resource_pressure_latch(redis_client=client)
@@ -2209,7 +2272,7 @@ def publish_external_resource_critical(
             grant.update(allowed=False, grant="denied", reason=reason)
     if tracked_counter is not None:
         try:
-            accepted = _persist_cgroup_oom_latch_and_ack(
+            acknowledgment_state = _persist_cgroup_oom_latch_and_ack(
                 client,
                 str(cgroup_id),
                 tracked_counter,
@@ -2217,34 +2280,21 @@ def publish_external_resource_critical(
             )
         except Exception as exc:
             raise RuntimeError("unable to persist worker cgroup OOM latch") from exc
-        if not accepted:
-            for existing in (
-                read_shared_resource_pressure_snapshot(redis_client=client),
-                read_resource_pressure_latch(redis_client=client),
-            ):
-                controller = (existing or {}).get("controller") or {}
-                if (
-                    existing
-                    and existing.get("status") == "paused"
-                    and controller.get("external_event_id") == event_id
-                ):
-                    return existing
+        if acknowledgment_state == "recovered":
             return None
+        if acknowledgment_state == "active":
+            for existing in (
+                read_resource_pressure_latch(redis_client=client),
+                read_shared_resource_pressure_snapshot(redis_client=client),
+            ):
+                if existing and existing.get("status") == "paused":
+                    return existing
+            # A malformed/unreadable latch is never evidence of recovery.
+            return snapshot
     elif not _refresh_pressure_latch(snapshot, redis_client=client):
         raise RuntimeError("unable to persist worker cgroup OOM latch")
     publish_resource_pressure_snapshot(snapshot, redis_client=client)
     return snapshot
-
-
-def _cgroup_oom_kill_acknowledged(
-    redis_client,
-    cgroup_id: str,
-    oom_kill_counter: int,
-) -> bool:
-    raw_ack = redis_client.hget(CGROUP_OOM_ACK_HASH_KEY, str(cgroup_id))
-    if isinstance(raw_ack, bytes):
-        raw_ack = raw_ack.decode("utf-8", "replace")
-    return int(raw_ack or 0) >= max(0, int(oom_kill_counter))
 
 
 def _pressure_latch_payload(
@@ -2278,7 +2328,7 @@ def _persist_cgroup_oom_latch_and_ack(
     cgroup_id: str,
     oom_kill_counter: int,
     snapshot: dict[str, Any],
-) -> bool:
+) -> str:
     """Atomically advance one cgroup counter and its authoritative latch."""
 
     payload = json.dumps(
@@ -2288,10 +2338,11 @@ def _persist_cgroup_oom_latch_and_ack(
     )
     accepted = redis_client.eval(
         _CGROUP_OOM_LATCH_ACK_LUA,
-        3,
+        4,
         CGROUP_OOM_ACK_HASH_KEY,
         PRESSURE_LATCH_KEY,
         CGROUP_OOM_ACK_SEEN_KEY,
+        CGROUP_OOM_RECOVERED_HASH_KEY,
         str(cgroup_id),
         max(0, int(oom_kill_counter)),
         payload,
@@ -2299,7 +2350,34 @@ def _persist_cgroup_oom_latch_and_ack(
         int(time.time()),
         CGROUP_OOM_ACK_RETENTION_SECONDS,
     )
-    return bool(int(accepted or 0))
+    return {0: "active", 1: "promoted", 2: "recovered"}.get(
+        int(accepted or 0),
+        "active",
+    )
+
+
+def touch_cgroup_oom_kill_ack(
+    redis_client,
+    cgroup_id: str,
+    oom_kill_counter: int,
+) -> str:
+    """Keep one live cgroup identity bounded without replaying its counter."""
+
+    state = redis_client.eval(
+        _CGROUP_OOM_ACK_TOUCH_LUA,
+        3,
+        CGROUP_OOM_ACK_HASH_KEY,
+        CGROUP_OOM_ACK_SEEN_KEY,
+        CGROUP_OOM_RECOVERED_HASH_KEY,
+        str(cgroup_id),
+        max(0, int(oom_kill_counter)),
+        int(time.time()),
+        CGROUP_OOM_ACK_RETENTION_SECONDS,
+    )
+    return {0: "missing", 1: "active", 2: "recovered"}.get(
+        int(state or 0),
+        "missing",
+    )
 
 
 def promote_worker_cgroup_oom_kills(
@@ -2335,8 +2413,6 @@ def promote_worker_cgroup_oom_kills(
         memory_events = contribution.get("memory_events") or {}
         counter = max(0, int(memory_events.get("oom_kill") or 0))
         try:
-            if _cgroup_oom_kill_acknowledged(client, cgroup_id, counter):
-                continue
             snapshot = publish_external_resource_critical(
                 "worker_cgroup_oom_kill",
                 redis_client=client,
@@ -2421,11 +2497,29 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool
         return False
 
 
-def _clear_pressure_latch(redis_client=None) -> None:
+def _clear_pressure_latch(
+    redis_client=None,
+    *,
+    expected_external_event_id: str | None = None,
+) -> bool:
+    """Atomically record controller recovery before removing its matching latch."""
+
     try:
-        _redis_client(redis_client).delete(PRESSURE_LATCH_KEY)
+        cleared = _redis_client(redis_client).eval(
+            _CLEAR_PRESSURE_LATCH_LUA,
+            4,
+            PRESSURE_LATCH_KEY,
+            CGROUP_OOM_ACK_HASH_KEY,
+            CGROUP_OOM_RECOVERED_HASH_KEY,
+            CGROUP_OOM_ACK_SEEN_KEY,
+            str(expected_external_event_id or ""),
+            CGROUP_OOM_ACK_RETENTION_SECONDS,
+            int(time.time()),
+        )
+        return bool(int(cleared or 0))
     except Exception:
         logger.debug("Unable to clear resource pressure latch", exc_info=True)
+        return False
 
 
 def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
@@ -2450,8 +2544,9 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
         active_leases.get("active_count") == 0 and not active_leases.get("error")
     )
     inherited = read_shared_resource_pressure_snapshot(redis_client=redis_client)
+    latched = read_resource_pressure_latch(redis_client=redis_client)
     if not inherited or inherited.get("status") != "paused":
-        inherited = read_resource_pressure_latch(redis_client=redis_client)
+        inherited = latched
     if inherited and inherited.get("status") == "paused":
         _monitor.enforce_external_pause(inherited)
     else:
@@ -2475,7 +2570,11 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
     elif previous_status == "paused":
         # The state machine can only make this transition after all recovery
         # thresholds remained satisfied for the full resume interval.
-        _clear_pressure_latch(redis_client=redis_client)
+        latch_controller = (latched or {}).get("controller") or {}
+        _clear_pressure_latch(
+            redis_client=redis_client,
+            expected_external_event_id=latch_controller.get("external_event_id"),
+        )
     publish_resource_pressure_snapshot(snapshot, redis_client=redis_client)
     return snapshot
 

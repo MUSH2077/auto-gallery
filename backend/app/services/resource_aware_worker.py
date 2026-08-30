@@ -26,12 +26,14 @@ from app.services.heavy_io import (
 )
 from app.services.resource_pressure import get_resource_pressure_snapshot_sync
 from app.services.resource_pressure import (
+    CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS,
     RESOURCE_CONTROL_CHANNEL,
     cgroup_oom_kill_event_id,
     profile_slice_cooldown_seconds,
     publish_external_resource_critical,
     resource_profile_permit,
     sample_cgroup_contribution,
+    touch_cgroup_oom_kill_ack,
     workload_profile_name,
 )
 
@@ -165,9 +167,29 @@ class ResourceAwareWorker(Worker):
         had_local_latch = bool(
             getattr(self, "_local_cgroup_oom_kill_latched", False)
         )
+        cgroup_id = str(cgroup_contribution.get("cgroup_id") or "unknown")
+        oom_kill_counter = max(0, int(cgroup_events.get("oom_kill") or 0))
+        last_ack_touch_at = float(
+            getattr(self, "_last_cgroup_ack_touch_at", 0.0)
+        )
+        if (
+            oom_kill_counter > 0
+            and not new_oom_event
+            and now - last_ack_touch_at >= CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS
+        ):
+            try:
+                acknowledgment_state = touch_cgroup_oom_kill_ack(
+                    self.connection,
+                    cgroup_id,
+                    oom_kill_counter,
+                )
+            except Exception:
+                self.log.exception("Unable to refresh live cgroup OOM acknowledgment")
+            else:
+                self._last_cgroup_ack_touch_at = now
+                if acknowledgment_state != "recovered" and not had_local_latch:
+                    new_oom_event = True
         if new_oom_event:
-            cgroup_id = str(cgroup_contribution.get("cgroup_id") or "unknown")
-            oom_kill_counter = max(0, int(cgroup_events.get("oom_kill") or 0))
             previous_pending = {
                 "event_id": cgroup_oom_kill_event_id(cgroup_id, oom_kill_counter),
                 "cgroup_id": cgroup_id,
@@ -194,6 +216,7 @@ class ResourceAwareWorker(Worker):
                 )
             else:
                 self._pending_cgroup_oom_event = None
+                self._last_cgroup_ack_touch_at = now
                 if external is not None:
                     self._local_cgroup_oom_kill_latched = True
                     self._local_cgroup_hard_reason = hard_event_reason

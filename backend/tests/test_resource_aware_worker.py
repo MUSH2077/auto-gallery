@@ -304,6 +304,48 @@ def test_restarted_worker_does_not_latch_an_acknowledged_historical_oom(monkeypa
     assert feedback["hard_gate_active"] is False
 
 
+def test_live_worker_periodically_touches_recovered_cgroup_ack(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 0.0}
+    touches = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 4},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/long-lived",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "touch_cgroup_oom_kill_ack",
+        lambda connection, cgroup_id, counter: (
+            touches.append((connection, cgroup_id, counter)) or "recovered"
+        ),
+        raising=False,
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    worker._publish_pressure_state(dict(normal))
+    now["value"] = 60 * 60 + 1
+    feedback = worker._publish_pressure_state(dict(normal))
+
+    assert touches == [(worker.connection, "/docker/long-lived", 4)]
+    assert feedback["hard_gate_active"] is False
+
+
 def test_worker_cgroup_max_and_oom_only_apply_local_soft_feedback(monkeypatch):
     from app.services import resource_aware_worker
 
