@@ -516,21 +516,26 @@ async def foreground_latency_feedback(request: Request, call_next):
     """
 
     started = time.perf_counter()
-    try:
-        return await call_next(request)
-    finally:
-        if request.method == "GET":
-            try:
-                from app.services.resource_pressure import (
-                    record_foreground_latency,
-                )
+    response = await call_next(request)
+    path = request.url.path
+    if (
+        request.method == "GET"
+        and 200 <= response.status_code < 300
+        and (
+            path.startswith("/api/v1/search")
+            or (
+                path.startswith("/api/v1/works")
+                and path != "/api/v1/works/derivative-progress"
+            )
+        )
+    ):
+        try:
+            from app.services.resource_pressure import record_foreground_latency
 
-                record_foreground_latency(
-                    request.url.path,
-                    (time.perf_counter() - started) * 1000,
-                )
-            except Exception:
-                logger.debug("Unable to record foreground latency", exc_info=True)
+            record_foreground_latency(path, (time.perf_counter() - started) * 1000)
+        except Exception:
+            logger.debug("Unable to record foreground latency", exc_info=True)
+    return response
 
 
 @app.exception_handler(RequestValidationError)
@@ -646,6 +651,21 @@ async def _resource_pressure_health() -> dict:
         pressure = {
             "status": "paused",
             "reasons": ["resource_health_unavailable"],
+            "trigger_reasons": ["resource_health_unavailable"],
+            "recovery_remaining_seconds": 0.0,
+            "signal_scopes": {
+                "memory": "host",
+                "swap": "host",
+                "psi": "host",
+                "foreground": "backend_process",
+                "cgroup_memory_events": "current_cgroup",
+            },
+            "local_cgroup_warnings": {
+                "scope": "current_cgroup",
+                "reasons": [],
+                "max_delta": None,
+                "oom_delta": None,
+            },
             "sampled_at": None,
             "memory": {"available_bytes": None, "total_bytes": None, "available_ratio": None},
             "swap": {"free_bytes": None, "total_bytes": None, "free_ratio": None},
@@ -671,6 +691,35 @@ async def _resource_pressure_health() -> dict:
     workers = dict(workers)
     queue_activity = workers.pop("queue_activity", {})
     pressure = dict(pressure)
+    pressure.setdefault("trigger_reasons", [])
+    pressure.setdefault("recovery_remaining_seconds", 0.0)
+    pressure.setdefault(
+        "signal_scopes",
+        {
+            "memory": "host",
+            "swap": "host",
+            "psi": "host",
+            "foreground": "backend_process",
+            "cgroup_memory_events": "current_cgroup",
+        },
+    )
+    cgroup_events = pressure.get("cgroup_memory_events") or {}
+    pressure.setdefault(
+        "local_cgroup_warnings",
+        {
+            "scope": cgroup_events.get("scope") or "current_cgroup",
+            "reasons": [
+                reason
+                for reason, delta in (
+                    ("cgroup_memory_max", cgroup_events.get("max_delta")),
+                    ("cgroup_memory_oom", cgroup_events.get("oom_delta")),
+                )
+                if delta
+            ],
+            "max_delta": cgroup_events.get("max_delta"),
+            "oom_delta": cgroup_events.get("oom_delta"),
+        },
+    )
     pressure["project_cgroup_contribution"] = {
         "scope": "auto_gallery_project_only",
         "backend": backend_cgroup,
@@ -837,8 +886,23 @@ def _starting_health_snapshot() -> dict:
             "status": "paused",
             "controller_mode": "critical",
             "reasons": ["health_snapshot_starting"],
+            "trigger_reasons": ["health_snapshot_starting"],
             "hard_reasons": ["health_snapshot_starting"],
             "soft_reasons": [],
+            "recovery_remaining_seconds": 0.0,
+            "signal_scopes": {
+                "memory": "host",
+                "swap": "host",
+                "psi": "host",
+                "foreground": "backend_process",
+                "cgroup_memory_events": "current_cgroup",
+            },
+            "local_cgroup_warnings": {
+                "scope": "current_cgroup",
+                "reasons": [],
+                "max_delta": None,
+                "oom_delta": None,
+            },
         },
     }
 

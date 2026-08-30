@@ -279,15 +279,153 @@ def test_foreground_p95_is_soft_feedback_only_after_consecutive_samples(monkeypa
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
     machine = ResourcePressureStateMachine()
-    slow = _sample(foreground_p95=750.0, foreground_count=20)
+    slow = _sample(foreground_p95=750.0, foreground_count=30)
 
-    assert "foreground_latency_high" not in machine.update(slow, now=0)["reasons"]
-    assert "foreground_latency_high" not in machine.update(slow, now=5)["reasons"]
-    snapshot = machine.update(slow, now=10)
+    assert "foreground_latency_high" not in machine.update(
+        replace(slow, foreground_sample_generation=1), now=0
+    )["reasons"]
+    assert "foreground_latency_high" not in machine.update(
+        replace(slow, foreground_sample_generation=2), now=5
+    )["reasons"]
+    snapshot = machine.update(
+        replace(slow, foreground_sample_generation=3), now=10
+    )
 
     assert snapshot["status"] == "warning"
     assert "foreground_latency_high" in snapshot["soft_reasons"]
     assert snapshot["hard_reasons"] == []
+
+
+def test_foreground_p95_ignores_a_rolling_window_with_fewer_than_thirty_requests(
+    monkeypatch,
+):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
+    monkeypatch.setattr(pressure_module.settings, "resource_foreground_min_samples", 1)
+    machine = ResourcePressureStateMachine()
+    slow = _sample(foreground_p95=750.0, foreground_count=29)
+
+    for generation, timestamp in enumerate((0, 5, 10), start=1):
+        snapshot = machine.update(
+            replace(slow, foreground_sample_generation=generation), now=timestamp
+        )
+
+    assert "foreground_latency_high" not in snapshot["soft_reasons"]
+
+
+def test_foreground_p95_does_not_count_an_unchanged_sample_window_repeatedly(
+    monkeypatch,
+):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
+    machine = ResourcePressureStateMachine()
+    slow = _sample(foreground_p95=750.0, foreground_count=30)
+
+    for timestamp in (0, 5, 10):
+        snapshot = machine.update(slow, now=timestamp)
+
+    assert "foreground_latency_high" not in snapshot["soft_reasons"]
+
+
+def test_foreground_latency_recorder_excludes_derivative_progress(monkeypatch):
+    from app.services import resource_pressure as pressure_module
+
+    monkeypatch.setattr(pressure_module, "_foreground_latencies", pressure_module.deque(maxlen=4096))
+    monkeypatch.setattr(pressure_module, "_foreground_latency_generation", 0)
+
+    pressure_module.record_foreground_latency("/api/v1/works", 100.0)
+    pressure_module.record_foreground_latency(
+        "/api/v1/works/derivative-progress", 900.0
+    )
+
+    snapshot = pressure_module.foreground_latency_snapshot()
+    assert snapshot["sample_count"] == 1
+    assert snapshot["sample_generation"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "status_code", "recorded"),
+    (
+        ("GET", "/api/v1/works", 200, True),
+        ("GET", "/api/v1/search?q=birds", 204, True),
+        ("GET", "/api/v1/works", 500, False),
+        ("GET", "/api/v1/works/derivative-progress", 200, False),
+        ("POST", "/api/v1/works", 200, False),
+        ("GET", "/api/v1/tags", 200, False),
+    ),
+)
+async def test_foreground_latency_middleware_records_only_successful_interactive_gets(
+    monkeypatch,
+    method,
+    path,
+    status_code,
+    recorded,
+):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    import app.main as main
+    from app.services import resource_pressure as pressure_module
+
+    records = []
+    monkeypatch.setattr(
+        pressure_module,
+        "record_foreground_latency",
+        lambda recorded_path, duration_ms: records.append((recorded_path, duration_ms)),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+    async def call_next(_request):
+        return Response(status_code=status_code)
+
+    await main.foreground_latency_feedback(request, call_next)
+
+    assert bool(records) is recorded
+
+
+@pytest.mark.asyncio
+async def test_foreground_latency_middleware_does_not_record_cancelled_or_failed_requests(
+    monkeypatch,
+):
+    from starlette.requests import Request
+
+    import app.main as main
+    from app.services import resource_pressure as pressure_module
+
+    records = []
+    monkeypatch.setattr(
+        pressure_module,
+        "record_foreground_latency",
+        lambda recorded_path, duration_ms: records.append((recorded_path, duration_ms)),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/search",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+    async def call_next(_request):
+        raise RuntimeError("cancelled downstream")
+
+    with pytest.raises(RuntimeError, match="cancelled downstream"):
+        await main.foreground_latency_feedback(request, call_next)
+
+    assert records == []
 
 
 def test_critical_recovery_is_not_blocked_by_external_psi_or_sticky_swap():
@@ -853,7 +991,9 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     from app.services import settings as settings_module
 
     async def fake_pressure():
-        return ResourcePressureStateMachine().update(_sample(), now=0)
+        return ResourcePressureStateMachine().update(
+            _sample(cgroup_max=2, cgroup_oom=1), now=0
+        )
 
     async def fake_defaults(_session):
         return {"download_concurrency": 4}
@@ -909,6 +1049,21 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     assert payload["redis"]["writable"] is True
     assert payload["queues"] == {"downloads": 2}
     assert payload["queue_activity"] == {}
+    assert payload["signal_scopes"] == {
+        "memory": "host",
+        "swap": "host",
+        "psi": "host",
+        "foreground": "backend_process",
+        "cgroup_memory_events": "current_cgroup",
+    }
+    assert payload["trigger_reasons"] == []
+    assert payload["recovery_remaining_seconds"] == 0.0
+    assert payload["local_cgroup_warnings"] == {
+        "scope": "current_cgroup",
+        "reasons": ["cgroup_memory_max", "cgroup_memory_oom"],
+        "max_delta": 2,
+        "oom_delta": 1,
+    }
     assert payload["download_concurrency"] == {
         "configured": 4,
         "cap": 1,

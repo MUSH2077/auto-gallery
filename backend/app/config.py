@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     # tooling always sets an explicit list during staged rollout.
     resource_governance_enforced_profiles: str = ""
     resource_foreground_p95_limit_ms: float = 500.0
+    resource_foreground_min_samples: int = 30
     resource_foreground_slow_samples: int = 3
     resource_baseline_memory_psi_margin: float = 0.5
     resource_baseline_io_psi_margin: float = 3.0

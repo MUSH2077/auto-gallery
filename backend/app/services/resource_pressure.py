@@ -110,6 +110,7 @@ class ResourceSample:
     cgroup_memory_oom_kill_delta: int | None = None
     foreground_p95_ms: float | None = None
     foreground_sample_count: int = 0
+    foreground_sample_generation: int = 0
     baseline_memory_psi_median: float | None = None
     baseline_memory_psi_p95: float | None = None
     baseline_io_psi_median: float | None = None
@@ -809,6 +810,7 @@ _swap_rate_previous: dict[str, tuple[float, int, int, int]] = {}
 _cgroup_event_previous: dict[str, tuple[int | None, int | None, int | None]] = {}
 _foreground_latency_lock = threading.Lock()
 _foreground_latencies: deque[tuple[float, float]] = deque(maxlen=4096)
+_foreground_latency_generation = 0
 FOREGROUND_LATENCY_WINDOW_SECONDS = 5 * 60
 
 
@@ -818,7 +820,10 @@ def record_foreground_latency(path: str, duration_ms: float) -> None:
     normalized = str(path or "")
     if not (
         normalized.startswith("/api/v1/search")
-        or normalized.startswith("/api/v1/works")
+        or (
+            normalized.startswith("/api/v1/works")
+            and normalized != "/api/v1/works/derivative-progress"
+        )
     ):
         return
     try:
@@ -827,6 +832,8 @@ def record_foreground_latency(path: str, duration_ms: float) -> None:
         return
     now = time.monotonic()
     with _foreground_latency_lock:
+        global _foreground_latency_generation
+        _foreground_latency_generation += 1
         _foreground_latencies.append((now, value))
 
 
@@ -837,12 +844,19 @@ def foreground_latency_snapshot(now: float | None = None) -> dict[str, Any]:
         while _foreground_latencies and _foreground_latencies[0][0] < cutoff:
             _foreground_latencies.popleft()
         values = sorted(value for _, value in _foreground_latencies)
+        generation = _foreground_latency_generation
     if not values:
-        return {"p95_ms": None, "sample_count": 0, "window_seconds": 300}
+        return {
+            "p95_ms": None,
+            "sample_count": 0,
+            "sample_generation": generation,
+            "window_seconds": 300,
+        }
     index = min(len(values) - 1, max(0, int(0.95 * (len(values) - 1))))
     return {
         "p95_ms": round(values[index], 3),
         "sample_count": len(values),
+        "sample_generation": generation,
         "window_seconds": FOREGROUND_LATENCY_WINDOW_SECONDS,
     }
 
@@ -932,6 +946,7 @@ def sample_resource_metrics(proc_root: str | os.PathLike[str] = "/proc") -> Reso
         cgroup_memory_oom_kill_delta=cgroup_deltas["oom_kill"],
         foreground_p95_ms=foreground["p95_ms"],
         foreground_sample_count=foreground["sample_count"],
+        foreground_sample_generation=foreground["sample_generation"],
         sampled_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -964,6 +979,7 @@ class ResourcePressureStateMachine:
         self._stable_since: float | None = None
         self._last_increase_at: float | None = None
         self._foreground_slow_count = 0
+        self._foreground_last_sample_generation: int | None = None
         self._sample: ResourceSample | None = None
         self._sampled_at: str | None = None
         self._trigger_reasons: list[str] = []
@@ -1114,14 +1130,21 @@ class ResourcePressureStateMachine:
         hard_reasons = self._hard_reasons(sample)
         soft_reasons = self._soft_reasons(sample)
         if (
-            sample.foreground_p95_ms is not None
-            and sample.foreground_sample_count >= 5
-            and sample.foreground_p95_ms
-            > float(settings.resource_foreground_p95_limit_ms)
+            self._foreground_last_sample_generation is None
+            or sample.foreground_sample_generation
+            > self._foreground_last_sample_generation
         ):
-            self._foreground_slow_count += 1
-        else:
-            self._foreground_slow_count = 0
+            self._foreground_last_sample_generation = sample.foreground_sample_generation
+            if (
+                sample.foreground_p95_ms is not None
+                and sample.foreground_sample_count
+                >= max(30, int(settings.resource_foreground_min_samples))
+                and sample.foreground_p95_ms
+                > float(settings.resource_foreground_p95_limit_ms)
+            ):
+                self._foreground_slow_count += 1
+            else:
+                self._foreground_slow_count = 0
         if self._foreground_slow_count >= max(
             1,
             int(settings.resource_foreground_slow_samples),
@@ -1316,6 +1339,11 @@ class ResourcePressureStateMachine:
                 ),
                 3,
             )
+        local_cgroup_warning_reasons: list[str] = []
+        if sample and sample.cgroup_memory_max_delta:
+            local_cgroup_warning_reasons.append("cgroup_memory_max")
+        if sample and sample.cgroup_memory_oom_delta:
+            local_cgroup_warning_reasons.append("cgroup_memory_oom")
         return {
             "status": self.status,
             "controller_mode": self.controller_mode,
@@ -1387,6 +1415,19 @@ class ResourcePressureStateMachine:
             "hard_reasons": list(dict.fromkeys(hard_reasons)),
             "soft_reasons": list(dict.fromkeys(soft_reasons)),
             "recovery_remaining_seconds": recovery_remaining_seconds,
+            "signal_scopes": {
+                "memory": "host",
+                "swap": "host",
+                "psi": "host",
+                "foreground": "backend_process",
+                "cgroup_memory_events": "current_cgroup",
+            },
+            "local_cgroup_warnings": {
+                "scope": "current_cgroup",
+                "reasons": local_cgroup_warning_reasons,
+                "max_delta": sample.cgroup_memory_max_delta if sample else None,
+                "oom_delta": sample.cgroup_memory_oom_delta if sample else None,
+            },
             "sampled_at": self._sampled_at,
             "memory": {
                 "available_bytes": sample.memory_available_bytes if sample else None,
@@ -1474,6 +1515,9 @@ class ResourcePressureStateMachine:
             "foreground": {
                 "p95_ms": sample.foreground_p95_ms if sample else None,
                 "sample_count": sample.foreground_sample_count if sample else 0,
+                "sample_generation": (
+                    sample.foreground_sample_generation if sample else 0
+                ),
                 "window_seconds": FOREGROUND_LATENCY_WINDOW_SECONDS,
                 "soft_limit_ms": float(settings.resource_foreground_p95_limit_ms),
                 "feedback_only": True,
