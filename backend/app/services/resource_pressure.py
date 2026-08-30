@@ -490,7 +490,7 @@ def automatic_memory_reserve_bytes(
     *,
     ratio: float = 0.15,
     minimum_bytes: int = 384 * MIB,
-    maximum_bytes: int = 1280 * MIB,
+    maximum_bytes: int = 2560 * MIB,
 ) -> int:
     """Return a bounded device-relative reserve for project admission.
 

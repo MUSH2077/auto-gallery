@@ -27,18 +27,9 @@ from app.services.resource_pressure import (
 GIB = 1024 ** 3
 
 
-@pytest.fixture(autouse=True)
-def _use_explicit_small_host_reserve_for_state_machine_scenarios(monkeypatch):
-    """Keep scenario samples deterministic instead of reading the Compose default."""
-
-    from app.services import resource_pressure as pressure_module
-
-    monkeypatch.setattr(pressure_module.settings, "resource_memory_reserve_max_mb", 1280)
-
-
 @pytest.mark.parametrize(
     ("total_gib", "expected_mib"),
-    ((2, 384), (4, 614), (8, 1228), (16, 1280)),
+    ((2, 384), (4, 614), (8, 1228), (16, 2457), (32, 2560)),
 )
 def test_automatic_memory_reserve_calibrates_across_device_sizes(total_gib, expected_mib):
     reserve = automatic_memory_reserve_bytes(total_gib * GIB)
@@ -141,7 +132,7 @@ def test_pressure_requires_three_samples_and_stable_recovery():
 
 
 def test_pressure_fails_closed_after_three_core_metric_failures():
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
 
     assert machine.update(None, error="OSError", now=0)["status"] == "warning"
     assert machine.update(None, error="OSError", now=10)["status"] == "warning"
@@ -152,7 +143,7 @@ def test_pressure_fails_closed_after_three_core_metric_failures():
 
 
 def test_sticky_swap_occupancy_constrains_but_does_not_pause_without_activity():
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     sample = _sample(swap_free=GIB, memory_psi=None, io_psi=None)
 
     machine.update(sample, now=0)
@@ -166,7 +157,7 @@ def test_sticky_swap_occupancy_constrains_but_does_not_pause_without_activity():
 
 
 def test_active_swap_or_absolute_swap_floor_is_a_hard_gate():
-    active = ResourcePressureStateMachine()
+    active = ResourcePressureStateMachine(PressureThresholds())
     sample = _sample(
         swap_free=GIB,
         swap_out=2 * 1024 ** 2,
@@ -177,7 +168,7 @@ def test_active_swap_or_absolute_swap_floor_is_a_hard_gate():
     assert active_snapshot["status"] == "paused"
     assert "swap_activity_critical" in active_snapshot["reasons"]
 
-    exhausted = ResourcePressureStateMachine()
+    exhausted = ResourcePressureStateMachine(PressureThresholds())
     sample = _sample(swap_free=int(0.05 * 6 * GIB))
     for timestamp in (0, 10, 20):
         exhausted_snapshot = exhausted.update(sample, now=timestamp)
@@ -187,7 +178,7 @@ def test_active_swap_or_absolute_swap_floor_is_a_hard_gate():
 
 @pytest.mark.parametrize("field", ("cgroup_max", "cgroup_oom"))
 def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
 
     snapshot = machine.update(_sample(**{field: 1}), now=0)
 
@@ -198,7 +189,7 @@ def test_cgroup_memory_events_do_not_change_global_pressure_state(field):
 
 
 def test_backend_cgroup_oom_kill_fails_closed_immediately():
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
 
     snapshot = machine.update(_sample(cgroup_oom_kill=1), now=0)
 
@@ -211,7 +202,7 @@ def test_psi_is_soft_aimd_feedback_and_does_not_latch_pause(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "shadow")
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     sample = _sample(memory_psi=8.0, io_psi=40.0)
 
     snapshots = [machine.update(sample, now=timestamp) for timestamp in (0, 10, 20, 30)]
@@ -227,7 +218,7 @@ def test_aimd_additive_recovery_waits_a_full_stable_thirty_seconds(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_budget_increase_step", 0.10)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     pressured = _sample(io_psi=40.0)
     for timestamp in (0, 5, 10, 15):
         snapshot = machine.update(pressured, now=timestamp)
@@ -287,7 +278,7 @@ def test_foreground_p95_is_soft_feedback_only_after_consecutive_samples(monkeypa
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     slow = _sample(foreground_p95=750.0, foreground_count=30)
 
     assert "foreground_latency_high" not in machine.update(
@@ -312,7 +303,7 @@ def test_foreground_p95_ignores_a_rolling_window_with_fewer_than_thirty_requests
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_min_samples", 1)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     slow = _sample(foreground_p95=750.0, foreground_count=29)
 
     for generation, timestamp in enumerate((0, 5, 10), start=1):
@@ -329,7 +320,7 @@ def test_foreground_p95_does_not_count_an_unchanged_sample_window_repeatedly(
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     slow = _sample(foreground_p95=750.0, foreground_count=30)
 
     for timestamp in (0, 5, 10):
@@ -342,7 +333,7 @@ def test_foreground_p95_clears_when_its_rolling_window_ages_out(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 3)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     slow = _sample(foreground_p95=750.0, foreground_count=30)
 
     for generation, timestamp in enumerate((0, 5, 10), start=1):
@@ -366,7 +357,7 @@ def test_foreground_p95_always_requires_three_new_slow_evaluations(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_foreground_slow_samples", 1)
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     slow = _sample(foreground_p95=750.0, foreground_count=30)
 
     for generation, timestamp in enumerate((1, 2), start=1):
@@ -496,7 +487,7 @@ def test_critical_recovery_is_not_blocked_by_external_psi_or_sticky_swap():
 
 
 def test_profile_reservation_keeps_absolute_memory_floor():
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     snapshot = machine.update(_sample(available=int(1.55 * GIB)), now=0)
 
     assert snapshot["status"] == "normal"
@@ -506,7 +497,7 @@ def test_profile_reservation_keeps_absolute_memory_floor():
 
 
 def test_exact_profiles_and_aliases_are_exposed():
-    snapshot = ResourcePressureStateMachine().update(_sample(), now=0)
+    snapshot = ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
 
     assert {
         "download_network",
@@ -534,7 +525,7 @@ def test_shadow_mode_keeps_hard_gate_but_does_not_enforce_soft_aimd(monkeypatch)
     assert profile["enforced"] is False
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
 
-    constrained = ResourcePressureStateMachine().update(
+    constrained = ResourcePressureStateMachine(PressureThresholds()).update(
         _sample(io_psi=50.0),
         now=10,
     )
@@ -546,7 +537,7 @@ def test_profile_slice_limits_keep_shadow_at_base_and_scale_enforce(monkeypatch)
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "shadow")
-    shadow_snapshot = ResourcePressureStateMachine().update(
+    shadow_snapshot = ResourcePressureStateMachine(PressureThresholds()).update(
         _sample(io_psi=50.0),
         now=0,
     )
@@ -563,7 +554,7 @@ def test_profile_slice_limits_keep_shadow_at_base_and_scale_enforce(monkeypatch)
     assert shadow.slice_seconds == 20.0
 
     monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "enforce")
-    enforce_snapshot = ResourcePressureStateMachine().update(
+    enforce_snapshot = ResourcePressureStateMachine(PressureThresholds()).update(
         _sample(io_psi=50.0),
         now=0,
     )
@@ -588,7 +579,7 @@ def test_rollout_max_scale_caps_enforced_profiles_without_hiding_computed_budget
 
     monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "enforce")
     monkeypatch.setattr(pressure_module.settings, "resource_governance_max_scale", 0.10)
-    snapshot = ResourcePressureStateMachine().update(_sample(), now=0)
+    snapshot = ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
     limits = profile_slice_limits(
         snapshot,
         "import_db",
@@ -608,7 +599,7 @@ def test_profile_slice_limits_never_zero_when_constrained_but_reject_critical(mo
     from app.services import resource_pressure as pressure_module
 
     monkeypatch.setattr(pressure_module.settings, "resource_governance_mode", "enforce")
-    machine = ResourcePressureStateMachine()
+    machine = ResourcePressureStateMachine(PressureThresholds())
     for timestamp in (0, 5, 10, 15):
         constrained_snapshot = machine.update(_sample(io_psi=50.0), now=timestamp)
     constrained = profile_slice_limits(constrained_snapshot, "import_db")
@@ -639,7 +630,7 @@ def test_staged_profile_allowlist_enforces_only_selected_soft_budget(monkeypatch
         "resource_governance_enforced_profiles",
         "search_index",
     )
-    snapshot = ResourcePressureStateMachine().update(_sample(io_psi=50.0), now=0)
+    snapshot = ResourcePressureStateMachine(PressureThresholds()).update(_sample(io_psi=50.0), now=0)
 
     search = profile_slice_limits(snapshot, "search_index", max_work_units=500)
     imported = profile_slice_limits(snapshot, "import_db", max_work_units=25)
@@ -858,7 +849,7 @@ def test_shared_snapshot_and_redis_write_probe():
 def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     redis = _FakeRedis()
     redis.values[PRESSURE_SNAPSHOT_KEY] = json.dumps(
-        ResourcePressureStateMachine().update(_sample(), now=0)
+        ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
     ).encode()
 
     snapshot = publish_external_resource_critical(
@@ -1043,7 +1034,7 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     from app.services import settings as settings_module
 
     async def fake_pressure():
-        return ResourcePressureStateMachine().update(
+        return ResourcePressureStateMachine(PressureThresholds()).update(
             _sample(cgroup_max=2, cgroup_oom=1), now=0
         )
 
@@ -1132,7 +1123,7 @@ async def test_health_resource_reports_worker_circuit_and_redis_write_failure(mo
     from app.services import resource_pressure as pressure_module
 
     async def fake_pressure():
-        return ResourcePressureStateMachine().update(_sample(), now=0)
+        return ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
 
     monkeypatch.setattr(pressure_module, "get_resource_pressure_snapshot", fake_pressure)
     monkeypatch.setattr(

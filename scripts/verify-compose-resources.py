@@ -74,8 +74,7 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def verify_base(config: dict) -> None:
-    services = config["services"]
+def verify_resource_limits(services: dict) -> None:
     for name in PROTECTED_SERVICE_NAMES:
         service = services[name]
         memory = int(service["mem_limit"])
@@ -106,6 +105,11 @@ def verify_base(config: dict) -> None:
             logging["options"] == {"max-file": "3", "max-size": "10m"},
             f"{name}: bad log rotation",
         )
+
+
+def verify_base(config: dict) -> None:
+    services = config["services"]
+    verify_resource_limits(services)
 
     for name in ("worker-download", "worker-import", "worker-operations", "scheduler"):
         service = services[name]
@@ -230,6 +234,7 @@ def verify_base(config: dict) -> None:
 
 def verify_io_override(config: dict) -> None:
     services = config["services"]
+    verify_resource_limits(services)
     expected = {
         "meilisearch": (20, 10),
         "worker-download": (20, 10),
@@ -248,6 +253,7 @@ def verify_io_override(config: dict) -> None:
 
 def verify_test_override(config: dict) -> None:
     services = config["services"]
+    verify_resource_limits(services)
     require(config["networks"]["default"]["internal"] is True, "test network must be internal")
     for name, service in services.items():
         labels = service.get("labels") or {}
