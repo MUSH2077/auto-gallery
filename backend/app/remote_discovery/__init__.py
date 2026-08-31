@@ -7,7 +7,11 @@ from app.remote_discovery.contract import (
     DiscoveryPage,
     RemoteCandidateIdentity,
     RemoteCollection,
+    RemoteCreatorDetail,
+    RemoteCreatorProfile,
     RemoteDiscoveryAdapter,
+    RemoteWorkPage,
+    RemoteWorkPreview,
 )
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 
@@ -34,7 +38,11 @@ __all__ = [
     "IdentityMatchSignals",
     "RemoteCandidateIdentity",
     "RemoteCollection",
+    "RemoteCreatorDetail",
+    "RemoteCreatorProfile",
     "RemoteDiscoveryAdapter",
+    "RemoteWorkPage",
+    "RemoteWorkPreview",
     "classify_identity",
     "init_discovery_adapters",
     "registry",

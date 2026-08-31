@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 
 import pytest
 
@@ -92,6 +93,96 @@ def test_discovery_page_freezes_items_and_cursor_and_rejects_mixed_sources():
         )
     with pytest.raises(ValueError, match="done"):
         contract.DiscoveryPage(items=[pixiv], next_cursor={"offset": 30}, done=True)
+
+
+def test_remote_creator_detail_contract_validates_generic_profile_and_work_pages():
+    """A provider cannot leak malformed or source-mismatched creator media into shared APIs."""
+    contract = _contract()
+    fetched_at = datetime.now(UTC)
+    created_at = datetime(2026, 8, 30, tzinfo=UTC)
+    profile = contract.RemoteCreatorProfile(
+        source="pixiv",
+        source_creator_id="123",
+        display_name="Artist",
+        username="artist",
+        profile_url="https://www.pixiv.net/users/123",
+        avatar_url="https://i.pximg.net/user-profile/img/123/avatar.jpg",
+        comment="fixture profile",
+        work_counts={"illust": 12, "manga": 3, "novel": 1},
+        is_followed=True,
+        fetched_at=fetched_at,
+    )
+    work = contract.RemoteWorkPreview(
+        source="pixiv",
+        source_work_id="456",
+        source_creator_id="123",
+        title="Fixture work",
+        work_url="https://www.pixiv.net/artworks/456",
+        created_at=created_at,
+        work_type="manga",
+        page_count=2,
+        x_restrict=1,
+        thumbnail_url="https://i.pximg.net/c/360x360/img-master/thumb.jpg",
+        preview_urls=(
+            "https://i.pximg.net/img-master/page0.jpg",
+            "https://i.pximg.net/img-master/page1.jpg",
+        ),
+    )
+    page = contract.RemoteWorkPage(items=[work], next_cursor={"offset": 20}, done=False)
+    detail = contract.RemoteCreatorDetail(profile=profile, works=page)
+
+    assert detail.profile.source_creator_id == "123"
+    assert detail.works.items == (work,)
+    assert detail.works.next_cursor["offset"] == 20
+    with pytest.raises(TypeError):
+        detail.profile.work_counts["illust"] = 99
+    with pytest.raises(TypeError):
+        detail.works.next_cursor["offset"] = 40
+    with pytest.raises(ValueError, match="same creator"):
+        contract.RemoteCreatorDetail(
+            profile=profile,
+            works=contract.RemoteWorkPage(
+                items=[
+                    contract.RemoteWorkPreview(
+                        source="pixiv",
+                        source_work_id="789",
+                        source_creator_id="999",
+                        title="Wrong creator",
+                        work_url="https://www.pixiv.net/artworks/789",
+                        created_at=created_at,
+                        work_type="illust",
+                        page_count=1,
+                        x_restrict=0,
+                        thumbnail_url=None,
+                        preview_urls=(),
+                    )
+                ],
+                done=True,
+            ),
+        )
+    with pytest.raises(ValueError, match="x_restrict"):
+        contract.RemoteWorkPreview(
+            source="pixiv",
+            source_work_id="456",
+            source_creator_id="123",
+            title="Bad rating",
+            work_url="https://www.pixiv.net/artworks/456",
+            created_at=created_at,
+            work_type="illust",
+            page_count=1,
+            x_restrict=3,
+            thumbnail_url=None,
+            preview_urls=(),
+        )
+
+
+def test_remote_creator_contracts_are_exported_from_package_boundary():
+    from app import remote_discovery
+
+    assert remote_discovery.RemoteCreatorProfile is _contract().RemoteCreatorProfile
+    assert remote_discovery.RemoteCreatorDetail is _contract().RemoteCreatorDetail
+    assert remote_discovery.RemoteWorkPreview is _contract().RemoteWorkPreview
+    assert remote_discovery.RemoteWorkPage is _contract().RemoteWorkPage
 
 
 def test_discovery_registry_resolves_standard_adapter_and_rejects_unknown_source():

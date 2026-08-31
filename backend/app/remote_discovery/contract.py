@@ -17,6 +17,7 @@ from app.services.remote_credentials import (
 
 
 RemoteSource = Literal["pixiv", "x", "bilibili"]
+RemoteWorkType = Literal["illust", "manga", "ugoira"]
 
 
 def _freeze(value: Any) -> Any:
@@ -27,6 +28,19 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, set):
         return frozenset(_freeze(child) for child in value)
     return value
+
+
+def _require_remote_source(source: str) -> None:
+    if source not in {"pixiv", "x", "bilibili"}:
+        raise ValueError("remote source is not supported")
+
+
+def _require_https_url(value: str | None, field_name: str) -> None:
+    if value is None:
+        return
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"{field_name} must use HTTPS")
 
 
 @dataclass(frozen=True)
@@ -55,15 +69,117 @@ class RemoteCandidateIdentity:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.source not in {"pixiv", "x", "bilibili"}:
-            raise ValueError("remote candidate source is not supported")
+        _require_remote_source(self.source)
         if not self.source_creator_id.strip():
             raise ValueError("source_creator_id must not be empty")
-        if self.profile_url:
-            parsed = urlsplit(self.profile_url)
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise ValueError("remote profile URL must use HTTPS")
+        _require_https_url(self.profile_url, "remote profile URL")
         object.__setattr__(self, "metadata", _freeze(self.metadata))
+
+
+@dataclass(frozen=True)
+class RemoteCreatorProfile:
+    source: RemoteSource
+    source_creator_id: str
+    display_name: str | None
+    username: str | None
+    profile_url: str
+    avatar_url: str | None
+    comment: str | None
+    work_counts: Mapping[str, int]
+    is_followed: bool | None
+    fetched_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_remote_source(self.source)
+        if not self.source_creator_id.strip():
+            raise ValueError("source_creator_id must not be empty")
+        _require_https_url(self.profile_url, "remote profile URL")
+        _require_https_url(self.avatar_url, "remote avatar URL")
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("fetched_at must be timezone-aware")
+        if not isinstance(self.work_counts, Mapping):
+            raise TypeError("work_counts must be a mapping")
+        for name, value in self.work_counts.items():
+            if not str(name).strip() or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("work_counts must contain non-negative integer values")
+        if self.is_followed is not None and not isinstance(self.is_followed, bool):
+            raise ValueError("is_followed must be a boolean or None")
+        object.__setattr__(self, "work_counts", _freeze(self.work_counts))
+
+
+@dataclass(frozen=True)
+class RemoteWorkPreview:
+    source: RemoteSource
+    source_work_id: str
+    source_creator_id: str
+    title: str
+    work_url: str
+    created_at: datetime
+    work_type: RemoteWorkType
+    page_count: int
+    x_restrict: int
+    thumbnail_url: str | None
+    preview_urls: tuple[str, ...] | list[str]
+
+    def __post_init__(self) -> None:
+        _require_remote_source(self.source)
+        if not self.source_work_id.strip():
+            raise ValueError("source_work_id must not be empty")
+        if not self.source_creator_id.strip():
+            raise ValueError("source_creator_id must not be empty")
+        if self.work_type not in {"illust", "manga", "ugoira"}:
+            raise ValueError("remote work type is not supported")
+        if isinstance(self.page_count, bool) or not isinstance(self.page_count, int) or self.page_count < 1:
+            raise ValueError("page_count must be a positive integer")
+        if self.x_restrict not in {0, 1, 2}:
+            raise ValueError("x_restrict must be 0, 1, or 2")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+        _require_https_url(self.work_url, "remote work URL")
+        _require_https_url(self.thumbnail_url, "remote thumbnail URL")
+        preview_urls = tuple(self.preview_urls)
+        for url in preview_urls:
+            _require_https_url(url, "remote preview URL")
+        object.__setattr__(self, "preview_urls", preview_urls)
+
+
+@dataclass(frozen=True)
+class RemoteWorkPage:
+    items: tuple[RemoteWorkPreview, ...] | list[RemoteWorkPreview]
+    done: bool
+    next_cursor: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        items = tuple(self.items)
+        if any(not isinstance(item, RemoteWorkPreview) for item in items):
+            raise TypeError("remote work page items must be remote work previews")
+        sources = {item.source for item in items}
+        if len(sources) > 1:
+            raise ValueError("remote work page items must all use the same source")
+        if self.done and self.next_cursor is not None:
+            raise ValueError("a done remote work page cannot expose a next cursor")
+        if not self.done and self.next_cursor is None:
+            raise ValueError("an incomplete remote work page requires a next cursor")
+        object.__setattr__(self, "items", items)
+        if self.next_cursor is not None:
+            if not isinstance(self.next_cursor, Mapping) or not self.next_cursor:
+                raise ValueError("next cursor must be a non-empty mapping or None")
+            object.__setattr__(self, "next_cursor", _freeze(self.next_cursor))
+
+    @property
+    def is_complete(self) -> bool:
+        return self.next_cursor is None
+
+
+@dataclass(frozen=True)
+class RemoteCreatorDetail:
+    profile: RemoteCreatorProfile
+    works: RemoteWorkPage
+
+    def __post_init__(self) -> None:
+        for work in self.works.items:
+            if work.source != self.profile.source or work.source_creator_id != self.profile.source_creator_id:
+                raise ValueError("remote creator detail works must belong to the same creator")
 
 
 @dataclass(frozen=True)
@@ -76,8 +192,7 @@ class RemoteWorkState:
     is_bookmarked: bool
 
     def __post_init__(self) -> None:
-        if self.source not in {"pixiv", "x", "bilibili"}:
-            raise ValueError("remote work state source is not supported")
+        _require_remote_source(self.source)
         if not self.source_work_id.strip():
             raise ValueError("source_work_id must not be empty")
         if self.fetched_at.tzinfo is None:
@@ -146,6 +261,33 @@ class RemoteDiscoveryAdapter(ABC):
         source_work_id: str,
     ) -> RemoteWorkState:
         raise NotImplementedError(f"{self.source} does not support remote work state")
+
+    async def fetch_creator_profile(
+        self,
+        credentials: RedactedCredentials | Mapping[str, Any],
+        *,
+        source_creator_id: str,
+    ) -> RemoteCreatorProfile:
+        raise NotImplementedError(f"{self.source} does not support remote creator profiles")
+
+    async def fetch_creator_detail(
+        self,
+        credentials: RedactedCredentials | Mapping[str, Any],
+        *,
+        source_creator_id: str,
+        page_size: int = 20,
+    ) -> RemoteCreatorDetail:
+        raise NotImplementedError(f"{self.source} does not support remote creator details")
+
+    async def fetch_creator_works(
+        self,
+        credentials: RedactedCredentials | Mapping[str, Any],
+        *,
+        source_creator_id: str,
+        cursor: Mapping[str, Any] | None = None,
+        page_size: int = 20,
+    ) -> RemoteWorkPage:
+        raise NotImplementedError(f"{self.source} does not support remote creator works")
 
     async def discover(
         self,
