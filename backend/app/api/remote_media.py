@@ -23,29 +23,53 @@ async def get_remote_media(token: str, db: AsyncSession = Depends(get_db)):
     tickets = RemoteAccessTokenService()
     try:
         payload = tickets.verify_media(token)
-        candidate_id = UUID(str(payload["candidate_id"]))
-        account_id = UUID(str(payload["remote_account_id"]))
-        row = (
-            await db.execute(
-                select(DiscoveryCandidate, RemoteAccount)
-                .join(RemoteAccount, RemoteAccount.id == DiscoveryCandidate.remote_account_id)
-                .where(
-                    DiscoveryCandidate.id == candidate_id,
-                    DiscoveryCandidate.user_id == int(payload["user_id"]),
-                    DiscoveryCandidate.remote_account_id == account_id,
-                    RemoteAccount.user_id == int(payload["user_id"]),
-                    RemoteAccount.credential_generation
-                    == int(payload["credential_generation"]),
-                    RemoteAccount.is_enabled.is_(True),
+        if payload.get("context") == "creator_reference":
+            from app.models import Creator, User
+
+            creator = await db.get(Creator, UUID(str(payload["creator_id"])))
+            user = await db.get(User, int(payload["user_id"]))
+            if creator is None or user is None or not user.is_active:
+                raise RemoteAccessTokenError("remote access token is no longer valid")
+            require_preview("pixiv")
+            if payload.get("remote_account_id") is not None:
+                account = (
+                    await db.execute(
+                        select(RemoteAccount).where(
+                            RemoteAccount.id == UUID(str(payload["remote_account_id"])),
+                            RemoteAccount.user_id == int(payload["user_id"]),
+                            RemoteAccount.source == "pixiv",
+                            RemoteAccount.credential_generation
+                            == int(payload["credential_generation"]),
+                            RemoteAccount.is_enabled.is_(True),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if account is None:
+                    raise RemoteAccessTokenError("remote access token is no longer valid")
+        else:
+            candidate_id = UUID(str(payload["candidate_id"]))
+            account_id = UUID(str(payload["remote_account_id"]))
+            row = (
+                await db.execute(
+                    select(DiscoveryCandidate, RemoteAccount)
+                    .join(RemoteAccount, RemoteAccount.id == DiscoveryCandidate.remote_account_id)
+                    .where(
+                        DiscoveryCandidate.id == candidate_id,
+                        DiscoveryCandidate.user_id == int(payload["user_id"]),
+                        DiscoveryCandidate.remote_account_id == account_id,
+                        RemoteAccount.user_id == int(payload["user_id"]),
+                        RemoteAccount.credential_generation
+                        == int(payload["credential_generation"]),
+                        RemoteAccount.is_enabled.is_(True),
+                    )
                 )
-            )
-        ).first()
-        if row is None:
-            raise RemoteAccessTokenError("remote access token is no longer valid")
-        _candidate, account = row
-        require_preview(account.source)
-        if account.source != "pixiv":
-            raise RemoteAccessTokenError("remote access token is invalid")
+            ).first()
+            if row is None:
+                raise RemoteAccessTokenError("remote access token is no longer valid")
+            _candidate, account = row
+            require_preview(account.source)
+            if account.source != "pixiv":
+                raise RemoteAccessTokenError("remote access token is invalid")
         result = await fetch_pixiv_media(
             str(payload["upstream_url"]),
             variant=payload["variant"],

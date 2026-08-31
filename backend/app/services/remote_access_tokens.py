@@ -122,13 +122,46 @@ class RemoteAccessTokenService:
             validate_pixiv_media_url(str(payload["upstream_url"]))
             if payload["variant"] not in {"avatar", "thumbnail", "preview"}:
                 raise ValueError
-            if int(payload["user_id"]) < 1 or int(payload["credential_generation"]) < 1:
+            if int(payload["user_id"]) < 1:
                 raise ValueError
-            UUID(str(payload["candidate_id"]))
-            UUID(str(payload["remote_account_id"]))
+            if payload.get("context") == "creator_reference":
+                UUID(str(payload["creator_id"]))
+                if payload.get("remote_account_id") is not None:
+                    UUID(str(payload["remote_account_id"]))
+                    if int(payload["credential_generation"]) < 1:
+                        raise ValueError
+            else:
+                if int(payload["credential_generation"]) < 1:
+                    raise ValueError
+                UUID(str(payload["candidate_id"]))
+                UUID(str(payload["remote_account_id"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise RemoteAccessTokenError("remote access token is invalid") from exc
         return payload
+
+    def issue_reference_media(
+        self,
+        *,
+        user_id: int,
+        creator_id: UUID,
+        upstream_url: str,
+        remote_account_id: UUID | None = None,
+        credential_generation: int | None = None,
+    ) -> str:
+        validate_pixiv_media_url(upstream_url)
+        if (remote_account_id is None) != (credential_generation is None):
+            raise ValueError("Remote account reference media provenance is incomplete")
+        payload: dict[str, Any] = {
+            "context": "creator_reference",
+            "user_id": user_id,
+            "creator_id": str(creator_id),
+            "upstream_url": upstream_url,
+            "variant": "avatar",
+        }
+        if remote_account_id is not None:
+            payload["remote_account_id"] = str(remote_account_id)
+            payload["credential_generation"] = credential_generation
+        return self._issue("media", payload)
 
     def issue_cursor(self, payload: Mapping[str, Any]) -> str:
         return self._issue("cursor", payload)

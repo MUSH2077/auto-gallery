@@ -24,6 +24,7 @@ import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
+import CreatorReferences from "./CreatorReferences";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -576,10 +577,11 @@ export default function CreatorDetailPage() {
             ) : <p className="text-sm text-muted">{t("creator_detail.no_links")}</p>}
           </section>
 
-          {c.danbooru_artist_id && (
-            <DanbooruAliases artistId={c.danbooru_artist_id} currentDisplay={c.display_name}
-              onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }} />
-          )}
+          <CreatorReferences
+            creatorId={id}
+            currentDisplay={c.display_name}
+            onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }}
+          />
         </aside>
 
         <section className="min-w-0">
@@ -813,61 +815,6 @@ export default function CreatorDetailPage() {
         error={(deleteCreator.error as Error)?.message || (deletionPreview.error as Error)?.message}
       />
     </PageShell>
-  );
-}
-
-function DanbooruAliases({ artistId, currentDisplay, onSelectAlias }: {
-  artistId: number; currentDisplay?: string; onSelectAlias: (alias: string) => void;
-}) {
-  const t = useT();
-  const aliases = useQuery({
-    queryKey: ["danbooru-artist", artistId],
-    queryFn: () => api.getDanbooruArtist(artistId),
-    staleTime: 10 * 60 * 1000,
-  });
-
-  if (aliases.isLoading) {
-    return <div className="card p-4"><div className="h-12 animate-pulse rounded-md bg-subtle dark:bg-subtle" /></div>;
-  }
-  if (!aliases.data?.artist) {
-    return (
-      <div className="card p-4">
-        <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
-        <p className="text-xs text-muted">Danbooru #{artistId}</p>
-      </div>
-    );
-  }
-
-  const artist = aliases.data.artist;
-  const names = [
-    ...(artist.pixiv_display_name ? [{ label: artist.pixiv_display_name, type: "pixiv" as const }] : []),
-    ...(artist.other_names || []).map((n: string) => ({ label: n, type: "danbooru" as const })),
-  ];
-  if (!names.length) return null;
-
-  return (
-    <div className="card p-4">
-      <h3 className="mb-2 text-sm font-semibold">{t("creator_detail.danbooru_ref")}</h3>
-      <p className="mb-3 text-xs text-muted">{t("creator_detail.danbooru_aliases_hint")}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {names.map(({ label, type }) => {
-          const isActive = currentDisplay === label;
-          return (
-            <button key={label} type="button" onClick={() => onSelectAlias(label)}
-              title={t("creator_detail.set_display_name_as", { name: label })}
-              className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                isActive
-                  ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent"
-                  : type === "pixiv"
-                    ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
-                    : "border-border bg-subtle text-muted hover:bg-subtle dark:border-border dark:bg-subtle dark:text-muted"
-              }`}>
-              {label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 

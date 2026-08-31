@@ -664,6 +664,29 @@ export interface CreatorListResponse {
   total: number;
 }
 
+export interface PixivCreatorReference {
+  source_creator_id: string;
+  display_name: string;
+  username?: string | null;
+  profile_url: string;
+  avatar_url?: string | null;
+  status: "remote" | "fallback";
+  error_code?: string | null;
+}
+
+export interface DanbooruCreatorReference {
+  artist_id: number;
+  name?: string | null;
+  other_names: string[];
+  profile_url: string;
+  status: "remote" | "fallback";
+}
+
+export interface CreatorReferences {
+  pixiv: PixivCreatorReference[];
+  danbooru?: DanbooruCreatorReference | null;
+}
+
 export type DeletionEntityType = "repository" | "subscription" | "creator";
 
 export interface DeletionPreview {

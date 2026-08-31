@@ -12,6 +12,7 @@ from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead,
 from app.schemas.curation import CreatorCurationRequest, CurationCommitRead
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
+from app.schemas.creator_reference import CreatorReferencesRead
 from app.schemas.deletion import (
     BatchDeletionRequest,
     DeletionPreviewResponse,
@@ -197,6 +198,20 @@ async def get_creator(creator_id: UUID, db: AsyncSession = Depends(get_db)):
         return creator
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{creator_id}/references", response_model=CreatorReferencesRead)
+async def get_creator_references(
+    creator_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("library"),
+):
+    from app.services.creator_references import CreatorReferenceService
+
+    try:
+        return await CreatorReferenceService(db, user.id).get_references(creator_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Creator not found") from exc
 
 
 @curation_router.post("", response_model=CreatorRead, status_code=201)
