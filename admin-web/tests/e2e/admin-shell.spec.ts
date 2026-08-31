@@ -1050,6 +1050,14 @@ test("desktop sidebar is the sole peer-page navigation and command palette remai
     "border-top-style",
     "solid",
   );
+  const dividerSpacing = await sidebar
+    .locator("section[data-sidebar-group] + section[data-sidebar-group]")
+    .first()
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { top: style.paddingTop, bottom: style.paddingBottom };
+    });
+  expect(dividerSpacing.top).toBe(dividerSpacing.bottom);
   await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Notifications" })).toHaveCount(0);

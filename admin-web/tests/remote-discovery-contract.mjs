@@ -101,6 +101,20 @@ assert.match(accounts, /auto_import_summary_paused/,
   "the account card must distinguish a configured policy from effective automatic import");
 assert.match(candidates, /previewEnabledAccountIds/,
   "candidate import and conflict actions must honor provider preview rollout");
+assert.doesNotMatch(candidates, /CandidateSnapshots|candidate\.recent_works/,
+  "the workbench must not render or load recent-work snapshots");
+assert.match(candidates, /getSourceBadgeColor/,
+  "provider badges must reuse the global source color contract");
+assert.match(candidates, /adminRoutes\.discoveryCandidate/,
+  "eligible rows must navigate to the dedicated creator route");
+assert.match(candidates, /adminRoutes\.creator\(/,
+  "a unique local match must link to the local creator page");
+assert.match(candidates, /useSearchParams/,
+  "workbench filters and pagination must restore from the URL");
+assert.match(candidates, /sessionStorage/,
+  "workbench selection and scroll state must survive a detail-page round trip");
+assert.doesNotMatch(candidates, /RemoteCreatorDrawer|detailCandidate/,
+  "the workbench must not render a details drawer");
 assert.ok(fs.existsSync(detailRoutePath), "candidate details must have a dedicated route");
 assert.ok(fs.existsSync(detailPagePath), "candidate details must have a focused page component");
 assert.ok(fs.existsSync(remoteWorksPath), "remote work preview and import must be reusable");

@@ -204,7 +204,7 @@ export default function AppSidebar({
               data-sidebar-group={groupIndex}
               className={compact
                 ? "border-t border-border/70 py-1 first:border-t-0"
-                : "border-t border-border/70 pb-1 pt-3 first:border-t-0 first:pt-3"}
+                : "border-t border-border/70 py-1 first:border-t-0 first:pt-3"}
             >
               {group.links.map(({ href, labelKey, icon }) => {
                 const active = activeSidebarHref === href;

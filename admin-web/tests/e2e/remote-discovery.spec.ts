@@ -475,7 +475,8 @@ test("scans, filters, imports without immediate sync, dismisses and restores vis
   expect(mutations.find((item) => item.path.endsWith("batch-actions") && item.body.action === "import")?.body)
     .toMatchObject({ action: "import", immediate_sync: false });
 
-  await page.getByRole("table").getByRole("button", { name: "Ignore Artist two" }).click();
+  await page.getByRole("table").getByRole("checkbox", { name: "Select Artist two" }).check();
+  await page.getByRole("button", { name: "Ignore selected" }).click();
   await page.getByLabel("Status filter").selectOption("dismissed");
   await expect(page.getByRole("table").getByText("Artist two")).toBeVisible();
   await page.getByRole("table").getByRole("button", { name: "Restore Artist two" }).click();
@@ -520,7 +521,7 @@ test("resolves a conflict by attaching an existing creator and by creating a new
   expect(mutations.at(-1)?.body).toMatchObject({ creator_name: "Resolved Artist", immediate_sync: false });
 });
 
-test("dismisses conflict candidates individually and through visible batch selection", async ({ context, page }) => {
+test("dismisses conflict candidates only through visible batch selection", async ({ context, page }) => {
   const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
   await installFixtures(context, {
     accounts: [account()],
@@ -534,13 +535,15 @@ test("dismisses conflict candidates individually and through visible batch selec
   await page.goto("/admin/discovery");
   const table = page.getByRole("table");
 
-  await table.getByRole("button", { name: "Ignore Artist conflict-one" }).click();
-  expect(mutations.at(-1)?.body).toMatchObject({ action: "dismiss", ids: ["conflict-one"] });
-
+  await expect(table.getByRole("button", { name: "Ignore Artist conflict-one" })).toHaveCount(0);
+  await table.getByRole("checkbox", { name: "Select Artist conflict-one" }).check();
   await table.getByRole("checkbox", { name: "Select Artist conflict-two" }).check();
   await table.getByRole("checkbox", { name: "Select Artist conflict-three" }).check();
   await page.getByRole("button", { name: "Ignore selected" }).click();
-  expect(mutations.at(-1)?.body).toMatchObject({ action: "dismiss", ids: ["conflict-two", "conflict-three"] });
+  expect(mutations.at(-1)?.body).toMatchObject({
+    action: "dismiss",
+    ids: ["conflict-one", "conflict-two", "conflict-three"],
+  });
 });
 
 test("paginates candidates without carrying selection across pages", async ({ context, page }) => {
@@ -610,7 +613,12 @@ test("filters local matches before server pagination and keeps conflict independ
   await expect(page.getByRole("table").getByText("Artist local-page-25")).toBeVisible();
   await expect(page.getByRole("table").getByText("Artist local-page-26")).toBeVisible();
   await expect(page.getByRole("table").getByText("Artist local-page-conflict")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open local creator" }).first()).toHaveAttribute(
+    "href",
+    "/admin/creators/creator-one",
+  );
   await expect(page.getByText("Total: 3")).toBeVisible();
+  await expect(page).toHaveURL(/local=matched/);
   await expect(page.getByRole("navigation", { name: "Pagination" })).toHaveCount(0);
   expect(candidateRequests.at(-1)?.searchParams.get("local_match")).toBe("true");
 
@@ -738,7 +746,7 @@ test("switches users in one session without flashing or reusing private discover
   expect(consoleErrors).toEqual([]);
 });
 
-test("backend rollout disables provider execution but keeps cleanup actions", async ({ context, page }) => {
+test("backend rollout disables provider execution while batch cleanup remains available", async ({ context, page }) => {
   await installFixtures(context, {
     accounts: [account()],
     candidates: [candidate("rollout")],
@@ -758,7 +766,9 @@ test("backend rollout disables provider execution but keeps cleanup actions", as
   await expect(pixivCard.getByRole("button", { name: /Delete Pixiv/i })).toBeEnabled();
 
   await expect(page.getByRole("button", { name: /Import Artist rollout/i }).first()).toBeDisabled();
-  await expect(page.getByRole("button", { name: /Ignore Artist rollout/i }).first()).toBeEnabled();
+  await expect(page.getByRole("link", { name: /View remote details for Artist rollout/i })).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "Select Artist rollout" }).check();
+  await expect(page.getByRole("button", { name: "Ignore selected" })).toBeEnabled();
 });
 
 test("manual preview rollout hides disabled provider cards at desktop and mobile", async ({ context, page }) => {
@@ -800,7 +810,7 @@ test("candidate avatar is requested once across responsive layouts", async ({ co
   expect(avatarRequests).toEqual(["https://images.example/avatar.png"]);
 });
 
-test("browses, reveals and imports paginated Pixiv works without losing workbench state", async ({ context, page }) => {
+test("opens the enriched Pixiv creator page and restores URL, selection and pagination state", async ({ context, page }) => {
   test.setTimeout(60_000);
   const detailCandidate = candidate("detail", {
     avatar_url: "https://images.example/avatar-signed.svg",
@@ -836,7 +846,7 @@ test("browses, reveals and imports paginated Pixiv works without losing workbenc
   });
 
   let detailAvailable = false;
-  const worksCursors: string[] = [];
+  const worksRequests: Array<{ cursor: string; workType: string }> = [];
   const imports: Record<string, unknown>[] = [];
   const work = (
     sourceWorkId: string,
@@ -861,41 +871,62 @@ test("browses, reveals and imports paginated Pixiv works without losing workbenc
   });
   await page.route("**/api/v1/discovery/candidates/detail/remote-detail?*", async (route) => {
     if (!detailAvailable) return json(route, { detail: "temporary detail failure" }, 502);
+    const workType = new URL(route.request().url()).searchParams.get("work_type") || "illust";
     return json(route, {
+      candidate: detailCandidate,
       profile: {
         source: "pixiv",
         source_creator_id: "remote-detail",
-        display_name: "Drawer Artist",
-        username: "drawer_artist",
+        display_name: "Pixez Artist",
+        username: "pixez_artist",
         profile_url: "https://www.pixiv.net/users/detail",
         avatar_url: "https://images.example/avatar-detail.svg",
+        header_image_url: "https://images.example/header-detail.svg",
         comment: "Live Pixiv profile",
-        work_counts: { total: 3 },
+        work_counts: { illusts: 3, manga: 1, novels: 7 },
+        social_counts: { following: 12, mypixiv: 3, public_bookmarks: 44 },
+        public_profile: {
+          gender: "Female",
+          region: "Tokyo",
+          birth_day: "08-30",
+          birth_year: 2000,
+          job: "Illustrator",
+        },
+        links: [
+          { kind: "website", url: "https://artist.example" },
+          { kind: "x", url: "https://x.com/pixez_artist" },
+        ],
         is_followed: true,
         fetched_at: now,
       },
       works: {
-        items: [
-          work("100", "Two page manga", {
-            work_type: "manga",
-            page_count: 2,
-            preview_urls: [
-              "https://images.example/manga-page-1.svg",
-              "https://images.example/manga-page-2.svg",
+        items: workType === "manga"
+          ? [work("200", "Two page manga", {
+              work_type: "manga",
+              page_count: 2,
+              preview_urls: [
+                "https://images.example/manga-page-1.svg",
+                "https://images.example/manga-page-2.svg",
+              ],
+            })]
+          : [
+              work("100", "First illustration"),
+              work("101", "Sensitive Ugoira", {
+                work_type: "ugoira",
+                x_restrict: 1,
+                preview_urls: ["https://images.example/sensitive-preview.svg"],
+              }),
             ],
-          }),
-          work("101", "Sensitive Ugoira", {
-            work_type: "ugoira",
-            x_restrict: 1,
-            preview_urls: ["https://images.example/sensitive-preview.svg"],
-          }),
-        ],
-        next_cursor: "cursor-page-2",
+        next_cursor: workType === "illust" ? "cursor-page-2" : null,
       },
     });
   });
   await page.route("**/api/v1/discovery/candidates/detail/remote-works?*", async (route) => {
-    worksCursors.push(new URL(route.request().url()).searchParams.get("cursor") || "");
+    const url = new URL(route.request().url());
+    worksRequests.push({
+      cursor: url.searchParams.get("cursor") || "",
+      workType: url.searchParams.get("work_type") || "",
+    });
     return json(route, {
       items: [work("102", "Later illustration")],
       next_cursor: null,
@@ -914,25 +945,44 @@ test("browses, reveals and imports paginated Pixiv works without losing workbenc
   await page.goto("/admin/discovery");
   const pagination = page.getByRole("navigation", { name: "Pagination" });
   await pagination.getByRole("button", { name: "Next" }).click();
+  await expect(page).toHaveURL(/page=2/);
   const table = page.getByRole("table");
   const row = table.getByRole("row").filter({ hasText: "Artist detail" });
-  await expect(row.getByLabel("Recent work snapshots").locator("img")).toHaveCount(2);
+  await expect(table.getByRole("columnheader", { name: "Recent works" })).toHaveCount(0);
   await row.getByRole("checkbox", { name: "Select Artist detail" }).check();
-  const trigger = row.getByRole("button", { name: "View remote details for Artist detail" }).last();
-  await trigger.focus();
-  await trigger.click();
+  await row.focus();
+  await page.keyboard.press("Enter");
 
-  const drawer = page.getByRole("dialog", { name: "Creator details" });
-  await expect(drawer).toBeVisible();
-  await expect(drawer.getByText("Could not load this creator's Pixiv details.")).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/discovery\/candidates\/detail\?return_to=/);
+  await expect(page.getByText("Could not load this creator's Pixiv details.")).toBeVisible();
   detailAvailable = true;
-  await drawer.getByRole("button", { name: "Retry" }).click();
-  await expect(drawer.getByRole("heading", { name: "Drawer Artist" })).toBeVisible();
-  await expect(drawer.getByText("@drawer_artist")).toBeVisible();
-  await expect(drawer.getByText("Live Pixiv profile")).toBeVisible();
-  await expect(drawer.getByText("2 loaded")).toBeVisible();
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("heading", { name: "Pixez Artist", level: 1 })).toBeVisible();
+  await expect(page.getByText("@pixez_artist · Pixiv ID: remote-detail")).toBeVisible();
+  await expect(page.locator('img[src="https://images.example/header-detail.svg"]')).toBeVisible();
+  await expect(page.getByText("2 loaded")).toBeVisible();
 
-  const manga = drawer.getByRole("article").filter({ hasText: "Two page manga" });
+  const sensitive = page.getByRole("article").filter({ hasText: "Sensitive Ugoira" });
+  await expect(sensitive.getByRole("button", { name: "Import this work" })).toBeDisabled();
+  await sensitive.getByRole("button", { name: "Click to reveal R-18 content" }).click();
+  await expect(sensitive.getByRole("button", { name: "Preview Sensitive Ugoira" })).toBeVisible();
+  await sensitive.getByRole("button", { name: "Import this work" }).click();
+  await expect(sensitive.getByText("Queued for download")).toBeVisible();
+  expect(imports).toEqual([{ work_token: "token-101", sensitive_content_confirmed: true }]);
+
+  await page.getByRole("button", { name: "Load more works" }).click();
+  await expect(page.getByText("Later illustration")).toBeVisible();
+  await expect(page.getByText("3 loaded")).toBeVisible();
+  expect(worksRequests).toEqual([{ cursor: "cursor-page-2", workType: "illust" }]);
+
+  await page.getByRole("tab", { name: "Profile" }).click();
+  await expect(page.getByText("Live Pixiv profile")).toBeVisible();
+  await expect(page.getByText("Tokyo", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Website" })).toHaveAttribute("href", "https://artist.example");
+
+  await page.getByRole("tab", { name: "Works" }).click();
+  await page.getByRole("button", { name: "Manga", exact: true }).click();
+  const manga = page.getByRole("article").filter({ hasText: "Two page manga" });
   await manga.getByRole("button", { name: "Preview Two page manga" }).click();
   const mangaLightbox = page.getByRole("dialog", { name: "Two page manga" });
   await expect(mangaLightbox.getByText("Page 1 of 2")).toBeVisible();
@@ -941,27 +991,13 @@ test("browses, reveals and imports paginated Pixiv works without losing workbenc
   await expect(mangaLightbox.getByRole("img", { name: "Page 2 of Two page manga" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(mangaLightbox).toBeHidden();
-  await expect(drawer).toBeVisible();
 
-  const sensitive = drawer.getByRole("article").filter({ hasText: "Sensitive Ugoira" });
-  await expect(sensitive.getByRole("button", { name: "Import this work" })).toBeDisabled();
-  await sensitive.getByRole("button", { name: "Click to reveal R-18 content" }).click();
-  await expect(sensitive.getByRole("button", { name: "Preview Sensitive Ugoira" })).toBeVisible();
-  await sensitive.getByRole("button", { name: "Import this work" }).click();
-  await expect(sensitive.getByText("Queued for download")).toBeVisible();
-  expect(imports).toEqual([{ work_token: "token-101", sensitive_content_confirmed: true }]);
-
-  await drawer.getByRole("button", { name: "Load more works" }).click();
-  await expect(drawer.getByText("Later illustration")).toBeVisible();
-  await expect(drawer.getByText("3 loaded")).toBeVisible();
-  expect(worksCursors).toEqual(["cursor-page-2"]);
-
-  await drawer.getByRole("button", { name: "Close dialog" }).click();
-  await expect(drawer).toBeHidden();
-  await expect(trigger).toBeFocused();
-  await expect(row.getByRole("checkbox", { name: "Select Artist detail" })).toBeChecked();
+  await page.getByRole("link", { name: "Back to candidate workbench" }).click();
+  await expect(page).toHaveURL(/\/admin\/discovery\?page=2/);
+  const restoredRow = page.getByRole("table").getByRole("row").filter({ hasText: "Artist detail" });
+  await expect(restoredRow.getByRole("checkbox", { name: "Select Artist detail" })).toBeChecked();
   await expect(page.getByText("1 selected")).toBeVisible();
-  await expect(row).toBeVisible();
+  await expect(restoredRow).toBeVisible();
 });
 
 test("closed auto gate shows a configured policy as paused and preserves it on save", async ({ context, page }) => {
