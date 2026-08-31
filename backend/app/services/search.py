@@ -20,6 +20,7 @@ import math
 import struct
 import tempfile
 import time as monotonic_time
+import unicodedata
 from pathlib import PurePosixPath
 from threading import Lock
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable
@@ -30,7 +31,7 @@ from weakref import WeakKeyDictionary, WeakValueDictionary
 from meilisearch_python_sdk import Client as MeiliClient
 from meilisearch_python_sdk.models.search import SearchParams
 from meilisearch_python_sdk.models.settings import MeilisearchSettings
-from sqlalchemy import String, and_, cast, exists, func, literal_column, not_, or_, select
+from sqlalchemy import String, and_, case, cast, exists, func, literal_column, not_, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,8 @@ from app.models import (
     SubscriptionSource,
     Tag,
     TaskRun,
+    UserSubscription,
+    UserSubscriptionSource,
     Work,
     WorkCurationState,
     WorkSource,
@@ -297,7 +300,7 @@ INDEX_SETTINGS = {
             "created_ts",
             "updated_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
     },
     TAGS_INDEX: {
@@ -329,7 +332,7 @@ INDEX_SETTINGS = {
             "updated_ts",
             "synced_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
     },
     SUBSCRIPTIONS_INDEX: {
@@ -348,7 +351,7 @@ INDEX_SETTINGS = {
             "updated_ts",
             "synced_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
     },
 }
@@ -454,7 +457,7 @@ DEFAULT_SORT = {
     "creators": "name_sort:asc",
     "tags": "usage_count:desc",
     "repositories": "updated_ts:desc",
-    "subscriptions": "updated_ts:desc",
+    "subscriptions": "name_sort:asc",
 }
 
 SORT_FIELD = {
@@ -573,6 +576,24 @@ HAS_FIELD = {
 
 class SearchBackendUnavailable(RuntimeError):
     pass
+
+
+class NameAnchorsUnavailable(ValueError):
+    """The active reference query cannot expose stable name offsets."""
+
+
+REFERENCE_NAME_ANCHORS = tuple(
+    [
+        {"key": chr(code), "label": chr(code), "kind": "latin"}
+        for code in range(ord("A"), ord("Z") + 1)
+    ]
+    + [
+        {"key": "0-9", "label": "0–9", "kind": "digit"},
+        {"key": "kana", "label": "かな", "kind": "kana"},
+        {"key": "han", "label": "汉", "kind": "han"},
+        {"key": "other", "label": "#", "kind": "other"},
+    ]
+)
 
 
 def _meili_search_semaphore() -> asyncio.BoundedSemaphore:
@@ -1307,6 +1328,40 @@ def _free_text(query: SearchQuery) -> str:
     return " ".join(values)
 
 
+def _normalize_reference_name(value: str) -> str:
+    """Match PostgreSQL's reference-list normalization in search documents."""
+
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _reference_name_expressions(name_expression: Any) -> tuple[Any, Any, Any]:
+    """Return normalized name, fixed anchor key, and sortable anchor rank."""
+
+    normalized = func.lower(
+        func.normalize(name_expression, literal_column("NFKC"))
+    )
+    initial = func.substr(normalized, 1, 1)
+    is_latin = initial.op("~")(r"^[a-z]$")
+    is_digit = initial.op("~")(r"^[0-9]$")
+    is_kana = initial.op("~")(r"^[\u3040-\u30ff\uff66-\uff9f]$")
+    is_han = initial.op("~")(r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$")
+    anchor_key = case(
+        (is_latin, func.upper(initial)),
+        (is_digit, "0-9"),
+        (is_kana, "kana"),
+        (is_han, "han"),
+        else_="other",
+    )
+    anchor_rank = case(
+        (is_latin, func.ascii(initial) - func.ascii("a")),
+        (is_digit, 26),
+        (is_kana, 27),
+        (is_han, 28),
+        else_=29,
+    )
+    return normalized, anchor_key, anchor_rank
+
+
 def _grouped_qualifiers(query: SearchQuery, target: SearchTarget) -> dict[tuple[str, bool], list[SearchQualifier]]:
     grouped: dict[tuple[str, bool], list[SearchQualifier]] = defaultdict(list)
     for token in query.qualifiers:
@@ -1396,7 +1451,7 @@ def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     if selected and selected[0] != "relevance":
         field, direction = SORT_FIELD[selected[0]]
         order = [f"{field}:{direction}"]
-        if target == "works" and field != "id":
+        if target in {"works", "creators", "repositories", "subscriptions"} and field != "id":
             order.append(f"id:{direction}")
         return order
     if query.terms or selected == ("relevance",):
@@ -1405,7 +1460,7 @@ def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     if not default:
         return None
     order = [default]
-    if target == "works":
+    if target in {"works", "creators", "repositories", "subscriptions"}:
         direction = default.rsplit(":", 1)[-1]
         order.append(f"id:{direction}")
     return order
@@ -1990,7 +2045,22 @@ class SearchService:
             token.key in {"uid", "pid", "url"}
             for token in parsed.qualifiers
         )
-        if not text and has_source_identity:
+        if (
+            not text
+            and len(targets) == 1
+            and targets[0] in {"creators", "subscriptions"}
+        ):
+            target = targets[0]
+            groups[target] = await self._search_browse_reference_db(
+                target,
+                parsed,
+                resolved,
+                offset,
+                limit,
+                allowed_subscription_ids=allowed_subscription_ids,
+                user_id=user_id,
+            )
+        elif not text and has_source_identity:
             for target in targets:
                 target_offset = offset if len(targets) == 1 else 0
                 target_limit = min(limit, 10) if len(targets) > 1 else limit
@@ -3193,7 +3263,9 @@ class SearchService:
         return [{
             "id": str(creator.id),
             "name": creator.name,
-            "name_sort": (creator.display_name or creator.name).lower(),
+            "name_sort": _normalize_reference_name(
+                creator.display_name or creator.name
+            ),
             "display_name": creator.display_name or creator.name,
             "description": (creator.description or "")[:1000],
             "thumbnail_url": creator.thumbnail_url,
@@ -3442,7 +3514,9 @@ class SearchService:
             documents.append({
                 "id": str(subscription.id),
                 "name": subscription.name or creator.display_name or creator.name,
-                "name_sort": (subscription.name or creator.display_name or creator.name).lower(),
+                "name_sort": _normalize_reference_name(
+                    creator.display_name or creator.name
+                ),
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
                 "is_active": bool(subscription.is_active),
@@ -3755,6 +3829,402 @@ class SearchService:
         # fall through for any future targets.
         return {"total": 0, "items": []}
 
+    def _reference_browse_statement(
+        self,
+        target: SearchTarget,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> tuple[Any, tuple[Any, ...], str]:
+        """Build the authoritative creator/subscription browse projection."""
+
+        if target not in {"creators", "subscriptions"}:
+            raise ValueError(f"Unsupported reference browse target: {target}")
+
+        if target == "creators":
+            model = Creator
+            identity = Creator.id
+            name = func.coalesce(Creator.display_name, Creator.name)
+            statement = select(identity.label("id"))
+        else:
+            model = Subscription
+            identity = Subscription.id
+            name = func.coalesce(Creator.display_name, Creator.name)
+            statement = select(identity.label("id")).join(
+                Creator,
+                Creator.id == Subscription.creator_id,
+            )
+            if user_id is not None:
+                statement = statement.join(
+                    UserSubscription,
+                    and_(
+                        UserSubscription.subscription_id == Subscription.id,
+                        UserSubscription.user_id == user_id,
+                    ),
+                )
+            if allowed_subscription_ids is not None:
+                statement = statement.where(
+                    Subscription.id.in_(allowed_subscription_ids)
+                )
+
+        conditions: list[Any] = []
+        for (key, negated), tokens in _grouped_qualifiers(query, target).items():
+            expressions: list[Any] = []
+            for token in tokens:
+                value = _resolved_value(token, resolved)
+                expression = None
+                if key == "uid":
+                    source, source_creator_id = parse_source_identity(token.value)
+                    if target == "creators":
+                        expression = or_(
+                            Creator.id.in_(
+                                select(SourceCreator.creator_id).where(
+                                    SourceCreator.creator_id.is_not(None),
+                                    SourceCreator.source == source,
+                                    SourceCreator.source_creator_id
+                                    == source_creator_id,
+                                )
+                            ),
+                            Creator.id.in_(
+                                select(Subscription.creator_id)
+                                .join(
+                                    SubscriptionSource,
+                                    SubscriptionSource.subscription_id
+                                    == Subscription.id,
+                                )
+                                .where(
+                                    SubscriptionSource.source == source,
+                                    SubscriptionSource.source_creator_id
+                                    == source_creator_id,
+                                )
+                            ),
+                        )
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == source,
+                                SubscriptionSource.source_creator_id
+                                == source_creator_id,
+                            )
+                        )
+                elif key == "url":
+                    source_url = _resolved_source_url(token, resolved)
+                    identities = source_url.ids_for(target) if source_url else ()
+                    expression = identity.in_(
+                        [UUID(item) for item in identities]
+                    )
+                elif key == "source":
+                    if target == "creators":
+                        expression = Creator.id.in_(
+                            select(SourceCreator.creator_id).where(
+                                SourceCreator.creator_id.is_not(None),
+                                SourceCreator.source == value,
+                            )
+                        )
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == value
+                            )
+                        )
+                elif key == "creator":
+                    creator_id = UUID(value)
+                    expression = (
+                        Creator.id == creator_id
+                        if target == "creators"
+                        else Subscription.creator_id == creator_id
+                    )
+                elif key == "repo" and target == "subscriptions":
+                    repository_id = UUID(value)
+                    expression = Subscription.id.in_(
+                        select(SubscriptionSource.subscription_id).where(
+                            SubscriptionSource.id == repository_id
+                        )
+                    )
+                elif key == "is":
+                    if target == "creators":
+                        expression = {
+                            "favorite": Creator.is_favorite.is_(True),
+                            "active": Creator.is_active.is_(True),
+                            "inactive": Creator.is_active.is_(False),
+                        }.get(value)
+                    else:
+                        state_model = (
+                            UserSubscription
+                            if user_id is not None
+                            else Subscription
+                        )
+                        expression = {
+                            "active": state_model.is_active.is_(True),
+                            "inactive": state_model.is_active.is_(False),
+                            "sync-enabled": state_model.sync_enabled.is_(True),
+                            "sync-disabled": state_model.sync_enabled.is_(False),
+                            "never-synced": self._subscription_never_synced_expression(
+                                user_id=user_id
+                            ),
+                        }.get(value)
+                elif key == "has":
+                    if target == "creators":
+                        expression = {
+                            "subscription": select(Subscription.id).where(
+                                Subscription.creator_id == Creator.id
+                            ).exists(),
+                            "repository": select(SubscriptionSource.id)
+                            .join(
+                                Subscription,
+                                Subscription.id
+                                == SubscriptionSource.subscription_id,
+                            )
+                            .where(Subscription.creator_id == Creator.id)
+                            .exists(),
+                            "danbooru": Creator.danbooru_artist_id.is_not(None),
+                        }.get(value)
+                    elif value == "last-sync":
+                        expression = self._subscription_has_last_sync_expression(
+                            user_id=user_id
+                        )
+                elif key in {"created", "updated", "synced"}:
+                    if key == "synced" and target == "subscriptions":
+                        expression = or_(
+                            _sql_date_expression(
+                                Subscription.last_synced_at,
+                                value,
+                            ),
+                            select(SubscriptionSource.id).where(
+                                SubscriptionSource.subscription_id
+                                == Subscription.id,
+                                _sql_date_expression(
+                                    SubscriptionSource.last_synced_at,
+                                    value,
+                                ),
+                            ).exists(),
+                        )
+                    elif key != "synced":
+                        expression = _sql_date_expression(
+                            getattr(model, f"{key}_at"),
+                            value,
+                        )
+                if expression is not None:
+                    expressions.append(
+                        not_(expression) if negated else expression
+                    )
+            if expressions:
+                conditions.append(
+                    and_(*expressions) if negated else or_(*expressions)
+                )
+
+        if conditions:
+            statement = statement.where(and_(*conditions))
+
+        normalized_name, anchor_key, anchor_rank = (
+            _reference_name_expressions(name)
+        )
+        selected_sort = query.values("sort")
+        sort_name = selected_sort[0] if selected_sort else "name-asc"
+        direction = "asc" if sort_name.endswith("-asc") else "desc"
+        if sort_name.startswith("name-"):
+            sort_value = normalized_name
+        elif sort_name.startswith("created-"):
+            sort_value = model.created_at
+        elif sort_name.startswith("updated-"):
+            sort_value = model.updated_at
+        else:
+            sort_value = (
+                Subscription.last_synced_at
+                if target == "subscriptions"
+                else model.updated_at
+            )
+
+        projection = statement.add_columns(
+            normalized_name.label("name_sort"),
+            anchor_key.label("anchor_key"),
+            anchor_rank.label("anchor_rank"),
+            sort_value.label("sort_value"),
+        ).subquery()
+        if sort_name.startswith("name-"):
+            name_sort = projection.c.name_sort.collate("und-x-icu")
+            if direction == "asc":
+                order_by = (
+                    projection.c.anchor_rank.asc(),
+                    name_sort.asc(),
+                    projection.c.id.asc(),
+                )
+            else:
+                order_by = (
+                    projection.c.anchor_rank.desc(),
+                    name_sort.desc(),
+                    projection.c.id.desc(),
+                )
+        else:
+            value_order = (
+                projection.c.sort_value.asc().nulls_last()
+                if direction == "asc"
+                else projection.c.sort_value.desc().nulls_last()
+            )
+            identity_order = (
+                projection.c.id.asc()
+                if direction == "asc"
+                else projection.c.id.desc()
+            )
+            order_by = (value_order, identity_order)
+        return projection, order_by, direction
+
+    @staticmethod
+    def _subscription_has_last_sync_expression(*, user_id: int | None) -> Any:
+        if user_id is not None:
+            return select(UserSubscriptionSource.id).where(
+                UserSubscriptionSource.user_subscription_id
+                == UserSubscription.id,
+                UserSubscriptionSource.user_id == user_id,
+                UserSubscriptionSource.last_synced_at.is_not(None),
+            ).exists()
+        return select(SubscriptionSource.id).where(
+            SubscriptionSource.subscription_id == Subscription.id,
+            SubscriptionSource.last_synced_at.is_not(None),
+        ).exists()
+
+    @classmethod
+    def _subscription_never_synced_expression(
+        cls,
+        *,
+        user_id: int | None,
+    ) -> Any:
+        canonical_missing = Subscription.last_synced_at.is_(None)
+        return and_(
+            canonical_missing,
+            not_(
+                cls._subscription_has_last_sync_expression(user_id=user_id)
+            ),
+        )
+
+    async def _search_browse_reference_db(
+        self,
+        target: SearchTarget,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
+        projection, order_by, _direction = self._reference_browse_statement(
+            target,
+            query,
+            resolved,
+            allowed_subscription_ids=allowed_subscription_ids,
+            user_id=user_id,
+        )
+        total = int(
+            (
+                await self.db.execute(
+                    select(func.count()).select_from(projection)
+                )
+            ).scalar_one()
+        )
+        identities = list(
+            (
+                await self.db.execute(
+                    select(projection.c.id)
+                    .order_by(*order_by)
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        if not identities:
+            return {"total": total, "items": []}
+        builder = (
+            self._build_creator_documents
+            if target == "creators"
+            else self._build_subscription_documents
+        )
+        documents = await builder(identities)
+        by_id = {document["id"]: document for document in documents}
+        return {
+            "total": total,
+            "items": [
+                by_id[str(identity)]
+                for identity in identities
+                if str(identity) in by_id
+            ],
+        }
+
+    async def name_anchors(
+        self,
+        *,
+        scope: SearchScope,
+        query: str,
+        permissions: set[str],
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
+        parsed = parse_search_query(query, scope)
+        targets = self._allowed_targets(parsed, permissions)
+        selected_sort = parsed.values("sort")
+        if (
+            scope not in {"creators", "subscriptions"}
+            or targets != (scope,)
+            or parsed.terms
+            or (
+                selected_sort
+                and selected_sort[0] not in {"name-asc", "name-desc"}
+            )
+        ):
+            raise NameAnchorsUnavailable(
+                "Name anchors require a structured reference query sorted by name"
+            )
+        resolved = await self._resolve_qualifiers(parsed)
+        projection, order_by, direction = self._reference_browse_statement(
+            scope,
+            parsed,
+            resolved,
+            allowed_subscription_ids=allowed_subscription_ids,
+            user_id=user_id,
+        )
+        ordered = select(
+            projection.c.anchor_key.label("anchor_key"),
+            (
+                func.row_number().over(order_by=order_by) - 1
+            ).label("offset"),
+        ).cte("ordered_reference_names")
+        rows = (
+            await self.db.execute(
+                select(
+                    ordered.c.anchor_key,
+                    func.min(ordered.c.offset),
+                    func.count(),
+                ).group_by(ordered.c.anchor_key)
+            )
+        ).all()
+        aggregates = {
+            key: {"offset": int(offset), "count": int(count)}
+            for key, offset, count in rows
+        }
+        definitions = (
+            reversed(REFERENCE_NAME_ANCHORS)
+            if direction == "desc"
+            else REFERENCE_NAME_ANCHORS
+        )
+        items = []
+        for definition in definitions:
+            aggregate = aggregates.get(definition["key"])
+            items.append(
+                {
+                    **definition,
+                    "offset": aggregate["offset"] if aggregate else None,
+                    "count": aggregate["count"] if aggregate else 0,
+                }
+            )
+        return {
+            "scope": scope,
+            "direction": direction,
+            "total": sum(item["count"] for item in items),
+            "items": items,
+        }
+
     async def _search_identity_reference_db(
         self,
         target: SearchTarget,
@@ -4021,7 +4491,9 @@ class SearchService:
         items = [{
             "id": str(creator.id),
             "name": creator.name,
-            "name_sort": (creator.display_name or creator.name).lower(),
+            "name_sort": _normalize_reference_name(
+                creator.display_name or creator.name
+            ),
             "display_name": creator.display_name or creator.name,
             "description": (creator.description or "")[:1000],
             "thumbnail_url": creator.thumbnail_url,
@@ -4164,7 +4636,9 @@ class SearchService:
             items.append({
                 "id": str(subscription.id),
                 "name": subscription.name or creator.display_name or creator.name,
-                "name_sort": (subscription.name or creator.display_name or creator.name).lower(),
+                "name_sort": _normalize_reference_name(
+                    creator.display_name or creator.name
+                ),
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
                 "is_active": bool(subscription.is_active),

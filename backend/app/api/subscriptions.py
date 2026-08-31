@@ -52,8 +52,6 @@ async def list_subscriptions(
     user=RequirePermission("subscriptions"),
 ):
     membership_service = SubscriptionMembershipService(db, user.id)
-    if not q.strip():
-        return await membership_service.list(offset=offset, limit=limit)
     try:
         result = await SearchService(db).search(
             q,

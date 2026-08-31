@@ -33,3 +33,18 @@ class SearchAssistRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=30)
     compose: SearchComposeRequest | None = None
     composes: list[SearchComposeRequest] = Field(default_factory=list)
+
+
+class ReferenceNameAnchorRead(BaseModel):
+    key: str
+    label: str
+    kind: Literal["latin", "digit", "kana", "han", "other"]
+    offset: int | None = None
+    count: int = Field(ge=0)
+
+
+class ReferenceNameAnchorsRead(BaseModel):
+    scope: Literal["creators", "subscriptions"]
+    direction: Literal["asc", "desc"]
+    total: int = Field(ge=0)
+    items: list[ReferenceNameAnchorRead]

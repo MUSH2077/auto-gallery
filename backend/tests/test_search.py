@@ -63,6 +63,17 @@ class TestSearchService:
         assert hasattr(SearchService, "reindex")
         assert inspect.iscoroutinefunction(SearchService.reindex)
 
+    def test_reference_indexes_default_to_stable_name_order(self):
+        """Changing the subscription default back to timestamps must fail."""
+        from app.services.search import _meili_sort
+        from app.services.search_language import parse_search_query
+
+        for scope in ("creators", "subscriptions"):
+            assert _meili_sort(
+                parse_search_query("", scope),
+                scope,
+            ) == ["name_sort:asc", "id:asc"]
+
     def test_parallel_work_hydration_reserves_a_control_connection(self, monkeypatch):
         from app.services import search
 

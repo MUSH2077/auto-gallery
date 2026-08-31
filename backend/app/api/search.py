@@ -8,8 +8,17 @@ from app.auth import RequireAnyPermission
 from app.database import get_db
 from app.models.user import User
 from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
-from app.schemas.search import SearchAssistRequest, SearchScopeValue
-from app.services.search import SearchBackendUnavailable, SearchPermissionError, SearchService
+from app.schemas.search import (
+    ReferenceNameAnchorsRead,
+    SearchAssistRequest,
+    SearchScopeValue,
+)
+from app.services.search import (
+    NameAnchorsUnavailable,
+    SearchBackendUnavailable,
+    SearchPermissionError,
+    SearchService,
+)
 from app.services.search_language import SCOPE_TARGETS, SearchQueryError
 
 _require_search = RequireAnyPermission("library", "curation", "subscriptions", "tasks", "upload")
@@ -32,6 +41,53 @@ def _raise_search_error(error: SearchQueryError) -> None:
             "diagnostic": error.diagnostic.payload(),
         },
     )
+
+
+@router.get("/name-anchors", response_model=ReferenceNameAnchorsRead)
+async def name_anchors(
+    scope: str = Query(..., pattern="^(creators|subscriptions)$"),
+    q: str = Query("", description="Structured reference query"),
+    user: User = _require_search,
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = getattr(user, "id", None)
+    allowed_subscription_ids: set[UUID] | None = None
+    if scope == "subscriptions":
+        if db is not None and user_id is not None:
+            allowed_subscription_ids = set(
+                (
+                    await db.execute(
+                        select(UserSubscription.subscription_id).where(
+                            UserSubscription.user_id == user_id
+                        )
+                    )
+                ).scalars()
+            )
+        else:
+            allowed_subscription_ids = set()
+    try:
+        return await SearchService(db).name_anchors(
+            scope=scope,
+            query=q,
+            permissions=_permissions(user),
+            allowed_subscription_ids=allowed_subscription_ids,
+            user_id=user_id,
+        )
+    except NameAnchorsUnavailable as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "name_anchors_unavailable",
+                "message": str(error),
+            },
+        ) from error
+    except SearchQueryError as error:
+        _raise_search_error(error)
+    except SearchPermissionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "permission_denied", "message": str(error)},
+        ) from error
 
 
 @router.get("")
