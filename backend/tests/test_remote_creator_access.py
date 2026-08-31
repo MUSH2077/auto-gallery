@@ -33,27 +33,40 @@ class DetailAdapter:
     auth_methods = ("refresh_token",)
 
     def __init__(self):
-        self.cursors = []
+        self.calls = []
 
-    async def fetch_creator_detail(self, credentials, *, source_creator_id, page_size=20):
+    async def fetch_creator_detail(
+        self, credentials, *, source_creator_id, work_type="illust", page_size=20
+    ):
         from app.remote_discovery.contract import RemoteCreatorDetail
 
         assert credentials.materialize()["refresh_token"] == "detail-secret"
+        self.calls.append(("detail", work_type, None))
         return RemoteCreatorDetail(
             profile=self._profile(source_creator_id),
-            works=self._page(source_creator_id, cursor=None),
+            works=self._page(source_creator_id, cursor=None, work_type=work_type),
         )
 
     async def fetch_creator_works(
-        self, credentials, *, source_creator_id, cursor=None, page_size=20
+        self,
+        credentials,
+        *,
+        source_creator_id,
+        work_type="illust",
+        cursor=None,
+        page_size=20,
     ):
         assert credentials.materialize()["refresh_token"] == "detail-secret"
-        self.cursors.append(dict(cursor or {}))
-        return self._page(source_creator_id, cursor=cursor)
+        self.calls.append(("works", work_type, dict(cursor or {})))
+        return self._page(source_creator_id, cursor=cursor, work_type=work_type)
 
     @staticmethod
     def _profile(source_creator_id):
-        from app.remote_discovery.contract import RemoteCreatorProfile
+        from app.remote_discovery.contract import (
+            RemoteCreatorLink,
+            RemoteCreatorProfile,
+            RemoteCreatorPublicProfile,
+        )
 
         return RemoteCreatorProfile(
             source="pixiv",
@@ -62,14 +75,27 @@ class DetailAdapter:
             username="detail_artist",
             profile_url=f"https://www.pixiv.net/users/{source_creator_id}",
             avatar_url="https://i.pximg.net/user-profile/example.jpg",
+            header_image_url="https://i.pximg.net/user-profile/header.jpg",
             comment="profile",
             work_counts={"illusts": 2, "manga": 1},
+            social_counts={"following": 25, "mypixiv": 2, "public_bookmarks": 40},
+            public_profile=RemoteCreatorPublicProfile(
+                gender="female",
+                region="Tokyo",
+                birth_day="08-30",
+                birth_year=2000,
+                job="Illustrator",
+            ),
+            links=(
+                RemoteCreatorLink(kind="website", url="https://artist.example"),
+                RemoteCreatorLink(kind="x", url="https://x.com/detail_artist"),
+            ),
             is_followed=True,
             fetched_at=datetime.now(timezone.utc),
         )
 
     @staticmethod
-    def _page(source_creator_id, cursor):
+    def _page(source_creator_id, cursor, work_type="illust"):
         from app.remote_discovery.contract import RemoteWorkPage, RemoteWorkPreview
 
         second = bool(cursor)
@@ -83,7 +109,7 @@ class DetailAdapter:
                     title=f"Work {work_id}",
                     work_url=f"https://www.pixiv.net/artworks/{work_id}",
                     created_at=datetime.now(timezone.utc),
-                    work_type="manga" if second else "illust",
+                    work_type=work_type,
                     page_count=2,
                     x_restrict=1 if second else 0,
                     thumbnail_url=f"https://i.pximg.net/thumb/{work_id}.jpg",
@@ -94,8 +120,51 @@ class DetailAdapter:
                 )
             ],
             done=second,
-            next_cursor=None if second else {"offset": 1},
+            next_cursor=None if second else {"offset": 1, "work_type": work_type},
         )
+
+
+def test_optional_profile_media_is_independently_downgraded():
+    from app.models import DiscoveryCandidate, RemoteAccount
+    from app.remote_discovery.contract import RemoteCreatorProfile
+    from app.services.remote_access_tokens import RemoteAccessTokenService
+    from app.services.remote_creator_access import RemoteCreatorAccessService
+
+    account = RemoteAccount(
+        id=uuid4(),
+        user_id=41,
+        source="pixiv",
+        credential_generation=1,
+    )
+    candidate = DiscoveryCandidate(
+        id=uuid4(),
+        remote_account_id=account.id,
+        user_id=41,
+        source_creator_id="4242",
+    )
+    profile = RemoteCreatorProfile(
+        source="pixiv",
+        source_creator_id="4242",
+        display_name="Default Avatar Artist",
+        username="default_avatar",
+        profile_url="https://www.pixiv.net/users/4242",
+        avatar_url="https://s.pximg.net/common/images/no_profile.png",
+        header_image_url="https://evil.example/header.jpg",
+        comment=None,
+        work_counts={},
+        is_followed=None,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    service = RemoteCreatorAccessService(
+        object(),
+        41,
+        tokens=RemoteAccessTokenService(secret="profile-media-test-secret"),
+    )
+
+    read = service._profile_read(candidate, account, profile)
+
+    assert read.avatar_url is None
+    assert read.header_image_url is None
 
 
 async def _cleanup(db):
@@ -195,10 +264,23 @@ async def test_candidate_detail_signs_media_work_and_opaque_cursor_and_enforces_
             assert candidate_read.recent_works[0].thumbnail_url.startswith(
                 "/api/v1/remote-media/"
             )
-            detail = await service.get_detail(candidate.id, limit=20)
+            detail = await service.get_detail(
+                candidate.id,
+                work_type="manga",
+                limit=20,
+            )
 
+            assert detail.candidate.id == candidate.id
             assert detail.profile.display_name == "Detail Artist"
             assert detail.profile.avatar_url.startswith("/api/v1/remote-media/")
+            assert detail.profile.header_image_url.startswith("/api/v1/remote-media/")
+            assert detail.profile.social_counts == {
+                "following": 25,
+                "mypixiv": 2,
+                "public_bookmarks": 40,
+            }
+            assert detail.profile.public_profile.region == "Tokyo"
+            assert [link.kind for link in detail.profile.links] == ["website", "x"]
             assert len(detail.works.items) == 1
             first = detail.works.items[0]
             assert first.thumbnail_url.startswith("/api/v1/remote-media/")
@@ -209,12 +291,24 @@ async def test_candidate_detail_signs_media_work_and_opaque_cursor_and_enforces_
 
             page = await service.get_works(
                 candidate.id,
+                work_type="manga",
                 cursor=detail.works.next_cursor,
                 limit=20,
             )
             assert [item.source_work_id for item in page.items] == ["9902"]
             assert page.next_cursor is None
-            assert adapter.cursors == [{"offset": 1}]
+            assert adapter.calls == [
+                ("detail", "manga", None),
+                ("works", "manga", {"offset": 1, "work_type": "manga"}),
+            ]
+
+            with pytest.raises(ValueError, match="cursor"):
+                await service.get_works(
+                    candidate.id,
+                    work_type="illust",
+                    cursor=detail.works.next_cursor,
+                    limit=20,
+                )
 
             with pytest.raises(ValueError, match="not found"):
                 await RemoteCreatorAccessService(

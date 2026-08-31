@@ -15,6 +15,7 @@ from app.remote_discovery.contract import (
     RemoteCreatorDetail,
     RemoteCreatorProfile,
     RemoteWorkPage,
+    RemoteWorkFeedType,
     RemoteWorkPreview,
 )
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
@@ -22,7 +23,9 @@ from app.schemas.remote_discovery import (
     DiscoveryCandidateRead,
     DiscoveryRecentWorkRead,
     RemoteCreatorDetailRead,
+    RemoteCreatorLinkRead,
     RemoteCreatorProfileRead,
+    RemoteCreatorPublicProfileRead,
     RemoteWorkPageRead,
     RemoteWorkPreviewRead,
 )
@@ -223,6 +226,20 @@ class RemoteCreatorAccessService:
         )
         return f"/api/v1/remote-media/{token}"
 
+    def _safe_media_url(
+        self,
+        candidate: DiscoveryCandidate,
+        account: RemoteAccount,
+        upstream_url: str | None,
+        variant: str,
+    ) -> str | None:
+        """Downgrade an invalid optional Pixiv image without failing the profile."""
+
+        try:
+            return self._media_url(candidate, account, upstream_url, variant)
+        except (TypeError, ValueError):
+            return None
+
     async def _work_states(
         self,
         works: tuple[RemoteWorkPreview, ...],
@@ -262,6 +279,8 @@ class RemoteCreatorAccessService:
         candidate: DiscoveryCandidate,
         account: RemoteAccount,
         page: RemoteWorkPage,
+        *,
+        work_type: RemoteWorkFeedType,
     ) -> RemoteWorkPageRead:
         local, queued = await self._work_states(page.items)
         items: list[RemoteWorkPreviewRead] = []
@@ -291,12 +310,17 @@ class RemoteCreatorAccessService:
                     work_type=work.work_type,
                     page_count=work.page_count,
                     x_restrict=work.x_restrict,
-                    thumbnail_url=self._media_url(
+                    thumbnail_url=self._safe_media_url(
                         candidate, account, work.thumbnail_url, "thumbnail"
                     ),
                     preview_urls=[
-                        self._media_url(candidate, account, url, "preview")
+                        signed
                         for url in work.preview_urls
+                        if (
+                            signed := self._safe_media_url(
+                                candidate, account, url, "preview"
+                            )
+                        )
                     ],
                     local_work_id=local_work_id,
                     download_job_id=job.id if job else None,
@@ -315,6 +339,7 @@ class RemoteCreatorAccessService:
                     "remote_account_id": str(account.id),
                     "credential_generation": int(account.credential_generation),
                     "source_creator_id": candidate.source_creator_id,
+                    "work_type": work_type,
                     "cursor": dict(page.next_cursor),
                 }
             )
@@ -332,20 +357,44 @@ class RemoteCreatorAccessService:
             display_name=profile.display_name,
             username=profile.username,
             profile_url=profile.profile_url,
-            avatar_url=self._media_url(candidate, account, profile.avatar_url, "avatar"),
+            avatar_url=self._safe_media_url(
+                candidate, account, profile.avatar_url, "avatar"
+            ),
+            header_image_url=self._safe_media_url(
+                candidate, account, profile.header_image_url, "header"
+            ),
             comment=profile.comment,
             work_counts=dict(profile.work_counts),
+            social_counts=dict(profile.social_counts),
+            public_profile=RemoteCreatorPublicProfileRead(
+                gender=profile.public_profile.gender,
+                region=profile.public_profile.region,
+                birth_day=profile.public_profile.birth_day,
+                birth_year=profile.public_profile.birth_year,
+                job=profile.public_profile.job,
+            ),
+            links=[
+                RemoteCreatorLinkRead(kind=link.kind, url=link.url)
+                for link in profile.links
+            ],
             is_followed=profile.is_followed,
             fetched_at=profile.fetched_at,
         )
 
-    async def get_detail(self, candidate_id: UUID, *, limit: int = 20) -> RemoteCreatorDetailRead:
+    async def get_detail(
+        self,
+        candidate_id: UUID,
+        *,
+        work_type: RemoteWorkFeedType = "illust",
+        limit: int = 20,
+    ) -> RemoteCreatorDetailRead:
         candidate, account = await self._context(candidate_id)
         result, account = await self._provider_call(
             account,
             lambda adapter, credentials: adapter.fetch_creator_detail(
                 credentials,
                 source_creator_id=candidate.source_creator_id,
+                work_type=work_type,
                 page_size=limit,
             ),
         )
@@ -353,39 +402,52 @@ class RemoteCreatorAccessService:
             raise ValueError("Remote adapter returned an invalid creator detail")
         if result.profile.source_creator_id != candidate.source_creator_id:
             raise ValueError("Remote adapter returned a different creator")
+        candidate_read = (await self.present_candidates([candidate]))[0]
         return RemoteCreatorDetailRead(
+            candidate=candidate_read,
             profile=self._profile_read(candidate, account, result.profile),
-            works=await self._page_read(candidate, account, result.works),
+            works=await self._page_read(
+                candidate,
+                account,
+                result.works,
+                work_type=work_type,
+            ),
         )
 
     async def get_works(
         self,
         candidate_id: UUID,
         *,
-        cursor: str,
+        work_type: RemoteWorkFeedType = "illust",
+        cursor: str | None = None,
         limit: int = 20,
     ) -> RemoteWorkPageRead:
         candidate, account = await self._context(candidate_id)
-        try:
-            cursor_payload = self.tokens.verify_cursor(cursor)
-            if (
-                int(cursor_payload["user_id"]) != self.user_id
-                or cursor_payload["candidate_id"] != str(candidate.id)
-                or cursor_payload["remote_account_id"] != str(account.id)
-                or int(cursor_payload["credential_generation"])
-                != int(account.credential_generation)
-                or cursor_payload["source_creator_id"] != candidate.source_creator_id
-                or not isinstance(cursor_payload["cursor"], Mapping)
-            ):
-                raise ValueError
-        except (KeyError, TypeError, ValueError, RemoteAccessTokenError) as exc:
-            raise RemoteAccessTokenError("remote works cursor is invalid") from exc
+        upstream_cursor: dict[str, Any] | None = None
+        if cursor is not None:
+            try:
+                cursor_payload = self.tokens.verify_cursor(cursor)
+                if (
+                    int(cursor_payload["user_id"]) != self.user_id
+                    or cursor_payload["candidate_id"] != str(candidate.id)
+                    or cursor_payload["remote_account_id"] != str(account.id)
+                    or int(cursor_payload["credential_generation"])
+                    != int(account.credential_generation)
+                    or cursor_payload["source_creator_id"] != candidate.source_creator_id
+                    or cursor_payload["work_type"] != work_type
+                    or not isinstance(cursor_payload["cursor"], Mapping)
+                ):
+                    raise ValueError
+                upstream_cursor = dict(cursor_payload["cursor"])
+            except (KeyError, TypeError, ValueError, RemoteAccessTokenError) as exc:
+                raise RemoteAccessTokenError("remote works cursor is invalid") from exc
         result, account = await self._provider_call(
             account,
             lambda adapter, credentials: adapter.fetch_creator_works(
                 credentials,
                 source_creator_id=candidate.source_creator_id,
-                cursor=dict(cursor_payload["cursor"]),
+                work_type=work_type,
+                cursor=upstream_cursor,
                 page_size=limit,
             ),
         )
@@ -393,4 +455,9 @@ class RemoteCreatorAccessService:
             item.source_creator_id != candidate.source_creator_id for item in result.items
         ):
             raise ValueError("Remote adapter returned works for a different creator")
-        return await self._page_read(candidate, account, result)
+        return await self._page_read(
+            candidate,
+            account,
+            result,
+            work_type=work_type,
+        )

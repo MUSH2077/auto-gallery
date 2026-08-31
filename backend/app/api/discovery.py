@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -176,13 +177,16 @@ def _remote_detail_error(exc: Exception) -> HTTPException:
 async def get_candidate_remote_detail(
     candidate_id: UUID,
     response: Response,
+    work_type: Literal["illust", "manga"] = Query("illust"),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user=RequirePermission("subscriptions"),
 ):
     try:
         detail = await RemoteCreatorAccessService(db, user.id).get_detail(
-            candidate_id, limit=limit
+            candidate_id,
+            work_type=work_type,
+            limit=limit,
         )
     except Exception as exc:
         raise _remote_detail_error(exc) from exc
@@ -197,7 +201,8 @@ async def get_candidate_remote_detail(
 async def get_candidate_remote_works(
     candidate_id: UUID,
     response: Response,
-    cursor: str = Query(min_length=40, max_length=10000),
+    work_type: Literal["illust", "manga"] = Query("illust"),
+    cursor: str | None = Query(None, min_length=40, max_length=10000),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user=RequirePermission("subscriptions"),
@@ -205,6 +210,7 @@ async def get_candidate_remote_works(
     try:
         works = await RemoteCreatorAccessService(db, user.id).get_works(
             candidate_id,
+            work_type=work_type,
             cursor=cursor,
             limit=limit,
         )

@@ -236,10 +236,29 @@ class RemoteCreatorProfileRead(BaseModel):
     username: str | None = None
     profile_url: str
     avatar_url: str | None = None
+    header_image_url: str | None = None
     comment: str | None = None
     work_counts: dict[str, int] = Field(default_factory=dict)
+    social_counts: dict[str, int] = Field(default_factory=dict)
+    public_profile: "RemoteCreatorPublicProfileRead" = Field(
+        default_factory=lambda: RemoteCreatorPublicProfileRead()
+    )
+    links: list["RemoteCreatorLinkRead"] = Field(default_factory=list)
     is_followed: bool | None = None
     fetched_at: datetime
+
+
+class RemoteCreatorPublicProfileRead(BaseModel):
+    gender: str | None = None
+    region: str | None = None
+    birth_day: str | None = None
+    birth_year: int | None = None
+    job: str | None = None
+
+
+class RemoteCreatorLinkRead(BaseModel):
+    kind: Literal["website", "x", "pawoo"]
+    url: str
 
 
 class RemoteWorkPreviewRead(BaseModel):
@@ -265,6 +284,7 @@ class RemoteWorkPageRead(BaseModel):
 
 
 class RemoteCreatorDetailRead(BaseModel):
+    candidate: DiscoveryCandidateRead
     profile: RemoteCreatorProfileRead
     works: RemoteWorkPageRead
 

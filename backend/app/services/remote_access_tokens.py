@@ -17,7 +17,7 @@ from app.config import settings
 
 
 REMOTE_ACCESS_TOKEN_TTL_SECONDS = 10 * 60
-RemoteMediaVariant = Literal["avatar", "thumbnail", "preview"]
+RemoteMediaVariant = Literal["avatar", "header", "thumbnail", "preview"]
 
 
 class RemoteAccessTokenError(ValueError):
@@ -101,7 +101,7 @@ class RemoteAccessTokenService:
         upstream_url: str,
         variant: RemoteMediaVariant,
     ) -> str:
-        if variant not in {"avatar", "thumbnail", "preview"}:
+        if variant not in {"avatar", "header", "thumbnail", "preview"}:
             raise ValueError("Unsupported remote media variant")
         validate_pixiv_media_url(upstream_url)
         return self._issue(
@@ -120,7 +120,7 @@ class RemoteAccessTokenService:
         payload = self._verify(token, "media")
         try:
             validate_pixiv_media_url(str(payload["upstream_url"]))
-            if payload["variant"] not in {"avatar", "thumbnail", "preview"}:
+            if payload["variant"] not in {"avatar", "header", "thumbnail", "preview"}:
                 raise ValueError
             if int(payload["user_id"]) < 1:
                 raise ValueError

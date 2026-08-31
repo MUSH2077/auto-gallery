@@ -28,11 +28,11 @@ class RemoteMediaResult:
 async def fetch_pixiv_media(
     upstream_url: str,
     *,
-    variant: Literal["avatar", "thumbnail", "preview"],
+    variant: Literal["avatar", "header", "thumbnail", "preview"],
     client: httpx.AsyncClient | None = None,
 ) -> RemoteMediaResult:
     validate_pixiv_media_url(upstream_url)
-    if variant not in {"avatar", "thumbnail", "preview"}:
+    if variant not in {"avatar", "header", "thumbnail", "preview"}:
         raise ValueError("Unsupported remote media variant")
     size_limit = PREVIEW_MEDIA_LIMIT if variant == "preview" else SMALL_MEDIA_LIMIT
     owns_client = client is None

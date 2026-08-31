@@ -47,6 +47,22 @@ def test_media_ticket_is_opaque_bound_and_expires():
         service.verify_media(token)
 
 
+def test_media_ticket_supports_header_variant():
+    from app.services.remote_access_tokens import RemoteAccessTokenService
+
+    service = RemoteAccessTokenService(secret="remote-ticket-test-secret-with-32-bytes")
+    token = service.issue_media(
+        user_id=41,
+        candidate_id=uuid4(),
+        remote_account_id=uuid4(),
+        credential_generation=7,
+        upstream_url="https://i.pximg.net/user-profile/header.jpg",
+        variant="header",
+    )
+
+    assert service.verify_media(token)["variant"] == "header"
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -115,9 +131,10 @@ async def test_pixiv_media_fetch_disables_redirects_and_sets_referer():
     [
         ("thumbnail", "text/html", b"not an image", "image MIME"),
         ("avatar", "image/jpeg", b"x" * (5 * 1024 * 1024 + 1), "size limit"),
+        ("header", "image/jpeg", b"x" * (5 * 1024 * 1024 + 1), "size limit"),
         ("preview", "image/png", b"x" * (25 * 1024 * 1024 + 1), "size limit"),
     ],
-    ids=["wrong-mime", "avatar-too-large", "preview-too-large"],
+    ids=["wrong-mime", "avatar-too-large", "header-too-large", "preview-too-large"],
 )
 async def test_pixiv_media_fetch_rejects_wrong_mime_and_oversize(
     variant, content_type, body, message
