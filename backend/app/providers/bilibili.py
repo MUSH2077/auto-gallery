@@ -20,9 +20,18 @@ class BilibiliProvider(BaseProvider):
             can_download=True,
             supports_gallerydl=True,
             supports_tags=True,
+            supports_remote_discovery=True,
+            discovery_auth_methods=("sessdata",),
+            supports_collection_selectors=True,
         )
 
     def normalize_url(self, input_text: str) -> str | None:
+        # Dynamic/opus pages are the account-level targets returned by remote
+        # discovery. Preserve the selected surface for gallery-dl.
+        match = re.search(r"space\.bilibili\.com/(\d+)/(dynamic|upload/opus)", input_text)
+        if match:
+            return f"https://space.bilibili.com/{match.group(1)}/{match.group(2)}"
+
         # User articles page: https://space.bilibili.com/{uid}/article
         match = re.search(r"space\.bilibili\.com/(\d+)(?:/article)?", input_text)
         if match:
@@ -45,6 +54,7 @@ class BilibiliProvider(BaseProvider):
     def validate_url(self, url: str) -> bool:
         patterns = [
             r"https?://space\.bilibili\.com/\d+/article",
+            r"https?://space\.bilibili\.com/\d+/(?:dynamic|upload/opus)/?",
             r"https?://(?:www\.)?bilibili\.com/read/(?:cv|mobile/)?\d+",
             r"https?://space\.bilibili\.com/\d+/favlist\?.*ftype=article",
         ]
@@ -56,6 +66,12 @@ class BilibiliProvider(BaseProvider):
             return ProviderSearchURL(
                 kind="work",
                 normalized_url=f"https://www.bilibili.com/read/cv{match.group(1)}",
+            )
+        match = re.search(r"space\.bilibili\.com/(\d+)/(dynamic|upload/opus)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://space.bilibili.com/{match.group(1)}/{match.group(2)}",
             )
         match = re.search(r"space\.bilibili\.com/(\d+)", input_text)
         if match:

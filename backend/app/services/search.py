@@ -99,7 +99,11 @@ from app.services.source_search_identity import (
     parse_source_identity,
     parse_source_url,
 )
-from app.services.tasks import task_payload
+from app.services.tasks import (
+    import_job_visibility_condition,
+    task_payload,
+    task_surface_visibility_condition,
+)
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
@@ -1944,6 +1948,9 @@ class SearchService:
         force_sfw: bool = False,
         kind: str | None = None,
         cursor: str | None = None,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         request_started_at = monotonic_time.perf_counter()
         # ``kind`` remains a thin adapter for internal callers while all
@@ -2003,6 +2010,8 @@ class SearchService:
                         resolved,
                         target_offset,
                         target_limit,
+                        allowed_subscription_ids=allowed_subscription_ids,
+                        allowed_repository_ids=allowed_repository_ids,
                     )
         elif not text and targets == ("works",) and self._works_db_compatible(parsed):
             groups["works"], execution = await self._hedged_structured_works_search(
@@ -2016,13 +2025,31 @@ class SearchService:
         elif not text and not has_filters and len(targets) == 1:
             target = targets[0]
             if target in ("creators", "subscriptions", "tags", "repositories"):
-                groups[target] = await self._search_reference_db(target, offset, limit)
+                groups[target] = await self._search_reference_db(
+                    target,
+                    offset,
+                    limit,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                    user_id=user_id,
+                )
 
         meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
         if cursor and meili_targets:
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
-            groups.update(await self._search_meili(parsed, meili_targets, resolved, offset, limit, force_sfw))
+            groups.update(
+                await self._search_meili(
+                    parsed,
+                    meili_targets,
+                    resolved,
+                    offset,
+                    limit,
+                    force_sfw,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                )
+            )
             execution.update({
                 "winner": "meilisearch",
                 "consistency": "fulltext_index_required",
@@ -2035,9 +2062,16 @@ class SearchService:
                 offset,
                 limit,
                 permissions=permission_set,
+                user_id=user_id,
             )
         if "scheduler" in targets:
-            groups["scheduler"] = await self._search_scheduler(parsed, resolved, offset, limit)
+            groups["scheduler"] = await self._search_scheduler(
+                parsed,
+                resolved,
+                offset,
+                limit,
+                user_id=user_id,
+            )
 
         first_target = targets[0]
         total = groups.get(first_target, {}).get("total", 0) if len(targets) == 1 else groups.get("works", {}).get("total", 0)
@@ -2085,6 +2119,9 @@ class SearchService:
         offset: int,
         limit: int,
         force_sfw: bool,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict[str, dict]:
         text = _free_text(query)
         timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
@@ -2107,6 +2144,34 @@ class SearchService:
                 resolved,
                 force_sfw=force_sfw,
             )
+            if target == "subscriptions" and allowed_subscription_ids is not None:
+                if allowed_subscription_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(subscription_id))}"
+                        for subscription_id in sorted(
+                            allowed_subscription_ids, key=str
+                        )
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_subscription__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
+            if target == "repositories" and allowed_repository_ids is not None:
+                if allowed_repository_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(repository_id))}"
+                        for repository_id in sorted(allowed_repository_ids, key=str)
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_repository__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
             sort = _meili_sort(query, target)
             if filter_expression:
                 search_kwargs["filter"] = filter_expression
@@ -2215,6 +2280,7 @@ class SearchService:
         visibility: str = "all",
         *,
         permissions: set[str] | frozenset[str],
+        user_id: int | None = None,
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
         excluded_admin_operation_types = (
@@ -2226,6 +2292,13 @@ class SearchService:
                 TaskRun.operation_type.is_(None),
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
+        if user_id is not None:
+            conditions.append(
+                task_surface_visibility_condition(
+                    user_id,
+                    include_global_system_tasks="system" in permissions,
+                )
+            )
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2291,6 +2364,7 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         permissions: set[str] | frozenset[str] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2301,6 +2375,7 @@ class SearchService:
             limit,
             visibility=visibility,
             permissions=permissions if permissions is not None else frozenset(),
+            user_id=user_id,
         )
 
     async def search_download_jobs(
@@ -2310,6 +2385,8 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
+        subscription_id: UUID | str | None = None,
     ) -> list[DownloadJob]:
         """Return download-domain rows using the canonical task search AST.
 
@@ -2320,6 +2397,12 @@ class SearchService:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if subscription_id is not None:
+            conditions.append(DownloadJob.subscription_id == UUID(str(subscription_id)))
+        if user_id is not None:
+            from app.services.tasks import download_job_visibility_condition
+
+            conditions.append(download_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2386,12 +2469,15 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
     ) -> tuple[int, list[ImportJob]]:
         """Return import-domain rows using the canonical task search AST."""
 
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if user_id is not None:
+            conditions.append(import_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2469,6 +2555,8 @@ class SearchService:
         resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
+        *,
+        user_id: int | None = None,
     ) -> dict:
         from app.jobs.subscription_sync import schedule_decision_snapshot
         from app.services.settings import get_scheduler_config
@@ -2483,14 +2571,48 @@ class SearchService:
             tz = timezone.utc
         now = datetime.now(tz)
         scheduler_enabled = bool(config.get("scheduler_enabled", True))
-        rows = (await self.db.execute(
+        scheduler_stmt = (
             select(SubscriptionSource, Subscription, Creator)
             .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
             .join(Creator, Subscription.creator_id == Creator.id)
-            .order_by(Creator.display_name, Creator.name, SubscriptionSource.source)
-        )).all()
+        )
+        if user_id is not None:
+            from app.models.remote_discovery import (
+                UserSubscription,
+                UserSubscriptionSource,
+            )
+
+            scheduler_stmt = (
+                scheduler_stmt.add_columns(UserSubscriptionSource, UserSubscription)
+                .join(
+                    UserSubscriptionSource,
+                    UserSubscriptionSource.subscription_source_id
+                    == SubscriptionSource.id,
+                )
+                .join(
+                    UserSubscription,
+                    UserSubscription.id
+                    == UserSubscriptionSource.user_subscription_id,
+                )
+                .where(
+                    UserSubscriptionSource.user_id == user_id,
+                    UserSubscription.user_id == user_id,
+                )
+            )
+        rows = (
+            await self.db.execute(
+                scheduler_stmt.order_by(
+                    Creator.display_name,
+                    Creator.name,
+                    SubscriptionSource.source,
+                )
+            )
+        ).all()
         items = []
-        for repository, subscription, creator in rows:
+        for row in rows:
+            repository, subscription, creator = row[:3]
+            source_policy = row[3] if user_id is not None else repository
+            subscription_policy = row[4] if user_id is not None else subscription
             try:
                 provider = registry.get(repository.source)
                 normalized_url = provider.normalize_url(repository.source_url) if repository.source_url else None
@@ -2502,22 +2624,23 @@ class SearchService:
                 can_download = False
                 display_name = repository.source
             decision = schedule_decision_snapshot(
-                subscription,
+                subscription_policy,
                 config,
-                repository.last_synced_at,
-                repository.last_attempted_at,
+                source_policy.last_synced_at,
+                source_policy.last_attempted_at,
                 now,
                 tz,
+                source_policy.next_sync_at,
             )
             due = bool(decision.get("due"))
             reason = str(decision.get("reason"))
             suppression_reason = None
-            auth_healthy = repository.auth_healthy is not False
-            if not subscription.is_active:
+            auth_healthy = source_policy.auth_healthy is not False
+            if not subscription_policy.is_active:
                 due, reason = False, "subscription_inactive"
-            elif not subscription.sync_enabled:
+            elif not subscription_policy.sync_enabled:
                 due, reason = False, "subscription_sync_disabled"
-            elif not repository.is_enabled:
+            elif not source_policy.is_enabled:
                 due, reason = False, "source_disabled"
             elif not auth_healthy:
                 due, reason = False, "auth_unhealthy"
@@ -2530,9 +2653,9 @@ class SearchService:
                 suppression_reason = "scheduler_disabled"
             items.append({
                 "subscription_id": str(subscription.id),
-                "subscription_name": subscription.name,
-                "subscription_active": subscription.is_active,
-                "subscription_sync_enabled": subscription.sync_enabled,
+                "subscription_name": subscription_policy.name,
+                "subscription_active": subscription_policy.is_active,
+                "subscription_sync_enabled": subscription_policy.sync_enabled,
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
                 "source_id": str(repository.id),
@@ -2540,19 +2663,19 @@ class SearchService:
                 "source_display_name": display_name,
                 "source_url": repository.source_url,
                 "source_creator_id": repository.source_creator_id,
-                "source_enabled": repository.is_enabled,
-                "effective_mode": decision.get("mode") or subscription.schedule_mode or config.get("schedule_mode", "interval"),
+                "source_enabled": source_policy.is_enabled,
+                "effective_mode": decision.get("mode") or subscription_policy.schedule_mode or config.get("schedule_mode", "interval"),
                 "timezone": tz_name,
-                "scheduled_times": subscription.scheduled_times or config.get("scheduled_times", ""),
+                "scheduled_times": subscription_policy.scheduled_times or config.get("scheduled_times", ""),
                 "schedule_rule": (
-                    effective_calendar_rule(subscription, config)
-                    if (subscription.schedule_mode or config.get("schedule_mode"))
+                    effective_calendar_rule(subscription_policy, config)
+                    if (subscription_policy.schedule_mode or config.get("schedule_mode"))
                     in {"calendar", "fixed_time"}
                     else None
                 ),
-                "sync_interval_hours": subscription.sync_interval_hours,
-                "last_synced_at": _iso(repository.last_synced_at),
-                "last_attempted_at": _iso(repository.last_attempted_at),
+                "sync_interval_hours": subscription_policy.sync_interval_hours,
+                "last_synced_at": _iso(source_policy.last_synced_at),
+                "last_attempted_at": _iso(source_policy.last_attempted_at),
                 "due": due,
                 "decision": "due_now" if due else reason,
                 "reason": reason,
@@ -2613,6 +2736,7 @@ class SearchService:
         permissions: set[str],
         compose: dict | None = None,
         composes: list[dict] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         query = before_cursor + after_cursor
         edits = ([compose] if compose else []) + (composes or [])
@@ -2658,6 +2782,7 @@ class SearchService:
             scope=scope,
             limit=limit,
             permissions=permissions,
+            allowed_repository_ids=allowed_repository_ids,
         )
         if diagnostic and not suggestions:
             suggestions = [
@@ -2687,6 +2812,7 @@ class SearchService:
         scope: SearchScope,
         limit: int,
         permissions: set[str],
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> list[dict]:
         negated = fragment.startswith("-")
         value = fragment[1:] if negated else fragment
@@ -2758,14 +2884,22 @@ class SearchService:
         elif key == "repo":
             if "subscriptions" not in permissions:
                 return []
-            rows = await self.db.execute(
-                select(SubscriptionSource.source, SubscriptionSource.source_creator_id, SubscriptionSource.id)
+            repo_stmt = (
+                select(
+                    SubscriptionSource.source,
+                    SubscriptionSource.source_creator_id,
+                    SubscriptionSource.id,
+                )
                 .where(or_(
                     SubscriptionSource.source_creator_id.ilike(f"%{partial}%"),
                     SubscriptionSource.source_url.ilike(f"%{partial}%"),
                 ))
-                .limit(limit)
             )
+            if allowed_repository_ids is not None:
+                repo_stmt = repo_stmt.where(
+                    SubscriptionSource.id.in_(allowed_repository_ids)
+                )
+            rows = await self.db.execute(repo_stmt.limit(limit))
             values = [f"{source}/{source_creator_id}" if source_creator_id else str(repo_id) for source, source_creator_id, repo_id in rows.all()]
         replacements = []
         for candidate in values[:limit]:
@@ -3211,6 +3345,16 @@ class SearchService:
             by_subscription[str(repository.subscription_id)].append(repository)
 
         running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
+        index_safe_job = and_(
+            DownloadJob.owner_user_id.is_(None),
+            DownloadJob.triggering_user_subscription_id.is_(None),
+            DownloadJob.triggering_remote_account_id.is_(None),
+        )
+        index_safe_task = and_(
+            TaskRun.owner_user_id.is_(None),
+            TaskRun.triggering_user_subscription_id.is_(None),
+            TaskRun.triggering_remote_account_id.is_(None),
+        )
         job_stats_rows = (await self.db.execute(
             select(
                 DownloadJob.subscription_id,
@@ -3218,7 +3362,10 @@ class SearchService:
                     DownloadJob.status.in_(running_statuses)
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+            )
             .group_by(DownloadJob.subscription_id)
         )).all()
         running_stats = {
@@ -3240,6 +3387,8 @@ class SearchService:
             .where(
                 DownloadJob.subscription_id.in_(selected_ids),
                 TaskRun.attention_state == "open",
+                index_safe_job,
+                index_safe_task,
             )
             .group_by(DownloadJob.subscription_id)
         )).all()
@@ -3263,7 +3412,11 @@ class SearchService:
                     TaskRun.subject_id == DownloadJob.id,
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+                index_safe_task,
+            )
             .where(or_(
                 TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
                 TaskRun.attention_state == "open",
@@ -3567,7 +3720,14 @@ class SearchService:
             await asyncio.to_thread(cache_release_lock, INDEX_WRITE_LOCK, lease)
 
     async def _search_reference_db(
-        self, target: str, offset: int, limit: int
+        self,
+        target: str,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         """Direct DB list query for real-time listing — no index dependency.
 
@@ -3578,7 +3738,17 @@ class SearchService:
         if target == "creators":
             return await self._search_creators_db(offset, limit)
         if target == "subscriptions":
-            return await self._search_subscriptions_db(offset, limit)
+            return await self._search_subscriptions_db(
+                offset,
+                limit,
+                allowed_subscription_ids=allowed_subscription_ids,
+                user_id=user_id,
+            )
+        if target == "repositories" and allowed_repository_ids is not None:
+            # Empty reference searches do not currently expose repositories;
+            # retain that contract while keeping the ownership argument
+            # explicit for future DB-backed listing support.
+            return {"total": 0, "items": []}
         if target == "works":
             return await self._search_works_db(offset, limit)
         # Tags and repositories already have their own DB endpoints;
@@ -3592,6 +3762,10 @@ class SearchService:
         resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         """Execute source-identity reference searches against committed rows."""
 
@@ -3601,6 +3775,10 @@ class SearchService:
             "subscriptions": Subscription,
         }[target]
         conditions: list[Any] = []
+        if target == "subscriptions" and allowed_subscription_ids is not None:
+            conditions.append(Subscription.id.in_(allowed_subscription_ids))
+        if target == "repositories" and allowed_repository_ids is not None:
+            conditions.append(SubscriptionSource.id.in_(allowed_repository_ids))
 
         for (key, negated), tokens in _grouped_qualifiers(query, target).items():
             expressions: list[Any] = []
@@ -3867,24 +4045,54 @@ class SearchService:
 
         return {"total": total, "items": items}
 
-    async def _search_subscriptions_db(self, offset: int, limit: int) -> dict:
+    async def _search_subscriptions_db(
+        self,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
         # Total count
-        total = (await self.db.execute(
-            select(func.count()).select_from(Subscription)
-        )).scalar() or 0
+        ownership = (
+            Subscription.id.in_(allowed_subscription_ids)
+            if allowed_subscription_ids is not None
+            else None
+        )
+        count_stmt = select(func.count()).select_from(Subscription)
+        if ownership is not None:
+            count_stmt = count_stmt.where(ownership)
+        total = (await self.db.execute(count_stmt)).scalar() or 0
 
         # Paginated rows
-        rows = (await self.db.execute(
+        rows_stmt = (
             select(Subscription, Creator)
             .join(Creator, Creator.id == Subscription.creator_id)
             .order_by(Subscription.updated_at.desc())
             .offset(offset).limit(limit)
-        )).all()
+        )
+        if ownership is not None:
+            rows_stmt = rows_stmt.where(ownership)
+        rows = (await self.db.execute(rows_stmt)).all()
 
         if not rows:
             return {"total": total, "items": []}
 
         sub_ids = [sub.id for sub, _ in rows]
+
+        from app.services.tasks import (
+            download_job_visibility_condition,
+            task_visibility_condition,
+        )
+
+        job_visibility = (
+            download_job_visibility_condition(user_id)
+            if user_id is not None
+            else None
+        )
+        task_visibility = (
+            task_visibility_condition(user_id) if user_id is not None else None
+        )
 
         # Sources per subscription
         source_rows = (await self.db.execute(
@@ -3896,19 +4104,25 @@ class SearchService:
         for repo in source_rows:
             by_sub[str(repo.subscription_id)].append(repo)
 
-        running_rows = (await self.db.execute(
-            select(DownloadJob.subscription_id, func.count(DownloadJob.id))
-            .where(
-                DownloadJob.subscription_id.in_(sub_ids),
-                DownloadJob.status.in_({"enqueued", "downloading", "downloaded", "importing"}),
-            )
-            .group_by(DownloadJob.subscription_id)
-        )).all()
+        running_stmt = select(
+            DownloadJob.subscription_id,
+            func.count(DownloadJob.id),
+        ).where(
+            DownloadJob.subscription_id.in_(sub_ids),
+            DownloadJob.status.in_(
+                {"enqueued", "downloading", "downloaded", "importing"}
+            ),
+        )
+        if job_visibility is not None:
+            running_stmt = running_stmt.where(job_visibility)
+        running_rows = (
+            await self.db.execute(running_stmt.group_by(DownloadJob.subscription_id))
+        ).all()
         running_by_sub = {
             str(subscription_id): int(count)
             for subscription_id, count in running_rows
         }
-        actionable_rows = (await self.db.execute(
+        actionable_stmt = (
             select(DownloadJob, TaskRun)
             .join(
                 TaskRun,
@@ -3924,8 +4138,16 @@ class SearchService:
                     TaskRun.attention_state == "open",
                 ),
             )
-            .order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
-        )).all()
+        )
+        if job_visibility is not None:
+            actionable_stmt = actionable_stmt.where(job_visibility)
+        if task_visibility is not None:
+            actionable_stmt = actionable_stmt.where(task_visibility)
+        actionable_rows = (
+            await self.db.execute(
+                actionable_stmt.order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
+            )
+        ).all()
         actionable_by_sub: dict[str, list[tuple[DownloadJob, TaskRun]]] = defaultdict(list)
         for job, task in actionable_rows:
             actionable_by_sub[str(job.subscription_id)].append((job, task))

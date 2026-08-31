@@ -55,6 +55,7 @@ class SubscriptionUpdate(_ScheduleInput):
 
 class SubscriptionRead(BaseModel):
     id: UUID
+    membership_id: UUID | None = None
     creator_id: UUID
     name: str | None = None
     creator_name: str | None = None
@@ -79,6 +80,8 @@ class SubscriptionRead(BaseModel):
     effective_mode: str | None = None
     auto_enabled_source: ActivatedSubscriptionSource | None = None
     next_sync_at: datetime | None = None
+    discovery_candidate_id: UUID | None = None
+    discovered_via: str | None = None
 
     model_config = {"from_attributes": True}
 

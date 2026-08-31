@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.curation import CurationStateRead
 
@@ -49,3 +50,12 @@ class WorkRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RemoteWorkStateRead(BaseModel):
+    source: Literal["pixiv"]
+    source_work_id: str
+    fetched_at: datetime
+    total_views: int = Field(ge=0)
+    total_bookmarks: int = Field(ge=0)
+    is_bookmarked: bool

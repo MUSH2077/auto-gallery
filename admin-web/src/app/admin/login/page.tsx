@@ -1,5 +1,5 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
@@ -17,10 +17,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (isAuthenticated) {
+  useEffect(() => {
+    if (!isAuthenticated) return;
     router.replace(user?.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
-    return null;
-  }
+  }, [isAuthenticated, router, user?.must_change_password]);
+
+  if (isAuthenticated) return null;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

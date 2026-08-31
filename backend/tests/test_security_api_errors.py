@@ -51,42 +51,30 @@ async def test_gallerydl_connection_does_not_expose_internal_exception(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_subscription_batch_deletion_preserves_structured_conflict(monkeypatch):
+async def test_subscription_batch_deletion_cannot_remove_shared_files(monkeypatch):
     from app.api import subscriptions
     from app.schemas.deletion import BatchDeletionRequest
-    from app.services import hierarchical_deletion
 
-    class BlockingDeletionService:
-        def __init__(self, _db):
-            pass
-
-        async def scope(self, _entity_type, _entity_ids):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "deletion_active_tasks",
-                    "message": "Stop active tasks before deleting.",
-                    "task_ids": [str(uuid4())],
-                },
-            )
+    class BombMembershipService:
+        def __init__(self, *_args):
+            raise AssertionError("unauthorized file deletion touched memberships")
 
     monkeypatch.setattr(
-        hierarchical_deletion,
-        "HierarchicalDeletionService",
-        BlockingDeletionService,
+        subscriptions,
+        "SubscriptionMembershipService",
+        BombMembershipService,
     )
 
     with pytest.raises(HTTPException) as error:
         await subscriptions.batch_delete_subscriptions(
-            BatchDeletionRequest(ids=[uuid4()]),
+            BatchDeletionRequest(ids=[uuid4()], delete_files=True),
             Response(),
-            user=SimpleNamespace(is_admin=False),
+            user=SimpleNamespace(id=41, is_admin=False),
             db=object(),
         )
 
-    assert error.value.status_code == 409
-    assert error.value.detail["code"] == "deletion_active_tasks"
-    assert "private" not in str(error.value.detail)
+    assert error.value.status_code == 403
+    assert error.value.detail == "Administrator access required to delete files"
 
 
 def test_hierarchy_batch_rejects_invalid_ids_at_the_contract_boundary():
@@ -100,19 +88,30 @@ def test_hierarchy_batch_rejects_invalid_ids_at_the_contract_boundary():
 async def test_subscription_batch_toggle_expected_errors_use_public_codes(monkeypatch):
     from app.api import subscriptions
 
-    class MissingSubscriptionService:
-        def __init__(self, _db):
-            pass
+    user_id = 41
 
-        async def update_subscription(self, _subscription_id, _data):
+    class MissingMembershipService:
+        def __init__(self, _db, owner_id):
+            assert owner_id == user_id
+
+        async def update(self, _subscription_id, _data):
             raise ValueError("Subscription not found")
 
-    monkeypatch.setattr(subscriptions, "SubscriptionService", MissingSubscriptionService)
+    class Database:
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(
+        subscriptions,
+        "SubscriptionMembershipService",
+        MissingMembershipService,
+    )
     missing_id = str(uuid4())
 
     update_result = await subscriptions.batch_toggle_sync(
         {"ids": ["not-a-uuid", missing_id], "sync_enabled": False},
-        db=object(),
+        db=Database(),
+        user=SimpleNamespace(id=user_id),
     )
 
     assert update_result["results"] == [

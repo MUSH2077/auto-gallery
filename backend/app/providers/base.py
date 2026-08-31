@@ -11,6 +11,9 @@ class ProviderCapabilities:
     supports_tags: bool = False
     is_reference_only: bool = False
     supports_download_cursor: bool = False
+    supports_remote_discovery: bool = False
+    discovery_auth_methods: tuple[str, ...] = ()
+    supports_collection_selectors: bool = False
 
 
 @dataclass(frozen=True)

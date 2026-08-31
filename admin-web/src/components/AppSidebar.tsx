@@ -15,6 +15,7 @@ import {
   Home,
   Image,
   Inbox,
+  Radar,
   Settings,
   Tag,
   Upload,
@@ -53,6 +54,7 @@ const ICONS: Record<AdminIconName, LucideIcon> = {
   pulse: CircleGauge,
   gear: Settings,
   people: UsersRound,
+  radar: Radar,
 };
 
 function NavIcon({ name }: { name: AdminIconName }) {

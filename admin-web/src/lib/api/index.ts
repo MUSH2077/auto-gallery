@@ -1,5 +1,5 @@
 import { request, ApiError, clearAuthOn401 } from "./client";
-import { worksApi } from "./endpoints";
+import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
 export * from "./types";
@@ -46,6 +46,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
 // ── API ──
 
 export const api = {
+  ...remoteDiscoveryApi,
   // System
   health: () => request<T.HealthResponse>("/api/v1/system/health"),
 
@@ -958,6 +959,30 @@ export const queryKeys = {
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
     summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
   },
+  remoteAccounts: {
+    all: (userId: number) => ["remote-discovery-private", userId, "remote-accounts"] as const,
+    detail: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id] as const,
+    collections: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id, "collections"] as const,
+  },
+  discovery: {
+    privateScope: (userId: number) => ["remote-discovery-private", userId] as const,
+    all: (userId: number) => ["remote-discovery-private", userId, "discovery"] as const,
+    mutation: (userId: number, operation: string) => ["remote-discovery-private", userId, "mutation", operation] as const,
+    scans: (userId: number, accountId?: string) => ["remote-discovery-private", userId, "discovery", "scans", accountId || "all"] as const,
+    candidates: (userId: number, filters?: T.DiscoveryCandidateFilters) => [
+      "remote-discovery-private",
+      userId,
+      "discovery",
+      "candidates",
+      filters?.accountId || "all",
+      filters?.state || "all",
+      filters?.confidence || "all",
+      filters?.isFollowing === undefined ? "all" : filters.isFollowing,
+      filters?.localMatch === undefined ? "all" : filters.localMatch,
+      filters?.offset || 0,
+      filters?.limit || 25,
+    ] as const,
+  },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
     tags: (id: string, page = 0) => ["repositories", id, "tags", page] as const,
@@ -992,6 +1017,7 @@ export const queryKeys = {
     all: ["works"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
+    remoteState: (id: string) => ["works", id, "remote-state"] as const,
     assets: (id: string) => ["works", id, "assets"] as const,
     tags: (id: string) => ["works", id, "tags"] as const,
   },

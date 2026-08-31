@@ -224,6 +224,241 @@ def test_worker_cgroup_oom_kill_is_immediately_fail_closed_and_promoted(monkeypa
     assert promoted == [("worker_cgroup_oom_kill", "test-worker")]
 
 
+def test_worker_retries_unacknowledged_oom_event_with_the_same_identity(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    contributions = iter(
+        [
+            {"max": 0, "oom": 1, "oom_kill": 1},
+            {"max": 0, "oom": 1, "oom_kill": 1},
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": next(contributions),
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/shared",
+        },
+    )
+
+    def promote(reason, **kwargs):
+        calls.append((reason, kwargs))
+        if len(calls) == 1:
+            raise RuntimeError("redis unavailable")
+        return {
+            "status": "paused",
+            "controller_mode": "critical",
+            "reasons": [reason],
+            "budget": {"throughput_scale": 0.0},
+        }
+
+    monkeypatch.setattr(resource_aware_worker, "publish_external_resource_critical", promote)
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    first = worker._publish_pressure_state(dict(normal))
+    second_snapshot = dict(normal)
+    second = worker._publish_pressure_state(second_snapshot)
+
+    assert first["hard_gate_active"] is True
+    assert second["hard_gate_active"] is True
+    assert second_snapshot["status"] == "paused"
+    assert len(calls) == 2
+    assert calls[0][1]["event_id"] == calls[1][1]["event_id"]
+    assert calls[0][1]["cgroup_id"] == "/docker/shared"
+    assert calls[0][1]["oom_kill_counter"] == 1
+
+
+def test_worker_keeps_local_gate_closed_past_recovery_while_oom_is_unacknowledged(
+    monkeypatch,
+):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 1},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unacknowledged",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: (_ for _ in ()).throw(
+            ConnectionError("promotion unavailable")
+        ),
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    first = worker._publish_pressure_state(dict(normal))
+    now["value"] += 61.0
+    second = worker._publish_pressure_state(dict(normal))
+
+    assert first["hard_gate_active"] is True
+    assert second["hard_gate_active"] is True
+    assert worker._pending_cgroup_oom_event is not None
+
+
+def test_worker_local_recovery_requires_confirmed_oom_acknowledgment(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    worker._last_cgroup_events = {"max": 0, "oom": 0, "oom_kill": 0}
+    worker._local_cgroup_oom_kill_latched = True
+    worker._local_cgroup_oom_kill_at = 10.0
+    worker._local_cgroup_oom_acknowledged = False
+    worker._pending_cgroup_oom_event = None
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: 71.0)
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 0, "oom_kill": 0},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unconfirmed",
+        },
+    )
+
+    feedback = worker._publish_pressure_state(
+        {"status": "normal", "controller_mode": "normal", "reasons": []}
+    )
+
+    assert feedback["hard_gate_active"] is True
+
+
+def test_restarted_worker_does_not_latch_an_acknowledged_historical_oom(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 4},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/shared",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: None,
+    )
+
+    feedback = worker._publish_pressure_state(
+        {"status": "normal", "controller_mode": "normal", "reasons": []}
+    )
+
+    assert feedback["hard_gate_active"] is False
+
+
+def test_live_worker_periodically_touches_recovered_cgroup_ack(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 0.0}
+    touches = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 4},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/long-lived",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "touch_cgroup_oom_kill_ack",
+        lambda connection, cgroup_id, counter: (
+            touches.append((connection, cgroup_id, counter)) or "recovered"
+        ),
+        raising=False,
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    worker._publish_pressure_state(dict(normal))
+    now["value"] = 60 * 60 + 1
+    feedback = worker._publish_pressure_state(dict(normal))
+
+    assert touches == [(worker.connection, "/docker/long-lived", 4)]
+    assert feedback["hard_gate_active"] is False
+
+
+def test_worker_cgroup_max_and_oom_only_apply_local_soft_feedback(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    samples = iter(
+        [
+            {"max": 0, "oom": 0, "oom_kill": 0},
+            {"max": 1, "oom": 1, "oom_kill": 0},
+        ]
+    )
+    promoted = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": next(samples),
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "worker-test",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda reason, **kwargs: promoted.append((reason, kwargs["source"])),
+    )
+
+    shared_snapshot = {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert worker._publish_pressure_state(shared_snapshot)["soft_scale"] == 1.0
+    feedback = worker._publish_pressure_state(shared_snapshot)
+
+    assert feedback == {
+        "hard_gate_active": False,
+        "soft_scale": 0.5,
+        "cgroup_deltas": {"max": 1, "oom": 1, "oom_kill": 0},
+    }
+    assert shared_snapshot == {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert promoted == []
+    assert worker._local_cgroup_soft_until == 70.0
+
+
 def test_worker_soft_cgroup_feedback_halves_an_enforced_slice():
     worker = _bare_worker()
     worker._local_cgroup_soft_until = float("inf")

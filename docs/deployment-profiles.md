@@ -1,14 +1,16 @@
 # Deployment Profile · 部署配置
 
-The base `docker-compose.yaml` is a portable project-local profile. Every
-memory, CPU and PID ceiling has an environment override, and auto-gallery
-containers cannot consume host swap (`memswap_limit == mem_limit`). These are
-upper fuses rather than host reservations. Lower worker I/O priority, bounded
-logs and runtime micro-batching keep background work cooperative.
+The base `docker-compose.yaml` is a portable project-local profile. PostgreSQL,
+Redis, Meilisearch, and the one-shot migration service retain hard memory, CPU,
+PID, and no-swap fuses. Application services retain PID/OOM/log protections but
+have no hard memory, swap, or CPU quotas; adaptive host-reserve governance,
+bounded queue concurrency, and per-process budgets keep background work
+cooperative.
 
-基础 `docker-compose.yaml` 是可移植的项目级配置。每个容器的内存、CPU 和 PID
-上限都可由环境变量覆盖；auto-gallery 容器不能使用宿主机 Swap
-(`memswap_limit == mem_limit`)。这些值是保险丝，不是从宿主预留的资源。
+基础 `docker-compose.yaml` 是可移植的项目级配置。PostgreSQL、Redis、
+Meilisearch 和一次性迁移服务保留内存、CPU、PID 及禁用 Swap 的硬保险丝。
+应用服务保留 PID/OOM/日志保护，但没有硬内存、Swap 或 CPU 配额；自适应宿主机
+储备、受限队列并发与进程内部预算使后台工作保持协作。
 
 Ordinary local deployment builds a source-digest candidate. Formal releases use
 `scripts/deploy.sh --verified <manifest>` and never rebuild accepted images.
@@ -23,35 +25,37 @@ whole application.
 
 | Service | Memory / swap total | CPU | PIDs | OOM score |
 | --- | ---: | ---: | ---: | ---: |
-| PostgreSQL | 384M | 0.45 | 64 | 0 |
-| Redis | 128M | 0.15 | 32 | 0 |
-| Meilisearch | 512M | 0.40 | 64 | 300 |
-| Backend | 512M | 0.55 | 128 | 100 |
-| Download worker | 320M | 0.35 | 96 | 500 |
-| Import worker | 640M | 0.65 | 64 | 500 |
-| Operations worker | 384M | 0.25 | 64 | 500 |
-| Scheduler | 128M | 0.10 | 32 | 500 |
-| Admin web | 256M | 0.15 | 64 | 100 |
+| PostgreSQL | 768M | 0.45 | 64 | 0 |
+| Redis | 256M | 0.15 | 32 | 0 |
+| Meilisearch | 1G | 0.40 | 64 | 300 |
+| Migrate | 512M | 0.25 | 64 | 100 |
+| Backend | unbounded | unbounded | 128 | 100 |
+| Download worker | unbounded | unbounded | 96 | 500 |
+| Import worker | unbounded | unbounded | 64 | 500 |
+| Operations worker | unbounded | unbounded | 64 | 500 |
+| Scheduler | unbounded | unbounded | 32 | 500 |
+| Admin web | unbounded | unbounded | 64 | 100 |
 
-`migrate` has a transient 256M limit and exits after applying migrations. Every
-service uses `json-file` rotation (`10m`, 3 files). Download concurrency has a
+`migrate` exits after applying migrations. Every service uses `json-file`
+rotation (`10m`, 3 files). Download concurrency has a
 deployment ceiling of one; raising the UI setting alone cannot exceed it.
 
-Redis remains `96mb/noeviction` because it stores RQ queues as well as cache
-data. Its container health check performs a short-lived `SET EX` and `DEL`, so a
-server that answers `PING` but rejects writes is not considered healthy.
+Redis remains `192mb/noeviction` inside its protected 256M container because it
+stores RQ queues as well as cache data. Its container health check performs a
+short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
+writes is not considered healthy.
 
 ## Adaptive algorithm governance · 自适应算法治理
 
 `RESOURCE_GOVERNANCE_MODE=enforce` is the default for non-Gitllery profiles.
 The host memory reserve is device-relative: `clamp(MemTotal × 15%, 384 MiB,
-1280 MiB)`, with a fixed override available. Active Swap collapse, unreadable
+2560 MiB)`, with a fixed override available. Active Swap collapse, unreadable
 core metrics, project cgroup OOM events and Redis/disk hard failures stop only
 auto-gallery heavy work. PSI alone only scales micro-batches through AIMD and
 never turns the whole pipeline off.
 
 非 Gitllery profile 默认启用 `RESOURCE_GOVERNANCE_MODE=enforce`。宿主储备按
-`clamp(MemTotal × 15%, 384 MiB, 1280 MiB)` 自动标定，也可固定覆盖。硬风险只停止
+`clamp(MemTotal × 15%, 384 MiB, 2560 MiB)` 自动标定，也可固定覆盖。硬风险只停止
 auto-gallery 重任务；PSI 仅通过 AIMD 缩小微批，不会单独让流水线归零。
 
 The profile controller separates network download, import DB batches, image
@@ -147,10 +151,15 @@ mapper stacks may charge I/O to a lower physical device than the mounted path.
    checksummed `deployment_scope=core` acceptance manifest for the exact image
    digests.
 3. Deploy the accepted images with `scripts/deploy.sh --verified <manifest>`.
-   The script creates a checked rollback point, migrates, verifies the core,
-   then starts adaptive workers unless `--core-only` is supplied. Host metrics
-   are observational; backup, migration, image identity and project health are
-   fail-closed.
+   The script creates a checked rollback point, stops old worker publishers,
+   migrates and recreates the foreground application, then waits for the new
+   enforced controller to clear any inherited hard latch after its full stable
+   recovery window. It never deletes the latch manually. Only after the core
+   runtime check passes does it recreate adaptive workers (unless `--core-only`
+   is supplied), then verify worker health and queue listeners. Idle queues and
+   previews are valid, so rollout does not require a progress counter to move.
+   Host metrics are observational; backup, migration, image identity and
+   project health are fail-closed.
 4. Observe the deployment before increasing any environment-overridden caps:
    starting the import rollout:
 
@@ -161,9 +170,10 @@ mapper stacks may charge I/O to a lower physical device than the mounted path.
 
    The JSONL includes host PSI and Swap trends, per-container memory/CPU/I/O,
    cgroup pressure/events, controller budgets, queue activity and outbox lag.
-   Confirm every container has equal memory and memory-swap limits, no new
-   cgroup `oom_kill`, no restart-count growth, and no more than 256 MiB host
-   Swap growth from the clean baseline.
+   Confirm protected services have equal memory and memory-swap limits,
+   application services have no hard memory/swap/CPU quota, no new cgroup
+   `oom_kill`, no restart-count growth, and no more than 256 MiB host Swap
+   growth from the clean baseline.
 5. Enable the NAS I/O override only after the device and cgroup-v2 throughput
    checks above pass, then repeat the mixed-load observation for 24–48 hours.
 6. Governance never edits host earlyoom, Swap, system services, or another

@@ -15,6 +15,7 @@ endpoint of their own module must return 200, and every other module's
 endpoint must return 403. The admin user must get 200 on all five.
 """
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -125,6 +126,8 @@ async def test_unauthenticated_is_401_on_every_module():
             for module, path in MODULE_ENDPOINTS.items():
                 r = await client.get(path)
                 assert r.status_code == 401, f"anon -> {path}: {r.status_code} {r.text}"
+            r = await client.get(f"/api/v1/works/{uuid4()}/remote-state")
+            assert r.status_code == 401, f"anon -> work remote state: {r.status_code} {r.text}"
     finally:
         await engine.dispose()
 
@@ -182,7 +185,6 @@ async def test_library_permission_blocked_from_curation_write_routes():
     nonexistent work id, not 403, proving the permission check itself no
     longer blocks it.
     """
-    from uuid import uuid4
     from app.database import async_session, engine
     from app.main import app
 
@@ -229,6 +231,11 @@ async def test_library_permission_blocked_from_curation_write_routes():
             r = await client.post(f"/api/v1/works/{random_id}/favorite", headers=curation_headers)
             assert r.status_code == 404, (
                 f"curation -> POST /works/{{id}}/favorite: {r.status_code} {r.text}"
+            )
+
+            r = await client.get(f"/api/v1/works/{random_id}/remote-state", headers=curation_headers)
+            assert r.status_code == 403, (
+                f"curation -> GET /works/{{id}}/remote-state: {r.status_code} {r.text}"
             )
     finally:
         async with async_session() as db:

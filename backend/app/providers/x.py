@@ -24,6 +24,9 @@ class XProvider(BaseProvider):
             can_download=True,
             supports_gallerydl=True,
             supports_tags=True,
+            supports_remote_discovery=True,
+            discovery_auth_methods=("oauth2", "cookie"),
+            supports_collection_selectors=True,
         )
 
     def normalize_url(self, input_text: str) -> str | None:

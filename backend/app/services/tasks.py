@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, and_, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
@@ -23,6 +23,199 @@ from app.models.task_run import TaskEvent, TaskRun
 NONTERMINAL_STATUSES = {"enqueued", "running", "paused", "recovering"}
 TERMINAL_STATUSES = {"complete", "failed", "cancelled", "stale"}
 _UNSET = object()
+_SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS = (
+    "subscription_id",
+    "subscription_source_id",
+    "user_subscription_id",
+    "remote_account_id",
+)
+
+
+def download_job_visibility_condition(user_id: int, job_model=DownloadJob):
+    """Prefer immutable ownership; infer only for genuinely legacy rows."""
+
+    from app.models.remote_discovery import UserSubscription
+
+    return or_(
+        job_model.owner_user_id == user_id,
+        and_(
+            job_model.owner_user_id.is_(None),
+            job_model.triggering_user_subscription_id.is_(None),
+            job_model.triggering_remote_account_id.is_(None),
+            job_model.subscription_id.in_(
+                select(UserSubscription.subscription_id).where(
+                    UserSubscription.user_id == user_id
+                )
+            ),
+        ),
+    )
+
+
+def import_job_visibility_condition(user_id: int):
+    """Infer import ownership through its parent DownloadJob."""
+
+    return exists(
+        select(1)
+        .select_from(DownloadJob)
+        .where(
+            DownloadJob.id == ImportJob.download_job_id,
+            download_job_visibility_condition(user_id),
+        )
+        .correlate(ImportJob)
+    )
+
+
+def _subscription_membership_locator_condition():
+    return or_(
+        TaskRun.subject_type.in_({"subscription", "subscription_source"}).is_(True),
+        *(
+            TaskRun.meta[key].astext.is_not(None)
+            for key in _SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS
+        ),
+    )
+
+
+def _task_trigger_condition():
+    return or_(
+        TaskRun.triggering_user_subscription_id.is_not(None),
+        TaskRun.triggering_remote_account_id.is_not(None),
+    )
+
+
+def _global_subscription_batch_condition():
+    return and_(
+        (TaskRun.kind == "admin").is_(True),
+        (TaskRun.operation_type == "subscription-sync-batch").is_(True),
+        TaskRun.owner_user_id.is_(None),
+        TaskRun.triggering_user_subscription_id.is_(None),
+        TaskRun.triggering_remote_account_id.is_(None),
+        ~_subscription_membership_locator_condition(),
+    )
+
+
+def is_global_subscription_batch(task: TaskRun) -> bool:
+    meta = task.meta if isinstance(task.meta, dict) else {}
+    return bool(
+        task.kind == "admin"
+        and task.operation_type == "subscription-sync-batch"
+        and task.owner_user_id is None
+        and task.triggering_user_subscription_id is None
+        and task.triggering_remote_account_id is None
+        and task.subject_type not in {"subscription", "subscription_source"}
+        and all(
+            meta.get(key) is None for key in _SUBSCRIPTION_MEMBERSHIP_LOCATOR_KEYS
+        )
+    )
+
+
+def can_access_global_subscription_batch(user: Any) -> bool:
+    return bool(
+        getattr(user, "is_admin", False)
+        or "system" in set(getattr(user, "permissions", None) or ())
+    )
+
+
+def task_visibility_condition(user_id: int):
+    """Use durable ownership, with tightly bounded legacy inference."""
+
+    from app.models.remote_discovery import (
+        UserSubscription,
+        UserSubscriptionSource,
+    )
+
+    has_trigger = _task_trigger_condition()
+    legacy_base = and_(TaskRun.owner_user_id.is_(None), ~has_trigger)
+    legacy_download = and_(
+        legacy_base,
+        TaskRun.subject_type == "download_job",
+        exists(
+            select(1)
+            .select_from(DownloadJob)
+            .where(
+                DownloadJob.id == TaskRun.subject_id,
+                download_job_visibility_condition(user_id),
+            )
+            .correlate(TaskRun)
+        ),
+    )
+    legacy_import = and_(
+        legacy_base,
+        TaskRun.subject_type == "import_job",
+        exists(
+            select(1)
+            .select_from(ImportJob)
+            .where(
+                ImportJob.id == TaskRun.subject_id,
+                import_job_visibility_condition(user_id),
+            )
+            .correlate(TaskRun)
+        ),
+    )
+    owned_subscription_ids = select(UserSubscription.subscription_id).where(
+        UserSubscription.user_id == user_id
+    )
+    owned_source_ids = select(UserSubscriptionSource.subscription_source_id).where(
+        UserSubscriptionSource.user_id == user_id
+    )
+    subscription_scoped = _subscription_membership_locator_condition()
+    global_subscription_batch = _global_subscription_batch_condition()
+    legacy_subscription = and_(
+        legacy_base,
+        subscription_scoped,
+        or_(
+            and_(
+                TaskRun.subject_type == "subscription",
+                TaskRun.subject_id.in_(owned_subscription_ids),
+            ),
+            and_(
+                TaskRun.subject_type == "subscription_source",
+                TaskRun.subject_id.in_(owned_source_ids),
+            ),
+            TaskRun.meta["subscription_id"].astext.in_(
+                select(cast(UserSubscription.subscription_id, String)).where(
+                    UserSubscription.user_id == user_id
+                )
+            ),
+            TaskRun.meta["subscription_source_id"].astext.in_(
+                select(cast(UserSubscriptionSource.subscription_source_id, String)).where(
+                    UserSubscriptionSource.user_id == user_id
+                )
+            ),
+        ),
+    )
+    public_operation = and_(
+        legacy_base,
+        TaskRun.kind.not_in({"download", "import", "discovery"}),
+        ~subscription_scoped,
+        ~global_subscription_batch,
+    )
+    return or_(
+        TaskRun.owner_user_id == user_id,
+        legacy_download,
+        legacy_import,
+        legacy_subscription,
+        public_operation,
+    )
+
+
+def task_surface_visibility_condition(
+    user_id: int,
+    *,
+    include_global_system_tasks: bool = False,
+):
+    """Combine member isolation with independently authorized admin tasks."""
+
+    independently_authorized_admin = and_(
+        TaskRun.kind == "admin",
+        TaskRun.owner_user_id.is_(None),
+        ~_task_trigger_condition(),
+        ~_subscription_membership_locator_condition(),
+        ~_global_subscription_batch_condition(),
+    )
+    conditions = [independently_authorized_admin, task_visibility_condition(user_id)]
+    if include_global_system_tasks:
+        conditions.append(_global_subscription_batch_condition())
+    return or_(*conditions)
 
 
 def normalize_task_status(status: str | None) -> str:
@@ -94,10 +287,48 @@ class TaskService:
         resource_reason: str | None = None,
         reason_code: str | None = None,
         task_id: UUID | None = None,
+        triggering_user_subscription_id: UUID | None = None,
+        triggering_remote_account_id: UUID | None = None,
+        owner_user_id: int | None = None,
     ) -> TaskRun:
+        owner_user_id = await self._resolve_owner_user_id(
+            owner_user_id=owner_user_id,
+            triggering_user_subscription_id=triggering_user_subscription_id,
+            triggering_remote_account_id=triggering_remote_account_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
         if subject_type and subject_id:
             existing = await self.get_by_subject(subject_type, subject_id)
             if existing:
+                if existing.owner_user_id != owner_user_id:
+                    raise ValueError("existing task owner does not match provenance")
+                if (
+                    existing.triggering_user_subscription_id is not None
+                    and triggering_user_subscription_id is not None
+                    and existing.triggering_user_subscription_id
+                    != triggering_user_subscription_id
+                ):
+                    raise ValueError("existing task has different membership provenance")
+                if (
+                    existing.triggering_remote_account_id is not None
+                    and triggering_remote_account_id is not None
+                    and existing.triggering_remote_account_id
+                    != triggering_remote_account_id
+                ):
+                    raise ValueError("existing task has different account provenance")
+                if (
+                    triggering_user_subscription_id is not None
+                    and existing.triggering_user_subscription_id is None
+                ):
+                    existing.triggering_user_subscription_id = (
+                        triggering_user_subscription_id
+                    )
+                if (
+                    triggering_remote_account_id is not None
+                    and existing.triggering_remote_account_id is None
+                ):
+                    existing.triggering_remote_account_id = triggering_remote_account_id
                 await self.update_task(
                     existing,
                     status=status,
@@ -127,6 +358,9 @@ class TaskService:
             subject_type=subject_type,
             subject_id=subject_id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=triggering_user_subscription_id,
+            triggering_remote_account_id=triggering_remote_account_id,
+            owner_user_id=owner_user_id,
             status=normalized,
             resource_state=(
                 resource_state
@@ -164,6 +398,91 @@ class TaskService:
         await self.db.flush()
         await self.add_event(task, "created", to_status=normalized, message=title)
         return task
+
+    async def _resolve_owner_user_id(
+        self,
+        *,
+        owner_user_id: int | None,
+        triggering_user_subscription_id: UUID | None,
+        triggering_remote_account_id: UUID | None,
+        subject_type: str | None,
+        subject_id: UUID | None,
+    ) -> int | None:
+        """Derive one immutable audit owner from every available provenance."""
+
+        from app.models.remote_discovery import RemoteAccount, UserSubscription
+
+        candidates: list[int] = []
+        provenance_candidates: list[int] = []
+        if owner_user_id is not None:
+            if owner_user_id < 1:
+                raise ValueError("owner_user_id must be a positive audit identifier")
+            candidates.append(owner_user_id)
+        if triggering_user_subscription_id is not None:
+            membership_owner = (
+                await self.db.execute(
+                    select(UserSubscription.user_id).where(
+                        UserSubscription.id == triggering_user_subscription_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership_owner is None:
+                raise ValueError("triggering membership does not exist")
+            candidates.append(membership_owner)
+            provenance_candidates.append(membership_owner)
+        if triggering_remote_account_id is not None:
+            account_owner = (
+                await self.db.execute(
+                    select(RemoteAccount.user_id).where(
+                        RemoteAccount.id == triggering_remote_account_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if account_owner is None:
+                raise ValueError("triggering remote account does not exist")
+            candidates.append(account_owner)
+            provenance_candidates.append(account_owner)
+        if subject_type == "download_job" and subject_id is not None:
+            job_owner = (
+                await self.db.execute(
+                    select(DownloadJob.owner_user_id).where(DownloadJob.id == subject_id)
+                )
+            ).scalar_one_or_none()
+            if job_owner is not None:
+                candidates.append(job_owner)
+                provenance_candidates.append(job_owner)
+        elif subject_type == "import_job" and subject_id is not None:
+            job_owner = (
+                await self.db.execute(
+                    select(DownloadJob.owner_user_id)
+                    .join(ImportJob, ImportJob.download_job_id == DownloadJob.id)
+                    .where(ImportJob.id == subject_id)
+                )
+            ).scalar_one_or_none()
+            if job_owner is not None:
+                candidates.append(job_owner)
+                provenance_candidates.append(job_owner)
+        distinct = set(candidates)
+        if len(distinct) > 1:
+            raise ValueError("private task provenance resolves to mixed owners")
+        resolved = next(iter(distinct), None)
+        if owner_user_id is not None and not provenance_candidates:
+            from app.models.user import User
+
+            existing_user = (
+                await self.db.execute(select(User.id).where(User.id == owner_user_id))
+            ).scalar_one_or_none()
+            if existing_user is None:
+                raise ValueError("owner user does not exist")
+        if (
+            resolved is None
+            and (
+                triggering_user_subscription_id is not None
+                or triggering_remote_account_id is not None
+            )
+        ):
+            raise ValueError("private task provenance requires an owner")
+        return resolved
 
     async def get_by_subject(self, subject_type: str, subject_id: UUID) -> TaskRun | None:
         result = await self.db.execute(
@@ -369,6 +688,9 @@ class TaskService:
             subject_type="download_job",
             subject_id=job.id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=job.triggering_user_subscription_id,
+            triggering_remote_account_id=job.triggering_remote_account_id,
+            owner_user_id=job.owner_user_id,
             status=job.status,
             queue_name="downloads",
             title=f"Download {job.source}",
@@ -386,6 +708,7 @@ class TaskService:
 
     async def ensure_import_task(self, job: ImportJob, *, parent_task_id: UUID | None = None) -> TaskRun:
         progress = job.progress_data if isinstance(job.progress_data, dict) else None
+        download_job = await self.db.get(DownloadJob, job.download_job_id)
         if not parent_task_id:
             parent = await self.get_by_subject("download_job", job.download_job_id)
             parent_task_id = parent.id if parent else None
@@ -395,6 +718,13 @@ class TaskService:
             subject_type="import_job",
             subject_id=job.id,
             parent_task_id=parent_task_id,
+            triggering_user_subscription_id=(
+                download_job.triggering_user_subscription_id if download_job else None
+            ),
+            triggering_remote_account_id=(
+                download_job.triggering_remote_account_id if download_job else None
+            ),
+            owner_user_id=download_job.owner_user_id if download_job else None,
             status=job.status,
             queue_name="imports",
             title="Import metadata",
@@ -419,6 +749,8 @@ class TaskService:
         offset: int = 0,
         limit: int = 50,
         excluded_admin_operation_types: frozenset[str] = frozenset(),
+        user_id: int | None = None,
+        include_global_system_tasks: bool = False,
     ) -> tuple[int, list[TaskRun]]:
         stmt = select(TaskRun)
         count_stmt = select(func.count(TaskRun.id))
@@ -446,12 +778,30 @@ class TaskService:
                 TaskRun.operation_type.is_(None),
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
+        if user_id is not None:
+            filters.append(
+                task_surface_visibility_condition(
+                    user_id,
+                    include_global_system_tasks=include_global_system_tasks,
+                )
+            )
         for item in filters:
             stmt = stmt.where(item)
             count_stmt = count_stmt.where(item)
         total = (await self.db.execute(count_stmt)).scalar_one()
         result = await self.db.execute(stmt.order_by(TaskRun.created_at.desc()).offset(offset).limit(limit))
         return int(total), list(result.scalars().all())
+
+    async def is_visible_to_user(self, task: TaskRun, user_id: int) -> bool:
+        visible = (
+            await self.db.execute(
+                select(TaskRun.id).where(
+                    TaskRun.id == task.id,
+                    task_visibility_condition(user_id),
+                )
+            )
+        ).scalar_one_or_none()
+        return visible is not None
 
     async def task_events(self, task_id: UUID) -> list[TaskEvent]:
         result = await self.db.execute(
@@ -470,6 +820,16 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
         "subject_type": task.subject_type,
         "subject_id": str(task.subject_id) if task.subject_id else None,
         "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+        "triggering_user_subscription_id": (
+            str(task.triggering_user_subscription_id)
+            if task.triggering_user_subscription_id
+            else None
+        ),
+        "triggering_remote_account_id": (
+            str(task.triggering_remote_account_id)
+            if task.triggering_remote_account_id
+            else None
+        ),
         "status": task.status,
         "resource_state": task.resource_state,
         "resource_reason": task.resource_reason,

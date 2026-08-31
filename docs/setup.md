@@ -93,6 +93,59 @@ First login is `admin / change-me-admin`. The web UI forces a password change im
 
 If the backend logs `auto-gallery refused to start — insecure defaults detected`, confirm that Docker Compose is reading the intended `.env`, the service secrets above are no longer `change-me-*`, and the backend image has been rebuilt after updating the code.
 
+### Remote account credential key
+
+Remote follow discovery requires an independent 32-byte URL-safe base64 key.
+Do not reuse `SECRET_KEY`:
+
+```bash
+python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+```
+
+Store the output as `REMOTE_CREDENTIAL_KEY` in `.env`. Back it up through the
+same encrypted operator-secret process as database credentials, separately
+from database/media backups. Losing it makes every stored remote credential
+undecryptable; a wrong key, wrong user/source/account AAD, or modified
+ciphertext fails authenticated decryption. Key rotation is not yet online:
+schedule downtime and migrate every credential atomically before replacing the
+key. Never start a mixed-key deployment.
+
+For X OAuth, register the public admin page—not the backend API—as the provider
+callback, then use the same absolute URL in `.env`:
+
+```bash
+X_OAUTH_CLIENT_ID=<public-client-id>
+X_OAUTH_REDIRECT_URI=https://autogallery.example.com/admin/discovery
+```
+
+The admin document's head script removes `code` and `state` from browser history
+before hydration and sends them once in the JSON body of
+`POST /api/v1/remote-accounts/x/oauth/callback`. The backend intentionally has
+no GET callback contract. The admin application suppresses its incoming-request
+log for `/admin/discovery`, but an edge reverse proxy receives the original URL
+before JavaScript can scrub it. Configure that proxy to omit or redact the query
+for this path. For example, an Nginx access format can log `$uri` rather than
+`$request_uri` for `/admin/discovery` (or for all routes). Never log OAuth
+callback request headers or bodies.
+
+Plain credentials are forbidden from PostgreSQL fields other than the AES-GCM
+ciphertext, Redis, `TaskRun`, manifests, API responses, and logs. Download
+workers materialize only an authentication override in a mode-`0600` file under
+the mode-`0700` `PERSONAL_AUTH_TMP_ROOT`. Compose mounts that path as a dedicated
+`tmpfs` only in `worker-download`; worker startup and every private job sweep
+crash debris, and every normal/error exit removes its own file. Startup fails
+closed if the path is persistent, unavailable, symlinked, or overlaps a backup
+root. `gallerydl-config/jobs` is excluded from backup estimates and archives as
+defense in depth. Deleting a remote account immediately clears ciphertext and
+unimported candidates; imported memberships and shared works remain.
+
+All discovery rollout flags in `.env.example` default to `false`. Enable them
+in order: private members, Pixiv preview, Pixiv automatic import, X preview, X
+automatic import, Bilibili preview, Bilibili automatic import. An automatic
+flag is ineffective unless its preview flag and the private-members foundation
+are also enabled. Closing a flag stops new discovery execution but does not
+erase accounts, candidates, memberships, subscriptions, or media.
+
 Set your timezone:
 
 ```bash

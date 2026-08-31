@@ -26,11 +26,14 @@ from app.services.heavy_io import (
 )
 from app.services.resource_pressure import get_resource_pressure_snapshot_sync
 from app.services.resource_pressure import (
+    CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS,
     RESOURCE_CONTROL_CHANNEL,
+    cgroup_oom_kill_event_id,
     profile_slice_cooldown_seconds,
     publish_external_resource_critical,
     resource_profile_permit,
     sample_cgroup_contribution,
+    touch_cgroup_oom_kill_ack,
     workload_profile_name,
 )
 
@@ -122,10 +125,10 @@ class ResourceAwareWorker(Worker):
         """Publish a low-write worker view and close worker-local cgroup gaps.
 
         The backend monitor can only see its own cgroup.  Every worker therefore
-        treats a newly observed ``oom_kill`` or ``max`` event in its cgroup as
-        an immediate hard gate and promotes it into the shared latch.  A plain
-        ``oom`` allocation failure without either boundary event remains soft
-        evidence and temporarily halves bounded work slices.
+        treats a newly observed ``oom_kill`` event in its cgroup as an
+        immediate hard gate and promotes it into the shared latch.  ``max``
+        and allocation-only ``oom`` events remain local soft evidence and
+        temporarily halve bounded work slices.
         """
 
         now = time.monotonic()
@@ -152,35 +155,80 @@ class ResourceAwareWorker(Worker):
         # the same cumulative event would otherwise cause a publish storm.
         self._last_cgroup_events = cgroup_events
 
-        if cgroup_deltas["oom"] > 0:
+        if cgroup_deltas["max"] > 0 or cgroup_deltas["oom"] > 0:
             self._local_cgroup_soft_until = max(
                 getattr(self, "_local_cgroup_soft_until", 0.0),
                 now + 60.0,
             )
 
-        hard_event_reason = (
-            "worker_cgroup_oom_kill"
-            if cgroup_deltas["oom_kill"] > 0
-            else "worker_cgroup_memory_max"
-            if cgroup_deltas["max"] > 0
-            else None
+        hard_event_reason = "worker_cgroup_oom_kill"
+        previous_pending = getattr(self, "_pending_cgroup_oom_event", None)
+        new_oom_event = cgroup_deltas["oom_kill"] > 0
+        had_local_latch = bool(
+            getattr(self, "_local_cgroup_oom_kill_latched", False)
         )
-        if hard_event_reason is not None:
+        cgroup_id = str(cgroup_contribution.get("cgroup_id") or "unknown")
+        oom_kill_counter = max(0, int(cgroup_events.get("oom_kill") or 0))
+        last_ack_touch_at = float(
+            getattr(self, "_last_cgroup_ack_touch_at", 0.0)
+        )
+        if (
+            oom_kill_counter > 0
+            and not new_oom_event
+            and now - last_ack_touch_at >= CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS
+        ):
+            try:
+                acknowledgment_state = touch_cgroup_oom_kill_ack(
+                    self.connection,
+                    cgroup_id,
+                    oom_kill_counter,
+                )
+            except Exception:
+                self.log.exception("Unable to refresh live cgroup OOM acknowledgment")
+            else:
+                self._last_cgroup_ack_touch_at = now
+                if acknowledgment_state != "recovered" and not had_local_latch:
+                    new_oom_event = True
+        if new_oom_event:
+            previous_pending = {
+                "event_id": cgroup_oom_kill_event_id(cgroup_id, oom_kill_counter),
+                "cgroup_id": cgroup_id,
+                "oom_kill_counter": oom_kill_counter,
+            }
+            self._pending_cgroup_oom_event = previous_pending
             self._local_cgroup_oom_kill_latched = True
+            self._local_cgroup_oom_acknowledged = False
             self._local_cgroup_oom_kill_at = now
             self._local_cgroup_hard_reason = hard_event_reason
+
+        if previous_pending is not None:
             try:
                 external = publish_external_resource_critical(
                     hard_event_reason,
                     redis_client=self.connection,
                     source=str(self.name),
+                    event_id=str(previous_pending["event_id"]),
+                    cgroup_id=str(previous_pending["cgroup_id"]),
+                    oom_kill_counter=int(previous_pending["oom_kill_counter"]),
                 )
-                snapshot.clear()
-                snapshot.update(external)
             except Exception:
                 self.log.exception(
                     "Unable to promote worker cgroup memory event; local gate remains closed"
                 )
+            else:
+                self._pending_cgroup_oom_event = None
+                self._local_cgroup_oom_acknowledged = True
+                self._last_cgroup_ack_touch_at = now
+                if external is not None:
+                    self._local_cgroup_oom_kill_latched = True
+                    self._local_cgroup_hard_reason = hard_event_reason
+                    snapshot.clear()
+                    snapshot.update(external)
+                elif new_oom_event and not had_local_latch:
+                    # Another process already acknowledged this cumulative
+                    # event and its global latch has completed recovery.
+                    self._local_cgroup_oom_kill_latched = False
+                    self._local_cgroup_hard_reason = None
 
         local_latched = bool(
             getattr(self, "_local_cgroup_oom_kill_latched", False)
@@ -193,9 +241,12 @@ class ResourceAwareWorker(Worker):
             )
             if (
                 shared_recovered
+                and getattr(self, "_pending_cgroup_oom_event", None) is None
+                and bool(getattr(self, "_local_cgroup_oom_acknowledged", False))
                 and now - event_at >= max(0.0, settings.resource_pressure_resume_seconds)
             ):
                 self._local_cgroup_oom_kill_latched = False
+                self._local_cgroup_oom_acknowledged = False
                 self._local_cgroup_hard_reason = None
                 local_latched = False
             else:
@@ -222,16 +273,6 @@ class ResourceAwareWorker(Worker):
             if now < float(getattr(self, "_local_cgroup_soft_until", 0.0))
             else 1.0
         )
-        if local_soft_scale < 1.0:
-            snapshot["reasons"] = list(
-                dict.fromkeys(
-                    [
-                        *(snapshot.get("reasons") or []),
-                        "worker_cgroup_memory_pressure",
-                    ]
-                )
-            )
-
         budget = snapshot.get("budget") or {}
         cgroup_signature = tuple(cgroup_events.get(name) for name in ("max", "oom", "oom_kill"))
         signature = (

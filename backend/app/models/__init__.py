@@ -11,6 +11,7 @@ from app.models.work_tag import WorkTag
 from app.models.work_source_tag import WorkSourceTag
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
+from app.models.remote_discovery import DiscoveryCandidate, RemoteAccount, UserSubscription, UserSubscriptionSource
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.system_setting import SystemSetting
@@ -59,6 +60,10 @@ __all__ = [
     "WorkSourceTag",
     "Subscription",
     "SubscriptionSource",
+    "UserSubscription",
+    "UserSubscriptionSource",
+    "RemoteAccount",
+    "DiscoveryCandidate",
     "DownloadJob",
     "ImportJob",
     "SystemSetting",

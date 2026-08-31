@@ -40,3 +40,5 @@ class Subscription(TimestampMixin, Base):
     creator = relationship("Creator", back_populates="subscriptions")
     subscription_sources = relationship("SubscriptionSource", back_populates="subscription")
     download_jobs = relationship("DownloadJob", back_populates="subscription")
+    user_subscriptions = relationship("UserSubscription", back_populates="subscription")
+    discovery_candidates = relationship("DiscoveryCandidate", back_populates="subscription")

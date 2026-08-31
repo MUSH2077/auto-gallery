@@ -219,6 +219,9 @@ seed_snapshot_inner() {
   head="$(compose run --rm --no-deps migrate alembic heads | awk '{print $1}' | tail -1)"
   [[ "$predeploy" =~ ^[a-f0-9]{12}$ && "$head" =~ ^[a-f0-9]{12}$ ]]
   if [[ "$predeploy" != "$head" ]]; then
+    # Destructive migration round trips are acceptance-only inside the
+    # auto-gallery-test-* project and TEST_ROOT. Production rollback is
+    # schema-forward and must never copy this behavior.
     compose run --rm --no-deps migrate alembic downgrade "$predeploy"
     compose run --rm --no-deps migrate alembic upgrade "$head"
   fi

@@ -1,0 +1,213 @@
+"""Private persistent scan and discovery candidate workflow."""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import RequirePermission
+from app.database import get_db
+from app.schemas.remote_discovery import (
+    DiscoveryCandidateBatchAction,
+    DiscoveryCandidateRead,
+    DiscoveryCandidateResolve,
+    DiscoveryScanCreate,
+)
+from app.services.remote_discovery import (
+    DiscoveryScanInProgress,
+    RemoteDiscoveryService,
+    prepare_discovery_scan_task,
+    publish_discovery_scan,
+)
+from app.services.remote_discovery_rollout import RemoteDiscoveryUnavailable
+from app.services.tasks import TaskService
+from app.services.subscription import SubscriptionService
+from app.services.tasks import task_payload
+
+
+router = APIRouter(dependencies=[RequirePermission("subscriptions")])
+
+
+@router.post("/scans", status_code=201)
+async def create_discovery_scan(
+    data: DiscoveryScanCreate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        task = await RemoteDiscoveryService(db).create_scan(user.id, data.remote_account_id)
+        await prepare_discovery_scan_task(db, task)
+        await db.commit()
+        await db.refresh(task)
+    except DiscoveryScanInProgress as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "scan_in_progress", "task_id": str(exc.task_id)},
+        ) from exc
+    except (ValueError, RuntimeError) as exc:
+        await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
+        status = 404 if "not found" in str(exc).casefold() else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    try:
+        publish_discovery_scan(task.id, attempt=task.attempts)
+    except Exception as exc:
+        current = await db.get(type(task), task.id)
+        if current is not None:
+            await TaskService(db).update_task(
+                current,
+                status="failed",
+                error=f"Discovery enqueue failed ({type(exc).__name__})",
+                reason_code="discovery_enqueue_failed",
+            )
+            await db.commit()
+        raise HTTPException(status_code=503, detail="Discovery queue is unavailable") from exc
+    return task_payload(task)
+
+
+@router.get("/scans")
+async def list_discovery_scans(
+    remote_account_id: UUID | None = None,
+    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    total, tasks = await RemoteDiscoveryService(db).list_scans(
+        user.id,
+        account_id=remote_account_id,
+        offset=offset,
+        limit=limit,
+    )
+    return {"total": total, "items": [task_payload(task) for task in tasks]}
+
+
+@router.get("/candidates")
+async def list_discovery_candidates(
+    remote_account_id: UUID | None = None,
+    state: str | None = None,
+    confidence: str | None = None,
+    is_following: bool | None = None,
+    local_match: bool | None = None,
+    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    total, candidates = await RemoteDiscoveryService(db).list_candidates(
+        user.id,
+        account_id=remote_account_id,
+        state=state,
+        confidence=confidence,
+        is_following=is_following,
+        local_match=local_match,
+        offset=offset,
+        limit=limit,
+    )
+    return {
+        "total": total,
+        "items": [DiscoveryCandidateRead.model_validate(item).model_dump(mode="json") for item in candidates],
+    }
+
+
+@router.post("/candidates/batch-actions")
+async def batch_discovery_candidates(
+    data: DiscoveryCandidateBatchAction,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    service = RemoteDiscoveryService(db)
+    try:
+        candidates = await service.batch_action(user.id, data.ids, action=data.action)
+        subscription_ids = {
+            candidate.subscription_id
+            for candidate in candidates
+            if data.action == "import" and candidate.subscription_id is not None
+        }
+        for candidate in candidates:
+            await db.refresh(candidate)
+        candidate_payloads = [
+            DiscoveryCandidateRead.model_validate(item).model_dump(mode="json")
+            for item in candidates
+        ]
+        await db.commit()
+    except (ValueError, RuntimeError) as exc:
+        await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
+        status = 404 if "not found" in str(exc).casefold() else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    sync_results = []
+    if data.immediate_sync and data.action == "import":
+        for subscription_id in subscription_ids:
+            sync_results.append(
+                await SubscriptionService(db).trigger_sync(subscription_id, user_id=user.id)
+            )
+    return {
+        "items": candidate_payloads,
+        "immediate_sync": data.immediate_sync,
+        "sync_results": sync_results,
+    }
+
+
+@router.post("/candidates/{candidate_id}/resolve")
+async def resolve_discovery_candidate(
+    candidate_id: UUID,
+    data: DiscoveryCandidateResolve,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    service = RemoteDiscoveryService(db)
+    try:
+        await service.resolve_candidate(
+            user.id,
+            candidate_id,
+            creator_id=data.creator_id,
+            creator_name=data.creator_name,
+        )
+        candidate = await service.import_candidate(user.id, candidate_id)
+        subscription_id = candidate.subscription_id
+        await db.refresh(candidate)
+        candidate_payload = DiscoveryCandidateRead.model_validate(candidate).model_dump(mode="json")
+        await db.commit()
+    except (ValueError, RuntimeError) as exc:
+        await db.rollback()
+        if isinstance(exc, RemoteDiscoveryUnavailable):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "remote_discovery_unavailable",
+                    "reason": exc.code,
+                    "source": exc.source,
+                },
+            ) from exc
+        status = 404 if "not found" in str(exc).casefold() else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    sync_result = None
+    if data.immediate_sync and subscription_id is not None:
+        sync_result = await SubscriptionService(db).trigger_sync(
+            subscription_id, user_id=user.id
+        )
+    return {
+        "candidate": candidate_payload,
+        "immediate_sync": data.immediate_sync,
+        "sync_result": sync_result,
+    }

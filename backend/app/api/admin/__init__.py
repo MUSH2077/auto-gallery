@@ -1,5 +1,5 @@
 from ._routers import router, curation_ops_router, tasks_ops_router
-from . import settings, data, scheduler, gallerydl, dedup, backup, auth_health  # noqa: F401
+from . import settings, data, scheduler, gallerydl, dedup, backup, auth_health, remote_discovery  # noqa: F401
 from .gallerydl import (  # Backward-compatible public imports for callers/tests.
     GalleryDLMultiConfig,
     PixivSourceConfig,

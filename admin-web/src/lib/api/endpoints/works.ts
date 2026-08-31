@@ -1,5 +1,5 @@
 import { request } from "../client";
-import type { CurationCommit, Work } from "../types";
+import type { CurationCommit, RemoteWorkState, Work } from "../types";
 import type { DerivativeStatus, MediaAssetData } from "../../media";
 
 export interface WorkAsset extends MediaAssetData {
@@ -22,6 +22,8 @@ export const worksApi = {
     request<Work>(`/api/v1/works/${id}/favorite`, { method: "POST" }),
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
+
+  getWorkRemoteState: (id: string) => request<RemoteWorkState>(`/api/v1/works/${id}/remote-state`),
 
   getWorkAssets: (id: string) => request<WorkAsset[]>(`/api/v1/works/${id}/assets`),
 

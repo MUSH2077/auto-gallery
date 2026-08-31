@@ -1019,7 +1019,11 @@ test("desktop sidebar is the sole peer-page navigation and command palette remai
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
   const sidebar = page.locator("#admin-sidebar");
-  await expect(sidebar.locator("nav a")).toHaveCount(11);
+  await expect(sidebar.locator("nav a")).toHaveCount(12);
+  await expect(sidebar.getByRole("link", { name: "Remote Discovery", exact: true })).toHaveAttribute(
+    "href",
+    "/admin/discovery",
+  );
   await expect(sidebar.locator("nav").getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAttribute("href", "/admin");
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAccessibleName("Go to dashboard");
@@ -2129,6 +2133,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
     await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
+    await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -3858,4 +3863,49 @@ test("mobile drawer is discoverable, dismissible, and the task page stays in bou
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-mobile.png", fullPage: true });
+});
+
+test("Escape ignores a queued drawer autofocus after focus restoration", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/jobs?tab=downloads");
+  await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __drawerFocusFrames?: Map<number, FrameRequestCallback>;
+      __flushDrawerFocusFrames?: () => void;
+    };
+    let nextFrame = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    testWindow.__drawerFocusFrames = frames;
+    window.requestAnimationFrame = (callback) => {
+      const frame = ++nextFrame;
+      frames.set(frame, callback);
+      return frame;
+    };
+    window.cancelAnimationFrame = (frame) => {
+      frames.delete(frame);
+    };
+    testWindow.__flushDrawerFocusFrames = () => {
+      const queued = [...frames.values()];
+      frames.clear();
+      for (const callback of queued) callback(performance.now());
+    };
+  });
+
+  const trigger = page.locator("header button[aria-controls]").first();
+  const drawer = page.locator("#admin-mobile-sidebar");
+  await trigger.click();
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const testWindow = window as Window & { __drawerFocusFrames?: Map<number, FrameRequestCallback> };
+    return testWindow.__drawerFocusFrames?.size ?? 0;
+  })).toBe(1);
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveClass(/drawer-left-exit/);
+  await page.evaluate(() => {
+    const testWindow = window as Window & { __flushDrawerFocusFrames?: () => void };
+    testWindow.__flushDrawerFocusFrames?.();
+  });
+  await expect(drawer).toBeHidden();
+  await expect(trigger).toBeFocused();
 });

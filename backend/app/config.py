@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     meili_search_timeout_seconds: float = 3.0
 
     secret_key: str = ""
+    # Separate from SECRET_KEY so rotating sessions cannot destroy stored
+    # remote-account credentials. Empty keeps discovery disabled until used.
+    remote_credential_key: str = ""
+    x_oauth_client_id: str = ""
+    x_oauth_redirect_uri: str = ""
+    # Independently reversible remote-follow rollout stages. Effective
+    # auto-import additionally depends on its provider preview gate and the
+    # private-members foundation. Every gate defaults closed.
+    remote_discovery_private_members_enabled: bool = False
+    remote_discovery_pixiv_preview_enabled: bool = False
+    remote_discovery_pixiv_auto_import_enabled: bool = False
+    remote_discovery_x_enabled: bool = False
+    remote_discovery_x_auto_import_enabled: bool = False
+    remote_discovery_bilibili_enabled: bool = False
+    remote_discovery_bilibili_auto_import_enabled: bool = False
     admin_password: str = ""
     access_token_expire_minutes: int = 10080  # 7 days (NAS single-user)
     media_playback_ttl_seconds: int = 7200
@@ -36,6 +51,7 @@ class Settings(BaseSettings):
     library_root: str = "/library"
     gallerydl_config_root: str = "/gallerydl-config"
     app_config_root: str = "/app-config"
+    personal_auth_tmp_root: str = "/run/auto-gallery-secrets"
 
     cors_origins: str = "http://localhost:13000"
     log_level: str = "INFO"
@@ -62,7 +78,7 @@ class Settings(BaseSettings):
     resource_memory_reserve_mode: str = "auto"  # auto | fixed
     resource_memory_reserve_ratio: float = 0.15
     resource_memory_reserve_min_mb: int = 384
-    resource_memory_reserve_max_mb: int = 1280
+    resource_memory_reserve_max_mb: int = 2560
     resource_pressure_warning_available_mb: int = 1536
     resource_pressure_pause_available_mb: int = 1280
     resource_pressure_resume_available_mb: int = 1792
@@ -87,7 +103,7 @@ class Settings(BaseSettings):
     resource_budget_min_scale: float = 0.10
     resource_budget_decrease_factor: float = 0.50
     resource_budget_increase_step: float = 0.10
-    resource_budget_increase_stable_seconds: float = 60.0
+    resource_budget_increase_stable_seconds: float = 30.0
     resource_governance_max_scale: float = 1.0
     resource_budget_base_read_mb_per_second: float = 20.0
     resource_budget_base_write_mb_per_second: float = 10.0
@@ -98,6 +114,7 @@ class Settings(BaseSettings):
     # tooling always sets an explicit list during staged rollout.
     resource_governance_enforced_profiles: str = ""
     resource_foreground_p95_limit_ms: float = 500.0
+    resource_foreground_min_samples: int = 30
     resource_foreground_slow_samples: int = 3
     resource_baseline_memory_psi_margin: float = 0.5
     resource_baseline_io_psi_margin: float = 3.0
@@ -123,8 +140,8 @@ class Settings(BaseSettings):
     db_pool_timeout: int = 10
 
     # Memory monitor: log backend RSS every N seconds, WARN past the threshold.
-    # Set memory_warn_mb below the container mem_limit so the logs capture the
-    # climb (and the last activity) BEFORE the OOM killer fires.
+    # Set memory_warn_mb below the expected backend process budget so the logs
+    # capture a climb and its last activity before host pressure becomes critical.
     memory_warn_mb: int = 700
     memory_log_interval_seconds: int = 60
 
@@ -137,6 +154,13 @@ class Settings(BaseSettings):
 
         if not self.secret_key or _is_placeholder(self.secret_key):
             errors.append("SECRET_KEY is not set or is still a factory placeholder.")
+        if self.remote_credential_key:
+            try:
+                from app.services.remote_credentials import validate_configured_remote_credential_key
+
+                validate_configured_remote_credential_key(self.remote_credential_key)
+            except ValueError as exc:
+                errors.append(str(exc))
         if not self.admin_password or self.admin_password.strip().lower() == "changeme":
             errors.append(
                 f"ADMIN_PASSWORD is not set. Use {DEFAULT_ADMIN_PASSWORD!r} for first login "

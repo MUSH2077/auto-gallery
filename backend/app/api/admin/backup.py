@@ -42,6 +42,33 @@ ALL_BACKUP_CONTENTS = [
 ]
 
 
+def _gallerydl_backup_ignore(_directory: str, names: list[str]) -> set[str]:
+    """Exclude every runtime job overlay from durable backup traversal."""
+
+    return {
+        name
+        for name in names
+        if name in {"jobs", "auth-temp", "auto-gallery-secrets"}
+        or name.startswith("auth-")
+    }
+
+
+def _gallerydl_backup_files(config_root: Path):
+    for candidate in config_root.rglob("*"):
+        try:
+            relative = candidate.relative_to(config_root)
+        except ValueError:  # pragma: no cover - rglob containment invariant
+            continue
+        if not relative.parts or relative.parts[0] in {
+            "jobs",
+            "auth-temp",
+            "auto-gallery-secrets",
+        }:
+            continue
+        if candidate.is_file() and not candidate.is_symlink():
+            yield candidate
+
+
 class RestoreUploadCreateRequest(BaseModel):
     filename: str
     size_bytes: int
@@ -145,7 +172,9 @@ def _estimate_component_sizes() -> dict[str, int]:
     # gallery-dl config
     config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
     if config_src.exists():
-        sizes["gallerydl-config"] = sum(f.stat().st_size for f in config_src.rglob("*") if f.is_file())
+        sizes["gallerydl-config"] = sum(
+            f.stat().st_size for f in _gallerydl_backup_files(config_src)
+        )
     else:
         sizes["gallerydl-config"] = 0
 
@@ -362,8 +391,19 @@ def _create_backup_sync(
             config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
             config_dst = os.path.join(tmpdir, "gallerydl-config")
             if config_src.exists():
-                shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+                shutil.copytree(
+                    str(config_src),
+                    config_dst,
+                    symlinks=False,
+                    ignore_dangling_symlinks=True,
+                    ignore=lambda directory, names: (
+                        shutil.ignore_patterns("*.pyc", "__pycache__", ".git")(
+                            directory,
+                            names,
+                        )
+                        | _gallerydl_backup_ignore(directory, names)
+                    ),
+                )
 
         # 3. App config
         if "app-config" in selected:
