@@ -520,6 +520,8 @@ export interface DiscoveryCandidate {
   source_creator_id: string;
   remote_url?: string | null;
   display_name?: string | null;
+  avatar_url?: string | null;
+  recent_works: DiscoveryRecentWork[];
   metadata?: Record<string, unknown> | null;
   confidence: DiscoveryConfidence;
   confidence_reasons?: Array<string | Record<string, unknown>> | null;
@@ -532,6 +534,66 @@ export interface DiscoveryCandidate {
   is_following: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type RemoteWorkType = "illust" | "manga" | "ugoira";
+
+export interface DiscoveryRecentWork {
+  source_work_id: string;
+  title: string;
+  work_url: string;
+  created_at: string;
+  work_type: RemoteWorkType;
+  page_count: number;
+  x_restrict: 0 | 1 | 2;
+  thumbnail_url?: string | null;
+}
+
+export interface RemoteCreatorProfile {
+  source: RemoteDiscoverySource;
+  source_creator_id: string;
+  display_name?: string | null;
+  username?: string | null;
+  profile_url: string;
+  avatar_url?: string | null;
+  comment?: string | null;
+  work_counts: Record<string, number>;
+  is_followed?: boolean | null;
+  fetched_at: string;
+}
+
+export interface RemoteWorkPreview {
+  source_work_id: string;
+  source_creator_id: string;
+  title: string;
+  work_url: string;
+  created_at: string;
+  work_type: RemoteWorkType;
+  page_count: number;
+  x_restrict: 0 | 1 | 2;
+  thumbnail_url?: string | null;
+  preview_urls: string[];
+  local_work_id?: string | null;
+  download_job_id?: string | null;
+  import_status: "available" | "queued" | "imported";
+  work_token: string;
+}
+
+export interface RemoteWorkPage {
+  items: RemoteWorkPreview[];
+  next_cursor?: string | null;
+}
+
+export interface RemoteCreatorDetail {
+  profile: RemoteCreatorProfile;
+  works: RemoteWorkPage;
+}
+
+export interface RemoteWorkImportResult {
+  status: "queued" | "already_queued" | "already_imported";
+  local_work_id?: string | null;
+  download_job_id?: string | null;
+  candidate?: DiscoveryCandidate | null;
 }
 
 export interface DiscoveryCandidateListResponse {

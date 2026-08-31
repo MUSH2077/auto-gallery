@@ -10,6 +10,9 @@ import type {
   RemoteAccountRead,
   RemoteAccountUpdateInput,
   RemoteCollection,
+  RemoteCreatorDetail,
+  RemoteWorkImportResult,
+  RemoteWorkPage,
   TaskRun,
   TaskRunListResponse,
   XOAuthAuthorizeResponse,
@@ -109,4 +112,35 @@ export const remoteDiscoveryApi = {
       }),
       signal,
     }),
+
+  getDiscoveryCandidateRemoteDetail: (id: string, limit = 20, signal?: AbortSignal) =>
+    request<RemoteCreatorDetail>(
+      `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-detail?limit=${limit}`,
+      { signal },
+    ),
+
+  getDiscoveryCandidateRemoteWorks: (id: string, cursor: string, limit = 20, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ cursor, limit: String(limit) });
+    return request<RemoteWorkPage>(
+      `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-works?${params.toString()}`,
+      { signal },
+    );
+  },
+
+  importDiscoveryCandidateRemoteWork: (
+    id: string,
+    workToken: string,
+    sensitiveContentConfirmed: boolean,
+    signal?: AbortSignal,
+  ) => request<RemoteWorkImportResult>(
+    `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-work-imports`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        work_token: workToken,
+        sensitive_content_confirmed: sensitiveContentConfirmed,
+      }),
+      signal,
+    },
+  ),
 };

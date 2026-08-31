@@ -1,8 +1,9 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownToLine, CircleAlert, ExternalLink, RotateCcw, UserRound, XCircle } from "lucide-react";
+import { ArrowDownToLine, CircleAlert, ExternalLink, Images, Info, RotateCcw, UserRound, XCircle } from "lucide-react";
 
 import { EmptyState, ErrorState, FilterBar, Modal, Pagination, SectionPanel, SelectionBar, StatusBadge, TableSkeleton, useToast } from "@/components";
 import {
@@ -30,6 +31,7 @@ import {
 
 const PAGE_SIZE = 25;
 type LocalFilter = "" | "matched" | "unmatched" | "conflict";
+const RemoteCreatorDrawer = dynamic(() => import("./RemoteCreatorDrawer"), { ssr: false });
 
 function Avatar({ candidate }: { candidate: DiscoveryCandidate }) {
   const t = useT();
@@ -65,16 +67,30 @@ function ConfidenceDetails({ candidate }: { candidate: DiscoveryCandidate }) {
   );
 }
 
-function CandidateIdentity({ candidate }: { candidate: DiscoveryCandidate }) {
+function CandidateIdentity({
+  candidate,
+  onOpen,
+}: {
+  candidate: DiscoveryCandidate;
+  onOpen?: () => void;
+}) {
   const t = useT();
   const name = candidate.display_name || candidate.source_creator_id;
   const username = candidateUsername(candidate);
   return (
     <div className="flex min-w-[12rem] items-center gap-3">
-      <Avatar candidate={candidate} />
+      {onOpen ? (
+        <button type="button" className="rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" onClick={onOpen} aria-label={t("discovery.open_creator_details", { name })}>
+          <Avatar candidate={candidate} />
+        </button>
+      ) : <Avatar candidate={candidate} />}
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate font-medium text-fg">{name}</span>
+          {onOpen ? (
+            <button type="button" className="truncate text-left font-medium text-fg hover:text-accent hover:underline" onClick={onOpen}>
+              {name}
+            </button>
+          ) : <span className="truncate font-medium text-fg">{name}</span>}
           {candidate.remote_url ? (
             <a href={candidate.remote_url} target="_blank" rel="noreferrer" aria-label={t("discovery.open_profile", { name })} className="shrink-0 text-muted hover:text-accent">
               <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
@@ -83,6 +99,31 @@ function CandidateIdentity({ candidate }: { candidate: DiscoveryCandidate }) {
         </div>
         <p className="truncate text-xs text-muted">{username ? `@${username}` : candidate.source_creator_id}</p>
       </div>
+    </div>
+  );
+}
+
+function CandidateSnapshots({ candidate }: { candidate: DiscoveryCandidate }) {
+  const t = useT();
+  const works = candidate.recent_works || [];
+  if (!works.length) return <span className="text-xs text-muted">{t("discovery.no_work_snapshot")}</span>;
+  return (
+    <div className="flex gap-1.5" aria-label={t("discovery.recent_work_snapshots")}>
+      {works.slice(0, 3).map((work) => (
+        <div key={work.source_work_id} className="relative h-12 w-12 overflow-hidden rounded-md border border-border bg-subtle" title={work.title}>
+          {work.thumbnail_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={work.thumbnail_url}
+              alt=""
+              className={`h-full w-full object-cover ${work.x_restrict > 0 ? "scale-110 blur-md" : ""}`}
+            />
+          ) : (
+            <span className="flex h-full items-center justify-center text-muted"><Images aria-hidden="true" className="h-4 w-4" /></span>
+          )}
+          {work.x_restrict > 0 ? <span className="absolute inset-x-0 bottom-0 bg-black/65 py-0.5 text-center text-[9px] text-white">R-18</span> : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -103,19 +144,29 @@ function RowActions({
   onDismiss,
   onRestore,
   onResolve,
+  onDetail,
   pending,
   importAvailable,
+  detailAvailable,
 }: {
   candidate: DiscoveryCandidate;
   onImport: () => void;
   onDismiss: () => void;
   onRestore: () => void;
   onResolve: () => void;
+  onDetail: () => void;
   pending: boolean;
   importAvailable: boolean;
+  detailAvailable: boolean;
 }) {
   const t = useT();
   const name = candidate.display_name || candidate.source_creator_id;
+  const detailButton = detailAvailable ? (
+    <button type="button" className="btn-ghost whitespace-nowrap" disabled={pending} onClick={onDetail} aria-label={t("discovery.open_creator_details", { name })}>
+      <Info aria-hidden="true" className="h-4 w-4" />
+      {t("discovery.details")}
+    </button>
+  ) : null;
   if (candidate.state === "conflict") {
     return (
       <div className="flex flex-wrap gap-1">
@@ -126,16 +177,18 @@ function RowActions({
         <button type="button" className="btn-ghost" disabled={pending} onClick={onDismiss} aria-label={t("discovery.dismiss_candidate", { name })}>
           <XCircle aria-hidden="true" className="h-4 w-4" />
         </button>
+        {detailButton}
       </div>
     );
   }
   if (candidate.state === "dismissed") {
-    return (
+    return <div className="flex flex-wrap gap-1">
       <button type="button" className="btn-ghost whitespace-nowrap" disabled={pending} onClick={onRestore} aria-label={t("discovery.restore_candidate", { name })}>
         <RotateCcw aria-hidden="true" className="h-4 w-4" />
         {t("discovery.restore")}
       </button>
-    );
+      {detailButton}
+    </div>;
   }
   if (candidate.state === "pending") {
     return (
@@ -147,10 +200,11 @@ function RowActions({
         <button type="button" className="btn-ghost" disabled={pending} onClick={onDismiss} aria-label={t("discovery.dismiss_candidate", { name })}>
           <XCircle aria-hidden="true" className="h-4 w-4" />
         </button>
+        {detailButton}
       </div>
     );
   }
-  return <StatusBadge status="complete" label={t("discovery.status_imported")} />;
+  return <div className="flex flex-wrap gap-1"><StatusBadge status="complete" label={t("discovery.status_imported")} />{detailButton}</div>;
 }
 
 function ImportDialog({
@@ -213,6 +267,7 @@ export default function CandidateWorkbench({
   const [importIds, setImportIds] = useState<string[]>([]);
   const [resolveCandidate, setResolveCandidate] = useState<DiscoveryCandidate | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [detailCandidate, setDetailCandidate] = useState<DiscoveryCandidate | null>(null);
   const accountBySource = useMemo(() => new Map(accounts.map((account) => [account.source, account])), [accounts]);
   const accountId = provider ? accountBySource.get(provider)?.id : undefined;
   const effectiveState = status || (local === "conflict" ? "conflict" : undefined);
@@ -405,6 +460,7 @@ export default function CandidateWorkbench({
                       />
                     </th>
                     <th className="px-3 py-3 text-left">{t("discovery.candidate_identity")}</th>
+                    <th className="px-3 py-3 text-left">{t("discovery.recent_works")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.provider")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.confidence")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.local_match")}</th>
@@ -417,16 +473,18 @@ export default function CandidateWorkbench({
                   {visible.map((candidate) => {
                     const name = candidate.display_name || candidate.source_creator_id;
                     const source = accounts.find((account) => account.id === candidate.remote_account_id)?.source || "pixiv";
+                    const detailAvailable = source === "pixiv" && previewEnabledAccountIds.has(candidate.remote_account_id);
                     return (
                       <tr key={candidate.id} className="bg-surface align-top hover:bg-subtle/60">
                         <td className="px-3 py-3"><input type="checkbox" className="rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} /></td>
-                        <td className="px-3 py-3"><CandidateIdentity candidate={candidate} /></td>
+                        <td className="px-3 py-3"><CandidateIdentity candidate={candidate} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></td>
+                        <td className="px-3 py-3"><CandidateSnapshots candidate={candidate} /></td>
                         <td className="px-3 py-3"><span className="rounded-md border border-border bg-subtle px-2 py-1 text-xs font-medium text-fg">{providerLabel(t, source)}</span></td>
                         <td className="px-3 py-3"><ConfidenceDetails candidate={candidate} /></td>
                         <td className="px-3 py-3"><LocalMatch candidate={candidate} /></td>
                         <td className="px-3 py-3"><StatusBadge status={candidate.is_following ? "up" : "warning"} label={t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")} /></td>
                         <td className="px-3 py-3 text-xs text-muted"><span className="whitespace-nowrap">{fmt.dateTime(candidate.updated_at)}</span></td>
-                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} /></td>
+                        <td className="w-28 min-w-28 px-3 py-3"><RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} detailAvailable={detailAvailable} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} onDetail={() => setDetailCandidate(candidate)} /></td>
                       </tr>
                     );
                   })}
@@ -438,12 +496,14 @@ export default function CandidateWorkbench({
               {visible.map((candidate) => {
                 const name = candidate.display_name || candidate.source_creator_id;
                 const source = accounts.find((account) => account.id === candidate.remote_account_id)?.source || "pixiv";
+                const detailAvailable = source === "pixiv" && previewEnabledAccountIds.has(candidate.remote_account_id);
                 return (
                   <article key={candidate.id} className="rounded-lg border border-border bg-surface p-3">
                     <div className="flex items-start gap-3">
                       <input type="checkbox" className="mt-2 rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} />
-                      <div className="min-w-0 flex-1"><CandidateIdentity candidate={candidate} /></div>
+                      <div className="min-w-0 flex-1"><CandidateIdentity candidate={candidate} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></div>
                     </div>
+                    <div className="mt-3"><CandidateSnapshots candidate={candidate} /></div>
                     <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border py-3 text-xs">
                       <div><p className="mb-1 text-muted">{t("discovery.provider")}</p><p className="font-medium text-fg">{providerLabel(t, source)}</p></div>
                       <div><p className="mb-1 text-muted">{t("discovery.remote_status")}</p><p className="font-medium text-fg">{t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")}</p></div>
@@ -452,7 +512,7 @@ export default function CandidateWorkbench({
                     </div>
                     <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                       <span className="text-xs text-muted">{fmt.dateTime(candidate.updated_at)}</span>
-                      <RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} />
+                      <RowActions candidate={candidate} importAvailable={previewEnabledAccountIds.has(candidate.remote_account_id)} detailAvailable={detailAvailable} pending={rowsInert || batch.isPending || resolve.isPending} onImport={() => setImportIds([candidate.id])} onDismiss={() => batch.mutate({ ids: [candidate.id], action: "dismiss" })} onRestore={() => batch.mutate({ ids: [candidate.id], action: "restore" })} onResolve={() => { setResolveError(null); setResolveCandidate(candidate); }} onDetail={() => setDetailCandidate(candidate)} />
                     </div>
                   </article>
                 );
@@ -467,6 +527,14 @@ export default function CandidateWorkbench({
 
       <ImportDialog count={importIds.length} open={importIds.length > 0} pending={batch.isPending} onClose={() => setImportIds([])} onConfirm={(syncNow) => batch.mutate({ ids: importIds, action: "import", syncNow })} />
       <ConflictResolutionDialog candidate={resolveCandidate} open={!!resolveCandidate} pending={resolve.isPending} error={resolveError} onClose={() => { setResolveCandidate(null); setResolveError(null); }} onResolve={(value) => resolve.mutate(value)} />
+      {detailCandidate ? (
+        <RemoteCreatorDrawer
+          candidate={detailCandidate}
+          userId={userId}
+          onClose={() => setDetailCandidate(null)}
+          onPrivateAccessError={onPrivateAccessError}
+        />
+      ) : null}
     </>
   );
 }

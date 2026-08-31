@@ -9,6 +9,7 @@ const apiIndexPath = path.join(root, "src/lib/api/index.ts");
 const pagePath = path.join(root, "src/app/admin/discovery/RemoteDiscoveryPage.tsx");
 const accountsPath = path.join(root, "src/app/admin/discovery/RemoteAccountPanel.tsx");
 const candidatesPath = path.join(root, "src/app/admin/discovery/CandidateWorkbench.tsx");
+const detailDrawerPath = path.join(root, "src/app/admin/discovery/RemoteCreatorDrawer.tsx");
 const privateCachePath = path.join(root, "src/lib/remoteDiscoveryPrivateCache.ts");
 const callbackBootstrapPath = path.join(root, "src/lib/xOAuthCallbackBootstrap.ts");
 const layoutPath = path.join(root, "src/app/layout.tsx");
@@ -36,12 +37,18 @@ for (const route of [
   "/api/v1/discovery/candidates",
   "/candidates/batch-actions",
   "/resolve",
+  "/remote-detail",
+  "/remote-works",
+  "/remote-work-imports",
 ]) {
   assert.ok(endpoint.includes(route), `typed endpoint module must include ${route}`);
 }
 
 assert.match(types, /interface RemoteAccountRead/);
 assert.match(types, /interface DiscoveryCandidate/);
+assert.match(types, /interface RemoteCreatorDetail/);
+assert.match(types, /interface RemoteWorkPreview/);
+assert.match(types, /work_token:\s*string/);
 assert.match(types, /interface RemoteDiscoveryRollout/,
   "frontend types must consume backend-effective rollout capabilities");
 assert.match(types, /type RemoteDiscoverySource\s*=\s*"pixiv"\s*\|\s*"x"\s*\|\s*"bilibili"/);
@@ -88,6 +95,18 @@ assert.match(accounts, /auto_import_summary_paused/,
   "the account card must distinguish a configured policy from effective automatic import");
 assert.match(candidates, /previewEnabledAccountIds/,
   "candidate import and conflict actions must honor provider preview rollout");
+assert.match(candidates, /candidate\.recent_works/,
+  "desktop and mobile candidate views must render the signed scan snapshot");
+assert.ok(fs.existsSync(detailDrawerPath), "candidate details must live in a focused drawer component");
+const detailDrawer = fs.readFileSync(detailDrawerPath, "utf8");
+assert.match(detailDrawer, /role="dialog"/);
+assert.match(detailDrawer, /aria-modal="true"/);
+assert.match(detailDrawer, /x_restrict/,
+  "the drawer must gate sensitive works before preview and import");
+assert.match(detailDrawer, /preview_urls/,
+  "the lightbox must support multi-page Pixiv works");
+assert.match(detailDrawer, /fetchNextPage/,
+  "work pagination must follow opaque server cursors");
 assert.match(endpoint, /filters\.localMatch !== undefined[\s\S]{0,120}local_match/,
   "the typed client must send local-match filtering to the paginated backend");
 assert.match(candidates, /localMatch:\s*local === "matched" \? true : local === "unmatched" \? false : undefined/,

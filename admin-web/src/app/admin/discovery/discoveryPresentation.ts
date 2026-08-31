@@ -22,6 +22,7 @@ export function candidateUsername(candidate: DiscoveryCandidate) {
 }
 
 export function candidateAvatar(candidate: DiscoveryCandidate) {
+  if (candidate.avatar_url) return candidate.avatar_url;
   const metadata = candidateMetadata(candidate);
   const profileImages = metadata.profile_image_urls;
   if (profileImages && typeof profileImages === "object") {
