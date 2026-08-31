@@ -978,7 +978,13 @@ class RemoteDiscoveryService:
         await self.db.flush()
         return creator
 
-    async def import_candidate(self, user_id: int, candidate_id: UUID) -> DiscoveryCandidate:
+    async def import_candidate(
+        self,
+        user_id: int,
+        candidate_id: UUID,
+        *,
+        manual_new_membership: bool = False,
+    ) -> DiscoveryCandidate:
         # Snapshot only immutable identifiers before locking. Account lifecycle
         # paths serialize on RemoteAccount first, so import must wait there
         # before taking Candidate or member-source locks.
@@ -1087,7 +1093,11 @@ class RemoteDiscoveryService:
             )
         ).scalar_one_or_none()
         if member is None:
-            defaults = await get_subscription_defaults(self.db)
+            defaults = (
+                {"schedule_mode": "manual", "sync_enabled": False}
+                if manual_new_membership
+                else await get_subscription_defaults(self.db)
+            )
             member = await membership_service.ensure_membership(
                 subscription,
                 name=creator.display_name or creator.name,

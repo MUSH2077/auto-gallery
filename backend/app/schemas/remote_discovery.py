@@ -189,6 +189,17 @@ class RemoteAccountRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DiscoveryRecentWorkRead(BaseModel):
+    source_work_id: str
+    title: str
+    work_url: str
+    created_at: datetime
+    work_type: Literal["illust", "manga", "ugoira"]
+    page_count: int = Field(ge=1)
+    x_restrict: int = Field(ge=0, le=2)
+    thumbnail_url: str | None = None
+
+
 class DiscoveryCandidateRead(BaseModel):
     id: UUID
     remote_account_id: UUID
@@ -196,6 +207,8 @@ class DiscoveryCandidateRead(BaseModel):
     source_creator_id: str
     remote_url: str | None = None
     display_name: str | None = None
+    avatar_url: str | None = None
+    recent_works: list[DiscoveryRecentWorkRead] = Field(default_factory=list, max_length=3)
     metadata: dict | None = Field(default=None, validation_alias="candidate_metadata")
     confidence: Confidence
     confidence_reasons: list | None = None
@@ -210,6 +223,62 @@ class DiscoveryCandidateRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+RemoteWorkType = Literal["illust", "manga", "ugoira"]
+RemoteWorkImportStatus = Literal["available", "queued", "imported"]
+
+
+class RemoteCreatorProfileRead(BaseModel):
+    source: RemoteSource
+    source_creator_id: str
+    display_name: str | None = None
+    username: str | None = None
+    profile_url: str
+    avatar_url: str | None = None
+    comment: str | None = None
+    work_counts: dict[str, int] = Field(default_factory=dict)
+    is_followed: bool | None = None
+    fetched_at: datetime
+
+
+class RemoteWorkPreviewRead(BaseModel):
+    source_work_id: str
+    source_creator_id: str
+    title: str
+    work_url: str
+    created_at: datetime
+    work_type: RemoteWorkType
+    page_count: int = Field(ge=1)
+    x_restrict: int = Field(ge=0, le=2)
+    thumbnail_url: str | None = None
+    preview_urls: list[str] = Field(default_factory=list)
+    local_work_id: UUID | None = None
+    download_job_id: UUID | None = None
+    import_status: RemoteWorkImportStatus = "available"
+    work_token: str
+
+
+class RemoteWorkPageRead(BaseModel):
+    items: list[RemoteWorkPreviewRead]
+    next_cursor: str | None = None
+
+
+class RemoteCreatorDetailRead(BaseModel):
+    profile: RemoteCreatorProfileRead
+    works: RemoteWorkPageRead
+
+
+class RemoteWorkImportRequest(BaseModel):
+    work_token: str = Field(min_length=40, max_length=10000)
+    sensitive_content_confirmed: bool = False
+
+
+class RemoteWorkImportRead(BaseModel):
+    status: Literal["queued", "already_queued", "already_imported"]
+    local_work_id: UUID | None = None
+    download_job_id: UUID | None = None
+    candidate: DiscoveryCandidateRead | None = None
 
 
 class DiscoveryScanCreate(BaseModel):

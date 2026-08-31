@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequirePermission
@@ -14,7 +14,25 @@ from app.schemas.remote_discovery import (
     DiscoveryCandidateRead,
     DiscoveryCandidateResolve,
     DiscoveryScanCreate,
+    RemoteCreatorDetailRead,
+    RemoteWorkImportRead,
+    RemoteWorkImportRequest,
+    RemoteWorkPageRead,
 )
+from app.remote_discovery.common import RemoteReauthenticationRequired
+from app.services.remote_access_tokens import RemoteAccessTokenError
+from app.services.remote_accounts import (
+    RemoteCredentialGenerationChanged,
+    RemoteWorkStateAccountRequired,
+    RemoteWorkStateAccountUnhealthy,
+)
+from app.services.remote_creator_access import RemoteCreatorAccessService
+from app.services.remote_work_import import (
+    RemoteSensitiveConfirmationRequired,
+    RemoteWorkImportService,
+    RemoteWorkSourceBusy,
+)
+from app.services.backpressure import DownloadAdmissionError
 from app.services.remote_discovery import (
     DiscoveryScanInProgress,
     RemoteDiscoveryService,
@@ -115,10 +133,133 @@ async def list_discovery_candidates(
         offset=offset,
         limit=limit,
     )
+    candidate_reads = await RemoteCreatorAccessService(db, user.id).present_candidates(
+        list(candidates)
+    )
     return {
         "total": total,
-        "items": [DiscoveryCandidateRead.model_validate(item).model_dump(mode="json") for item in candidates],
+        "items": [item.model_dump(mode="json") for item in candidate_reads],
     }
+
+
+def _remote_detail_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, RemoteDiscoveryUnavailable):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "remote_discovery_unavailable",
+                "reason": exc.code,
+                "source": exc.source,
+            },
+        )
+    if isinstance(exc, RemoteAccessTokenError):
+        return HTTPException(status_code=400, detail={"code": "invalid_cursor"})
+    if isinstance(exc, RemoteWorkStateAccountRequired):
+        return HTTPException(status_code=409, detail={"code": "remote_account_required"})
+    if isinstance(exc, RemoteWorkStateAccountUnhealthy):
+        return HTTPException(status_code=409, detail={"code": "reauthentication_required"})
+    if isinstance(exc, RemoteCredentialGenerationChanged):
+        return HTTPException(status_code=409, detail={"code": "credential_generation_changed"})
+    if isinstance(exc, RemoteReauthenticationRequired):
+        return HTTPException(status_code=409, detail={"code": "reauthentication_required"})
+    if isinstance(exc, NotImplementedError):
+        return HTTPException(status_code=501, detail={"code": "remote_detail_not_supported"})
+    if isinstance(exc, ValueError) and "not found" in str(exc).casefold():
+        return HTTPException(status_code=404, detail={"code": "candidate_not_found"})
+    return HTTPException(status_code=502, detail={"code": "remote_provider_failed"})
+
+
+@router.get(
+    "/candidates/{candidate_id}/remote-detail",
+    response_model=RemoteCreatorDetailRead,
+)
+async def get_candidate_remote_detail(
+    candidate_id: UUID,
+    response: Response,
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        detail = await RemoteCreatorAccessService(db, user.id).get_detail(
+            candidate_id, limit=limit
+        )
+    except Exception as exc:
+        raise _remote_detail_error(exc) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return detail
+
+
+@router.get(
+    "/candidates/{candidate_id}/remote-works",
+    response_model=RemoteWorkPageRead,
+)
+async def get_candidate_remote_works(
+    candidate_id: UUID,
+    response: Response,
+    cursor: str = Query(min_length=40, max_length=10000),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        works = await RemoteCreatorAccessService(db, user.id).get_works(
+            candidate_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except Exception as exc:
+        raise _remote_detail_error(exc) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return works
+
+
+@router.post(
+    "/candidates/{candidate_id}/remote-work-imports",
+    response_model=RemoteWorkImportRead,
+)
+async def import_candidate_remote_work(
+    candidate_id: UUID,
+    data: RemoteWorkImportRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteWorkImportService(db, user.id).import_work(
+            candidate_id,
+            data.work_token,
+            sensitive_content_confirmed=data.sensitive_content_confirmed,
+        )
+        await db.commit()
+    except DownloadAdmissionError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.payload()) from exc
+    except RemoteWorkSourceBusy as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "source_busy"}) from exc
+    except RemoteSensitiveConfirmationRequired as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "sensitive_content_confirmation_required"},
+        ) from exc
+    except (RemoteAccessTokenError, ValueError) as exc:
+        await db.rollback()
+        if isinstance(exc, RemoteAccessTokenError):
+            raise HTTPException(status_code=400, detail={"code": "invalid_work_token"}) from exc
+        message = str(exc).casefold()
+        if "not found" in message:
+            status, code = 404, "candidate_not_found"
+        elif "dismissed" in message:
+            status, code = 409, "candidate_dismissed"
+        elif "conflict" in message:
+            status, code = 409, "candidate_conflict"
+        else:
+            status, code = 400, "remote_work_import_failed"
+        raise HTTPException(status_code=status, detail={"code": code}) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return result
 
 
 @router.post("/candidates/batch-actions")
