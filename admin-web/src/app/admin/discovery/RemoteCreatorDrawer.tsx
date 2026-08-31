@@ -284,10 +284,17 @@ export default function RemoteCreatorDrawer({
     queryFn: async ({ pageParam, signal }): Promise<CreatorPage> => {
       if (pageParam) {
         return {
-          works: await api.getDiscoveryCandidateRemoteWorks(candidate.id, pageParam, 20, signal),
+          works: await api.getDiscoveryCandidateRemoteWorks(candidate.id, {
+            cursor: pageParam,
+            limit: 20,
+            signal,
+          }),
         };
       }
-      const first = await api.getDiscoveryCandidateRemoteDetail(candidate.id, 20, signal);
+      const first = await api.getDiscoveryCandidateRemoteDetail(candidate.id, {
+        limit: 20,
+        signal,
+      });
       return { profile: first.profile, works: first.works };
     },
     getNextPageParam: (lastPage) => lastPage.works.next_cursor || undefined,

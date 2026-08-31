@@ -537,6 +537,7 @@ export interface DiscoveryCandidate {
 }
 
 export type RemoteWorkType = "illust" | "manga" | "ugoira";
+export type RemoteWorkFeedType = "illust" | "manga";
 
 export interface DiscoveryRecentWork {
   source_work_id: string;
@@ -556,10 +557,27 @@ export interface RemoteCreatorProfile {
   username?: string | null;
   profile_url: string;
   avatar_url?: string | null;
+  header_image_url?: string | null;
   comment?: string | null;
   work_counts: Record<string, number>;
+  social_counts: Record<string, number>;
+  public_profile: RemoteCreatorPublicProfile;
+  links: RemoteCreatorLink[];
   is_followed?: boolean | null;
   fetched_at: string;
+}
+
+export interface RemoteCreatorPublicProfile {
+  gender?: string | null;
+  region?: string | null;
+  birth_day?: string | null;
+  birth_year?: number | null;
+  job?: string | null;
+}
+
+export interface RemoteCreatorLink {
+  kind: "website" | "x" | "pawoo";
+  url: string;
 }
 
 export interface RemoteWorkPreview {
@@ -585,6 +603,7 @@ export interface RemoteWorkPage {
 }
 
 export interface RemoteCreatorDetail {
+  candidate: DiscoveryCandidate;
   profile: RemoteCreatorProfile;
   works: RemoteWorkPage;
 }

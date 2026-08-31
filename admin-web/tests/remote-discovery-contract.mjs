@@ -9,7 +9,9 @@ const apiIndexPath = path.join(root, "src/lib/api/index.ts");
 const pagePath = path.join(root, "src/app/admin/discovery/RemoteDiscoveryPage.tsx");
 const accountsPath = path.join(root, "src/app/admin/discovery/RemoteAccountPanel.tsx");
 const candidatesPath = path.join(root, "src/app/admin/discovery/CandidateWorkbench.tsx");
-const detailDrawerPath = path.join(root, "src/app/admin/discovery/RemoteCreatorDrawer.tsx");
+const detailRoutePath = path.join(root, "src/app/admin/discovery/candidates/[id]/page.tsx");
+const detailPagePath = path.join(root, "src/app/admin/discovery/candidates/[id]/RemoteCreatorDetailPage.tsx");
+const remoteWorksPath = path.join(root, "src/app/admin/discovery/RemoteCreatorWorks.tsx");
 const privateCachePath = path.join(root, "src/lib/remoteDiscoveryPrivateCache.ts");
 const callbackBootstrapPath = path.join(root, "src/lib/xOAuthCallbackBootstrap.ts");
 const layoutPath = path.join(root, "src/app/layout.tsx");
@@ -47,6 +49,10 @@ for (const route of [
 assert.match(types, /interface RemoteAccountRead/);
 assert.match(types, /interface DiscoveryCandidate/);
 assert.match(types, /interface RemoteCreatorDetail/);
+assert.match(types, /header_image_url\?:\s*string/);
+assert.match(types, /social_counts:\s*Record<string, number>/);
+assert.match(types, /public_profile:\s*RemoteCreatorPublicProfile/);
+assert.match(types, /candidate:\s*DiscoveryCandidate/);
 assert.match(types, /interface RemoteWorkPreview/);
 assert.match(types, /work_token:\s*string/);
 assert.match(types, /interface RemoteDiscoveryRollout/,
@@ -95,18 +101,26 @@ assert.match(accounts, /auto_import_summary_paused/,
   "the account card must distinguish a configured policy from effective automatic import");
 assert.match(candidates, /previewEnabledAccountIds/,
   "candidate import and conflict actions must honor provider preview rollout");
-assert.match(candidates, /candidate\.recent_works/,
-  "desktop and mobile candidate views must render the signed scan snapshot");
-assert.ok(fs.existsSync(detailDrawerPath), "candidate details must live in a focused drawer component");
-const detailDrawer = fs.readFileSync(detailDrawerPath, "utf8");
-assert.match(detailDrawer, /role="dialog"/);
-assert.match(detailDrawer, /aria-modal="true"/);
-assert.match(detailDrawer, /x_restrict/,
-  "the drawer must gate sensitive works before preview and import");
-assert.match(detailDrawer, /preview_urls/,
+assert.ok(fs.existsSync(detailRoutePath), "candidate details must have a dedicated route");
+assert.ok(fs.existsSync(detailPagePath), "candidate details must have a focused page component");
+assert.ok(fs.existsSync(remoteWorksPath), "remote work preview and import must be reusable");
+const detailPage = fs.readFileSync(detailPagePath, "utf8");
+const remoteWorks = fs.readFileSync(remoteWorksPath, "utf8");
+assert.match(detailPage, /header_image_url/,
+  "the detail page must render a signed Pixiv header image with a theme fallback");
+assert.match(detailPage, /public_profile/,
+  "the detail page must expose the provider-approved public profile fields");
+assert.match(detailPage, /useState<RemoteWorkFeedType>\("illust"\)/);
+assert.match(detailPage, /\["illust",\s*"manga"\]\s+as const/,
+  "illustration and manga feeds must be selectable independently");
+assert.match(remoteWorks, /x_restrict/,
+  "the creator page must gate sensitive works before preview and import");
+assert.match(remoteWorks, /preview_urls/,
   "the lightbox must support multi-page Pixiv works");
-assert.match(detailDrawer, /fetchNextPage/,
+assert.match(detailPage, /fetchNextPage/,
   "work pagination must follow opaque server cursors");
+assert.match(endpoint, /work_type/,
+  "typed detail and work requests must send the selected Pixiv feed type");
 assert.match(endpoint, /filters\.localMatch !== undefined[\s\S]{0,120}local_match/,
   "the typed client must send local-match filtering to the paginated backend");
 assert.match(candidates, /localMatch:\s*local === "matched" \? true : local === "unmatched" \? false : undefined/,

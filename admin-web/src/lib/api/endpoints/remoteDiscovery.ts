@@ -11,6 +11,7 @@ import type {
   RemoteAccountUpdateInput,
   RemoteCollection,
   RemoteCreatorDetail,
+  RemoteWorkFeedType,
   RemoteWorkImportResult,
   RemoteWorkPage,
   TaskRun,
@@ -113,17 +114,37 @@ export const remoteDiscoveryApi = {
       signal,
     }),
 
-  getDiscoveryCandidateRemoteDetail: (id: string, limit = 20, signal?: AbortSignal) =>
-    request<RemoteCreatorDetail>(
-      `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-detail?limit=${limit}`,
-      { signal },
-    ),
+  getDiscoveryCandidateRemoteDetail: (
+    id: string,
+    options: { workType?: RemoteWorkFeedType; limit?: number; signal?: AbortSignal } = {},
+  ) => {
+    const params = new URLSearchParams({
+      work_type: options.workType || "illust",
+      limit: String(options.limit || 20),
+    });
+    return request<RemoteCreatorDetail>(
+      `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-detail?${params.toString()}`,
+      { signal: options.signal },
+    );
+  },
 
-  getDiscoveryCandidateRemoteWorks: (id: string, cursor: string, limit = 20, signal?: AbortSignal) => {
-    const params = new URLSearchParams({ cursor, limit: String(limit) });
+  getDiscoveryCandidateRemoteWorks: (
+    id: string,
+    options: {
+      workType?: RemoteWorkFeedType;
+      cursor?: string | null;
+      limit?: number;
+      signal?: AbortSignal;
+    } = {},
+  ) => {
+    const params = new URLSearchParams({
+      work_type: options.workType || "illust",
+      limit: String(options.limit || 20),
+    });
+    if (options.cursor) params.set("cursor", options.cursor);
     return request<RemoteWorkPage>(
       `/api/v1/discovery/candidates/${encodeURIComponent(id)}/remote-works?${params.toString()}`,
-      { signal },
+      { signal: options.signal },
     );
   },
 
