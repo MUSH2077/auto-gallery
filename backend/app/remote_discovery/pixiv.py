@@ -22,7 +22,9 @@ from app.remote_discovery.contract import (
     RemoteCandidateIdentity,
     RemoteCollection,
     RemoteCreatorDetail,
+    RemoteCreatorLink,
     RemoteCreatorProfile,
+    RemoteCreatorPublicProfile,
     RemoteDiscoveryAdapter,
     RemoteWorkPage,
     RemoteWorkPreview,
@@ -46,6 +48,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         "User-Agent": "PixivIOSApp/7.19.1 (iOS 16.7.2; iPhone12,8)",
         "Referer": "https://app-api.pixiv.net/",
     }
+    DEFAULT_PROFILE_IMAGE_URL = "https://s.pximg.net/common/images/no_profile.png"
 
     def __init__(self, transport: RemoteHTTPTransport | None = None):
         self.transport = transport or HttpxRemoteTransport()
@@ -204,6 +207,30 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
     def _optional_https_url(value: Any) -> str | None:
         return value if isinstance(value, str) and value.startswith("https://") else None
 
+    @classmethod
+    def _optional_profile_image_url(cls, value: Any) -> str | None:
+        url = cls._optional_https_url(value)
+        return None if url == cls.DEFAULT_PROFILE_IMAGE_URL else url
+
+    @staticmethod
+    def _public_text(profile: Mapping[str, Any], publicity: Mapping[str, Any], field: str) -> str | None:
+        value = profile.get(field)
+        if publicity.get(field) != "public" or not isinstance(value, str) or not value.strip():
+            return None
+        return value
+
+    @staticmethod
+    def _external_link(value: Any, *, allowed_hosts: set[str] | None = None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        parsed = urlsplit(value)
+        hostname = (parsed.hostname or "").casefold()
+        if parsed.scheme != "https" or not hostname or parsed.username or parsed.password:
+            return None
+        if allowed_hosts is not None and hostname not in allowed_hosts:
+            return None
+        return value
+
     @staticmethod
     def _required_nonnegative_profile_count(profile: Mapping[str, Any], field: str) -> int:
         value = profile.get(field, 0)
@@ -216,6 +243,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         cls,
         user: Any,
         profile: Any,
+        profile_publicity: Any = None,
         *,
         source_creator_id: str,
     ) -> RemoteCreatorProfile:
@@ -223,20 +251,47 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             raise MalformedRemoteResponse("Pixiv user detail has invalid user identity")
         if not isinstance(profile, Mapping):
             raise MalformedRemoteResponse("Pixiv user detail has invalid profile")
+        if profile_publicity is None:
+            profile_publicity = {}
+        if not isinstance(profile_publicity, Mapping):
+            raise MalformedRemoteResponse("Pixiv user detail has invalid profile publicity")
         image_urls = user.get("profile_image_urls") or {}
         if not isinstance(image_urls, Mapping):
             raise MalformedRemoteResponse("Pixiv user detail has invalid profile image URLs")
         avatar_url = next(
             (
-                cls._optional_https_url(image_urls.get(key))
+                cls._optional_profile_image_url(image_urls.get(key))
                 for key in ("medium", "square_medium", "large")
-                if cls._optional_https_url(image_urls.get(key))
+                if cls._optional_profile_image_url(image_urls.get(key))
             ),
             None,
         )
         is_followed = user.get("is_followed")
         if is_followed is not None and not isinstance(is_followed, bool):
             raise MalformedRemoteResponse("Pixiv user detail has invalid is_followed")
+        birth_year = profile.get("birth_year")
+        if (
+            profile_publicity.get("birth_year") != "public"
+            or isinstance(birth_year, bool)
+            or not isinstance(birth_year, int)
+            or birth_year < 0
+        ):
+            birth_year = None
+        links: list[RemoteCreatorLink] = []
+        website = cls._external_link(profile.get("webpage"))
+        if website:
+            links.append(RemoteCreatorLink(kind="website", url=website))
+        x_url = cls._external_link(
+            profile.get("twitter_url"),
+            allowed_hosts={"twitter.com", "www.twitter.com", "x.com", "www.x.com"},
+        )
+        if x_url:
+            links.append(RemoteCreatorLink(kind="x", url=x_url))
+        pawoo_url = cls._external_link(
+            profile.get("pawoo_url"), allowed_hosts={"pawoo.net", "www.pawoo.net"}
+        )
+        if pawoo_url and profile_publicity.get("pawoo") is True:
+            links.append(RemoteCreatorLink(kind="pawoo", url=pawoo_url))
         return RemoteCreatorProfile(
             source="pixiv",
             source_creator_id=source_creator_id,
@@ -250,6 +305,22 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
                 "manga": cls._required_nonnegative_profile_count(profile, "total_manga"),
                 "novel": cls._required_nonnegative_profile_count(profile, "total_novels"),
             },
+            header_image_url=cls._optional_https_url(profile.get("background_image_url")),
+            social_counts={
+                "following": cls._required_nonnegative_profile_count(profile, "total_follow_users"),
+                "mypixiv": cls._required_nonnegative_profile_count(profile, "total_mypixiv_users"),
+                "public_bookmarks": cls._required_nonnegative_profile_count(
+                    profile, "total_illust_bookmarks_public"
+                ),
+            },
+            public_profile=RemoteCreatorPublicProfile(
+                gender=cls._public_text(profile, profile_publicity, "gender"),
+                region=cls._public_text(profile, profile_publicity, "region"),
+                birth_day=cls._public_text(profile, profile_publicity, "birth_day"),
+                birth_year=birth_year,
+                job=cls._public_text(profile, profile_publicity, "job"),
+            ),
+            links=links,
             is_followed=is_followed,
             fetched_at=datetime.now(UTC),
         )
@@ -343,7 +414,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         }
 
     @staticmethod
-    def _creator_works_cursor(next_url: Any) -> Mapping[str, Any] | None:
+    def _creator_works_cursor(next_url: Any, *, work_type: str) -> Mapping[str, Any] | None:
         if not next_url:
             return None
         if not isinstance(next_url, str):
@@ -355,7 +426,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             raise MalformedRemoteResponse("Pixiv creator works next_url is missing a valid offset") from exc
         if offset < 0:
             raise MalformedRemoteResponse("Pixiv creator works next_url has a negative offset")
-        return {"offset": offset}
+        return {"offset": offset, "work_type": work_type}
 
     async def _fetch_profile_with_access_token(
         self,
@@ -374,6 +445,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         return self._normalize_profile(
             payload.get("user"),
             payload.get("profile"),
+            payload.get("profile_publicity"),
             source_creator_id=source_creator_id,
         )
 
@@ -383,6 +455,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         *,
         source_creator_id: str,
         offset: int,
+        work_type: str,
         page_size: int,
     ) -> RemoteWorkPage:
         response = await self.transport.request(
@@ -394,7 +467,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
                 "offset": offset,
                 "filter": "for_ios",
                 "limit": page_size,
-                "type": "illust",
+                "type": work_type,
             },
             timeout=10,
         )
@@ -404,9 +477,21 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             raise MalformedRemoteResponse("Pixiv creator works response has invalid illusts")
         items = [
             self._normalize_work(item, source_creator_id=source_creator_id)
-            for item in raw_works
+            for item in raw_works[:page_size]
         ]
-        next_cursor = self._creator_works_cursor(payload.get("next_url"))
+        # Pixiv's user/illusts endpoint can ignore a small requested limit and
+        # return its fixed-size page. Keep our public contract strict and
+        # resume from the first item we did not expose, rather than skipping
+        # the upstream remainder via next_url.
+        if len(raw_works) > page_size:
+            next_cursor = {
+                "offset": offset + page_size,
+                "work_type": work_type,
+            }
+        else:
+            next_cursor = self._creator_works_cursor(
+                payload.get("next_url"), work_type=work_type
+            )
         return RemoteWorkPage(items=items, next_cursor=next_cursor, done=next_cursor is None)
 
     async def fetch_creator_profile(
@@ -428,11 +513,14 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         credentials: Mapping[str, Any],
         *,
         source_creator_id: str,
+        work_type: str = "illust",
         page_size: int = 20,
     ) -> RemoteCreatorDetail:
         validate_page_size(page_size)
         if not source_creator_id.strip():
             raise ValueError("source_creator_id must not be empty")
+        if work_type not in {"illust", "manga"}:
+            raise ValueError("Pixiv creator work type is invalid")
         access_token, _user = await self._authentication(credentials)
         profile = await self._fetch_profile_with_access_token(
             access_token,
@@ -442,6 +530,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             access_token,
             source_creator_id=source_creator_id,
             offset=0,
+            work_type=work_type,
             page_size=page_size,
         )
         return RemoteCreatorDetail(profile=profile, works=works)
@@ -451,12 +540,18 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
         credentials: Mapping[str, Any],
         *,
         source_creator_id: str,
+        work_type: str = "illust",
         cursor: Mapping[str, Any] | None = None,
         page_size: int = 20,
     ) -> RemoteWorkPage:
         validate_page_size(page_size)
         if not source_creator_id.strip():
             raise ValueError("source_creator_id must not be empty")
+        if work_type not in {"illust", "manga"}:
+            raise ValueError("Pixiv creator work type is invalid")
+        cursor_work_type = (cursor or {}).get("work_type", work_type)
+        if cursor_work_type != work_type:
+            raise ValueError("Pixiv creator work type does not match cursor")
         try:
             offset = int((cursor or {}).get("offset", 0))
         except (TypeError, ValueError) as exc:
@@ -468,6 +563,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             access_token,
             source_creator_id=source_creator_id,
             offset=offset,
+            work_type=work_type,
             page_size=page_size,
         )
 

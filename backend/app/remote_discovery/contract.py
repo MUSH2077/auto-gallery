@@ -18,6 +18,7 @@ from app.services.remote_credentials import (
 
 RemoteSource = Literal["pixiv", "x", "bilibili"]
 RemoteWorkType = Literal["illust", "manga", "ugoira"]
+RemoteWorkFeedType = Literal["illust", "manga"]
 
 
 def _freeze(value: Any) -> Any:
@@ -77,6 +78,38 @@ class RemoteCandidateIdentity:
 
 
 @dataclass(frozen=True)
+class RemoteCreatorPublicProfile:
+    gender: str | None = None
+    region: str | None = None
+    birth_day: str | None = None
+    birth_year: int | None = None
+    job: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("gender", "region", "birth_day", "job"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be non-empty text or None")
+        if self.birth_year is not None and (
+            isinstance(self.birth_year, bool)
+            or not isinstance(self.birth_year, int)
+            or self.birth_year < 0
+        ):
+            raise ValueError("birth_year must be a non-negative integer or None")
+
+
+@dataclass(frozen=True)
+class RemoteCreatorLink:
+    kind: Literal["website", "x", "pawoo"]
+    url: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"website", "x", "pawoo"}:
+            raise ValueError("remote creator link kind is not supported")
+        _require_https_url(self.url, "remote creator link URL")
+
+
+@dataclass(frozen=True)
 class RemoteCreatorProfile:
     source: RemoteSource
     source_creator_id: str
@@ -88,6 +121,12 @@ class RemoteCreatorProfile:
     work_counts: Mapping[str, int]
     is_followed: bool | None
     fetched_at: datetime
+    header_image_url: str | None = None
+    social_counts: Mapping[str, int] = field(default_factory=dict)
+    public_profile: RemoteCreatorPublicProfile = field(
+        default_factory=RemoteCreatorPublicProfile
+    )
+    links: tuple[RemoteCreatorLink, ...] | list[RemoteCreatorLink] = ()
 
     def __post_init__(self) -> None:
         _require_remote_source(self.source)
@@ -95,6 +134,7 @@ class RemoteCreatorProfile:
             raise ValueError("source_creator_id must not be empty")
         _require_https_url(self.profile_url, "remote profile URL")
         _require_https_url(self.avatar_url, "remote avatar URL")
+        _require_https_url(self.header_image_url, "remote header image URL")
         if self.fetched_at.tzinfo is None:
             raise ValueError("fetched_at must be timezone-aware")
         if not isinstance(self.work_counts, Mapping):
@@ -102,9 +142,21 @@ class RemoteCreatorProfile:
         for name, value in self.work_counts.items():
             if not str(name).strip() or isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError("work_counts must contain non-negative integer values")
+        if not isinstance(self.social_counts, Mapping):
+            raise TypeError("social_counts must be a mapping")
+        for name, value in self.social_counts.items():
+            if not str(name).strip() or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("social_counts must contain non-negative integer values")
+        if not isinstance(self.public_profile, RemoteCreatorPublicProfile):
+            raise TypeError("public_profile must be a RemoteCreatorPublicProfile")
+        links = tuple(self.links)
+        if any(not isinstance(link, RemoteCreatorLink) for link in links):
+            raise TypeError("links must contain RemoteCreatorLink values")
         if self.is_followed is not None and not isinstance(self.is_followed, bool):
             raise ValueError("is_followed must be a boolean or None")
         object.__setattr__(self, "work_counts", _freeze(self.work_counts))
+        object.__setattr__(self, "social_counts", _freeze(self.social_counts))
+        object.__setattr__(self, "links", links)
 
 
 @dataclass(frozen=True)
@@ -275,6 +327,7 @@ class RemoteDiscoveryAdapter(ABC):
         credentials: RedactedCredentials | Mapping[str, Any],
         *,
         source_creator_id: str,
+        work_type: RemoteWorkFeedType = "illust",
         page_size: int = 20,
     ) -> RemoteCreatorDetail:
         raise NotImplementedError(f"{self.source} does not support remote creator details")
@@ -284,6 +337,7 @@ class RemoteDiscoveryAdapter(ABC):
         credentials: RedactedCredentials | Mapping[str, Any],
         *,
         source_creator_id: str,
+        work_type: RemoteWorkFeedType = "illust",
         cursor: Mapping[str, Any] | None = None,
         page_size: int = 20,
     ) -> RemoteWorkPage:

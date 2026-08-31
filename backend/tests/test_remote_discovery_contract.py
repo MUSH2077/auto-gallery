@@ -107,8 +107,21 @@ def test_remote_creator_detail_contract_validates_generic_profile_and_work_pages
         username="artist",
         profile_url="https://www.pixiv.net/users/123",
         avatar_url="https://i.pximg.net/user-profile/img/123/avatar.jpg",
+        header_image_url="https://i.pximg.net/user-profile/img/123/header.jpg",
         comment="fixture profile",
         work_counts={"illust": 12, "manga": 3, "novel": 1},
+        social_counts={"following": 25, "mypixiv": 2, "public_bookmarks": 40},
+        public_profile=contract.RemoteCreatorPublicProfile(
+            gender="female",
+            region="Tokyo",
+            birth_day="08-30",
+            birth_year=2000,
+            job="Illustrator",
+        ),
+        links=(
+            contract.RemoteCreatorLink(kind="website", url="https://artist.example"),
+            contract.RemoteCreatorLink(kind="x", url="https://x.com/artist"),
+        ),
         is_followed=True,
         fetched_at=fetched_at,
     )
@@ -132,10 +145,15 @@ def test_remote_creator_detail_contract_validates_generic_profile_and_work_pages
     detail = contract.RemoteCreatorDetail(profile=profile, works=page)
 
     assert detail.profile.source_creator_id == "123"
+    assert detail.profile.header_image_url.endswith("/header.jpg")
+    assert detail.profile.public_profile.job == "Illustrator"
+    assert detail.profile.links[1].kind == "x"
     assert detail.works.items == (work,)
     assert detail.works.next_cursor["offset"] == 20
     with pytest.raises(TypeError):
         detail.profile.work_counts["illust"] = 99
+    with pytest.raises(TypeError):
+        detail.profile.social_counts["following"] = 99
     with pytest.raises(TypeError):
         detail.works.next_cursor["offset"] = 40
     with pytest.raises(ValueError, match="same creator"):
@@ -160,6 +178,8 @@ def test_remote_creator_detail_contract_validates_generic_profile_and_work_pages
                 done=True,
             ),
         )
+    with pytest.raises(ValueError, match="HTTPS"):
+        contract.RemoteCreatorLink(kind="website", url="http://artist.example")
     with pytest.raises(ValueError, match="x_restrict"):
         contract.RemoteWorkPreview(
             source="pixiv",

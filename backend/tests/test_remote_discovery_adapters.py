@@ -397,9 +397,27 @@ async def test_pixiv_creator_detail_normalizes_profile_and_first_work_page_with_
                 "total_illusts": 12,
                 "total_manga": 3,
                 "total_novels": 1,
-                "background_image_url": None,
+                "total_follow_users": 25,
+                "total_mypixiv_users": 2,
+                "total_illust_bookmarks_public": 40,
+                "background_image_url": "https://i.pximg.net/user-profile/header.jpg",
+                "webpage": "https://artist.example",
+                "twitter_url": "https://twitter.com/pixiv_artist",
+                "pawoo_url": "https://pawoo.net/@pixiv_artist",
+                "gender": "female",
+                "region": "Tokyo",
+                "birth_day": "08-30",
+                "birth_year": 2000,
+                "job": "Illustrator",
             },
-            "profile_publicity": {},
+            "profile_publicity": {
+                "gender": "public",
+                "region": "private",
+                "birth_day": "public",
+                "birth_year": "private",
+                "job": "public",
+                "pawoo": True,
+            },
             "workspace": {},
         }, {}),
         response(200, {
@@ -413,11 +431,30 @@ async def test_pixiv_creator_detail_normalizes_profile_and_first_work_page_with_
     )
 
     detail = await PixivRemoteDiscoveryAdapter(transport).fetch_creator_detail(
-        {"refresh_token": "refresh"}, source_creator_id="123", page_size=20
+        {"refresh_token": "refresh"},
+        source_creator_id="123",
+        work_type="manga",
+        page_size=20,
     )
 
     assert detail.profile.display_name == "Pixiv Artist"
+    assert detail.profile.header_image_url == "https://i.pximg.net/user-profile/header.jpg"
     assert dict(detail.profile.work_counts) == {"illust": 12, "manga": 3, "novel": 1}
+    assert dict(detail.profile.social_counts) == {
+        "following": 25,
+        "mypixiv": 2,
+        "public_bookmarks": 40,
+    }
+    assert detail.profile.public_profile.gender == "female"
+    assert detail.profile.public_profile.region is None
+    assert detail.profile.public_profile.birth_day == "08-30"
+    assert detail.profile.public_profile.birth_year is None
+    assert detail.profile.public_profile.job == "Illustrator"
+    assert [(link.kind, link.url) for link in detail.profile.links] == [
+        ("website", "https://artist.example"),
+        ("x", "https://twitter.com/pixiv_artist"),
+        ("pawoo", "https://pawoo.net/@pixiv_artist"),
+    ]
     assert detail.works.items[0].work_type == "manga"
     assert detail.works.items[0].page_count == 2
     assert detail.works.items[0].x_restrict == 1
@@ -426,7 +463,7 @@ async def test_pixiv_creator_detail_normalizes_profile_and_first_work_page_with_
         "https://i.pximg.net/img-master/456_p1.jpg",
     )
     assert detail.works.items[1].work_type == "ugoira"
-    assert dict(detail.works.next_cursor) == {"offset": 20}
+    assert dict(detail.works.next_cursor) == {"offset": 20, "work_type": "manga"}
     assert [request[1] for request in transport.requests] == [
         "https://oauth.secure.pixiv.net/auth/token",
         "https://app-api.pixiv.net/v1/user/detail",
@@ -437,8 +474,44 @@ async def test_pixiv_creator_detail_normalizes_profile_and_first_work_page_with_
         "offset": 0,
         "filter": "for_ios",
         "limit": 20,
-        "type": "illust",
+        "type": "manga",
     }
+
+
+@pytest.mark.asyncio
+async def test_pixiv_default_profile_image_is_normalized_as_missing_optional_media():
+    """Signing Pixiv's s.pximg.net placeholder must not make the whole profile fail."""
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    adapter = PixivRemoteDiscoveryAdapter(FixtureTransport(
+        response(200, {"access_token": "access"}, {}),
+        response(200, {
+            "user": {
+                "id": 123,
+                "name": "No Avatar Artist",
+                "account": "no_avatar",
+                "profile_image_urls": {
+                    "medium": "https://s.pximg.net/common/images/no_profile.png",
+                },
+                "comment": "",
+                "is_followed": True,
+            },
+            "profile": {
+                "total_illusts": 0,
+                "total_manga": 0,
+                "total_novels": 0,
+            },
+            "profile_publicity": {},
+            "workspace": {},
+        }, {}),
+    ))
+
+    profile = await adapter.fetch_creator_profile(
+        {"refresh_token": "refresh"}, source_creator_id="123"
+    )
+
+    assert profile.avatar_url is None
 
 
 @pytest.mark.asyncio
@@ -458,13 +531,52 @@ async def test_pixiv_creator_work_page_uses_validated_offset_cursor():
     page = await PixivRemoteDiscoveryAdapter(transport).fetch_creator_works(
         {"refresh_token": "refresh"},
         source_creator_id="123",
-        cursor={"offset": 20},
+        work_type="manga",
+        cursor={"offset": 20, "work_type": "manga"},
         page_size=20,
     )
 
     assert page.is_complete is True
     assert page.items[0].source_work_id == "789"
     assert transport.requests[1][2]["params"]["offset"] == 20
+    assert transport.requests[1][2]["params"]["type"] == "manga"
+
+    with pytest.raises(ValueError, match="work type"):
+        await PixivRemoteDiscoveryAdapter(FixtureTransport()).fetch_creator_works(
+            {"refresh_token": "refresh"},
+            source_creator_id="123",
+            work_type="illust",
+            cursor={"offset": 20, "work_type": "manga"},
+            page_size=20,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pixiv_creator_work_page_enforces_requested_size_when_upstream_ignores_limit():
+    """Pixiv can return its fixed-size page even when a smaller limit is sent."""
+    from app.remote_discovery.pixiv import PixivRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(200, {"access_token": "access"}, {}),
+        response(200, {
+            "user": {"id": 123, "name": "Artist", "account": "artist"},
+            "illusts": [_pixiv_illust(800 + index) for index in range(5)],
+            "next_url": None,
+        }, {}),
+    )
+
+    page = await PixivRemoteDiscoveryAdapter(transport).fetch_creator_works(
+        {"refresh_token": "refresh"},
+        source_creator_id="123",
+        work_type="illust",
+        cursor={"offset": 7, "work_type": "illust"},
+        page_size=2,
+    )
+
+    assert [item.source_work_id for item in page.items] == ["800", "801"]
+    assert dict(page.next_cursor) == {"offset": 9, "work_type": "illust"}
+    assert page.is_complete is False
 
 
 @pytest.mark.asyncio
