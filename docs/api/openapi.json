@@ -1635,6 +1635,29 @@
         "title": "CreatorRef",
         "type": "object"
       },
+      "CreatorReferencesRead": {
+        "properties": {
+          "danbooru": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DanbooruCreatorReferenceRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pixiv": {
+            "items": {
+              "$ref": "#/components/schemas/PixivCreatorReferenceRead"
+            },
+            "title": "Pixiv",
+            "type": "array"
+          }
+        },
+        "title": "CreatorReferencesRead",
+        "type": "object"
+      },
       "CreatorStorageNode": {
         "properties": {
           "creator_id": {
@@ -2160,6 +2183,51 @@
         "title": "DailyScheduleRule",
         "type": "object"
       },
+      "DanbooruCreatorReferenceRead": {
+        "properties": {
+          "artist_id": {
+            "title": "Artist Id",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "other_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Other Names",
+            "type": "array"
+          },
+          "profile_url": {
+            "title": "Profile Url",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "remote",
+              "fallback"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artist_id",
+          "profile_url",
+          "status"
+        ],
+        "title": "DanbooruCreatorReferenceRead",
+        "type": "object"
+      },
       "DanbooruMappingRefreshEnqueueResponse": {
         "properties": {
           "job_id": {
@@ -2650,6 +2718,199 @@
         "title": "DiscoveryCandidateBatchAction",
         "type": "object"
       },
+      "DiscoveryCandidateRead": {
+        "properties": {
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "confidence_reasons": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Reasons"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dismissed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed At"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "imported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported At"
+          },
+          "is_following": {
+            "title": "Is Following",
+            "type": "boolean"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "recent_works": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveryRecentWorkRead"
+            },
+            "maxItems": 3,
+            "title": "Recent Works",
+            "type": "array"
+          },
+          "remote_account_id": {
+            "format": "uuid",
+            "title": "Remote Account Id",
+            "type": "string"
+          },
+          "remote_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Url"
+          },
+          "source_creator_id": {
+            "title": "Source Creator Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "dismissed",
+              "imported",
+              "conflict"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          },
+          "user_subscription_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Subscription Id"
+          }
+        },
+        "required": [
+          "id",
+          "remote_account_id",
+          "user_id",
+          "source_creator_id",
+          "confidence",
+          "state",
+          "is_following",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DiscoveryCandidateRead",
+        "type": "object"
+      },
       "DiscoveryCandidateResolve": {
         "properties": {
           "creator_id": {
@@ -2684,6 +2945,69 @@
           }
         },
         "title": "DiscoveryCandidateResolve",
+        "type": "object"
+      },
+      "DiscoveryRecentWorkRead": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "page_count": {
+            "minimum": 1.0,
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "source_work_id": {
+            "title": "Source Work Id",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "work_type": {
+            "enum": [
+              "illust",
+              "manga",
+              "ugoira"
+            ],
+            "title": "Work Type",
+            "type": "string"
+          },
+          "work_url": {
+            "title": "Work Url",
+            "type": "string"
+          },
+          "x_restrict": {
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "X Restrict",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_work_id",
+          "title",
+          "work_url",
+          "created_at",
+          "work_type",
+          "page_count",
+          "x_restrict"
+        ],
+        "title": "DiscoveryRecentWorkRead",
         "type": "object"
       },
       "DiscoveryScanCreate": {
@@ -4302,6 +4626,96 @@
         "title": "MeOut",
         "type": "object"
       },
+      "MediaDerivativeProgressRead": {
+        "properties": {
+          "affected_works": {
+            "title": "Affected Works",
+            "type": "integer"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "completion_percent": {
+            "title": "Completion Percent",
+            "type": "number"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "last_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Completed At"
+          },
+          "oldest_unfinished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Unfinished At"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "processing": {
+            "title": "Processing",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "stall_after_seconds": {
+            "title": "Stall After Seconds",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "idle",
+              "waiting",
+              "running",
+              "stalled",
+              "failed",
+              "complete"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "completed",
+          "pending",
+          "processing",
+          "failed",
+          "remaining",
+          "affected_works",
+          "completion_percent",
+          "status",
+          "stall_after_seconds"
+        ],
+        "title": "MediaDerivativeProgressRead",
+        "type": "object"
+      },
       "MonthlyScheduleRule": {
         "properties": {
           "frequency": {
@@ -4445,6 +4859,71 @@
           }
         },
         "title": "PinterestSourceConfig",
+        "type": "object"
+      },
+      "PixivCreatorReferenceRead": {
+        "properties": {
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "profile_url": {
+            "title": "Profile Url",
+            "type": "string"
+          },
+          "source_creator_id": {
+            "title": "Source Creator Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "remote",
+              "fallback"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "source_creator_id",
+          "display_name",
+          "profile_url",
+          "status"
+        ],
+        "title": "PixivCreatorReferenceRead",
         "type": "object"
       },
       "PixivSourceConfig": {
@@ -5356,6 +5835,118 @@
         "title": "RemoteAccountUpdate",
         "type": "object"
       },
+      "RemoteCreatorDetailRead": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/RemoteCreatorProfileRead"
+          },
+          "works": {
+            "$ref": "#/components/schemas/RemoteWorkPageRead"
+          }
+        },
+        "required": [
+          "profile",
+          "works"
+        ],
+        "title": "RemoteCreatorDetailRead",
+        "type": "object"
+      },
+      "RemoteCreatorProfileRead": {
+        "properties": {
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "fetched_at": {
+            "format": "date-time",
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "is_followed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Followed"
+          },
+          "profile_url": {
+            "title": "Profile Url",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "pixiv",
+              "x",
+              "bilibili"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "source_creator_id": {
+            "title": "Source Creator Id",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "work_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Work Counts",
+            "type": "object"
+          }
+        },
+        "required": [
+          "source",
+          "source_creator_id",
+          "profile_url",
+          "fetched_at"
+        ],
+        "title": "RemoteCreatorProfileRead",
+        "type": "object"
+      },
       "RemoteDiscoveryRolloutRead": {
         "properties": {
           "auto_import": {
@@ -5384,6 +5975,219 @@
           "unavailable_reason"
         ],
         "title": "RemoteDiscoveryRolloutRead",
+        "type": "object"
+      },
+      "RemoteWorkImportRead": {
+        "properties": {
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DiscoveryCandidateRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "download_job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Job Id"
+          },
+          "local_work_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Work Id"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "already_queued",
+              "already_imported"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RemoteWorkImportRead",
+        "type": "object"
+      },
+      "RemoteWorkImportRequest": {
+        "properties": {
+          "sensitive_content_confirmed": {
+            "default": false,
+            "title": "Sensitive Content Confirmed",
+            "type": "boolean"
+          },
+          "work_token": {
+            "maxLength": 10000,
+            "minLength": 40,
+            "title": "Work Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_token"
+        ],
+        "title": "RemoteWorkImportRequest",
+        "type": "object"
+      },
+      "RemoteWorkPageRead": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RemoteWorkPreviewRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RemoteWorkPageRead",
+        "type": "object"
+      },
+      "RemoteWorkPreviewRead": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "download_job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Job Id"
+          },
+          "import_status": {
+            "default": "available",
+            "enum": [
+              "available",
+              "queued",
+              "imported"
+            ],
+            "title": "Import Status",
+            "type": "string"
+          },
+          "local_work_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Work Id"
+          },
+          "page_count": {
+            "minimum": 1.0,
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "preview_urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preview Urls",
+            "type": "array"
+          },
+          "source_creator_id": {
+            "title": "Source Creator Id",
+            "type": "string"
+          },
+          "source_work_id": {
+            "title": "Source Work Id",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "work_token": {
+            "title": "Work Token",
+            "type": "string"
+          },
+          "work_type": {
+            "enum": [
+              "illust",
+              "manga",
+              "ugoira"
+            ],
+            "title": "Work Type",
+            "type": "string"
+          },
+          "work_url": {
+            "title": "Work Url",
+            "type": "string"
+          },
+          "x_restrict": {
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "X Restrict",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_work_id",
+          "source_creator_id",
+          "title",
+          "work_url",
+          "created_at",
+          "work_type",
+          "page_count",
+          "x_restrict",
+          "work_token"
+        ],
+        "title": "RemoteWorkPreviewRead",
         "type": "object"
       },
       "RemoteWorkStateRead": {
@@ -16347,6 +17151,83 @@
         ]
       }
     },
+    "/api/v1/creators/{creator_id}/references": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_creators_creator_id_references",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "creator_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Creator Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatorReferencesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Creator References",
+        "tags": [
+          "creators"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
+        ]
+      }
+    },
     "/api/v1/creators/{creator_id}/sources": {
       "get": {
         "description": "List source accounts for a creator.",
@@ -18597,6 +19478,282 @@
           "subscriptions"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/discovery/candidates/{candidate_id}/remote-detail": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_discovery_candidates_candidate_id_remote_detail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteCreatorDetailRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Candidate Remote Detail",
+        "tags": [
+          "discovery"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/discovery/candidates/{candidate_id}/remote-work-imports": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_discovery_candidates_candidate_id_remote_work_imports",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteWorkImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteWorkImportRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Candidate Remote Work",
+        "tags": [
+          "discovery"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/api/v1/discovery/candidates/{candidate_id}/remote-works": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_discovery_candidates_candidate_id_remote_works",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": true,
+            "schema": {
+              "maxLength": 10000,
+              "minLength": 40,
+              "title": "Cursor",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteWorkPageRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Candidate Remote Works",
+        "tags": [
+          "discovery"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
       }
     },
     "/api/v1/discovery/candidates/{candidate_id}/resolve": {
@@ -22935,6 +24092,60 @@
         "x-required-permissions": [
           "subscriptions"
         ]
+      }
+    },
+    "/api/v1/remote-media/{token}": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_remote_media_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "image/*": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Remote Media",
+        "tags": [
+          "remote-media"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "public",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-response-schema-status": "generic"
       }
     },
     "/api/v1/repositories/batch-delete": {
@@ -28742,6 +29953,71 @@
           "curation"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/works/derivative-progress": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_works_derivative_progress",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDerivativeProgressRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Media Derivative Progress",
+        "tags": [
+          "works"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
+        ]
       }
     },
     "/api/v1/works/{work_id}": {

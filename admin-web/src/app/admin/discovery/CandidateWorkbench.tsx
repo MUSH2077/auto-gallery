@@ -33,12 +33,24 @@ const PAGE_SIZE = 25;
 type LocalFilter = "" | "matched" | "unmatched" | "conflict";
 const RemoteCreatorDrawer = dynamic(() => import("./RemoteCreatorDrawer"), { ssr: false });
 
-function Avatar({ candidate }: { candidate: DiscoveryCandidate }) {
+function useDesktopCandidateLayout() {
+  const [desktop, setDesktop] = useState<boolean | null>(null);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const update = () => setDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return desktop;
+}
+
+function Avatar({ candidate, loadMedia }: { candidate: DiscoveryCandidate; loadMedia: boolean }) {
   const t = useT();
   const [failed, setFailed] = useState(false);
   const name = candidate.display_name || candidate.source_creator_id;
   const src = candidateAvatar(candidate);
-  if (!src || failed) {
+  if (!loadMedia || !src || failed) {
     return (
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-subtle text-muted">
         <UserRound aria-hidden="true" className="h-5 w-5" />
@@ -48,7 +60,14 @@ function Avatar({ candidate }: { candidate: DiscoveryCandidate }) {
   return (
     // Provider avatar URLs are immutable snapshots, not application assets.
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt={t("discovery.avatar_alt", { name })} className="h-10 w-10 shrink-0 rounded-lg object-cover" onError={() => setFailed(true)} />
+    <img
+      src={src}
+      alt={t("discovery.avatar_alt", { name })}
+      loading="lazy"
+      decoding="async"
+      className="h-10 w-10 shrink-0 rounded-lg object-cover"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -70,9 +89,11 @@ function ConfidenceDetails({ candidate }: { candidate: DiscoveryCandidate }) {
 function CandidateIdentity({
   candidate,
   onOpen,
+  loadMedia,
 }: {
   candidate: DiscoveryCandidate;
   onOpen?: () => void;
+  loadMedia: boolean;
 }) {
   const t = useT();
   const name = candidate.display_name || candidate.source_creator_id;
@@ -81,9 +102,9 @@ function CandidateIdentity({
     <div className="flex min-w-[12rem] items-center gap-3">
       {onOpen ? (
         <button type="button" className="rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" onClick={onOpen} aria-label={t("discovery.open_creator_details", { name })}>
-          <Avatar candidate={candidate} />
+          <Avatar candidate={candidate} loadMedia={loadMedia} />
         </button>
-      ) : <Avatar candidate={candidate} />}
+      ) : <Avatar candidate={candidate} loadMedia={loadMedia} />}
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
           {onOpen ? (
@@ -103,7 +124,7 @@ function CandidateIdentity({
   );
 }
 
-function CandidateSnapshots({ candidate }: { candidate: DiscoveryCandidate }) {
+function CandidateSnapshots({ candidate, loadMedia }: { candidate: DiscoveryCandidate; loadMedia: boolean }) {
   const t = useT();
   const works = candidate.recent_works || [];
   if (!works.length) return <span className="text-xs text-muted">{t("discovery.no_work_snapshot")}</span>;
@@ -111,11 +132,13 @@ function CandidateSnapshots({ candidate }: { candidate: DiscoveryCandidate }) {
     <div className="flex gap-1.5" aria-label={t("discovery.recent_work_snapshots")}>
       {works.slice(0, 3).map((work) => (
         <div key={work.source_work_id} className="relative h-12 w-12 overflow-hidden rounded-md border border-border bg-subtle" title={work.title}>
-          {work.thumbnail_url ? (
+          {loadMedia && work.thumbnail_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={work.thumbnail_url}
               alt=""
+              loading="lazy"
+              decoding="async"
               className={`h-full w-full object-cover ${work.x_restrict > 0 ? "scale-110 blur-md" : ""}`}
             />
           ) : (
@@ -268,6 +291,7 @@ export default function CandidateWorkbench({
   const [resolveCandidate, setResolveCandidate] = useState<DiscoveryCandidate | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [detailCandidate, setDetailCandidate] = useState<DiscoveryCandidate | null>(null);
+  const desktopLayout = useDesktopCandidateLayout();
   const accountBySource = useMemo(() => new Map(accounts.map((account) => [account.source, account])), [accounts]);
   const accountId = provider ? accountBySource.get(provider)?.id : undefined;
   const effectiveState = status || (local === "conflict" ? "conflict" : undefined);
@@ -477,8 +501,8 @@ export default function CandidateWorkbench({
                     return (
                       <tr key={candidate.id} className="bg-surface align-top hover:bg-subtle/60">
                         <td className="px-3 py-3"><input type="checkbox" className="rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} /></td>
-                        <td className="px-3 py-3"><CandidateIdentity candidate={candidate} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></td>
-                        <td className="px-3 py-3"><CandidateSnapshots candidate={candidate} /></td>
+                        <td className="px-3 py-3"><CandidateIdentity candidate={candidate} loadMedia={desktopLayout === true} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></td>
+                        <td className="px-3 py-3"><CandidateSnapshots candidate={candidate} loadMedia={desktopLayout === true} /></td>
                         <td className="px-3 py-3"><span className="rounded-md border border-border bg-subtle px-2 py-1 text-xs font-medium text-fg">{providerLabel(t, source)}</span></td>
                         <td className="px-3 py-3"><ConfidenceDetails candidate={candidate} /></td>
                         <td className="px-3 py-3"><LocalMatch candidate={candidate} /></td>
@@ -501,9 +525,9 @@ export default function CandidateWorkbench({
                   <article key={candidate.id} className="rounded-lg border border-border bg-surface p-3">
                     <div className="flex items-start gap-3">
                       <input type="checkbox" className="mt-2 rounded" disabled={rowsInert} aria-label={t("discovery.select_candidate", { name })} checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(candidate.id)) next.delete(candidate.id); else next.add(candidate.id); return next; })} />
-                      <div className="min-w-0 flex-1"><CandidateIdentity candidate={candidate} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></div>
+                      <div className="min-w-0 flex-1"><CandidateIdentity candidate={candidate} loadMedia={desktopLayout === false} onOpen={detailAvailable ? () => setDetailCandidate(candidate) : undefined} /></div>
                     </div>
-                    <div className="mt-3"><CandidateSnapshots candidate={candidate} /></div>
+                    <div className="mt-3"><CandidateSnapshots candidate={candidate} loadMedia={desktopLayout === false} /></div>
                     <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border py-3 text-xs">
                       <div><p className="mb-1 text-muted">{t("discovery.provider")}</p><p className="font-medium text-fg">{providerLabel(t, source)}</p></div>
                       <div><p className="mb-1 text-muted">{t("discovery.remote_status")}</p><p className="font-medium text-fg">{t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")}</p></div>

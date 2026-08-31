@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import type { WorkAsset } from "@/lib/api/endpoints/works";
+import type { MediaDerivativeProgress, WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkMediaThumbnail, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
@@ -208,6 +208,86 @@ function WorkCard({
 type SortKey = "created_at" | "posted_at" | "title";
 type ViewMode = "grid" | "list";
 
+function DerivativeProgressCard({
+  progress,
+  refreshing,
+  onRefresh,
+}: {
+  progress?: MediaDerivativeProgress;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  if (!progress || progress.total === 0 || progress.remaining === 0) return null;
+
+  const statusKey = progress.status === "stalled"
+    ? "works.derivative_progress_stalled"
+    : progress.status === "failed"
+      ? "works.derivative_progress_failed"
+      : progress.status === "waiting"
+        ? "works.derivative_progress_waiting"
+        : "works.derivative_progress_running";
+  const percent = Math.min(100, Math.max(0, progress.completion_percent));
+  const stalled = progress.status === "stalled";
+
+  return (
+    <section
+      className={`mb-4 rounded-lg border p-4 ${stalled ? "border-warning/40 bg-warning-subtle" : "border-border bg-surface"}`}
+      role="region"
+      aria-label={t("works.derivative_progress_region")}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-fg">{t("works.derivative_progress_title")}</p>
+          <p className={`mt-0.5 text-xs font-medium ${stalled ? "text-warning" : "text-accent"}`} role="status">
+            {t(statusKey)}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-ghost shrink-0"
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-label={t("works.derivative_progress_refresh")}
+        >
+          {refreshing ? t("common.refreshing") : t("works.derivative_progress_refresh")}
+        </button>
+      </div>
+      <div
+        className="mt-3 h-2 overflow-hidden rounded-full bg-border"
+        role="progressbar"
+        aria-label={t("works.derivative_progress_title")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}
+      >
+        <div
+          className={`h-full w-full rounded-full transition-transform duration-slow ease-out ${stalled ? "bg-warning" : "bg-accent"}`}
+          style={{ transform: `scaleX(${percent / 100})`, transformOrigin: "left" }}
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
+        <span className="font-mono tabular-nums text-fg">
+          {t("works.derivative_progress_count", {
+            completed: fmt.number(progress.completed),
+            total: fmt.number(progress.total),
+          })}
+        </span>
+        <span>
+          {t("works.derivative_progress_remaining", {
+            remaining: fmt.number(progress.remaining),
+            works: fmt.number(progress.affected_works),
+          })}
+        </span>
+        {progress.last_completed_at ? (
+          <span>{t("works.derivative_progress_last", { time: fmt.relative(progress.last_completed_at) })}</span>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function WorksContent() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -348,6 +428,14 @@ function WorksContent() {
     ...worksQuery,
     data: worksQuery.data?.groups.works,
   };
+  const derivativeProgress = useQuery({
+    queryKey: queryKeys.works.derivativeProgress,
+    queryFn: ({ signal }) => api.getMediaDerivativeProgress(signal),
+    staleTime: 10_000,
+    refetchInterval: (query) => (
+      (query.state.data?.remaining ?? 0) > 0 ? 15_000 : false
+    ),
+  });
 
   useEffect(() => {
     // placeholderData belongs to the previous page/query.  Its cursor must
@@ -510,6 +598,12 @@ function WorksContent() {
             {t("slideshow.open")}
           </button>
         ) : undefined}
+      />
+
+      <DerivativeProgressCard
+        progress={derivativeProgress.data}
+        refreshing={derivativeProgress.isFetching}
+        onRefresh={() => { void derivativeProgress.refetch(); }}
       />
 
       {worksQuery.isFetching && !worksQuery.isLoading && (

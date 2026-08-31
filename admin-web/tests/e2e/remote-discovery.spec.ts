@@ -62,6 +62,8 @@ function candidate(id: string, overrides: Record<string, unknown> = {}) {
     source_creator_id: `remote-${id}`,
     remote_url: `https://www.pixiv.net/users/${id}`,
     display_name: `Artist ${id}`,
+    avatar_url: null,
+    recent_works: [],
     metadata: {
       username: `artist_${id}`,
       profile_image_urls: { medium: "https://images.example/avatar.png" },
@@ -794,8 +796,172 @@ test("candidate avatar is requested once across responsive layouts", async ({ co
 
   await page.goto("/admin/discovery");
   await expect(page.getByText("Artist avatar", { exact: true }).first()).toBeVisible();
-  await expect(page.locator('img[alt="Avatar for Artist avatar"]')).toHaveCount(0);
+  await expect(page.locator('img[alt="Avatar for Artist avatar"]:visible')).toHaveCount(0);
   expect(avatarRequests).toEqual(["https://images.example/avatar.png"]);
+});
+
+test("browses, reveals and imports paginated Pixiv works without losing workbench state", async ({ context, page }) => {
+  test.setTimeout(60_000);
+  const detailCandidate = candidate("detail", {
+    avatar_url: "https://images.example/avatar-signed.svg",
+    recent_works: [
+      {
+        source_work_id: "work-manga",
+        title: "Two page manga",
+        work_url: "https://www.pixiv.net/artworks/100",
+        created_at: now,
+        work_type: "manga",
+        page_count: 2,
+        x_restrict: 0,
+        thumbnail_url: "https://images.example/manga-thumb.svg",
+      },
+      {
+        source_work_id: "work-sensitive",
+        title: "Sensitive Ugoira",
+        work_url: "https://www.pixiv.net/artworks/101",
+        created_at: now,
+        work_type: "ugoira",
+        page_count: 1,
+        x_restrict: 1,
+        thumbnail_url: "https://images.example/sensitive-thumb.svg",
+      },
+    ],
+  });
+  await installFixtures(context, {
+    accounts: [account()],
+    candidates: [
+      ...Array.from({ length: 25 }, (_, index) => candidate(`detail-page-${index}`)),
+      detailCandidate,
+    ],
+  });
+
+  let detailAvailable = false;
+  const worksCursors: string[] = [];
+  const imports: Record<string, unknown>[] = [];
+  const work = (
+    sourceWorkId: string,
+    title: string,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    source_work_id: sourceWorkId,
+    source_creator_id: "remote-detail",
+    title,
+    work_url: `https://www.pixiv.net/artworks/${sourceWorkId}`,
+    created_at: now,
+    work_type: "illust",
+    page_count: 1,
+    x_restrict: 0,
+    thumbnail_url: `https://images.example/${sourceWorkId}-thumb.svg`,
+    preview_urls: [`https://images.example/${sourceWorkId}-preview.svg`],
+    local_work_id: null,
+    download_job_id: null,
+    import_status: "available",
+    work_token: `token-${sourceWorkId}`,
+    ...overrides,
+  });
+  await page.route("**/api/v1/discovery/candidates/detail/remote-detail?*", async (route) => {
+    if (!detailAvailable) return json(route, { detail: "temporary detail failure" }, 502);
+    return json(route, {
+      profile: {
+        source: "pixiv",
+        source_creator_id: "remote-detail",
+        display_name: "Drawer Artist",
+        username: "drawer_artist",
+        profile_url: "https://www.pixiv.net/users/detail",
+        avatar_url: "https://images.example/avatar-detail.svg",
+        comment: "Live Pixiv profile",
+        work_counts: { total: 3 },
+        is_followed: true,
+        fetched_at: now,
+      },
+      works: {
+        items: [
+          work("100", "Two page manga", {
+            work_type: "manga",
+            page_count: 2,
+            preview_urls: [
+              "https://images.example/manga-page-1.svg",
+              "https://images.example/manga-page-2.svg",
+            ],
+          }),
+          work("101", "Sensitive Ugoira", {
+            work_type: "ugoira",
+            x_restrict: 1,
+            preview_urls: ["https://images.example/sensitive-preview.svg"],
+          }),
+        ],
+        next_cursor: "cursor-page-2",
+      },
+    });
+  });
+  await page.route("**/api/v1/discovery/candidates/detail/remote-works?*", async (route) => {
+    worksCursors.push(new URL(route.request().url()).searchParams.get("cursor") || "");
+    return json(route, {
+      items: [work("102", "Later illustration")],
+      next_cursor: null,
+    });
+  });
+  await page.route("**/api/v1/discovery/candidates/detail/remote-work-imports", async (route) => {
+    imports.push(route.request().postDataJSON() as Record<string, unknown>);
+    return json(route, {
+      status: "queued",
+      local_work_id: null,
+      download_job_id: "download-sensitive",
+      candidate: null,
+    }, 201);
+  });
+
+  await page.goto("/admin/discovery");
+  const pagination = page.getByRole("navigation", { name: "Pagination" });
+  await pagination.getByRole("button", { name: "Next" }).click();
+  const table = page.getByRole("table");
+  const row = table.getByRole("row").filter({ hasText: "Artist detail" });
+  await expect(row.getByLabel("Recent work snapshots").locator("img")).toHaveCount(2);
+  await row.getByRole("checkbox", { name: "Select Artist detail" }).check();
+  const trigger = row.getByRole("button", { name: "View remote details for Artist detail" }).last();
+  await trigger.focus();
+  await trigger.click();
+
+  const drawer = page.getByRole("dialog", { name: "Creator details" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText("Could not load this creator's Pixiv details.")).toBeVisible();
+  detailAvailable = true;
+  await drawer.getByRole("button", { name: "Retry" }).click();
+  await expect(drawer.getByRole("heading", { name: "Drawer Artist" })).toBeVisible();
+  await expect(drawer.getByText("@drawer_artist")).toBeVisible();
+  await expect(drawer.getByText("Live Pixiv profile")).toBeVisible();
+  await expect(drawer.getByText("2 loaded")).toBeVisible();
+
+  const manga = drawer.getByRole("article").filter({ hasText: "Two page manga" });
+  await manga.getByRole("button", { name: "Preview Two page manga" }).click();
+  const mangaLightbox = page.getByRole("dialog", { name: "Two page manga" });
+  await expect(mangaLightbox.getByText("Page 1 of 2")).toBeVisible();
+  await mangaLightbox.getByRole("button", { name: "Next" }).click();
+  await expect(mangaLightbox.getByText("Page 2 of 2")).toBeVisible();
+  await expect(mangaLightbox.getByRole("img", { name: "Page 2 of Two page manga" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(mangaLightbox).toBeHidden();
+  await expect(drawer).toBeVisible();
+
+  const sensitive = drawer.getByRole("article").filter({ hasText: "Sensitive Ugoira" });
+  await expect(sensitive.getByRole("button", { name: "Import this work" })).toBeDisabled();
+  await sensitive.getByRole("button", { name: "Click to reveal R-18 content" }).click();
+  await expect(sensitive.getByRole("button", { name: "Preview Sensitive Ugoira" })).toBeVisible();
+  await sensitive.getByRole("button", { name: "Import this work" }).click();
+  await expect(sensitive.getByText("Queued for download")).toBeVisible();
+  expect(imports).toEqual([{ work_token: "token-101", sensitive_content_confirmed: true }]);
+
+  await drawer.getByRole("button", { name: "Load more works" }).click();
+  await expect(drawer.getByText("Later illustration")).toBeVisible();
+  await expect(drawer.getByText("3 loaded")).toBeVisible();
+  expect(worksCursors).toEqual(["cursor-page-2"]);
+
+  await drawer.getByRole("button", { name: "Close dialog" }).click();
+  await expect(drawer).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await expect(row.getByRole("checkbox", { name: "Select Artist detail" })).toBeChecked();
+  await expect(page.getByText("1 selected")).toBeVisible();
+  await expect(row).toBeVisible();
 });
 
 test("closed auto gate shows a configured policy as paused and preserves it on save", async ({ context, page }) => {

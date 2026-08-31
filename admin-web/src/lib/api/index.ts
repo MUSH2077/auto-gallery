@@ -1015,6 +1015,7 @@ export const queryKeys = {
   },
   works: {
     all: ["works"] as const,
+    derivativeProgress: ["works", "derivative-progress"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
     remoteState: (id: string) => ["works", id, "remote-state"] as const,

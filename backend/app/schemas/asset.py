@@ -42,6 +42,21 @@ class WorkAssetRead(BaseModel):
     created_at: datetime
 
 
+class MediaDerivativeProgressRead(BaseModel):
+    total: int
+    completed: int
+    pending: int
+    processing: int
+    failed: int
+    remaining: int
+    affected_works: int
+    completion_percent: float
+    status: Literal["idle", "waiting", "running", "stalled", "failed", "complete"]
+    last_completed_at: datetime | None = None
+    oldest_unfinished_at: datetime | None = None
+    stall_after_seconds: int
+
+
 class PlaybackTicketRead(BaseModel):
     url: str
     expires_at: datetime

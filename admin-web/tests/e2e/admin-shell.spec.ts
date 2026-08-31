@@ -259,6 +259,8 @@ async function installFixtureRoutes(context: BrowserContext) {
       });
     } else if (path === "/api/v1/creators/fixture-creator/links") {
       await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/creators/fixture-creator/references") {
+      await route.fulfill({ json: { pixiv: [], danbooru: null } });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
       const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
       const days = year === 2023
@@ -550,6 +552,21 @@ async function installFixtureRoutes(context: BrowserContext) {
       });
     } else if (path === "/api/v1/works") {
       await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/works/derivative-progress") {
+      await route.fulfill({ json: {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        processing: 0,
+        failed: 0,
+        remaining: 0,
+        affected_works: 0,
+        completion_percent: 100,
+        status: "idle",
+        last_completed_at: null,
+        oldest_unfinished_at: null,
+        stall_after_seconds: 300,
+      } });
     } else if (path === "/api/v1/creators") {
       await route.fulfill({ json: { items: [], total: 0 } });
     } else if (path === "/api/v1/creators/count") {
@@ -1027,7 +1044,12 @@ test("desktop sidebar is the sole peer-page navigation and command palette remai
   await expect(sidebar.locator("nav").getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAttribute("href", "/admin");
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAccessibleName("Go to dashboard");
-  await expect(sidebar.getByRole("heading", { name: "Upload & Import" })).toBeVisible();
+  await expect(sidebar.locator("nav h2")).toHaveCount(0);
+  await expect(sidebar.locator('section[aria-label="Upload & Import"]')).toBeVisible();
+  await expect(sidebar.locator("section[data-sidebar-group] + section[data-sidebar-group]").first()).toHaveCSS(
+    "border-top-style",
+    "solid",
+  );
   await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Notifications" })).toHaveCount(0);
@@ -1300,6 +1322,67 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByTestId("creator-activity-chart")).toBeVisible();
   await expect(page.locator(".chart-dot-enter")).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+test("creator references keep Pixiv identities and Danbooru aliases in separate read-only groups", async ({ page }) => {
+  const mappingWrites: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== "GET" && (path.includes("source-creators") || path.endsWith("/links"))) {
+      mappingWrites.push(`${request.method()} ${path}`);
+    }
+  });
+  await page.route("**/api/v1/creators/fixture-creator/references", (route) => route.fulfill({
+    json: {
+      pixiv: [
+        {
+          source_creator_id: "100",
+          display_name: "Current Pixiv Name",
+          username: "pixiv_account",
+          profile_url: "https://www.pixiv.net/users/100",
+          avatar_url: null,
+          status: "remote",
+          error_code: null,
+        },
+        {
+          source_creator_id: "200",
+          display_name: "Stored Pixiv Name",
+          username: null,
+          profile_url: "https://www.pixiv.net/users/200",
+          avatar_url: null,
+          status: "fallback",
+          error_code: "remote_unavailable",
+        },
+      ],
+      danbooru: {
+        artist_id: 300,
+        name: "danbooru_primary",
+        other_names: ["danbooru_alias", "second_alias"],
+        profile_url: "https://danbooru.donmai.us/artists/300",
+        status: "remote",
+      },
+    },
+  }));
+
+  await page.goto("/admin/creators/fixture-creator");
+  const references = page.getByRole("region", { name: "Name references" });
+  await expect(references.getByRole("heading", { name: "Pixiv" })).toBeVisible();
+  await expect(references.getByRole("heading", { name: "Danbooru" })).toBeVisible();
+  await expect(references.getByText("Current Pixiv Name")).toBeVisible();
+  await expect(references.getByText("Stored Pixiv Name")).toBeVisible();
+  await expect(references.getByText("Showing stored profile data or the user ID because the remote profile is unavailable.")).toBeVisible();
+  await expect(references.getByText("danbooru_primary")).toBeVisible();
+
+  await references.getByRole("button", { name: "@pixiv_account" }).click();
+  let edit = page.getByRole("dialog", { name: "Edit Creator" });
+  await expect(edit.getByRole("textbox").nth(1)).toHaveValue("pixiv_account");
+  await edit.getByRole("button", { name: "Cancel" }).click();
+
+  await references.getByRole("button", { name: "danbooru_alias" }).click();
+  edit = page.getByRole("dialog", { name: "Edit Creator" });
+  await expect(edit.getByRole("textbox").nth(1)).toHaveValue("danbooru_alias");
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  expect(mappingWrites).toEqual([]);
 });
 
 test("creator activity distinguishes a failed request from a genuinely empty year", async ({ page }) => {
@@ -1838,6 +1921,54 @@ test("pending derivatives render the original and retain a recovery label", asyn
   await page.goto("/admin/works/fixture-work");
   await expect(page.getByText("Preview is being generated in the background").first()).toBeVisible();
   await expect.poll(() => originalRequests).toBeGreaterThan(0);
+});
+
+test("works page shows aggregate preview progress and refreshes it", async ({ page }) => {
+  let requests = 0;
+  let resumed = false;
+  await page.route("**/api/v1/works/derivative-progress", async (route) => {
+    requests += 1;
+    await route.fulfill({ json: !resumed ? {
+      total: 5150,
+      completed: 4362,
+      pending: 788,
+      processing: 0,
+      failed: 0,
+      remaining: 788,
+      affected_works: 504,
+      completion_percent: 84.7,
+      status: "stalled",
+      last_completed_at: "2026-08-29T03:44:01+08:00",
+      oldest_unfinished_at: "2026-08-27T20:08:23+08:00",
+      stall_after_seconds: 300,
+    } : {
+      total: 5150,
+      completed: 4363,
+      pending: 786,
+      processing: 1,
+      failed: 0,
+      remaining: 787,
+      affected_works: 503,
+      completion_percent: 84.7,
+      status: "running",
+      last_completed_at: "2026-08-30T12:20:00+08:00",
+      oldest_unfinished_at: "2026-08-27T20:08:23+08:00",
+      stall_after_seconds: 300,
+    } });
+  });
+
+  await page.goto("/admin/works");
+  const progress = page.getByRole("region", { name: "Preview generation progress" });
+  await expect(progress).toBeVisible();
+  await expect(progress.getByText("Generation appears stalled")).toBeVisible();
+  await expect(progress.getByText("4,362 / 5,150")).toBeVisible();
+  await expect(progress.getByText("788 remaining across 504 works")).toBeVisible();
+
+  resumed = true;
+  await progress.getByRole("button", { name: "Refresh progress" }).click();
+  await expect(progress.getByText("Generating previews")).toBeVisible();
+  await expect(progress.getByText("4,363 / 5,150")).toBeVisible();
+  await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
 });
 
 test("system and source tabs preserve module-level permissions", async ({ page }) => {

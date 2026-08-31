@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.schemas.work import RemoteWorkStateRead, WorkRead, WorkList, WorkListResponse
-from app.schemas.asset import PlaybackTicketRead, WorkAssetRead
+from app.schemas.asset import MediaDerivativeProgressRead, PlaybackTicketRead, WorkAssetRead
 from app.schemas.curation import BatchCurateRequest, CurationCommitRead
 from app.repositories.work import WorkRepository
 from app.models.asset import Asset
@@ -23,6 +23,7 @@ from app.models.tag import Tag
 from app.models.work_tag import WorkTag
 from app.services.media_assets import is_browser_playable_video, media_kind
 from app.services.media_derivatives import (
+    media_derivative_progress,
     media_derivative_status,
     request_media_derivatives,
 )
@@ -89,6 +90,15 @@ async def list_works(
         "total": group["total"],
         "items": [WorkList.model_validate(item) for item in group["items"]],
     }
+
+
+@router.get("/derivative-progress", response_model=MediaDerivativeProgressRead)
+async def get_media_derivative_progress(
+    user: User = _require_library,
+    db: AsyncSession = Depends(get_db),
+):
+    del user
+    return await media_derivative_progress(db)
 
 
 @router.get("/{work_id}", response_model=WorkRead)

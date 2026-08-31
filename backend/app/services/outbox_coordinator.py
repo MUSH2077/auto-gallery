@@ -307,6 +307,7 @@ def _wake_job_is_active(redis_client, job_id: str) -> bool:
 
     from rq.exceptions import NoSuchJobError
     from rq.job import Job
+    from rq.registry import ScheduledJobRegistry
 
     try:
         job = Job.fetch(job_id, connection=redis_client)
@@ -317,6 +318,18 @@ def _wake_job_is_active(redis_client, job_id: str) -> bool:
         return True
     status = get_status(refresh=True)
     normalized = str(getattr(status, "value", status)).lower()
+    if normalized == "scheduled":
+        origin = str(getattr(job, "origin", "") or "")
+        if not origin:
+            return False
+        registry = ScheduledJobRegistry(origin, connection=redis_client)
+        if str(job_id) not in {str(item) for item in registry.get_job_ids()}:
+            # RQ persists the status in the job hash separately from the
+            # scheduled-registry zset.  A Redis restore or registry cleanup can
+            # therefore leave a job that says ``scheduled`` but can never be
+            # promoted to its queue.  Treat that split-brain record as stale so
+            # the compare-delete/re-enqueue path can recover the durable outbox.
+            return False
     return normalized in {"queued", "started", "deferred", "scheduled"}
 
 

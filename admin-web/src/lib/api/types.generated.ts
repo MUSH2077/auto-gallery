@@ -1492,6 +1492,26 @@ export interface paths {
         patch: operations["patch_api_v1_creators_creator_id_links_link_id"];
         trace?: never;
     };
+    "/api/v1/creators/{creator_id}/references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Creator References
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_creators_creator_id_references"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/creators/{creator_id}/sources": {
         parameters: {
             query?: never;
@@ -2032,6 +2052,66 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_discovery_candidates_batch_actions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/candidates/{candidate_id}/remote-detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidate Remote Detail
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_discovery_candidates_candidate_id_remote_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/candidates/{candidate_id}/remote-work-imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Candidate Remote Work
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_discovery_candidates_candidate_id_remote_work_imports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/candidates/{candidate_id}/remote-works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidate Remote Works
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_discovery_candidates_candidate_id_remote_works"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2984,6 +3064,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_remote_accounts_account_id_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-media/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Remote Media
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_remote_media_token"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4187,6 +4287,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/works/derivative-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Media Derivative Progress
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_works_derivative_progress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/works/{work_id}": {
         parameters: {
             query?: never;
@@ -5007,6 +5127,12 @@ export interface components {
             /** Work Count */
             work_count: number;
         };
+        /** CreatorReferencesRead */
+        CreatorReferencesRead: {
+            danbooru?: components["schemas"]["DanbooruCreatorReferenceRead"] | null;
+            /** Pixiv */
+            pixiv?: components["schemas"]["PixivCreatorReferenceRead"][];
+        };
         /** CreatorStorageNode */
         CreatorStorageNode: {
             /** Creator Id */
@@ -5207,6 +5333,22 @@ export interface components {
             frequency: "daily";
             /** Times */
             times: string[];
+        };
+        /** DanbooruCreatorReferenceRead */
+        DanbooruCreatorReferenceRead: {
+            /** Artist Id */
+            artist_id: number;
+            /** Name */
+            name?: string | null;
+            /** Other Names */
+            other_names?: string[];
+            /** Profile Url */
+            profile_url: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "remote" | "fallback";
         };
         /** DanbooruMappingRefreshEnqueueResponse */
         DanbooruMappingRefreshEnqueueResponse: {
@@ -5416,6 +5558,69 @@ export interface components {
              */
             immediate_sync: boolean;
         };
+        /** DiscoveryCandidateRead */
+        DiscoveryCandidateRead: {
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low";
+            /** Confidence Reasons */
+            confidence_reasons?: unknown[] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dismissed At */
+            dismissed_at?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Imported At */
+            imported_at?: string | null;
+            /** Is Following */
+            is_following: boolean;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Recent Works */
+            recent_works?: components["schemas"]["DiscoveryRecentWorkRead"][];
+            /**
+             * Remote Account Id
+             * Format: uuid
+             */
+            remote_account_id: string;
+            /** Remote Url */
+            remote_url?: string | null;
+            /** Source Creator Id */
+            source_creator_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "dismissed" | "imported" | "conflict";
+            /** Subscription Id */
+            subscription_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** User Id */
+            user_id: number;
+            /** User Subscription Id */
+            user_subscription_id?: string | null;
+        };
         /** DiscoveryCandidateResolve */
         DiscoveryCandidateResolve: {
             /** Creator Id */
@@ -5427,6 +5632,31 @@ export interface components {
              * @default false
              */
             immediate_sync: boolean;
+        };
+        /** DiscoveryRecentWorkRead */
+        DiscoveryRecentWorkRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Page Count */
+            page_count: number;
+            /** Source Work Id */
+            source_work_id: string;
+            /** Thumbnail Url */
+            thumbnail_url?: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Work Type
+             * @enum {string}
+             */
+            work_type: "illust" | "manga" | "ugoira";
+            /** Work Url */
+            work_url: string;
+            /** X Restrict */
+            x_restrict: number;
         };
         /** DiscoveryScanCreate */
         DiscoveryScanCreate: {
@@ -6040,6 +6270,36 @@ export interface components {
             /** Username */
             username: string;
         };
+        /** MediaDerivativeProgressRead */
+        MediaDerivativeProgressRead: {
+            /** Affected Works */
+            affected_works: number;
+            /** Completed */
+            completed: number;
+            /** Completion Percent */
+            completion_percent: number;
+            /** Failed */
+            failed: number;
+            /** Last Completed At */
+            last_completed_at?: string | null;
+            /** Oldest Unfinished At */
+            oldest_unfinished_at?: string | null;
+            /** Pending */
+            pending: number;
+            /** Processing */
+            processing: number;
+            /** Remaining */
+            remaining: number;
+            /** Stall After Seconds */
+            stall_after_seconds: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "idle" | "waiting" | "running" | "stalled" | "failed" | "complete";
+            /** Total */
+            total: number;
+        };
         /** MonthlyScheduleRule */
         MonthlyScheduleRule: {
             /**
@@ -6087,6 +6347,26 @@ export interface components {
              * @default true
              */
             videos: boolean | null;
+        };
+        /** PixivCreatorReferenceRead */
+        PixivCreatorReferenceRead: {
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Profile Url */
+            profile_url: string;
+            /** Source Creator Id */
+            source_creator_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "remote" | "fallback";
+            /** Username */
+            username?: string | null;
         };
         /** PixivSourceConfig */
         PixivSourceConfig: {
@@ -6391,6 +6671,42 @@ export interface components {
             /** Scopes */
             scopes?: string[] | null;
         };
+        /** RemoteCreatorDetailRead */
+        RemoteCreatorDetailRead: {
+            profile: components["schemas"]["RemoteCreatorProfileRead"];
+            works: components["schemas"]["RemoteWorkPageRead"];
+        };
+        /** RemoteCreatorProfileRead */
+        RemoteCreatorProfileRead: {
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /** Comment */
+            comment?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /** Is Followed */
+            is_followed?: boolean | null;
+            /** Profile Url */
+            profile_url: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "pixiv" | "x" | "bilibili";
+            /** Source Creator Id */
+            source_creator_id: string;
+            /** Username */
+            username?: string | null;
+            /** Work Counts */
+            work_counts?: {
+                [key: string]: number;
+            };
+        };
         /** RemoteDiscoveryRolloutRead */
         RemoteDiscoveryRolloutRead: {
             /** Auto Import */
@@ -6399,6 +6715,77 @@ export interface components {
             manual_preview: boolean;
             /** Unavailable Reason */
             unavailable_reason: string | null;
+        };
+        /** RemoteWorkImportRead */
+        RemoteWorkImportRead: {
+            candidate?: components["schemas"]["DiscoveryCandidateRead"] | null;
+            /** Download Job Id */
+            download_job_id?: string | null;
+            /** Local Work Id */
+            local_work_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "already_queued" | "already_imported";
+        };
+        /** RemoteWorkImportRequest */
+        RemoteWorkImportRequest: {
+            /**
+             * Sensitive Content Confirmed
+             * @default false
+             */
+            sensitive_content_confirmed: boolean;
+            /** Work Token */
+            work_token: string;
+        };
+        /** RemoteWorkPageRead */
+        RemoteWorkPageRead: {
+            /** Items */
+            items: components["schemas"]["RemoteWorkPreviewRead"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** RemoteWorkPreviewRead */
+        RemoteWorkPreviewRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Download Job Id */
+            download_job_id?: string | null;
+            /**
+             * Import Status
+             * @default available
+             * @enum {string}
+             */
+            import_status: "available" | "queued" | "imported";
+            /** Local Work Id */
+            local_work_id?: string | null;
+            /** Page Count */
+            page_count: number;
+            /** Preview Urls */
+            preview_urls?: string[];
+            /** Source Creator Id */
+            source_creator_id: string;
+            /** Source Work Id */
+            source_work_id: string;
+            /** Thumbnail Url */
+            thumbnail_url?: string | null;
+            /** Title */
+            title: string;
+            /** Work Token */
+            work_token: string;
+            /**
+             * Work Type
+             * @enum {string}
+             */
+            work_type: "illust" | "manga" | "ugoira";
+            /** Work Url */
+            work_url: string;
+            /** X Restrict */
+            x_restrict: number;
         };
         /** RemoteWorkStateRead */
         RemoteWorkStateRead: {
@@ -11920,6 +12307,55 @@ export interface operations {
             };
         };
     };
+    get_api_v1_creators_creator_id_references: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                creator_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatorReferencesRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_creators_creator_id_sources: {
         parameters: {
             query?: never;
@@ -13233,6 +13669,162 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_discovery_candidates_candidate_id_remote_detail: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteCreatorDetailRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_discovery_candidates_candidate_id_remote_work_imports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteWorkImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteWorkImportRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_discovery_candidates_candidate_id_remote_works: {
+        parameters: {
+            query: {
+                cursor: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteWorkPageRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -15900,6 +16492,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_remote_media_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                    "image/*": string;
                 };
             };
             /** @description Validation Error */
@@ -19416,6 +20040,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_works_derivative_progress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaDerivativeProgressRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
                 };
             };
         };

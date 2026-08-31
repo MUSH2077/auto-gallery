@@ -197,20 +197,15 @@ export default function AppSidebar({
 
       <nav aria-label={t("nav.primary")} className={`min-h-0 flex-1 overflow-y-auto pb-2 ${compact ? "px-2 pt-2" : "px-2"}`}>
         {groups.map((group, groupIndex) => {
-          const labelId = `sidebar-group-${groupIndex}`;
           return (
             <section
               key={group.labelKey}
-              aria-labelledby={compact ? undefined : labelId}
+              aria-label={t(group.labelKey)}
+              data-sidebar-group={groupIndex}
               className={compact
                 ? "border-t border-border/70 py-1 first:border-t-0"
                 : "border-t border-border/70 pb-1 pt-3 first:border-t-0 first:pt-3"}
             >
-              {!compact && (
-                <h2 id={labelId} className="mx-2 mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  {t(group.labelKey)}
-                </h2>
-              )}
               {group.links.map(({ href, labelKey, icon }) => {
                 const active = activeSidebarHref === href;
                 const label = t(labelKey);
