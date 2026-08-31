@@ -5837,6 +5837,9 @@
       },
       "RemoteCreatorDetailRead": {
         "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/DiscoveryCandidateRead"
+          },
           "profile": {
             "$ref": "#/components/schemas/RemoteCreatorProfileRead"
           },
@@ -5845,10 +5848,34 @@
           }
         },
         "required": [
+          "candidate",
           "profile",
           "works"
         ],
         "title": "RemoteCreatorDetailRead",
+        "type": "object"
+      },
+      "RemoteCreatorLinkRead": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "website",
+              "x",
+              "pawoo"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ],
+        "title": "RemoteCreatorLinkRead",
         "type": "object"
       },
       "RemoteCreatorProfileRead": {
@@ -5891,6 +5918,17 @@
             "title": "Fetched At",
             "type": "string"
           },
+          "header_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Image Url"
+          },
           "is_followed": {
             "anyOf": [
               {
@@ -5902,9 +5940,26 @@
             ],
             "title": "Is Followed"
           },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/RemoteCreatorLinkRead"
+            },
+            "title": "Links",
+            "type": "array"
+          },
           "profile_url": {
             "title": "Profile Url",
             "type": "string"
+          },
+          "public_profile": {
+            "$ref": "#/components/schemas/RemoteCreatorPublicProfileRead"
+          },
+          "social_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Social Counts",
+            "type": "object"
           },
           "source": {
             "enum": [
@@ -5945,6 +6000,67 @@
           "fetched_at"
         ],
         "title": "RemoteCreatorProfileRead",
+        "type": "object"
+      },
+      "RemoteCreatorPublicProfileRead": {
+        "properties": {
+          "birth_day": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Day"
+          },
+          "birth_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Year"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "title": "RemoteCreatorPublicProfileRead",
         "type": "object"
       },
       "RemoteDiscoveryRolloutRead": {
@@ -19497,6 +19613,20 @@
           },
           {
             "in": "query",
+            "name": "work_type",
+            "required": false,
+            "schema": {
+              "default": "illust",
+              "enum": [
+                "illust",
+                "manga"
+              ],
+              "title": "Work Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -19673,13 +19803,34 @@
           },
           {
             "in": "query",
-            "name": "cursor",
-            "required": true,
+            "name": "work_type",
+            "required": false,
             "schema": {
-              "maxLength": 10000,
-              "minLength": 40,
-              "title": "Cursor",
+              "default": "illust",
+              "enum": [
+                "illust",
+                "manga"
+              ],
+              "title": "Work Type",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 10000,
+                  "minLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {

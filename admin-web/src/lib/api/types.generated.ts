@@ -6673,8 +6673,19 @@ export interface components {
         };
         /** RemoteCreatorDetailRead */
         RemoteCreatorDetailRead: {
+            candidate: components["schemas"]["DiscoveryCandidateRead"];
             profile: components["schemas"]["RemoteCreatorProfileRead"];
             works: components["schemas"]["RemoteWorkPageRead"];
+        };
+        /** RemoteCreatorLinkRead */
+        RemoteCreatorLinkRead: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "website" | "x" | "pawoo";
+            /** Url */
+            url: string;
         };
         /** RemoteCreatorProfileRead */
         RemoteCreatorProfileRead: {
@@ -6689,10 +6700,19 @@ export interface components {
              * Format: date-time
              */
             fetched_at: string;
+            /** Header Image Url */
+            header_image_url?: string | null;
             /** Is Followed */
             is_followed?: boolean | null;
+            /** Links */
+            links?: components["schemas"]["RemoteCreatorLinkRead"][];
             /** Profile Url */
             profile_url: string;
+            public_profile?: components["schemas"]["RemoteCreatorPublicProfileRead"];
+            /** Social Counts */
+            social_counts?: {
+                [key: string]: number;
+            };
             /**
              * Source
              * @enum {string}
@@ -6706,6 +6726,19 @@ export interface components {
             work_counts?: {
                 [key: string]: number;
             };
+        };
+        /** RemoteCreatorPublicProfileRead */
+        RemoteCreatorPublicProfileRead: {
+            /** Birth Day */
+            birth_day?: string | null;
+            /** Birth Year */
+            birth_year?: number | null;
+            /** Gender */
+            gender?: string | null;
+            /** Job */
+            job?: string | null;
+            /** Region */
+            region?: string | null;
         };
         /** RemoteDiscoveryRolloutRead */
         RemoteDiscoveryRolloutRead: {
@@ -13703,6 +13736,7 @@ export interface operations {
     get_api_v1_discovery_candidates_candidate_id_remote_detail: {
         parameters: {
             query?: {
+                work_type?: "illust" | "manga";
                 limit?: number;
             };
             header?: never;
@@ -13806,8 +13840,9 @@ export interface operations {
     };
     get_api_v1_discovery_candidates_candidate_id_remote_works: {
         parameters: {
-            query: {
-                cursor: string;
+            query?: {
+                work_type?: "illust" | "manga";
+                cursor?: string | null;
                 limit?: number;
             };
             header?: never;
