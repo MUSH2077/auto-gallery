@@ -19,6 +19,7 @@
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:media": "node scripts/check-media.mjs",
     "check:search-contract": "node scripts/check-search-contract.mjs",
+    "test:reference-list": "node --no-warnings --test tests/reference-list-state.test.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "screenshots:readme": "UPDATE_README_SCREENSHOTS=1 PLAYWRIGHT_MANAGE_SERVER=1 playwright test tests/e2e/readme-screenshots.spec.ts --project=chromium --workers=1",
@@ -26,6 +27,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.4",
+    "@tanstack/react-virtual": "3.14.10",
     "animejs": "^4.5.0",
     "d3-hierarchy": "^3.1.2",
     "lucide-react": "^1.31.0",

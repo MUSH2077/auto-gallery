@@ -288,6 +288,12 @@
   input[type="range"]:focus-visible {
     @apply outline-none ring-2 ring-accent/35;
   }
+  .compact-selection-hitbox {
+    @apply inline-flex min-h-6 min-w-6 shrink-0 cursor-pointer items-center justify-center rounded;
+  }
+  .compact-selection-checkbox {
+    @apply h-4 w-4 cursor-pointer rounded;
+  }
   .textarea {
     @apply min-h-[84px];
   }
@@ -322,6 +328,24 @@
   }
   .entity-list > [role="listitem"] + [role="listitem"] {
     @apply border-t border-border;
+  }
+  .virtual-reference-row:not(:first-child) .entity-row {
+    @apply border-t border-border;
+  }
+  .reference-list-layout {
+    @apply grid min-w-0 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_2rem];
+  }
+  .reference-name-rail {
+    @apply sticky bottom-0 z-20 flex max-w-full gap-0.5 overflow-x-auto rounded-lg
+           border border-border bg-surface/95 p-1 shadow-sm backdrop-blur
+           md:top-16 md:bottom-auto md:max-h-[calc(100vh-5rem)] md:flex-col md:overflow-x-hidden md:overflow-y-auto;
+    padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+  }
+  .reference-name-anchor {
+    @apply inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded px-1
+           text-[10px] font-semibold text-muted hover:bg-subtle hover:text-fg
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40
+           disabled:cursor-default disabled:opacity-25;
   }
   .entity-row {
     @apply relative flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 p-4

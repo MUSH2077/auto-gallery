@@ -491,6 +491,18 @@ export const api = {
     return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`, { signal });
   },
 
+  referenceNameAnchors: (
+    scope: "creators" | "subscriptions",
+    q: string,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({ scope, q });
+    return request<T.ReferenceNameAnchorsRead>(
+      `/api/v1/search/name-anchors?${params.toString()}`,
+      { signal },
+    );
+  },
+
   assistSearch: (data: {
     before_cursor: string;
     after_cursor?: string;

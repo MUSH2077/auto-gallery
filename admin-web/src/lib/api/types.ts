@@ -1491,6 +1491,21 @@ export interface SearchResponse {
   };
 }
 
+export interface ReferenceNameAnchorRead {
+  key: string;
+  label: string;
+  kind: "latin" | "digit" | "kana" | "han" | "other";
+  offset: number | null;
+  count: number;
+}
+
+export interface ReferenceNameAnchorsRead {
+  scope: "creators" | "subscriptions";
+  direction: "asc" | "desc";
+  total: number;
+  items: ReferenceNameAnchorRead[];
+}
+
 export interface SearchAssistResponse {
   query: string;
   canonical_query?: string | null;
