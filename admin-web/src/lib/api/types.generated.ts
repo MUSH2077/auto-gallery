@@ -3274,6 +3274,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search/name-anchors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Name Anchors
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_search_name_anchors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources": {
         parameters: {
             query?: never;
@@ -6520,6 +6540,39 @@ export interface components {
              * @default 500
              */
             limit: number;
+        };
+        /** ReferenceNameAnchorRead */
+        ReferenceNameAnchorRead: {
+            /** Count */
+            count: number;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "latin" | "digit" | "kana" | "han" | "other";
+            /** Label */
+            label: string;
+            /** Offset */
+            offset?: number | null;
+        };
+        /** ReferenceNameAnchorsRead */
+        ReferenceNameAnchorsRead: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "asc" | "desc";
+            /** Items */
+            items: components["schemas"]["ReferenceNameAnchorRead"][];
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "creators" | "subscriptions";
+            /** Total */
+            total: number;
         };
         /** RemoteAccountCreate */
         RemoteAccountCreate: {
@@ -17074,6 +17127,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_search_name_anchors: {
+        parameters: {
+            query: {
+                scope: string;
+                /** @description Structured reference query */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceNameAnchorsRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

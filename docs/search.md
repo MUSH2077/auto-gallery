@@ -60,6 +60,7 @@ side-effect commands. Search input can only navigate or filter.
 
 ```http
 GET /api/v1/search?q=type%3Awork%20tag%3A%22landscape%22&scope=global&offset=0&limit=20
+GET /api/v1/search/name-anchors?scope=creators&q=sort%3Aname-asc
 POST /api/v1/search/assist
 Content-Type: application/json
 
@@ -78,6 +79,14 @@ repositories, and subscriptions, trimmed by permission. `tasks` and
 Meilisearch indexes. A missing Meilisearch service returns `503`, not an empty
 result.
 
+Creator and subscription browsing without a free-text term uses PostgreSQL as
+the authoritative path. Both scopes default to `sort:name-asc`; subscription
+name order is based on the associated creator's display name, not its optional
+custom subscription title. `GET /api/v1/search/name-anchors` returns fixed
+`A–Z`, `0–9`, `かな`, `汉`, and `#` groups with direct offsets for structured,
+name-sorted queries. It returns `422/name_anchors_unavailable` for full-text or
+non-name-sorted queries.
+
 `POST /api/v1/search/assist` returns suggestions, diagnostics, parsed tokens,
 and optional server-composed replacements. Invalid dates, incompatible
 qualifiers, conflicting states, unknown values, and ambiguous identities
@@ -87,6 +96,12 @@ return positional diagnostics.
 `{total, items}`。全局结果包含作品、创作者、标签、仓库和订阅，并按权限裁剪。
 任务和调度使用 SQL 适配器，本地图库实体使用版本化 Meilisearch 索引。
 Meilisearch 不可用时返回 `503`，而不是伪装成空结果。
+
+不含自由文本的创作者与订阅浏览以 PostgreSQL 为权威路径，两者默认均为
+`sort:name-asc`；订阅按关联创作者的展示名排序，而不是可选的自定义订阅标题。
+`GET /api/v1/search/name-anchors` 为结构化的名称排序查询返回固定的 `A–Z`、
+`0–9`、`かな`、`汉`、`#` 分组及可直接定位的 offset。全文查询或非名称排序
+请求会返回 `422/name_anchors_unavailable`。
 
 ## Index lifecycle / 索引生命周期
 

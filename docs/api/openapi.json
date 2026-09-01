@@ -5348,6 +5348,93 @@
         "title": "ReconcileTasksRequest",
         "type": "object"
       },
+      "ReferenceNameAnchorRead": {
+        "properties": {
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "latin",
+              "digit",
+              "kana",
+              "han",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "count"
+        ],
+        "title": "ReferenceNameAnchorRead",
+        "type": "object"
+      },
+      "ReferenceNameAnchorsRead": {
+        "properties": {
+          "direction": {
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceNameAnchorRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "creators",
+              "subscriptions"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scope",
+          "direction",
+          "total",
+          "items"
+        ],
+        "title": "ReferenceNameAnchorsRead",
+        "type": "object"
+      },
       "RemoteAccountCreate": {
         "properties": {
           "auth_method": {
@@ -25257,6 +25344,99 @@
           "upload"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/search/name-anchors": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_search_name_anchors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "pattern": "^(creators|subscriptions)$",
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Structured reference query",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "description": "Structured reference query",
+              "title": "Q",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceNameAnchorsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Name Anchors",
+        "tags": [
+          "search"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "anyOf",
+        "x-required-permissions": [
+          "curation",
+          "library",
+          "subscriptions",
+          "tasks",
+          "upload"
+        ]
       }
     },
     "/api/v1/sources": {
