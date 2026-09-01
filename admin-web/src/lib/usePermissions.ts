@@ -21,5 +21,5 @@ export function usePermissions() {
     return permissions.includes(module);
   }
 
-  return { isAdmin, has, isLoading: me.isLoading };
+  return { isAdmin, has, isLoading: me.isLoading, user: me.data };
 }

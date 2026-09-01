@@ -1,16 +1,23 @@
 "use client";
-import { useMemo, useState, useEffect, Suspense } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
-import { useStaggeredEntrance } from "@/lib/motion";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, type SearchQualifierToken, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys, type SearchQualifierToken, type SearchResponse, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import {
+  createReferenceListSession,
+  legacyPageInitialIndex,
+  readReferenceListSession,
+  referenceNameAnchorsAvailable,
+  referenceSessionStorageKey,
+  referenceSortFromTokens,
+} from "@/lib/reference-list-state";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
@@ -77,18 +84,80 @@ function SubscriptionsContent() {
   const toast = useToast();
   const qc = useQueryClient();
   const notify = useNotifications();
-  const { isAdmin } = usePermissions();
+  const { isAdmin, user } = usePermissions();
   const sp = useSearchParams();
   const pathname = usePathname();
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
-  const page = Number(sp.get("p") ?? "0");
-  const limit = 25;
+  const legacyPage = sp.get("p");
+  const legacyInitialIndex = legacyPageInitialIndex(legacyPage);
+  const queryFingerprint = `subscriptions:${search}`;
+  const sessionKey = referenceSessionStorageKey(user?.id ?? "current", pathname, queryFingerprint);
+  const listRef = useRef<VirtualReferenceListHandle>(null);
+  const initialVirtualIndexRef = useRef(legacyInitialIndex);
+  const pendingLegacyScrollRef = useRef<number | null>(legacyPage === null ? null : legacyInitialIndex);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [syncingSubId, setSyncingSubId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
+  const [listState, setListState] = useState<VirtualReferenceListState<SubscriptionSearchHit>>({
+    total: 0,
+    loadedItems: [],
+    loadedOffsets: [],
+    loadedPages: [],
+    visibleOffsets: [],
+  });
+  const [storedSession, setStoredSession] = useState<{
+    key: string;
+    value: ReturnType<typeof readReferenceListSession>;
+  } | null>(null);
+  const restoredSession = storedSession?.key === sessionKey ? storedSession.value : null;
+  const sessionReady = storedSession?.key === sessionKey;
+  const previousQueryFingerprintRef = useRef(queryFingerprint);
+
+  useEffect(() => {
+    const queryChanged = previousQueryFingerprintRef.current !== queryFingerprint;
+    previousQueryFingerprintRef.current = queryFingerprint;
+    const saved = queryChanged
+      ? null
+      : readReferenceListSession(window.sessionStorage.getItem(sessionKey), queryFingerprint);
+    setStoredSession({
+      key: sessionKey,
+      value: saved,
+    });
+    setSelected(new Set(saved?.selectedIds || []));
+    if (queryChanged) {
+      setSearchMeta(null);
+      setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });
+      window.scrollTo({ top: 0 });
+    }
+  }, [queryFingerprint, sessionKey]);
+
+  const persistListSession = useCallback(() => {
+    if (!sessionReady) return;
+    window.sessionStorage.setItem(sessionKey, JSON.stringify(createReferenceListSession({
+      queryFingerprint,
+      scrollY: window.scrollY,
+      loadedOffsets: listState.loadedOffsets,
+      selectedIds: [...selected],
+    })));
+  }, [listState.loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", persistListSession);
+    return () => window.removeEventListener("pagehide", persistListSession);
+  }, [persistListSession]);
+
+  const restoredScrollKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionReady || !listState.total || legacyPage !== null || restoredScrollKeyRef.current === sessionKey) return;
+    restoredScrollKeyRef.current = sessionKey;
+    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: restoredSession?.scrollY || 0 }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [legacyPage, listState.total, restoredSession?.scrollY, sessionKey, sessionReady]);
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -96,6 +165,8 @@ function SubscriptionsContent() {
   useEffect(() => {
     if (inputVal === search) return;
     const timer = setTimeout(() => {
+      setSelected(new Set());
+      window.scrollTo({ top: 0 });
       const p = new URLSearchParams(sp.toString());
       if (inputVal) p.set("q", inputVal); else p.delete("q");
       p.delete("p");
@@ -122,16 +193,20 @@ function SubscriptionsContent() {
     { key: "never_synced", label: t("subscriptions.filter_never") },
   ];
 
-  const subsQuery = useQuery({
-    queryKey: [...queryKeys.subscriptions.all, "compound-search", page, search],
-    queryFn: () => api.search(search, page * limit, limit, "subscriptions"),
-    placeholderData: (previousData) => previousData,
-  });
-  const subs = {
-    ...subsQuery,
-    data: subsQuery.data?.groups.subscriptions?.items,
-  };
-  const isValues = (subsQuery.data?.parsed.tokens || [])
+  const loadSubscriptions = useCallback(async (
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<VirtualReferencePage<SubscriptionSearchHit, SearchResponse>> => {
+    const response = await api.search(search, offset, limit, "subscriptions", signal);
+    return {
+      items: response.groups.subscriptions?.items || [],
+      total: response.groups.subscriptions?.total || 0,
+      meta: response,
+    };
+  }, [search]);
+  const parsedTokens = searchMeta?.query === search ? searchMeta.parsed.tokens : [];
+  const isValues = parsedTokens
     .filter((token): token is SearchQualifierToken => token.kind === "qualifier" && token.key === "is" && !token.negated)
     .map((token) => token.value);
   const filter: FilterMode = isValues.includes("active")
@@ -145,31 +220,40 @@ function SubscriptionsContent() {
           : isValues.includes("never-synced")
             ? "never_synced"
             : "all";
-  const subscriptionItems = subs.data || [];
-  const subscriptionEntrance = useStaggeredEntrance(subscriptionItems.map((subscription) => subscription.id));
+  const sort = referenceSortFromTokens(parsedTokens);
+  const anchorsAvailable = !!searchMeta && searchMeta.query === search && referenceNameAnchorsAvailable(parsedTokens);
+  const anchors = useQuery({
+    queryKey: ["reference-name-anchors", "subscriptions", search],
+    queryFn: ({ signal }) => api.referenceNameAnchors("subscriptions", search, signal),
+    enabled: anchorsAvailable,
+  });
+  const subscriptionItems = listState.loadedItems;
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
-    subs.refetch();
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
   }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notify.batchJob?.status !== "completed") return;
-    subs.refetch();
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-  const summaryIds = useMemo(
-    () => subscriptionItems.map((subscription) => subscription.id),
-    [subscriptionItems],
-  );
-  const summaries = useQuery({
-    queryKey: queryKeys.subscriptions.summaries(summaryIds),
-    queryFn: () => api.subscriptionSummaries(summaryIds),
-    enabled: summaryIds.length > 0,
-    refetchInterval: 15000,
+  const summaryQueries = useQueries({
+    queries: listState.loadedPages.map((page) => {
+      const ids = page.items.map((subscription) => subscription.id);
+      const visible = listState.visibleOffsets.includes(page.offset);
+      return {
+        queryKey: queryKeys.subscriptions.summaries(ids),
+        queryFn: () => api.subscriptionSummaries(ids),
+        enabled: visible && ids.length > 0,
+        refetchInterval: visible ? 15_000 : (false as const),
+        staleTime: 15_000,
+      };
+    }),
   });
   const summaryBySub = useMemo(
-    () => new Map((summaries.data?.items || []).map((item) => [item.subscription_id, item])),
-    [summaries.data?.items],
+    () => new Map(summaryQueries.flatMap((query) => query.data?.items || []).map((item) => [item.subscription_id, item])),
+    [summaryQueries],
   );
 
   const refreshSubscriptionViews = () => {
@@ -182,7 +266,6 @@ function SubscriptionsContent() {
     onSuccess: () => { setShowCreate(false); refreshSubscriptionViews(); },
   });
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "subscription", deleteId],
@@ -217,7 +300,6 @@ function SubscriptionsContent() {
     mutationFn: (id: string) => api.syncNowSubscription(id),
     onMutate: (id) => setSyncingSubId(id),
     onSuccess: (data) => {
-      subs.refetch();
       refreshSubscriptionViews();
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
@@ -272,25 +354,24 @@ function SubscriptionsContent() {
     onSuccess: () => { setSelected(new Set()); refreshSubscriptionViews(); toast.success({ message: t("notification.updated") }); },
   });
 
-  useEffect(() => {
-    if (!subs.data) return;
-    const visibleIds = new Set(subs.data.map((sub) => sub.id));
-    setSelected((prev) => {
-      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [subs.data]);
-
   const toggleSelect = (id: string) => {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
   };
   const selectAll = () => {
-    if (selected.size === (subs.data?.length || 0)) setSelected(new Set());
-    else setSelected(new Set((subs.data || []).map((s) => s.id)));
+    const loadedIds = subscriptionItems.map((subscription) => subscription.id);
+    const allLoadedSelected = loadedIds.length > 0 && loadedIds.every((id) => selected.has(id));
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allLoadedSelected) loadedIds.forEach((id) => next.delete(id));
+      else loadedIds.forEach((id) => next.add(id));
+      return next;
+    });
   };
   const setSearchQuery = (next: string) => {
+    setSelected(new Set());
+    window.scrollTo({ top: 0 });
     setInputVal(next);
     updateParams({ q: next || null });
   };
@@ -312,12 +393,56 @@ function SubscriptionsContent() {
       },
     ]);
   };
+  const handleSortChange = (value: string) => {
+    setSelected(new Set());
+    window.scrollTo({ top: 0 });
+    filterComposer.mutate([{ key: "sort", value, operation: "set" }]);
+  };
+
+  const allLoadedSelected = subscriptionItems.length > 0
+    && subscriptionItems.every((subscription) => selected.has(subscription.id));
+  const someLoadedSelected = subscriptionItems.some((subscription) => selected.has(subscription.id));
+
+  useEffect(() => {
+    if (legacyPage === null || !listState.total) return;
+    let cleanupFrame = 0;
+    const scrollFrame = window.requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex(legacyInitialIndex);
+      cleanupFrame = window.requestAnimationFrame(() => {
+        initialVirtualIndexRef.current = 0;
+        const params = new URLSearchParams(sp.toString());
+        params.delete("p");
+        const suffix = params.toString();
+        router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(scrollFrame);
+      if (cleanupFrame) window.cancelAnimationFrame(cleanupFrame);
+    };
+  }, [legacyInitialIndex, legacyPage, listState.total, pathname, router, sp]);
+
+  useEffect(() => {
+    if (legacyPage !== null || !listState.total || pendingLegacyScrollRef.current === null) return;
+    const index = pendingLegacyScrollRef.current;
+    let settleFrame = 0;
+    const scrollFrame = window.requestAnimationFrame(() => {
+      settleFrame = window.requestAnimationFrame(() => {
+        listRef.current?.scrollToIndex(index);
+        pendingLegacyScrollRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(scrollFrame);
+      if (settleFrame) window.cancelAnimationFrame(settleFrame);
+    };
+  }, [legacyPage, listState.total]);
 
   return (
     <PageShell>
       <PageHeader
         title={t("subscriptions.title")}
-        description={t("subscriptions.count").replace("{count}", String(subsQuery.data?.groups.subscriptions?.total ?? 0))}
+        description={t("subscriptions.count").replace("{count}", String(listState.total))}
         primaryAction={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>}
       />
 
@@ -341,6 +466,18 @@ function SubscriptionsContent() {
             </button>
           ))}
         </div>
+        <ReferenceSortControl
+          value={sort}
+          labels={{
+            group: t("reference_list.sort_group"),
+            name: t("reference_list.sort_name"),
+            created: t("reference_list.sort_created"),
+            updated: t("reference_list.sort_updated"),
+            ascending: t("reference_list.ascending"),
+            descending: t("reference_list.descending"),
+          }}
+          onChange={handleSortChange}
+        />
       </FilterBar>
       </div>
 
@@ -361,27 +498,68 @@ function SubscriptionsContent() {
       </SelectionBar>
 
       {/* Select all */}
-      {subs.data && subs.data.length > 0 && (
+      {subscriptionItems.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
-          <input type="checkbox" aria-label={t("subscriptions.select_all")} checked={selected.size === subs.data.length && subs.data.length > 0} onChange={selectAll} className="h-6 w-6 rounded" />
+          <CompactSelectionCheckbox
+            checked={allLoadedSelected}
+            indeterminate={!allLoadedSelected && someLoadedSelected}
+            ariaLabel={t("subscriptions.select_all")}
+            onChange={selectAll}
+            stopPropagation={false}
+          />
           {t("subscriptions.select_all")}
+          <span aria-live="polite">
+            {t("reference_list.selected_loaded", { selected: selected.size, loaded: subscriptionItems.length })}
+          </span>
         </label>
       )}
 
-      {/* Content */}
-      {subs.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
-      {subs.error && <ErrorState message={(subs.error as Error).message} onRetry={() => subs.refetch()} />}
-      {subs.data && !subs.data.length && (
-        <EmptyState
-          title={search || filter !== "all" ? t("works.no_works_filter") : t("subscriptions.no_subs")}
-          description={search || filter !== "all" ? undefined : t("subscriptions.no_subs_desc")}
-          action={!search && filter === "all" ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button> : undefined}
-        />
-      )}
-
-      {subs.data && subs.data.length > 0 && (
-        <EntityList label={t("subscriptions.title")}>
-          {subs.data.map((s: SubscriptionSearchHit, i: number) => {
+      <ReferenceListLayout
+        rail={anchorsAvailable && anchors.data ? (
+          <ReferenceNameRail
+            items={anchors.data.items}
+            ariaLabel={t("reference_list.anchors_label")}
+            jumpLabel={(label, count) => t("reference_list.anchor_jump", { label, count })}
+            emptyLabel={(label) => t("reference_list.anchor_empty", { label })}
+            onSelect={(anchor) => {
+              if (anchor.offset !== null) listRef.current?.scrollToIndex(anchor.offset);
+            }}
+          />
+        ) : undefined}
+      >
+        {!sessionReady ? (
+          <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>
+        ) : (
+          <VirtualReferenceList<SubscriptionSearchHit, SearchResponse>
+            key={sessionKey}
+            ref={listRef}
+            queryKey={[...queryKeys.subscriptions.all, "virtual", search]}
+            loadPage={loadSubscriptions}
+            label={t("subscriptions.title")}
+            initialIndex={initialVirtualIndexRef.current}
+            initialOffsets={restoredSession?.loadedOffsets}
+            estimateSize={132}
+            onStateChange={setListState}
+            onMetaChange={setSearchMeta}
+            renderInitialLoading={() => (
+              <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-24 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>
+            )}
+            renderInitialError={(error, retry) => <ErrorState message={error.message} onRetry={retry} />}
+            renderPageError={(_offset, error, retry) => (
+              <div className="flex min-h-28 items-center justify-center gap-3 rounded-md border border-danger/30 bg-danger-subtle px-4 text-sm text-danger">
+                <span>{error.message}</span>
+                <button type="button" className="btn-ghost text-xs" onClick={retry}>{t("common.retry")}</button>
+              </div>
+            )}
+            renderPlaceholder={(index) => <div aria-label={t("reference_list.loading_row", { index: index + 1 })} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />}
+            renderEmpty={() => (
+              <EmptyState
+                title={search || filter !== "all" ? t("works.no_works_filter") : t("subscriptions.no_subs")}
+                description={search || filter !== "all" ? undefined : t("subscriptions.no_subs_desc")}
+                action={!search && filter === "all" ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.create_sub")}</button> : undefined}
+              />
+            )}
+            renderItem={(s, index, total) => {
             const name = s.name || s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
             const creatorName = s.creator_display_name || s.creator_name || s.creator_id.slice(0, 8);
             const summary = summaryBySub.get(s.id);
@@ -403,16 +581,17 @@ function SubscriptionsContent() {
                 key={s.id}
                 label={t("common.open_item", { name })}
                 selected={selected.has(s.id)}
-                entrance={subscriptionEntrance(s.id, i)}
-                onOpen={() => router.push(`/admin/subscriptions/${s.id}`)}
+                positionInSet={index + 1}
+                setSize={total}
+                onOpen={() => {
+                  persistListSession();
+                  router.push(`/admin/subscriptions/${s.id}`);
+                }}
               >
-                <input
-                  type="checkbox"
-                  aria-label={t("common.select_item", { name })}
+                <CompactSelectionCheckbox
+                  ariaLabel={t("common.select_item", { name })}
                   checked={selected.has(s.id)}
                   onChange={() => toggleSelect(s.id)}
-                  className="h-6 w-6 shrink-0 rounded"
-                  onClick={(event) => event.stopPropagation()}
                 />
                 <div className="entity-avatar">
                   {creatorName.trim().slice(0, 2).toUpperCase()}
@@ -488,18 +667,10 @@ function SubscriptionsContent() {
                 </div>
               </EntityRow>
             );
-          })}
-        </EntityList>
-      )}
-
-      {/* Pagination */}
-      {subs.data && subs.data.length > 0 && (
-        <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-muted">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!subs.data || subs.data.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
-        </div>
-      )}
+            }}
+          />
+        )}
+      </ReferenceListLayout>
       </PageSection>
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>

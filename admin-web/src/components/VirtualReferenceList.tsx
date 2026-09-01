@@ -35,6 +35,7 @@ export interface VirtualReferenceListState<TItem> {
   total: number;
   loadedItems: TItem[];
   loadedOffsets: number[];
+  loadedPages: Array<{ offset: number; items: TItem[] }>;
   visibleOffsets: number[];
 }
 
@@ -108,6 +109,7 @@ function VirtualReferenceListInner<
   const initialScrollDoneRef = useRef(false);
   const stateCallbackRef = useRef(onStateChange);
   const metaCallbackRef = useRef(onMetaChange);
+  const stateSignatureRef = useRef("");
   stateCallbackRef.current = onStateChange;
   metaCallbackRef.current = onMetaChange;
 
@@ -156,6 +158,8 @@ function VirtualReferenceListInner<
     estimateSize: () => estimateSize,
     overscan: REFERENCE_OVERSCAN,
     scrollMargin,
+    useFlushSync: false,
+    useAnimationFrameWithResizeObserver: true,
     getItemKey: (index) => itemAt(index)?.id || index,
   });
   const virtualItems = virtualizer.getVirtualItems();
@@ -165,7 +169,7 @@ function VirtualReferenceListInner<
     if (!element) return;
     const next = Math.round(element.getBoundingClientRect().top + window.scrollY);
     setScrollMargin((current) => current === next ? current : next);
-  });
+  }, [total]);
 
   useEffect(() => {
     const updateMargin = () => {
@@ -228,18 +232,33 @@ function VirtualReferenceListInner<
     () => successfulPages.map((page) => page.offset),
     [successfulPages],
   );
+  const loadedPages = useMemo(
+    () => successfulPages.map((page) => ({
+      offset: page.offset,
+      items: page.data.items,
+    })),
+    [successfulPages],
+  );
   const visibleOffsets = useMemo(
     () => [...new Set(virtualItems.map((item) => referenceBatchOffset(item.index)))],
     [virtualItems],
   );
   const callbackState = useMemo(
-    () => ({ total, loadedItems, loadedOffsets, visibleOffsets }),
-    [loadedItems, loadedOffsets, total, visibleOffsets],
+    () => ({ total, loadedItems, loadedOffsets, loadedPages, visibleOffsets }),
+    [loadedItems, loadedOffsets, loadedPages, total, visibleOffsets],
   );
+  const stateSignature = [
+    total,
+    loadedOffsets.join(","),
+    loadedItems.map((item) => item.id).join(","),
+    visibleOffsets.join(","),
+  ].join("|");
 
   useEffect(() => {
+    if (stateSignatureRef.current === stateSignature) return;
+    stateSignatureRef.current = stateSignature;
     stateCallbackRef.current?.(callbackState);
-  }, [callbackState]);
+  }, [callbackState, stateSignature]);
 
   const requestAndScroll = (rawIndex: number) => {
     if (!total) return;

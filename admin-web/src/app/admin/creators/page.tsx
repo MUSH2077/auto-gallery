@@ -1,9 +1,8 @@
 "use client";
-import { useState, useMemo, useEffect, Suspense } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, type SearchQualifierToken } from "@/lib/api";
-import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityList, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer } from "@/components";
+import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -12,6 +11,14 @@ import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { Star } from "lucide-react";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import {
+  createReferenceListSession,
+  legacyPageInitialIndex,
+  readReferenceListSession,
+  referenceNameAnchorsAvailable,
+  referenceSessionStorageKey,
+  referenceSortFromTokens,
+} from "@/lib/reference-list-state";
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -85,19 +92,80 @@ function CreatorsContent() {
   const notify = useNotifications();
   const sp = useSearchParams();
   const pathname = usePathname();
-  const { isAdmin, has } = usePermissions();
+  const { isAdmin, has, user } = usePermissions();
   const canCurate = has("curation");
 
   // Filter state derived from URL
   const search = sp.get("q") ?? "";
-  const page = Number(sp.get("p") ?? "0");
+  const legacyPage = sp.get("p");
+  const legacyInitialIndex = legacyPageInitialIndex(legacyPage);
+  const queryFingerprint = `creators:${search}`;
+  const sessionKey = referenceSessionStorageKey(user?.id ?? "current", pathname, queryFingerprint);
+  const listRef = useRef<VirtualReferenceListHandle>(null);
+  const initialVirtualIndexRef = useRef(legacyInitialIndex);
+  const pendingLegacyScrollRef = useRef<number | null>(legacyPage === null ? null : legacyInitialIndex);
 
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
-  const limit = 25;
+  const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
+  const [listState, setListState] = useState<VirtualReferenceListState<CreatorSearchHit>>({
+    total: 0,
+    loadedItems: [],
+    loadedOffsets: [],
+    loadedPages: [],
+    visibleOffsets: [],
+  });
+  const [storedSession, setStoredSession] = useState<{
+    key: string;
+    value: ReturnType<typeof readReferenceListSession>;
+  } | null>(null);
+  const restoredSession = storedSession?.key === sessionKey ? storedSession.value : null;
+  const sessionReady = storedSession?.key === sessionKey;
+  const previousQueryFingerprintRef = useRef(queryFingerprint);
+
+  useEffect(() => {
+    const queryChanged = previousQueryFingerprintRef.current !== queryFingerprint;
+    previousQueryFingerprintRef.current = queryFingerprint;
+    const saved = queryChanged
+      ? null
+      : readReferenceListSession(window.sessionStorage.getItem(sessionKey), queryFingerprint);
+    setStoredSession({
+      key: sessionKey,
+      value: saved,
+    });
+    setSelected(new Set(saved?.selectedIds || []));
+    if (queryChanged) {
+      setSearchMeta(null);
+      setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });
+      window.scrollTo({ top: 0 });
+    }
+  }, [queryFingerprint, sessionKey]);
+
+  const persistListSession = useCallback(() => {
+    if (!sessionReady) return;
+    window.sessionStorage.setItem(sessionKey, JSON.stringify(createReferenceListSession({
+      queryFingerprint,
+      scrollY: window.scrollY,
+      loadedOffsets: listState.loadedOffsets,
+      selectedIds: [...selected],
+    })));
+  }, [listState.loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", persistListSession);
+    return () => window.removeEventListener("pagehide", persistListSession);
+  }, [persistListSession]);
+
+  const restoredScrollKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionReady || !listState.total || legacyPage !== null || restoredScrollKeyRef.current === sessionKey) return;
+    restoredScrollKeyRef.current = sessionKey;
+    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: restoredSession?.scrollY || 0 }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [legacyPage, listState.total, restoredSession?.scrollY, sessionKey, sessionReady]);
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -105,6 +173,8 @@ function CreatorsContent() {
   useEffect(() => {
     if (inputVal === search) return;
     const timer = setTimeout(() => {
+      setSelected(new Set());
+      window.scrollTo({ top: 0 });
       const p = new URLSearchParams(sp.toString());
       if (inputVal) p.set("q", inputVal); else p.delete("q");
       p.delete("p");
@@ -132,18 +202,20 @@ function CreatorsContent() {
     { key: "favorites", label: t("creators.filter_favorites") },
   ], [t]);
 
-  const creatorsQuery = useQuery({
-    queryKey: [...queryKeys.creators.all, "compound-search", page, search],
-    queryFn: () => api.search(search, page * limit, limit, "creators"),
-    placeholderData: (previousData) => previousData,
-  });
-  const creators = {
-    ...creatorsQuery,
-    data: creatorsQuery.data?.groups.creators
-      ? { items: creatorsQuery.data.groups.creators.items, total: creatorsQuery.data.groups.creators.total }
-      : undefined,
-  };
-  const qualifierTokens = (creatorsQuery.data?.parsed.tokens || []).filter(
+  const loadCreators = useCallback(async (
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<VirtualReferencePage<CreatorSearchHit, SearchResponse>> => {
+    const response = await api.search(search, offset, limit, "creators", signal);
+    return {
+      items: response.groups.creators?.items || [],
+      total: response.groups.creators?.total || 0,
+      meta: response,
+    };
+  }, [search]);
+  const parsedTokens = searchMeta?.query === search ? searchMeta.parsed.tokens : [];
+  const qualifierTokens = parsedTokens.filter(
     (token): token is SearchQualifierToken => token.kind === "qualifier",
   );
   const isValues = qualifierTokens.filter((token) => token.key === "is" && !token.negated).map((token) => token.value);
@@ -161,8 +233,14 @@ function CreatorsContent() {
             : hasTokens.some((token) => token.value === "subscription" && !token.negated)
               ? "has_subscription"
               : "all";
-  const creatorItems = creators.data?.items || [];
-  const creatorEntrance = useStaggeredEntrance(creatorItems.map((creator) => creator.id));
+  const sort = referenceSortFromTokens(parsedTokens);
+  const anchorsAvailable = !!searchMeta && searchMeta.query === search && referenceNameAnchorsAvailable(parsedTokens);
+  const anchors = useQuery({
+    queryKey: ["reference-name-anchors", "creators", search],
+    queryFn: ({ signal }) => api.referenceNameAnchors("creators", search, signal),
+    enabled: anchorsAvailable,
+  });
+  const creatorItems = listState.loadedItems;
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "creator", deleteId],
     queryFn: () => api.getCreatorDeletionPreview(deleteId as string),
@@ -176,12 +254,12 @@ function CreatorsContent() {
 
   useEffect(() => {
     if (notify.operationJob?.kind !== "danbooru-import-all" || notify.operationJob.status !== "completed") return;
-    creators.refetch();
+    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
   }, [notify.operationJob?.jobId, notify.operationJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notify.batchJob?.status !== "completed") return;
-    creators.refetch();
+    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
   }, [notify.batchJob?.jobId, notify.batchJob?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshCreatorViews = () => {
@@ -241,23 +319,20 @@ function CreatorsContent() {
     onError: (error: Error) => toast.error({ message: error.message }),
   });
 
-  useEffect(() => {
-    if (!creators.data?.items) return;
-    const visibleIds = new Set(creators.data.items.map((creator) => creator.id));
-    setSelected((prev) => {
-      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [creators.data]);
-
   const toggleSelect = (id: string) => {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
   };
   const selectAll = () => {
-    if (selected.size === (creators.data?.items.length || 0)) setSelected(new Set());
-    else setSelected(new Set((creators.data?.items || []).map((c) => c.id)));
+    const loadedIds = creatorItems.map((creator) => creator.id);
+    const allLoadedSelected = loadedIds.length > 0 && loadedIds.every((id) => selected.has(id));
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allLoadedSelected) loadedIds.forEach((id) => next.delete(id));
+      else loadedIds.forEach((id) => next.add(id));
+      return next;
+    });
   };
 
   const toggleFavorite = useMutation({
@@ -266,6 +341,8 @@ function CreatorsContent() {
   });
 
   const setSearchQuery = (next: string) => {
+    setSelected(new Set());
+    window.scrollTo({ top: 0 });
     setInputVal(next);
     updateParams({ q: next || null });
   };
@@ -287,12 +364,56 @@ function CreatorsContent() {
     }
     filterComposer.mutate(composes);
   };
+  const handleSortChange = (value: string) => {
+    setSelected(new Set());
+    window.scrollTo({ top: 0 });
+    filterComposer.mutate([{ key: "sort", value, operation: "set" }]);
+  };
+
+  const allLoadedSelected = creatorItems.length > 0
+    && creatorItems.every((creator) => selected.has(creator.id));
+  const someLoadedSelected = creatorItems.some((creator) => selected.has(creator.id));
+
+  useEffect(() => {
+    if (legacyPage === null || !listState.total) return;
+    let cleanupFrame = 0;
+    const scrollFrame = window.requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex(legacyInitialIndex);
+      cleanupFrame = window.requestAnimationFrame(() => {
+        initialVirtualIndexRef.current = 0;
+        const params = new URLSearchParams(sp.toString());
+        params.delete("p");
+        const suffix = params.toString();
+        router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(scrollFrame);
+      if (cleanupFrame) window.cancelAnimationFrame(cleanupFrame);
+    };
+  }, [legacyInitialIndex, legacyPage, listState.total, pathname, router, sp]);
+
+  useEffect(() => {
+    if (legacyPage !== null || !listState.total || pendingLegacyScrollRef.current === null) return;
+    const index = pendingLegacyScrollRef.current;
+    let settleFrame = 0;
+    const scrollFrame = window.requestAnimationFrame(() => {
+      settleFrame = window.requestAnimationFrame(() => {
+        listRef.current?.scrollToIndex(index);
+        pendingLegacyScrollRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(scrollFrame);
+      if (settleFrame) window.cancelAnimationFrame(settleFrame);
+    };
+  }, [legacyPage, listState.total]);
 
   return (
     <PageShell>
       <PageHeader
         title={t("creators.title")}
-        description={t("creators.count").replace("{count}", String(creators.data?.total ?? 0))}
+        description={t("creators.count").replace("{count}", String(listState.total))}
         secondaryActions={
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
         }
@@ -319,6 +440,18 @@ function CreatorsContent() {
             </button>
           ))}
         </div>
+        <ReferenceSortControl
+          value={sort}
+          labels={{
+            group: t("reference_list.sort_group"),
+            name: t("reference_list.sort_name"),
+            created: t("reference_list.sort_created"),
+            updated: t("reference_list.sort_updated"),
+            ascending: t("reference_list.ascending"),
+            descending: t("reference_list.descending"),
+          }}
+          onChange={handleSortChange}
+        />
       </FilterBar>
       </div>
 
@@ -337,42 +470,84 @@ function CreatorsContent() {
       )}
 
       {/* Select all */}
-      {canCurate && creators.data && creators.data.items.length > 0 && (
+      {canCurate && creatorItems.length > 0 && (
         <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-muted">
-          <input type="checkbox" aria-label={t("creators.select_all")} checked={selected.size === creators.data.items.length && creators.data.items.length > 0} onChange={selectAll} className="rounded" />
+          <CompactSelectionCheckbox
+            checked={allLoadedSelected}
+            indeterminate={!allLoadedSelected && someLoadedSelected}
+            ariaLabel={t("creators.select_all")}
+            onChange={selectAll}
+            stopPropagation={false}
+          />
           {t("creators.select_all")}
+          <span aria-live="polite">
+            {t("reference_list.selected_loaded", { selected: selected.size, loaded: creatorItems.length })}
+          </span>
         </label>
       )}
 
-      {/* Content */}
-      {creators.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
-      {creators.error && <ErrorState message={(creators.error as Error).message} onRetry={() => creators.refetch()} />}
-      {creators.data && !creators.data.items.length && (
-        <EmptyState
-          title={search || filter !== "all" ? t("works.no_works_filter") : t("creators.no_creators")}
-          description={search || filter !== "all" ? undefined : t("creators.no_creators_desc")}
-          action={(canCurate && !search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.create_creator")}</button> : undefined}
-        />
-      )}
-
-      {creators.data && creators.data.items.length > 0 && (
-        <EntityList label={t("creators.title")}>
-          {creators.data.items.map((c, i) => (
+      <ReferenceListLayout
+        rail={anchorsAvailable && anchors.data ? (
+          <ReferenceNameRail
+            items={anchors.data.items}
+            ariaLabel={t("reference_list.anchors_label")}
+            jumpLabel={(label, count) => t("reference_list.anchor_jump", { label, count })}
+            emptyLabel={(label) => t("reference_list.anchor_empty", { label })}
+            onSelect={(anchor) => {
+              if (anchor.offset !== null) listRef.current?.scrollToIndex(anchor.offset);
+            }}
+          />
+        ) : undefined}
+      >
+        {!sessionReady ? (
+          <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>
+        ) : (
+          <VirtualReferenceList<CreatorSearchHit, SearchResponse>
+            key={sessionKey}
+            ref={listRef}
+            queryKey={[...queryKeys.creators.all, "virtual", search]}
+            loadPage={loadCreators}
+            label={t("creators.title")}
+            initialIndex={initialVirtualIndexRef.current}
+            initialOffsets={restoredSession?.loadedOffsets}
+            estimateSize={84}
+            onStateChange={setListState}
+            onMetaChange={setSearchMeta}
+            renderInitialLoading={() => (
+              <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>
+            )}
+            renderInitialError={(error, retry) => <ErrorState message={error.message} onRetry={retry} />}
+            renderPageError={(_offset, error, retry) => (
+              <div className="flex min-h-20 items-center justify-center gap-3 rounded-md border border-danger/30 bg-danger-subtle px-4 text-sm text-danger">
+                <span>{error.message}</span>
+                <button type="button" className="btn-ghost text-xs" onClick={retry}>{t("common.retry")}</button>
+              </div>
+            )}
+            renderPlaceholder={(index) => <div aria-label={t("reference_list.loading_row", { index: index + 1 })} className="h-20 animate-pulse rounded-md bg-subtle dark:bg-subtle" />}
+            renderEmpty={() => (
+              <EmptyState
+                title={search || filter !== "all" ? t("works.no_works_filter") : t("creators.no_creators")}
+                description={search || filter !== "all" ? undefined : t("creators.no_creators_desc")}
+                action={(canCurate && !search && filter === "all") ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.create_creator")}</button> : undefined}
+              />
+            )}
+            renderItem={(c, index, total) => (
             <EntityRow
               key={c.id}
               label={t("common.open_item", { name: c.display_name || c.name })}
               selected={selected.has(c.id)}
-              entrance={creatorEntrance(c.id, i)}
-              onOpen={() => router.push(`/admin/creators/${c.id}`)}
+              positionInSet={index + 1}
+              setSize={total}
+              onOpen={() => {
+                persistListSession();
+                router.push(`/admin/creators/${c.id}`);
+              }}
             >
               {canCurate && (
-                <input
-                  type="checkbox"
-                  aria-label={t("common.select_item", { name: c.display_name || c.name })}
+                <CompactSelectionCheckbox
+                  ariaLabel={t("common.select_item", { name: c.display_name || c.name })}
                   checked={selected.has(c.id)}
                   onChange={() => toggleSelect(c.id)}
-                  className="shrink-0 rounded"
-                  onClick={(event) => event.stopPropagation()}
                 />
               )}
               <div className="entity-avatar">
@@ -433,18 +608,10 @@ function CreatorsContent() {
                 )}
               </div>
             </EntityRow>
-          ))}
-        </EntityList>
-      )}
-
-      {/* Pagination */}
-      {(creators.data?.items.length || 0) > 0 && (
-        <div className="flex gap-2 justify-center mt-4">
-          <button disabled={page === 0} onClick={() => updateParams({ p: page <= 1 ? null : String(page - 1) }, false)} className="btn-ghost disabled:opacity-30">{t("common.prev")}</button>
-          <span className="px-3 py-1 text-sm text-muted">{t("common.page").replace("{page}", String(page + 1))}</span>
-          <button onClick={() => updateParams({ p: String(page + 1) }, false)} disabled={!creators.data?.items || creators.data.items.length < limit} className="btn-ghost disabled:opacity-30">{t("common.next")}</button>
-        </div>
-      )}
+            )}
+          />
+        )}
+      </ReferenceListLayout>
       </PageSection>
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
