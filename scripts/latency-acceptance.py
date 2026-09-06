@@ -169,7 +169,9 @@ def seal(candidate):
         raise RuntimeError("Acceptance isolation guard failed")
     if run(["git", "-C", str(PROJECT), "status", "--porcelain", "--untracked-files=no"]).stdout.strip():
         raise RuntimeError("Commit reviewed code before sealing the comparison")
-    processes = run(["docker", "top", SERVICES["runner"], "-eo", "args"]).stdout.splitlines()[1:]
+    # Docker needs a PID column even when only command text is inspected.
+    process_rows = run(["docker", "top", SERVICES["runner"], "-eo", "pid,args"]).stdout.splitlines()[1:]
+    processes = [row.split(None, 1)[1].strip() for row in process_rows]
     if processes != ["sleep infinity"]:
         raise RuntimeError(f"Acceptance runner must be idle before sealing: {processes}")
     names = [*SERVICES.values(), *(f"ag-latency-bench-api-{v}" for v in ("baseline", "candidate"))]
