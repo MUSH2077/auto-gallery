@@ -44,6 +44,10 @@ class BilibiliProvider(BaseProvider):
             article_id = match.group(1)
             return f"https://www.bilibili.com/read/cv{article_id}"
 
+        match = re.search(r"bilibili\.com/opus/(\d+)", input_text)
+        if match:
+            return f"https://www.bilibili.com/opus/{match.group(1)}"
+
         # User article favorites: https://space.bilibili.com/{uid}/favlist?fid={fid}&ftype=article
         match = re.search(r"space\.bilibili\.com/(\d+)/favlist\?.*ftype=article", input_text)
         if match:
@@ -56,6 +60,7 @@ class BilibiliProvider(BaseProvider):
             r"https?://space\.bilibili\.com/\d+/article",
             r"https?://space\.bilibili\.com/\d+/(?:dynamic|upload/opus)/?",
             r"https?://(?:www\.)?bilibili\.com/read/(?:cv|mobile/)?\d+",
+            r"https?://(?:www\.)?bilibili\.com/opus/\d+",
             r"https?://space\.bilibili\.com/\d+/favlist\?.*ftype=article",
         ]
         return any(re.match(p, url) for p in patterns)
@@ -66,6 +71,12 @@ class BilibiliProvider(BaseProvider):
             return ProviderSearchURL(
                 kind="work",
                 normalized_url=f"https://www.bilibili.com/read/cv{match.group(1)}",
+            )
+        match = re.search(r"bilibili\.com/opus/(\d+)", input_text)
+        if match:
+            return ProviderSearchURL(
+                kind="work",
+                normalized_url=f"https://www.bilibili.com/opus/{match.group(1)}",
             )
         match = re.search(r"space\.bilibili\.com/(\d+)/(dynamic|upload/opus)", input_text)
         if match:
@@ -94,24 +105,27 @@ class BilibiliProvider(BaseProvider):
 
     def parse_source_creator(self, raw_metadata: dict) -> dict:
         user = raw_metadata.get("user", {})
-        # gallery-dl exposes user as {id, name} for bilibili
-        user_id = str(user.get("id", ""))
-        name = user.get("name") or user_id
+        user = user if isinstance(user, dict) else {}
+        user_id = str(raw_metadata.get("user_id") or user.get("id") or "")
+        name = raw_metadata.get("username") or user.get("name") or user_id
         return {
             "source": self.source_name,
             "source_creator_id": user_id,
             "source_url": f"https://space.bilibili.com/{user_id}" if user_id else None,
             "display_name": name,
-            "raw_metadata": user,
+            "raw_metadata": raw_metadata,
         }
 
     def parse_work_source(self, raw_metadata: dict) -> dict:
-        article_id = str(raw_metadata.get("id", ""))
+        article_id = str(raw_metadata.get("opus_id") or raw_metadata.get("id") or "")
         user = raw_metadata.get("user", {})
-        user_id = str(user.get("id", ""))
+        user = user if isinstance(user, dict) else {}
+        user_id = str(raw_metadata.get("user_id") or user.get("id") or "")
         title = raw_metadata.get("title") or ""
         description = raw_metadata.get("summary") or raw_metadata.get("content") or ""
-        source_url = f"https://www.bilibili.com/read/cv{article_id}" if article_id else None
+        if isinstance(description, list):
+            description = "\n".join(str(item) for item in description)
+        source_url = f"https://www.bilibili.com/opus/{article_id}" if article_id else None
 
         # gallery-dl provides "date" as a Unix timestamp for bilibili
         posted_at = raw_metadata.get("date")
@@ -128,12 +142,13 @@ class BilibiliProvider(BaseProvider):
         }
 
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
-        article_id = str(raw_metadata.get("id", ""))
+        article_id = str(raw_metadata.get("opus_id") or raw_metadata.get("id") or "")
         num = raw_metadata.get("num", 0)
+        suffix = str(raw_metadata.get("suffix") or "")
         url = raw_metadata.get("url") or raw_metadata.get("image_url")
         width = raw_metadata.get("width")
         height = raw_metadata.get("height")
-        asset_id = f"{article_id}_{num}" if article_id else None
+        asset_id = f"{article_id}_{num}{suffix}" if article_id else None
         return [{
             "source": self.source_name,
             "source_asset_id": asset_id,
@@ -167,7 +182,13 @@ class BilibiliProvider(BaseProvider):
 
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         user = raw_metadata.get("user", {})
-        return str(user.get("id") or user.get("name", "unknown"))
+        user = user if isinstance(user, dict) else {}
+        return str(
+            raw_metadata.get("user_id")
+            or user.get("id")
+            or raw_metadata.get("username")
+            or user.get("name", "unknown")
+        )
 
     def get_creator_dir_from_url(self, source_url: str) -> str | None:
         m = re.search(r'space\.bilibili\.com/(\d+)', source_url)

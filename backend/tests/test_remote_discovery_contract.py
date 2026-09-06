@@ -95,6 +95,22 @@ def test_discovery_page_freezes_items_and_cursor_and_rejects_mixed_sources():
         contract.DiscoveryPage(items=[pixiv], next_cursor={"offset": 30}, done=True)
 
 
+def test_candidate_evidence_is_source_pinned_and_deeply_immutable():
+    """Mutable or source-free evidence could be attached to the wrong private candidate."""
+    contract = _contract()
+    evidence = contract.RemoteCandidateEvidence(
+        source="x",
+        source_creator_id="42",
+        metadata={"recent_visual_post": True, "supported_links": ["https://pixiv.net/users/1"]},
+    )
+
+    assert evidence.metadata["recent_visual_post"] is True
+    with pytest.raises(TypeError):
+        evidence.metadata["supported_links"][0] = "https://example.test"
+    with pytest.raises(ValueError, match="source_creator_id"):
+        contract.RemoteCandidateEvidence(source="x", source_creator_id="", metadata={})
+
+
 def test_remote_creator_detail_contract_validates_generic_profile_and_work_pages():
     """A provider cannot leak malformed or source-mismatched creator media into shared APIs."""
     contract = _contract()

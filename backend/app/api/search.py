@@ -11,6 +11,7 @@ from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
 from app.schemas.search import (
     ReferenceNameAnchorsRead,
     SearchAssistRequest,
+    SearchResponseRead,
     SearchScopeValue,
 )
 from app.services.search import (
@@ -90,7 +91,7 @@ async def name_anchors(
         ) from error
 
 
-@router.get("")
+@router.get("", response_model=SearchResponseRead)
 async def search(
     q: str = Query("", description="Search query"),
     scope: SearchScopeValue = Query("global", description="Search surface and result type"),

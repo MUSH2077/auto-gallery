@@ -12,8 +12,8 @@ case "$verify_scope" in
     application_services=(backend admin-web worker-import worker-operations)
     ;;
   full)
-    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations scheduler)
-    application_services=(backend admin-web worker-download worker-import worker-operations scheduler)
+    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
+    application_services=(backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
     ;;
   *)
     echo "Unsupported VERIFY_SCOPE: $verify_scope" >&2
@@ -202,7 +202,7 @@ PY
 echo "ok: resource protection health contract"
 
 if [[ "$verify_scope" == "core" ]]; then
-  for service in worker-download worker-import worker-operations scheduler; do
+  for service in worker-download worker-import worker-operations worker-discovery scheduler; do
     status="$(compose ps -a "$service" --format '{{.State}}')"
     if [[ -n "$status" && "$status" != "exited" && "$status" != "created" ]]; then
       echo "Core rollout requires $service to remain stopped, got: $status" >&2
@@ -212,7 +212,7 @@ if [[ "$verify_scope" == "core" ]]; then
   echo "ok: background workers remain stopped for core rollout"
 fi
 if [[ "$verify_scope" == "import" ]]; then
-  for service in worker-download scheduler; do
+  for service in worker-download worker-discovery scheduler; do
     status="$(compose ps -a "$service" --format '{{.State}}')"
     if [[ -n "$status" && "$status" != "exited" && "$status" != "created" ]]; then
       echo "Import/search rollout requires $service to remain stopped, got: $status" >&2
@@ -316,12 +316,14 @@ if [[ "$verify_scope" == "full" ]]; then
   rq_download_hostname="$(current_container_hostname worker-download)"
   rq_import_hostname="$(current_container_hostname worker-import)"
   rq_operations_hostname="$(current_container_hostname worker-operations)"
+  rq_discovery_hostname="$(current_container_hostname worker-discovery)"
   rq_scheduler_hostname="$(current_container_hostname scheduler)"
 
   compose exec -T \
     -e VERIFY_RQ_DOWNLOAD_HOSTNAME="$rq_download_hostname" \
     -e VERIFY_RQ_IMPORT_HOSTNAME="$rq_import_hostname" \
     -e VERIFY_RQ_OPERATIONS_HOSTNAME="$rq_operations_hostname" \
+    -e VERIFY_RQ_DISCOVERY_HOSTNAME="$rq_discovery_hostname" \
     -e VERIFY_RQ_SCHEDULER_HOSTNAME="$rq_scheduler_hostname" \
     backend python3 - <<'PY' \
     | VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS="${VERIFY_RQ_HEARTBEAT_MAX_AGE_SECONDS:-480}" \
@@ -354,6 +356,7 @@ print(
                 "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
                 "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
                 "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
+                "discovery": os.environ["VERIFY_RQ_DISCOVERY_HOSTNAME"],
                 "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
             },
             "workers": workers,

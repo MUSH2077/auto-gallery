@@ -25,7 +25,7 @@ export default function CompactSelectionCheckbox({
 
   return (
     <span
-      className="compact-selection-hitbox"
+      className="compact-selection-hitbox relative"
       onClick={stopPropagation ? (event) => event.stopPropagation() : undefined}
     >
       <input
@@ -35,8 +35,20 @@ export default function CompactSelectionCheckbox({
         disabled={disabled}
         aria-label={ariaLabel}
         onChange={onChange}
-        className="compact-selection-checkbox"
+        className="compact-selection-checkbox peer"
       />
+      <span
+        aria-hidden="true"
+        className={`compact-selection-visual ${checked || indeterminate ? "compact-selection-visual-active" : ""}`}
+      >
+        {indeterminate ? (
+          <span className="h-0.5 w-2 rounded-full bg-white" />
+        ) : checked ? (
+          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none">
+            <path d="m3.25 8.25 2.75 2.5 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : null}
+      </span>
     </span>
   );
 }

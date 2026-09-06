@@ -5,6 +5,7 @@ from app.remote_discovery.classifier import (
 )
 from app.remote_discovery.contract import (
     DiscoveryPage,
+    RemoteCandidateEvidence,
     RemoteCandidateIdentity,
     RemoteCollection,
     RemoteCreatorDetail,
@@ -38,6 +39,7 @@ __all__ = [
     "DiscoveryPage",
     "IdentityClassification",
     "IdentityMatchSignals",
+    "RemoteCandidateEvidence",
     "RemoteCandidateIdentity",
     "RemoteCollection",
     "RemoteCreatorDetail",

@@ -475,6 +475,8 @@ async def _execute_registered_admin_operation(
         )
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"}:
         return await _run_creator_reenrich_operation(task_id, options)
+    if operation_type == "admin-creator-alias-backfill":
+        return await _run_creator_alias_backfill_operation(task_id, options)
     if operation_type == "danbooru-import-all":
         from app.services.danbooru_import import import_all_danbooru_artist
 
@@ -1453,6 +1455,32 @@ def run_search_reindex_operation(job_id: str, options: dict | None = None) -> di
     # for the atomic swap.  Wrapping the coordinator in the legacy operation
     # lock would otherwise serialize all 67k documents behind one long lease.
     return asyncio.run(_run_search_reindex_operation(job_id, options or {}))
+
+
+def run_creator_alias_backfill_operation(
+    job_id: str,
+    options: dict | None = None,
+) -> dict:
+    """Compatibility entry point for the registered creator-alias operation."""
+
+    return asyncio.run(
+        _run_creator_alias_backfill_operation(job_id, options or {})
+    )
+
+
+async def _run_creator_alias_backfill_operation(
+    job_id: str,
+    options: dict,
+) -> dict:
+    from app.services.creator_aliases import backfill_all_creator_aliases
+
+    del job_id, options
+    async with async_session() as db:
+        result = await backfill_all_creator_aliases(
+            db,
+            request_projection=True,
+        )
+    return {**result, "message": "Creator alias backfill complete"}
 
 
 async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:

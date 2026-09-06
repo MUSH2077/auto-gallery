@@ -156,6 +156,104 @@ class PagedPixivAdapter:
         )
 
 
+@pytest.mark.asyncio
+async def test_evidence_batch_enforces_x_oauth_concurrency_two():
+    """Provider enrichment must not fan a 25-person segment out without bounds."""
+    import asyncio
+
+    from app.remote_discovery.contract import RemoteCandidateEvidence, RemoteCandidateIdentity
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class Adapter:
+        source = "x"
+
+        def __init__(self):
+            self.active = 0
+            self.maximum = 0
+
+        async def enrich_candidate(self, _credentials, identity):
+            self.active += 1
+            self.maximum = max(self.maximum, self.active)
+            await asyncio.sleep(0)
+            self.active -= 1
+            return RemoteCandidateEvidence(
+                source="x",
+                source_creator_id=identity.source_creator_id,
+            )
+
+    adapter = Adapter()
+    identities = [
+        RemoteCandidateIdentity(
+            source="x",
+            source_creator_id=str(index),
+            profile_url=f"https://x.com/user{index}",
+        )
+        for index in range(8)
+    ]
+    results = await RemoteDiscoveryService._enrich_batch(
+        adapter, {}, identities, concurrency=2
+    )
+    assert adapter.maximum == 2
+    assert len(results) == 8
+
+
+@pytest.mark.asyncio
+async def test_bilibili_evidence_batch_is_serial_with_three_to_six_second_jitter(monkeypatch):
+    """Bilibili evidence calls need the conservative anti-rate-limit cadence."""
+    from app.remote_discovery.contract import RemoteCandidateEvidence, RemoteCandidateIdentity
+    from app.services import remote_discovery
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    class Adapter:
+        source = "bilibili"
+
+        async def enrich_candidate(self, _credentials, identity):
+            return RemoteCandidateEvidence(
+                source="bilibili",
+                source_creator_id=identity.source_creator_id,
+            )
+
+    monkeypatch.setattr(remote_discovery.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(remote_discovery.random, "uniform", lambda low, high: 4.5)
+    identities = [
+        RemoteCandidateIdentity(
+            source="bilibili",
+            source_creator_id=str(index),
+            profile_url=f"https://space.bilibili.com/{index}/dynamic",
+        )
+        for index in range(3)
+    ]
+    await remote_discovery.RemoteDiscoveryService._enrich_batch(
+        Adapter(), {}, identities, concurrency=1
+    )
+    assert sleeps == [4.5, 4.5]
+
+
+def test_discovery_job_turns_persistent_waiting_state_into_delayed_rq_wakeup(monkeypatch):
+    """A completed worker slice must be resumed by the queue scheduler, not stranded."""
+    from types import SimpleNamespace
+
+    from rq import Retry
+
+    from app.jobs import remote_discovery as job
+
+    async def fake_run(_task_id):
+        return SimpleNamespace(
+            status="waiting",
+            progress_data={"phase": "cooldown", "retry_after_seconds": 75},
+        )
+
+    monkeypatch.setattr(job, "_run", fake_run)
+    result = job.run_remote_discovery_scan(str(uuid4()))
+    assert isinstance(result, Retry)
+    assert result.max == 1_000_000
+    assert result.intervals == [75]
+
+
 async def _account(db, user, adapter, *, auto=False, limit=25):
     from app.services.remote_accounts import RemoteAccountService
 
@@ -227,6 +325,7 @@ async def test_scan_singleflight_pages_are_resumable_and_only_complete_marks_unf
             assert len(current) == 2
             assert all(item.is_following for item in current)
             assert {item.confidence for item in current} == {"high", "low"}
+            assert {item.evidence_status for item in current} == {"ready"}
             stored_account = await db.get(RemoteAccount, account.id)
             assert stored_account.scan_cursor is None
             assert stored_account.last_scan_completed_at is not None
@@ -243,6 +342,258 @@ async def test_scan_singleflight_pages_are_resumable_and_only_complete_marks_unf
                 )
             ).scalar_one()
             assert count == 3
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_x_snapshot_finalizes_before_resumable_evidence_segments():
+    """Re-running the snapshot for every evidence slice would corrupt follow-state authority."""
+    from app.database import async_session, engine
+    from app.models import DiscoveryCandidate, RemoteAccount
+    from app.remote_discovery.contract import (
+        DiscoveryPage,
+        RemoteCandidateEvidence,
+        RemoteCandidateIdentity,
+    )
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class SegmentedXAdapter:
+        source = "x"
+
+        def __init__(self):
+            self.fetch_calls = 0
+            self.enriched: list[str] = []
+
+        async def fetch_page(self, credentials, *, selector=None, cursor=None, page_size=100):
+            self.fetch_calls += 1
+            return DiscoveryPage(
+                items=[
+                    RemoteCandidateIdentity(
+                        source="x",
+                        source_creator_id=f"segmented-{index:02d}",
+                        profile_url=f"https://x.com/segmented_{index:02d}",
+                        username=f"segmented_{index:02d}",
+                        metadata={"description": "fixture"},
+                    )
+                    for index in range(12)
+                ],
+                done=True,
+            )
+
+        async def enrich_candidate(self, credentials, identity):
+            self.enriched.append(identity.source_creator_id)
+            return RemoteCandidateEvidence(
+                source="x",
+                source_creator_id=identity.source_creator_id,
+                metadata={**dict(identity.metadata), "recent_visual_post": True},
+            )
+
+    adapter = SegmentedXAdapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "segmented_x")
+            account = await RemoteAccountService(
+                db, user.id, vault=_vault(), adapters=adapters
+            ).create(
+                {
+                    "source": "x",
+                    "auth_method": "cookie",
+                    "credentials": {"cookie": "auth_token=secret; ct0=csrf"},
+                    "collection_selectors": [{"kind": "following"}],
+                }
+            )
+            old = DiscoveryCandidate(
+                remote_account_id=account.id,
+                user_id=user.id,
+                source_creator_id="segmented-old",
+                state="pending",
+                evidence_status="pending",
+                is_following=True,
+                last_seen_at=datetime.now(timezone.utc) - timedelta(days=2),
+            )
+            db.add(old)
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            task = await service.create_scan(user.id, account.id)
+            await db.commit()
+
+            first = await service.run_scan(task.id)
+            assert first.status == "waiting"
+            assert first.progress_data["phase"] == "enriching"
+            assert first.progress_data["evidence_completed"] == 10
+            await db.refresh(old)
+            assert old.is_following is False
+
+            second = await service.run_scan(task.id)
+            assert second.status == "complete"
+            assert second.progress_data["evidence_completed"] == 12
+            assert adapter.fetch_calls == 1
+            assert len(adapter.enriched) == 12
+            statuses = set(
+                (
+                    await db.execute(
+                        select(DiscoveryCandidate.evidence_status).where(
+                            DiscoveryCandidate.remote_account_id == account.id,
+                            DiscoveryCandidate.source_creator_id.like("segmented-%"),
+                            DiscoveryCandidate.source_creator_id != "segmented-old",
+                        )
+                    )
+                ).scalars()
+            )
+            assert statuses == {"ready"}
+            stored_account = await db.get(RemoteAccount, account.id)
+            assert stored_account.scan_cursor is None
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_x_evidence_rate_limit_cools_down_without_skipping_candidate_or_damaging_auth():
+    """A 429 wakeup must retry the same candidate and preserve discovery credentials."""
+    from app.database import async_session, engine
+    from app.models import RemoteAccount
+    from app.remote_discovery.common import RemoteRateLimited
+    from app.remote_discovery.contract import (
+        DiscoveryPage,
+        RemoteCandidateEvidence,
+        RemoteCandidateIdentity,
+    )
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class Adapter:
+        source = "x"
+
+        def __init__(self):
+            self.fetch_calls = 0
+            self.enrich_calls = 0
+
+        async def fetch_page(self, _credentials, **_kwargs):
+            self.fetch_calls += 1
+            return DiscoveryPage(
+                items=[RemoteCandidateIdentity(
+                    source="x",
+                    source_creator_id="cooldown-one",
+                    profile_url="https://x.com/cooldown_one",
+                    username="cooldown_one",
+                )],
+                done=True,
+            )
+
+        async def enrich_candidate(self, _credentials, identity):
+            self.enrich_calls += 1
+            if self.enrich_calls == 1:
+                raise RemoteRateLimited(75)
+            return RemoteCandidateEvidence(
+                source="x",
+                source_creator_id=identity.source_creator_id,
+                metadata={"recent_visual_post": True},
+            )
+
+    adapter = Adapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "cooldown_x")
+            account = await RemoteAccountService(
+                db, user.id, vault=_vault(), adapters=adapters
+            ).create({
+                "source": "x",
+                "auth_method": "cookie",
+                "credentials": {"cookie": "auth_token=secret; ct0=csrf"},
+                "collection_selectors": [{"kind": "following"}],
+            })
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            task = await service.create_scan(user.id, account.id)
+            await db.commit()
+
+            waiting = await service.run_scan(task.id)
+            assert waiting.status == "waiting"
+            assert waiting.progress_data["phase"] == "cooldown"
+            assert waiting.progress_data["retry_after_seconds"] == 75
+            assert waiting.progress_data["evidence_after_id"] is None
+            stored_account = await db.get(RemoteAccount, account.id)
+            assert stored_account.auth_status == "untested"
+
+            completed = await service.run_scan(task.id)
+            assert completed.status == "complete"
+            assert completed.progress_data["evidence_completed"] == 1
+            assert adapter.fetch_calls == 1
+            assert adapter.enrich_calls == 2
+    finally:
+        async with async_session() as db:
+            await _cleanup(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_protocol_change_stops_after_three_and_completes_partial_snapshot():
+    """Repeated response drift is not an auth failure and must leave later evidence pending."""
+    from app.database import async_session, engine
+    from app.models import RemoteAccount
+    from app.remote_discovery.common import MalformedRemoteResponse
+    from app.remote_discovery.contract import DiscoveryPage, RemoteCandidateIdentity
+    from app.services.remote_accounts import RemoteAccountService
+    from app.services.remote_discovery import RemoteDiscoveryService
+
+    class Adapter:
+        source = "x"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_page(self, _credentials, **_kwargs):
+            return DiscoveryPage(items=[
+                RemoteCandidateIdentity(
+                    source="x",
+                    source_creator_id=f"protocol-{index}",
+                    profile_url=f"https://x.com/protocol_{index}",
+                    username=f"protocol_{index}",
+                )
+                for index in range(4)
+            ], done=True)
+
+        async def enrich_candidate(self, _credentials, _identity):
+            self.calls += 1
+            raise MalformedRemoteResponse("fixture drift")
+
+    adapter = Adapter()
+    adapters = Registry(adapter)
+    try:
+        async with async_session() as db:
+            await _cleanup(db)
+            user = await _seed_user(db, "protocol_x")
+            account = await RemoteAccountService(
+                db, user.id, vault=_vault(), adapters=adapters
+            ).create({
+                "source": "x",
+                "auth_method": "cookie",
+                "credentials": {"cookie": "auth_token=secret; ct0=csrf"},
+                "collection_selectors": [{"kind": "following"}],
+            })
+            service = RemoteDiscoveryService(db, vault=_vault(), adapters=adapters)
+            task = await service.create_scan(user.id, account.id)
+            await db.commit()
+
+            completed = await service.run_scan(task.id)
+            assert completed.status == "complete"
+            assert completed.result_data["status"] == "partial"
+            assert completed.progress_data["evidence_failed"] == 3
+            assert completed.progress_data["evidence_pending"] == 1
+            assert adapter.calls == 3
+            stored_account = await db.get(RemoteAccount, account.id)
+            assert stored_account.auth_status == "untested"
     finally:
         async with async_session() as db:
             await _cleanup(db)

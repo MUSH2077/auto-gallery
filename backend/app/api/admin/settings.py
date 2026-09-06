@@ -477,8 +477,10 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
     """Build the Data Center hierarchy from durable artifact rows only."""
     from app.models.creator import Creator
     from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
     from app.models.subscription import Subscription
     from app.models.subscription_source import SubscriptionSource
+    from app.models.work_source import WorkSource
     from app.providers import registry
     from app.services.settings import extractor_key_for_source
 
@@ -491,6 +493,29 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
     source_creators = list((await db.execute(
         select(SourceCreator, Creator)
         .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
+    )).all())
+    work_source_identities = list((await db.execute(
+        select(
+            StorageArtifact.source,
+            StorageArtifact.creator_dir,
+            WorkSource.source_creator_id,
+        )
+        .join(
+            WorkSource,
+            and_(
+                WorkSource.source == StorageArtifact.source,
+                WorkSource.source_work_id == StorageArtifact.source_work_id,
+            ),
+        )
+        .where(
+            StorageArtifact.storage_root == "downloads",
+            WorkSource.source_creator_id.is_not(None),
+        )
+        .group_by(
+            StorageArtifact.source,
+            StorageArtifact.creator_dir,
+            WorkSource.source_creator_id,
+        )
     )).all())
 
     creators_by_id: dict[str, Creator] = {}
@@ -545,6 +570,15 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
                 )
             if creator:
                 creators_by_id[str(creator.id)] = creator
+
+    work_identity_by_directory: dict[tuple[str, str], object] = {}
+    for source, directory, source_creator_id in work_source_identities:
+        add_unique(
+            work_identity_by_directory,
+            (source, directory),
+            source_creator_id,
+            source_creator_id,
+        )
 
     repositories_by_source_creator: dict[tuple[str, str], object] = {}
     repositories_by_provider_directory: dict[tuple[str, str], object] = {}
@@ -601,23 +635,43 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         source_total["creator_count"] += 1
         source_total["work_count"] += work_count
 
-        owner_match = owner_by_directory.get((source, directory_name), missing)
-        owner_id = (
-            owner_match[1]
-            if owner_match is not missing and owner_match is not ambiguous
+        work_identity_match = work_identity_by_directory.get(
+            (source, directory_name),
+            missing,
+        )
+        work_identity = (
+            work_identity_match[1]
+            if work_identity_match is not missing
+            and work_identity_match is not ambiguous
             else None
         )
-        best_context = unique_repository_context(source, directory_name)
+        identity_keys: list[str] = []
+        if work_identity_match is not ambiguous:
+            identity_keys.append(directory_name)
+            if work_identity and work_identity != directory_name:
+                identity_keys.append(work_identity)
 
-        creator_id = owner_id
+        owner_ids: set[str] = set()
+        repository_context_by_id: dict[str, tuple] = {}
+        for identity_key in identity_keys:
+            owner_match = owner_by_directory.get((source, identity_key), missing)
+            if owner_match is not missing and owner_match is not ambiguous:
+                owner_ids.add(owner_match[1])
+            repository_context = unique_repository_context(source, identity_key)
+            if repository_context:
+                repository, creator = repository_context
+                owner_ids.add(str(creator.id))
+                repository_context_by_id[str(repository.id)] = repository_context
+
+        creator_id = next(iter(owner_ids)) if len(owner_ids) == 1 else None
         repository_id: str | None = None
         display_name = directory_name
-        if best_context:
-            repository, creator = best_context
-            creator_id = str(creator.id)
-            repository_id = str(repository.id)
-            display_name = creator.display_name or creator.name or display_name
-        elif creator_id and creator_id in creators_by_id:
+        if creator_id and len(repository_context_by_id) == 1:
+            repository, creator = next(iter(repository_context_by_id.values()))
+            if str(creator.id) == creator_id:
+                repository_id = str(repository.id)
+                display_name = creator.display_name or creator.name or display_name
+        if not repository_id and creator_id and creator_id in creators_by_id:
             creator = creators_by_id[creator_id]
             display_name = creator.display_name or creator.name or display_name
 

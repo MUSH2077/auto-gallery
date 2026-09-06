@@ -26,6 +26,7 @@ function candidateParams(filters: DiscoveryCandidateFilters = {}) {
   if (filters.confidence) params.set("confidence", filters.confidence);
   if (filters.isFollowing !== undefined) params.set("is_following", String(filters.isFollowing));
   if (filters.localMatch !== undefined) params.set("local_match", String(filters.localMatch));
+  if (filters.evidenceStatus) params.set("evidence_status", filters.evidenceStatus);
   params.set("offset", String(filters.offset ?? 0));
   params.set("limit", String(filters.limit ?? 25));
   return params;
@@ -75,6 +76,19 @@ export const remoteDiscoveryApi = {
       signal,
     });
   },
+
+  setXDownloadAuth: (id: string, cookie: string, signal?: AbortSignal) =>
+    request<RemoteAccountRead>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/download-auth`, {
+      method: "PUT",
+      body: JSON.stringify({ cookie }),
+      signal,
+    }),
+
+  clearXDownloadAuth: (id: string, signal?: AbortSignal) =>
+    request<void>(`/api/v1/remote-accounts/${encodeURIComponent(id)}/download-auth`, {
+      method: "DELETE",
+      signal,
+    }),
 
   createDiscoveryScan: (remoteAccountId: string, signal?: AbortSignal) =>
     request<TaskRun>("/api/v1/discovery/scans", {

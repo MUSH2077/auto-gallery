@@ -28,28 +28,42 @@ class PixivProvider(BaseProvider):
         patterns = [
             r"pixiv\.net/(?:en/)?artworks/(\d+)",
             r"pixiv\.net/(?:en/)?users/(\d+)",
+            r"pixiv\.net/stacc/([A-Za-z0-9_]+)",
         ]
         for pattern in patterns:
             match = re.search(pattern, input_text)
             if match:
-                return f"https://www.pixiv.net/artworks/{match.group(1)}" if "artworks" in pattern else f"https://www.pixiv.net/users/{match.group(1)}"
+                if "artworks" in pattern:
+                    return f"https://www.pixiv.net/artworks/{match.group(1)}"
+                if "stacc" in pattern:
+                    return f"https://www.pixiv.net/stacc/{match.group(1)}"
+                return f"https://www.pixiv.net/users/{match.group(1)}"
         return None
 
     def validate_url(self, url: str) -> bool:
         return bool(
-            re.match(r"https?://(?:www\.)?pixiv\.net/(?:en/)?(artworks|users)/\d+", url)
+            re.match(
+                r"https?://(?:www\.)?pixiv\.net/(?:(?:en/)?(?:artworks|users)/\d+|stacc/[A-Za-z0-9_]+)",
+                url,
+            )
         )
 
     def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
         match = re.search(r"pixiv\.net/(?:en/)?(artworks|users)/(\d+)", input_text)
-        if not match:
-            return None
-        kind, identity = match.groups()
-        entity = "work" if kind == "artworks" else "creator"
-        return ProviderSearchURL(
-            kind=entity,
-            normalized_url=f"https://www.pixiv.net/{kind}/{identity}",
-        )
+        if match:
+            kind, identity = match.groups()
+            entity = "work" if kind == "artworks" else "creator"
+            return ProviderSearchURL(
+                kind=entity,
+                normalized_url=f"https://www.pixiv.net/{kind}/{identity}",
+            )
+        stacc = re.search(r"pixiv\.net/stacc/([A-Za-z0-9_]+)", input_text)
+        if stacc:
+            return ProviderSearchURL(
+                kind="creator",
+                normalized_url=f"https://www.pixiv.net/stacc/{stacc.group(1)}",
+            )
+        return None
 
     def build_gallerydl_config(self, subscription_source) -> dict:
         cfg = {

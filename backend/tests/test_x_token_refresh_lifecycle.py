@@ -122,6 +122,7 @@ async def _create_x_account(db, adapter, *, suffix: str, credentials: dict[str, 
             "source": "x",
             "auth_method": "oauth2",
             "remote_user_id": "42",
+            "scopes": ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
             "credentials": credentials,
             "collection_selectors": [{"kind": "following"}],
         }
@@ -235,6 +236,7 @@ async def test_account_test_refresh_persists_rotated_tokens_and_generation(
                     "source": "x",
                     "auth_method": "oauth2",
                     "remote_user_id": "42",
+                    "scopes": ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
                     "credentials": {
                         "access_token": old_access,
                         "refresh_token": old_refresh,
@@ -440,6 +442,8 @@ async def test_scan_refresh_advances_task_and_checkpoint_pin_before_next_page(
                         "meta": {},
                     },
                 )
+            if url.endswith(("/users/501/tweets", "/users/502/tweets")):
+                return RemoteHTTPResponse(200, {"data": [], "includes": {}})
             raise AssertionError("unexpected X refresh lifecycle request")
 
     transport = BlockingSecondPageTransport()
@@ -468,6 +472,7 @@ async def test_scan_refresh_advances_task_and_checkpoint_pin_before_next_page(
                     "source": "x",
                     "auth_method": "oauth2",
                     "remote_user_id": "42",
+                    "scopes": ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
                     "credentials": {
                         "access_token": old_access,
                         "refresh_token": old_refresh,

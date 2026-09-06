@@ -494,6 +494,30 @@ test("name index becomes a mobile bottom rail without covering the list", async 
   expect(railBox && viewport && railBox.y + railBox.height <= viewport.height + 1).toBe(true);
 });
 
+test("desktop name indexes hide their scrollbars but keep wheel scrolling", async ({ context, page }) => {
+  const observations = { searches: [], summaryBatches: [] } as {
+    searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+    summaryBatches: string[][];
+  };
+  await installRoutes(context, observations);
+  await page.setViewportSize({ width: 1280, height: 520 });
+
+  for (const scope of ["creators", "subscriptions"] as const) {
+    await page.goto(`/admin/${scope}`);
+    const rail = page.getByRole("navigation", { name: "Name index" });
+    await expect(rail).toBeVisible();
+    await expect.poll(() => rail.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollbarWidth: window.getComputedStyle(element).scrollbarWidth,
+    }))).toMatchObject({ scrollbarWidth: "none" });
+    expect(await rail.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await rail.hover();
+    await page.mouse.wheel(0, 320);
+    await expect.poll(() => rail.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  }
+});
+
 test("legacy pages become virtual offsets and list state survives a detail round trip", async ({ context, page }) => {
   const observations = { searches: [], summaryBatches: [] } as {
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;

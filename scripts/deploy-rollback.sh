@@ -107,7 +107,7 @@ write_receipt
 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
     --env-file "$ROLLBACK_DIR/.env.predeploy" \
     -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-    stop -t 120 migrate backend admin-web worker-download worker-import worker-operations scheduler || true
+    stop -t 120 migrate backend admin-web worker-download worker-import worker-operations worker-discovery scheduler || true
 
 docker image tag "$BACKEND_ROLLBACK_TAG" auto-gallery-backend:latest
 docker image tag "$ADMIN_ROLLBACK_TAG" auto-gallery-admin-web:latest

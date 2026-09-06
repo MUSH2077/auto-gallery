@@ -22,7 +22,13 @@ from app.services.remote_credentials import decode_remote_credential_key
 
 STATE_PREFIX = "remote-discovery:x:oauth-state:"
 STATE_TTL_SECONDS = 600
-X_SCOPES = ("users.read", "follows.read", "list.read", "offline.access")
+X_SCOPES = (
+    "tweet.read",
+    "users.read",
+    "follows.read",
+    "list.read",
+    "offline.access",
+)
 _STATE_VERSION = 1
 _STATE_NONCE_BYTES = 12
 _STATE_SOURCE = "x"

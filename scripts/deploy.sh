@@ -559,7 +559,7 @@ deploy_failed() {
     trap - ERR
     echo -e "${RED}Deployment did not complete successfully.${NC}" >&2
     if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 ]]; then
-        compose stop -t 60 migrate worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
+        compose stop -t 60 migrate worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true
     fi
     if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 && "$ROLLBACK_READY" -eq 1 && -x "$ROLLBACK_DIR/rollback.sh" ]]; then
         echo "Attempting fail-closed foreground rollback; heavy workers stay stopped..." >&2
@@ -618,7 +618,7 @@ echo -e "${GREEN}  Resource contract OK${NC}"
 echo -e "${YELLOW}[3/7] Protecting live images and freezing background writers...${NC}"
 prepare_rollback_point
 DEPLOY_MUTATION_STARTED=1
-compose stop -t 120 worker-download worker-import worker-operations scheduler
+compose stop -t 120 worker-download worker-import worker-operations worker-discovery scheduler
 persist_runtime_env
 
 # ── 4. Reuse the exact candidate images ──────────────────────────────
@@ -635,7 +635,7 @@ compose up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
 compose up --force-recreate --no-deps --no-build migrate
 COMPOSE_PARALLEL_LIMIT=1 compose up -d --force-recreate --no-deps --no-build \
     backend admin-web
-compose stop -t 60 worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
+compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true
 
 # ── 6. Wait for healthy ───────────────────────────────────────────────
 echo -e "${YELLOW}[6/7] Waiting up to 180 seconds for every service...${NC}"
@@ -668,10 +668,10 @@ VERIFY_SCOPE=core \
 if [[ "$CORE_ONLY" -eq 0 ]]; then
     echo -e "${YELLOW}[7/7] Starting adaptive background workers...${NC}"
     compose up -d --force-recreate --no-build \
-        worker-download worker-import worker-operations scheduler
+        worker-download worker-import worker-operations worker-discovery scheduler
     ready=0
     for attempt in $(seq 1 36); do
-        if all_services_ready worker-download worker-import worker-operations scheduler; then
+        if all_services_ready worker-download worker-import worker-operations worker-discovery scheduler; then
             ready=1
             break
         fi
@@ -680,7 +680,7 @@ if [[ "$CORE_ONLY" -eq 0 ]]; then
     done
     [[ "$ready" -eq 1 ]] || {
         compose ps >&2
-        compose logs --tail=50 worker-download worker-import worker-operations scheduler >&2 || true
+        compose logs --tail=50 worker-download worker-import worker-operations worker-discovery scheduler >&2 || true
         false
     }
     VERIFY_SCOPE=full \

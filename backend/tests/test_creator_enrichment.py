@@ -490,6 +490,9 @@ async def test_creator_sweeps_await_async_progress_callbacks(monkeypatch, refres
         def scalars(self):
             return ScalarValues(self._values)
 
+        def all(self):
+            return list(self._values)
+
         def one_or_none(self):
             return self._values[0] if self._values else None
 

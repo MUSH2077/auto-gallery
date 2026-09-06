@@ -24,7 +24,8 @@ ROLE_QUEUES = {
     },
     # Extra queues are separate RQ child registrations in the same service.
     "import": {"imports", "maintenance"},
-    "operations": {"operations", "discovery"},
+    "operations": {"operations"},
+    "discovery": {"discovery"},
     "scheduler": {"scheduled"},
 }
 

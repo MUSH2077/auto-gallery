@@ -200,7 +200,7 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
             ("import", ["imports"]),
             ("import", ["maintenance"]),
             ("operations", ["operations"]),
-            ("operations", ["discovery"]),
+            ("discovery", ["discovery"]),
             ("scheduler", ["scheduled"]),
         )
         workers = []
@@ -219,7 +219,7 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
             "observed_at": "2026-08-30T10:05:00+00:00",
             "expected_hostnames": {
                 role: f"current-{role}"
-                for role in ("download", "import", "operations", "scheduler")
+                for role in ("download", "import", "operations", "discovery", "scheduler")
             },
             "workers": workers,
         }
@@ -277,6 +277,7 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
             "worker-download": "download",
             "worker-import": "import",
             "worker-operations": "operations",
+            "worker-discovery": "discovery",
             "scheduler": "scheduler",
         }
 
@@ -334,7 +335,7 @@ class RunbookSafetyContractTests(unittest.TestCase):
         section = section.split("### Deploying Only Infrastructure Changes", 1)[0]
 
         workers_stopped = section.index(
-            "docker compose stop -t 120 worker-download worker-import worker-operations scheduler"
+            "docker compose stop -t 120 worker-download worker-import worker-operations worker-discovery scheduler"
         )
         foreground_stopped = section.index(
             "docker compose stop -t 120 admin-web backend"

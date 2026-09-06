@@ -161,9 +161,14 @@ async def mark_source_sync_success(
             binding.auth_error_reason = None
             binding.last_auth_checked_at = when
             if trigger_account is not None:
-                trigger_account.auth_status = "healthy"
-                trigger_account.auth_error_reason = None
-                trigger_account.last_authenticated_at = when
+                if trigger_account.source == "x" and trigger_account.auth_method == "oauth2":
+                    if trigger_account.download_auth_status == "personal":
+                        trigger_account.download_auth_error_reason = None
+                        trigger_account.last_download_auth_checked_at = when
+                else:
+                    trigger_account.auth_status = "healthy"
+                    trigger_account.auth_error_reason = None
+                    trigger_account.last_authenticated_at = when
     await recompute_subscription_membership_cache(db, ss.subscription_id)
     await request_search_projection(
         db,
@@ -256,8 +261,22 @@ async def mark_source_auth_failure(
             binding.auth_error_reason = safe_reason
             binding.last_auth_checked_at = when
             if account is not None:
-                account.auth_status = "unhealthy"
-                account.auth_error_reason = safe_reason
+                if account.source == "x" and account.auth_method == "oauth2":
+                    if account.download_auth_status == "anonymous_only":
+                        binding.auth_error_reason = "download_cookie_required"
+                    else:
+                        account.download_auth_status = "unhealthy"
+                        account.download_auth_error_reason = safe_reason
+                        account.last_download_auth_checked_at = when
+                        from app.services.remote_accounts import RemoteAccountService
+
+                        await RemoteAccountService(
+                            db,
+                            account.user_id,
+                        )._pause_protected_x_bindings(account)
+                else:
+                    account.auth_status = "unhealthy"
+                    account.auth_error_reason = safe_reason
     if binding is None and membership_id is None and account_id is None:
         # Compatibility for a truly legacy job without member provenance.
         source.auth_healthy = False

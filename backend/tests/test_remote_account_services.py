@@ -1058,7 +1058,7 @@ async def test_remote_account_policies_are_provider_specific_and_rejected_atomic
                     "source": "x",
                     "auth_method": "cookie",
                     "credentials": {"cookie": "x-cookie"},
-                    "scopes": ["users.read", "follows.read", "list.read"],
+                    "scopes": [],
                     "collection_selectors": [
                         {"kind": "following"},
                         {"kind": "list", "list_id": "7719", "private": True},
@@ -1130,7 +1130,7 @@ async def test_remote_account_policies_are_provider_specific_and_rejected_atomic
                 {"restrict": "public"},
                 {"restrict": "private"},
             ]
-            assert stored_x.scopes == ["users.read", "follows.read", "list.read"]
+            assert stored_x.scopes == []
             assert stored_bilibili.collection_selectors[1] == {
                 "kind": "group",
                 "group_id": "12",
@@ -1196,7 +1196,7 @@ class FakeOAuthExchange:
         return {
             "access_token": "oauth-access-secret",
             "refresh_token": "oauth-refresh-secret",
-            "scope": "users.read follows.read list.read offline.access",
+            "scope": "tweet.read users.read follows.read list.read offline.access",
         }
 
 
@@ -1412,6 +1412,7 @@ async def test_remote_account_auth_method_cannot_relabel_existing_ciphertext():
                 {
                     "source": "x",
                     "auth_method": "oauth2",
+                    "scopes": ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
                     "credentials": {"access_token": "top-secret-access"},
                 }
             )
@@ -1450,10 +1451,104 @@ def test_x_oauth_scope_validation_requires_every_discovery_scope():
     from app.services.x_oauth import validate_x_oauth_scopes
 
     assert validate_x_oauth_scopes(
-        "users.read follows.read list.read offline.access"
-    ) == ["users.read", "follows.read", "list.read", "offline.access"]
+        "tweet.read users.read follows.read list.read offline.access"
+    ) == ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"]
     with pytest.raises(ValueError, match="missing required scopes"):
-        validate_x_oauth_scopes("users.read follows.read")
+        validate_x_oauth_scopes("users.read follows.read list.read offline.access")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_x_download_cookie_is_identity_bound_redacted_and_removable():
+    """A download Cookie must never cross X identities or leak through account reads."""
+    from sqlalchemy import text
+
+    from app.database import async_session, engine
+    from app.models import User
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.services.remote_accounts import RemoteAccountService
+
+    marker = f"x_download_auth_{uuid4().hex}"
+
+    class XAdapter:
+        source = "x"
+
+        async def validate_account(self, credentials):
+            values = credentials.materialize()
+            remote_id = "99" if "wrong-account" in values.get("cookie", "") else "42"
+            return RemoteCandidateIdentity(
+                source="x",
+                source_creator_id=remote_id,
+                profile_url=f"https://x.com/user{remote_id}",
+                username=f"user{remote_id}",
+            )
+
+    try:
+        async with async_session() as db:
+            user = User(username=marker, password_hash="x", is_active=True)
+            db.add(user)
+            await db.flush()
+            service = RemoteAccountService(
+                db,
+                user.id,
+                vault=_vault(),
+                adapters=FakeRegistry(XAdapter()),
+            )
+            created = await service.create(
+                {
+                    "source": "x",
+                    "auth_method": "oauth2",
+                    "remote_user_id": "42",
+                    "scopes": [
+                        "tweet.read",
+                        "users.read",
+                        "follows.read",
+                        "list.read",
+                        "offline.access",
+                    ],
+                    "credentials": {
+                        "access_token": "oauth-access-secret",
+                        "refresh_token": "oauth-refresh-secret",
+                        "client_id": "client-id",
+                    },
+                }
+            )
+            saved = await service.set_download_auth(
+                created.id,
+                "auth_token=download-secret; ct0=csrf-secret",
+            )
+            assert saved.download_auth_status == "personal"
+            assert saved.download_auth_mask == {"cookie": "••••"}
+            assert "download_cookie" not in saved.credential_mask
+            assert "download-secret" not in saved.model_dump_json()
+
+            await service.clear_download_auth(created.id)
+            cleared = await service.get(created.id)
+            assert cleared.download_auth_status == "anonymous_only"
+            assert cleared.download_auth_mask == {}
+
+            with pytest.raises(ValueError, match="different remote account"):
+                await service.set_download_auth(
+                    created.id,
+                    "auth_token=wrong-account; ct0=csrf-secret",
+                )
+            await db.commit()
+            mismatch = await service.get(created.id)
+            assert mismatch.auth_status == "untested"
+            assert mismatch.download_auth_status == "unhealthy"
+            assert mismatch.download_auth_error_reason == "download_identity_mismatch"
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                text(
+                    "DELETE FROM remote_accounts WHERE user_id IN "
+                    "(SELECT id FROM users WHERE username=:marker)"
+                ),
+                {"marker": marker},
+            )
+            await db.execute(text("DELETE FROM users WHERE username=:marker"), {"marker": marker})
+            await db.commit()
+        await engine.dispose()
 
 
 def _headers(username: str) -> dict[str, str]:

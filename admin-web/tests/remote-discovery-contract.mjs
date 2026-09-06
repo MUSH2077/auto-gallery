@@ -67,6 +67,8 @@ assert.match(apiIndex, /candidates:\s*\(userId:\s*number,\s*filters\?/,
   "candidate keys must include the authenticated user ID");
 assert.match(apiIndex, /filters\?\.localMatch === undefined \? "all" : filters\.localMatch/,
   "matched and unmatched pages must have distinct private query-cache keys");
+assert.match(apiIndex, /filters\?\.evidenceStatus \|\| "all"/,
+  "evidence-status pages must have distinct private query-cache keys");
 assert.ok(fs.existsSync(privateCachePath), "private discovery cache must have an explicit cleanup boundary");
 assert.doesNotMatch(page, /useSearchParams/, "OAuth callback secrets must not enter reactive search-param state");
 assert.doesNotMatch(page, /oauthCallback\s*=\s*useMutation/, "OAuth callback secrets must not enter mutation variables");

@@ -371,8 +371,6 @@ services:
   worker-operations:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    # The late heavy-I/O race guard returns an interval Retry, so this worker
-    # also owns the queue-scoped scheduler for the operations registry.
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations 1 --with-scheduler
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
@@ -406,7 +404,6 @@ services:
       RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
       GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
       GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
-      WORKER_EXTRA_QUEUES: discovery
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
       DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
     volumes:
@@ -429,6 +426,67 @@ services:
     init: true
     stop_grace_period: 60s
     pids_limit: ${OPERATIONS_WORKER_PIDS_LIMIT:-64}
+    oom_score_adj: 500
+    logging: *default-logging
+
+  worker-discovery:
+    image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
+    pull_policy: never
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py discovery 1 --with-scheduler
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}
+      SECRET_KEY: ${SECRET_KEY}
+      REMOTE_CREDENTIAL_KEY: ${REMOTE_CREDENTIAL_KEY:-}
+      REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED: ${REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED:-false}
+      REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED: ${REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED:-false}
+      REMOTE_DISCOVERY_PIXIV_AUTO_IMPORT_ENABLED: ${REMOTE_DISCOVERY_PIXIV_AUTO_IMPORT_ENABLED:-false}
+      REMOTE_DISCOVERY_X_ENABLED: ${REMOTE_DISCOVERY_X_ENABLED:-false}
+      REMOTE_DISCOVERY_X_AUTO_IMPORT_ENABLED: ${REMOTE_DISCOVERY_X_AUTO_IMPORT_ENABLED:-false}
+      REMOTE_DISCOVERY_BILIBILI_ENABLED: ${REMOTE_DISCOVERY_BILIBILI_ENABLED:-false}
+      REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED: ${REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED:-false}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DOWNLOAD_ROOT: /downloads
+      LIBRARY_ROOT: /library
+      GALLERYDL_CONFIG_ROOT: /gallerydl-config
+      APP_CONFIG_ROOT: /app-config
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TIMEZONE:-UTC}
+      RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
+      RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
+      RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
+      RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
+      RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
+      RESOURCE_MEMORY_RESERVE_MAX_MB: ${RESOURCE_MEMORY_RESERVE_MAX_MB:-2560}
+      GITLLERY_PROJECTION_MODE: ${GITLLERY_PROJECTION_MODE:-shadow}
+      GITLLERY_BUILD_GENERATION: ${GITLLERY_BUILD_GENERATION:-segment-r1}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+    volumes:
+      - ${HOST_DOWNLOADS:-./data/downloads}:/downloads
+      - ${HOST_LIBRARY:-./data/library}:/library
+      - ${HOST_CONFIG_GALLERYDL:-./data/config/gallery-dl}:/gallerydl-config
+      - ${HOST_CONFIG_APP:-./data/config/app}:/app-config
+    healthcheck:
+      test: ["CMD", "python3", "scripts/check_worker_health.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    pids_limit: ${DISCOVERY_WORKER_PIDS_LIMIT:-64}
     oom_score_adj: 500
     logging: *default-logging
 

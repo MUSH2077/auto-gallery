@@ -143,7 +143,7 @@ EOF
 }
 
 build_candidate() {
-  for service in worker-download worker-import worker-operations scheduler; do
+  for service in worker-download worker-import worker-operations worker-discovery scheduler; do
     if [[ "$(docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery ps "$service" --format '{{.State}}' 2>/dev/null || true)" == "running" ]]; then
       echo "Refusing to learn an idle acceptance baseline while production $service is running" >&2
       exit 2
@@ -245,7 +245,7 @@ run_tests_inner() {
   python3 scripts/check-governance-contracts.py
   compose run --rm --no-deps backend python -m pytest -q
   compose run --rm --no-deps backend python scripts/export_api_contracts.py --check
-  compose up -d backend worker-download worker-import worker-operations scheduler admin-web provider-stub
+  compose up -d backend worker-download worker-import worker-operations worker-discovery scheduler admin-web provider-stub
   local attempt
   for attempt in $(seq 1 60); do
     if VERIFY_REQUIRE_NORMAL_PRESSURE=0 COMPOSE_ENV_FILE="$TEST_ENV" COMPOSE_PROJECT_NAME="$TEST_PROJECT" \
@@ -269,7 +269,7 @@ run_tests_inner() {
     -e PLAYWRIGHT_BASE_URL=http://admin-web:3000 \
     'mcr.microsoft.com/playwright:v1.62.1-noble' \
     npx playwright test --project=chromium --workers=1
-  compose stop -t 60 worker-download worker-import worker-operations scheduler
+  compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler
   backend_port="$(awk -F= '$1=="BACKEND_PORT" {print $2}' "$TEST_ENV")"
   admin_port="$(awk -F= '$1=="ADMIN_WEB_PORT" {print $2}' "$TEST_ENV")"
   CORE_SMOKE_DURATION_SECONDS="${CORE_SMOKE_DURATION_SECONDS:-1800}" \

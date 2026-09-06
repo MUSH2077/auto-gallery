@@ -660,6 +660,7 @@ async def test_x_oauth_collections_include_following_and_owned_lists():
         ("list:88", "Photographers"),
     ]
     assert adapter.required_oauth_scopes == (
+        "tweet.read",
         "users.read",
         "follows.read",
         "list.read",
@@ -710,6 +711,129 @@ async def test_x_oauth_following_is_normalized_and_paged_with_official_api():
     assert (method, url) == ("GET", "https://api.x.com/2/users/42/following")
     assert kwargs["params"]["pagination_token"] == "current-token"
     assert kwargs["headers"]["Authorization"] == "Bearer access"
+
+
+@pytest.mark.asyncio
+async def test_x_oauth_enrichment_reads_five_recent_media_posts():
+    """Dropping tweet.read enrichment would leave visual creators permanently under-classified."""
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(
+            200,
+            {
+                "data": [
+                    {
+                        "id": "1001",
+                        "created_at": "2026-09-01T10:00:00Z",
+                        "attachments": {"media_keys": ["3_1001"]},
+                    }
+                ],
+                "includes": {"media": [{"media_key": "3_1001", "type": "photo"}]},
+                "meta": {"result_count": 1},
+            },
+            {},
+        )
+    )
+    adapter = XRemoteDiscoveryAdapter(transport)
+
+    evidence = await adapter.enrich_candidate(
+        {"auth_method": "oauth2", "access_token": "access"},
+        RemoteCandidateIdentity(
+            source="x",
+            source_creator_id="900",
+            profile_url="https://x.com/x_artist",
+            display_name="X Artist",
+            username="x_artist",
+            metadata={"description": "Illustrator"},
+        ),
+    )
+
+    assert evidence.metadata["recent_visual_post"] is True
+    assert evidence.metadata["art_focused_bio"] is True
+    method, url, kwargs = transport.requests[0]
+    assert (method, url) == ("GET", "https://api.x.com/2/users/900/tweets")
+    assert kwargs["params"]["max_results"] == 5
+    assert kwargs["params"]["exclude"] == "retweets,replies"
+    assert kwargs["params"]["expansions"] == "attachments.media_keys"
+
+
+@pytest.mark.asyncio
+async def test_x_cookie_enrichment_uses_user_media_graphql_and_transaction_id():
+    """Using the following query for media evidence would silently parse the wrong timeline."""
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+    from app.remote_discovery.x import XRemoteDiscoveryAdapter
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(
+            200,
+            {
+                "data": {
+                    "user": {
+                        "result": {
+                            "timeline": {
+                                "timeline": {
+                                    "instructions": [
+                                        {
+                                            "type": "TimelineAddEntries",
+                                            "entries": [
+                                                {
+                                                    "entryId": "tweet-1001",
+                                                    "content": {
+                                                        "itemContent": {
+                                                            "tweet_results": {
+                                                                "result": {
+                                                                    "rest_id": "1001",
+                                                                    "legacy": {
+                                                                        "created_at": "Tue Sep 01 10:00:00 +0000 2026",
+                                                                        "extended_entities": {
+                                                                            "media": [{"type": "photo"}]
+                                                                        },
+                                                                    },
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            {},
+        )
+    )
+    transaction_ids = FixtureTransactionIdProvider()
+    adapter = XRemoteDiscoveryAdapter(
+        transport,
+        transaction_id_provider=transaction_ids,
+    )
+
+    evidence = await adapter.enrich_candidate(
+        {
+            "auth_method": "cookie",
+            "cookie": "auth_token=secret; ct0=csrf",
+            "remote_user_id": "42",
+        },
+        RemoteCandidateIdentity(
+            source="x",
+            source_creator_id="900",
+            profile_url="https://x.com/x_artist",
+            username="x_artist",
+            metadata={},
+        ),
+    )
+
+    assert evidence.metadata["recent_visual_post"] is True
+    assert transport.requests[0][1].endswith("/jCRhbOzdgOHp6u9H4g2tEg/UserMedia")
+    assert transaction_ids.calls[0][1] == transport.requests[0][1]
 
 
 @pytest.mark.asyncio
@@ -1054,6 +1178,61 @@ async def test_bilibili_group_following_is_normalized_and_paged():
     assert dict(page.next_cursor) == {"page": 3}
     assert transport.requests[0][1].endswith("/x/relation/tag")
     assert transport.requests[0][2]["params"]["tagid"] == "12"
+
+
+@pytest.mark.asyncio
+async def test_bilibili_enrichment_detects_recent_visual_opus():
+    """Failing to inspect Opus media would keep active Bilibili artists at low confidence."""
+    from app.remote_discovery.bilibili import BilibiliRemoteDiscoveryAdapter
+    from app.remote_discovery.contract import RemoteCandidateIdentity
+
+    response = _common().RemoteHTTPResponse
+    transport = FixtureTransport(
+        response(
+            200,
+            {
+                "code": 0,
+                "message": "0",
+                "data": {
+                    "items": [
+                        {
+                            "opus_id": "7788",
+                            "modules": [
+                                {"module_author": {"pub_ts": 1788256800}},
+                                {
+                                    "module_content": {
+                                        "paragraphs": [
+                                            {"pic": {"pics": [{"url": "https://i0.hdslb.com/a.jpg"}]}}
+                                        ]
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                    "has_more": False,
+                },
+            },
+            {},
+        )
+    )
+    adapter = BilibiliRemoteDiscoveryAdapter(transport)
+
+    evidence = await adapter.enrich_candidate(
+        {"SESSDATA": "sess"},
+        RemoteCandidateIdentity(
+            source="bilibili",
+            source_creator_id="765",
+            profile_url="https://space.bilibili.com/765/dynamic",
+            display_name="Bili Artist",
+            metadata={"sign": "自由插画师 https://www.pixiv.net/users/123"},
+        ),
+    )
+
+    assert evidence.metadata["art_focused_bio"] is True
+    assert evidence.metadata["recent_visual_post"] is True
+    assert evidence.metadata["supported_links"] == ("https://www.pixiv.net/users/123",)
+    assert transport.requests[0][1].endswith("/x/polymer/web-dynamic/v1/opus/feed/space")
+    assert transport.requests[0][2]["params"] == {"host_mid": "765", "page_size": 5}
 
 
 @pytest.mark.asyncio

@@ -324,6 +324,28 @@ async def reindex_search():
     )
 
 
+@router.post(
+    "/data/creator-aliases/backfill",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def backfill_creator_aliases_operation():
+    """Enqueue the resumable projection of stored creator identity evidence."""
+
+    from app.services.operations import enqueue_admin_operation
+
+    return await enqueue_admin_operation(
+        lock_key="library:creator-alias-backfill:active",
+        operation_type="admin-creator-alias-backfill",
+        title="Backfill creator identity aliases",
+        entity="creator-aliases",
+        func="app.jobs.admin_operations.run_creator_alias_backfill_operation",
+        options={},
+        job_timeout=7200,
+        queue_name="maintenance",
+    )
+
+
 # ── Library ──
 
 class RebuildLibraryRequest(BaseModel):

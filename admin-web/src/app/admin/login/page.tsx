@@ -6,7 +6,9 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { ThemeToggle, LangToggle } from "@/lib/theme";
 import SourceCodeLink from "@/components/SourceCodeLink";
+import ThreeUiArcCanvas from "@/components/ThreeUiArcCanvas";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { Eye, EyeOff, Images, ShieldCheck } from "lucide-react";
 
 export default function LoginPage() {
   const t = useT();
@@ -15,6 +17,7 @@ export default function LoginPage() {
   const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -42,64 +45,104 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-subtle px-4 py-10 text-fg dark:bg-canvas dark:text-fg">
-      <div className="absolute right-4 top-4 flex items-center gap-2">
+    <main className="relative min-h-screen overflow-hidden bg-bg px-4 py-16 text-fg sm:px-6 lg:flex lg:items-center lg:px-10 lg:py-10">
+      <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
         <LangToggle />
         <ThemeToggle />
       </div>
 
-      <section className="w-full max-w-sm">
-        <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-white text-lg font-semibold tracking-tight shadow-sm dark:border-border dark:bg-surface">
-            AG
-          </div>
-          <h1 className="text-2xl font-semibold tracking-normal">auto-gallery</h1>
-          <p className="mt-1 text-sm text-muted">{t("auth.admin_panel")}</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="card p-5">
-          <div className="space-y-4">
+      <div className="mx-auto grid w-full max-w-6xl overflow-hidden rounded-xl border border-border bg-surface shadow-lg lg:min-h-[660px] lg:grid-cols-[minmax(0,1.18fr)_minmax(380px,.82fr)]">
+        <section
+          data-testid="login-hero"
+          className="relative isolate min-h-60 overflow-hidden border-b border-border px-6 py-8 sm:min-h-72 sm:px-10 lg:min-h-0 lg:border-b-0 lg:border-r lg:px-12 lg:py-14"
+          aria-labelledby="login-hero-title"
+        >
+          <ThreeUiArcCanvas className="opacity-65 dark:opacity-45" density="calm" />
+          <div className="relative z-10 flex h-full max-w-xl flex-col justify-between gap-12">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-surface/90 text-accent shadow-sm">
+                <Images className="h-5 w-5" aria-hidden />
+              </div>
+              <span className="text-sm font-semibold tracking-wide">auto-gallery</span>
+            </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium" htmlFor="username">{t("auth.username")}</label>
-              <input
-                id="username"
-                type="text"
-                autoComplete="username"
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="input w-full"
-                placeholder={t("auth.username_placeholder")}
-              />
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{t("auth.admin_panel")}</p>
+              <h1 id="login-hero-title" className="mt-3 max-w-lg text-3xl font-semibold tracking-tight sm:text-4xl lg:text-5xl lg:leading-[1.08]">
+                {t("auth.hero_title")}
+              </h1>
+              <p className="mt-4 max-w-lg text-sm leading-6 text-muted sm:text-base sm:leading-7">{t("auth.hero_desc")}</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="flex items-center px-6 py-10 sm:px-10 lg:px-12" aria-labelledby="login-form-title">
+          <div className="mx-auto w-full max-w-sm">
+            <div className="mb-7">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-subtle text-accent">
+                <ShieldCheck className="h-5 w-5" aria-hidden />
+              </div>
+              <h2 id="login-form-title" className="text-2xl font-semibold tracking-tight">{t("auth.login")}</h2>
+              <p className="mt-2 text-sm text-muted">{t("auth.form_desc")}</p>
             </div>
 
-            <div>
-              <label className="mb-1.5 block text-sm font-medium" htmlFor="password">{t("auth.password")}</label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input w-full"
-                placeholder="••••••••"
-              />
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium" htmlFor="username">{t("auth.username")}</label>
+                <input
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="input w-full"
+                  placeholder={t("auth.username_placeholder")}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium" htmlFor="password">{t("auth.password")}</label>
+                <div className="relative">
+                  <input
+                    id="password"
+                    type={passwordVisible ? "text" : "password"}
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input w-full pr-12"
+                    placeholder="••••••••"
+                  />
+                  <button
+                    type="button"
+                    aria-controls="password"
+                    aria-pressed={passwordVisible}
+                    aria-label={passwordVisible ? t("auth.hide_password") : t("auth.show_password")}
+                    title={passwordVisible ? t("auth.hide_password") : t("auth.show_password")}
+                    onClick={() => setPasswordVisible((visible) => !visible)}
+                    className="absolute inset-y-0 right-0 inline-flex min-h-11 min-w-11 items-center justify-center rounded-r-md text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                  >
+                    {passwordVisible
+                      ? <EyeOff className="h-4 w-4" aria-hidden="true" />
+                      : <Eye className="h-4 w-4" aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" disabled={loading} className="btn-primary mt-2 w-full">
+                {loading ? t("auth.logging_in") : t("auth.login_button")}
+              </button>
+            </form>
+
+            <p className="mt-6 text-center text-xs text-muted">
+              {t("auth.secure_access", { version: "v0.1.0" })}
+            </p>
+            <div className="mt-1 flex justify-center">
+              <SourceCodeLink />
             </div>
-
-            <button type="submit" disabled={loading} className="btn-primary w-full">
-              {loading ? t("auth.logging_in") : t("auth.login_button")}
-            </button>
           </div>
-        </form>
-
-        <p className="mt-5 text-center text-xs text-muted">
-          {t("auth.secure_access", { version: "v0.1.0" })}
-        </p>
-        <div className="mt-1 flex justify-center">
-          <SourceCodeLink />
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

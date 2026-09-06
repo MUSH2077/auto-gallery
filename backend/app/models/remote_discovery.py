@@ -74,6 +74,10 @@ class RemoteAccount(TimestampMixin, Base):
             "credential_generation >= 0",
             name="ck_remote_accounts_credential_generation",
         ),
+        CheckConstraint(
+            "download_auth_status IN ('personal', 'anonymous_only', 'unhealthy', 'unavailable')",
+            name="ck_remote_accounts_download_auth_status",
+        ),
         Index(
             "ix_remote_accounts_next_scan_due",
             "next_scan_at",
@@ -107,6 +111,13 @@ class RemoteAccount(TimestampMixin, Base):
     auth_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     auth_error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_authenticated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    download_auth_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="unavailable", server_default=text("'unavailable'")
+    )
+    download_auth_error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_download_auth_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     scan_cursor: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     last_scan_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_scan_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -236,6 +247,10 @@ class DiscoveryCandidate(TimestampMixin, Base):
             "state IN ('pending', 'dismissed', 'imported', 'conflict')",
             name="ck_discovery_candidates_state",
         ),
+        CheckConstraint(
+            "evidence_status IN ('pending', 'ready', 'retrying', 'failed', 'not_required')",
+            name="ck_discovery_candidates_evidence_status",
+        ),
         Index("ix_discovery_candidates_account_state", "remote_account_id", "state", "id"),
     )
 
@@ -260,6 +275,16 @@ class DiscoveryCandidate(TimestampMixin, Base):
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_following: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    evidence_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default=text("'pending'")
+    )
+    evidence_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    evidence_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    evidence_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
     remote_account = relationship(
         "RemoteAccount",

@@ -20,7 +20,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { runPrivateDiscoveryRequest, startPrivateDiscoveryRequest } from "@/lib/remoteDiscoveryPrivateCache";
 import { DISCOVERY_SOURCES, providerLabel, safeDiscoveryError } from "./discoveryPresentation";
 
-type DialogKind = "connect" | "reconnect" | "settings" | null;
+type DialogKind = "connect" | "reconnect" | "settings" | "downloadAuth" | null;
 
 function validXAuthorizationUrl(value: string) {
   try {
@@ -396,6 +396,81 @@ function AccountSettingsDialog({
   );
 }
 
+function XDownloadAuthDialog({
+  account,
+  userId,
+  onPrivateAccessError,
+  onClose,
+}: {
+  account: RemoteAccountRead;
+  userId: number;
+  onPrivateAccessError: (error: unknown) => void;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const fieldId = useId();
+  const [cookie, setCookie] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const save = useMutation({
+    mutationKey: queryKeys.discovery.mutation(userId, "x-download-auth"),
+    mutationFn: async () => {
+      let secret = cookie;
+      setCookie("");
+      try {
+        return await runPrivateDiscoveryRequest(userId, (signal) => (
+          api.setXDownloadAuth(account.id, secret, signal)
+        ));
+      } finally {
+        secret = "";
+      }
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
+      toast.success(t("discovery.download_auth_saved"));
+      onClose();
+    },
+    onError: (error) => {
+      onPrivateAccessError(error);
+      setFeedback(safeDiscoveryError(t, error, t("discovery.download_auth_failed")));
+    },
+  });
+  const clear = useMutation({
+    mutationKey: queryKeys.discovery.mutation(userId, "x-download-auth-clear"),
+    mutationFn: () => runPrivateDiscoveryRequest(userId, (signal) => (
+      api.clearXDownloadAuth(account.id, signal)
+    )),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.remoteAccounts.all(userId) });
+      toast.success(t("discovery.download_auth_cleared"));
+      onClose();
+    },
+    onError: (error) => {
+      onPrivateAccessError(error);
+      setFeedback(safeDiscoveryError(t, error, t("discovery.download_auth_failed")));
+    },
+  });
+  const pending = save.isPending || clear.isPending;
+  return (
+    <Modal open onClose={onClose} title={t("discovery.download_auth_title")}>
+      <p className="text-sm leading-5 text-muted">{t("discovery.download_auth_help")}</p>
+      <label htmlFor={fieldId} className="mt-4 block text-sm font-medium text-fg">
+        <span className="mb-1.5 block">{t("discovery.x_cookie_label")}</span>
+        <input id={fieldId} className="input w-full font-mono" type="password" autoComplete="off" spellCheck={false} value={cookie} onChange={(event) => setCookie(event.target.value)} />
+      </label>
+      {feedback ? <p role="alert" className="mt-3 rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">{feedback}</p> : null}
+      <div className="mt-5 flex flex-wrap justify-between gap-2">
+        <button type="button" className="btn-ghost text-danger" disabled={pending || account.download_auth_status !== "personal"} onClick={() => clear.mutate()}>{t("discovery.download_auth_clear")}</button>
+        <div className="flex gap-2">
+          <button type="button" className="btn-ghost" disabled={pending} onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" className="btn-primary" disabled={pending || !cookie.trim()} onClick={() => save.mutate()}>{t("discovery.download_auth_save")}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function AccountCard({
   source,
   provider,
@@ -420,14 +495,24 @@ function AccountCard({
   const t = useT();
   const fmt = useI18nFormat();
   const label = providerLabel(t, source);
-  const experimental = source !== "x" && provider?.capabilities.supports_remote_discovery;
+  const experimental = (source === "bilibili" || account?.auth_method === "cookie")
+    && provider?.capabilities.supports_remote_discovery;
   const previewAvailable = provider?.capabilities.remote_discovery_rollout?.manual_preview === true;
   const autoImportAvailable = provider?.capabilities.remote_discovery_rollout?.auto_import === true;
   const activeScan = scan && ["enqueued", "running", "recovering", "waiting"].includes(scan.status);
-  const scanState = scan?.status === "complete"
+  const phase = typeof scan?.progress_data?.phase === "string" ? scan.progress_data.phase : null;
+  const scanState = scan?.status === "complete" && scan?.result_data?.status === "partial"
+    ? t("discovery.scan_partial")
+    : scan?.status === "complete"
     ? t("discovery.scan_complete")
     : scan?.status === "failed"
       ? t("discovery.scan_failed")
+      : phase === "cooldown"
+        ? t("discovery.scan_cooldown")
+        : phase === "enriching"
+          ? t("discovery.scan_enriching")
+          : phase === "snapshot"
+            ? t("discovery.scan_snapshot")
       : activeScan
         ? t("discovery.scan_in_progress")
         : null;
@@ -437,14 +522,23 @@ function AccountCard({
     : account?.auth_status
       ? t("discovery.auth_requires_attention")
       : t("discovery.auth_untested");
-  const progressCurrent = typeof scan?.progress_current === "number"
+  const evidenceCurrent = Number(scan?.progress_data?.evidence_completed || 0)
+    + Number(scan?.progress_data?.evidence_failed || 0);
+  const evidenceTotal = typeof scan?.progress_data?.evidence_total === "number"
+    ? scan.progress_data.evidence_total
+    : null;
+  const progressCurrent = phase === "enriching" || phase === "cooldown"
+    ? evidenceCurrent
+    : typeof scan?.progress_current === "number"
     ? scan.progress_current
     : typeof scan?.progress_data?.current === "number"
       ? scan.progress_data.current
       : typeof scan?.progress_data?.selector_index === "number"
         ? scan.progress_data.selector_index
         : null;
-  const progressTotal = typeof scan?.progress_total === "number"
+  const progressTotal = phase === "enriching" || phase === "cooldown"
+    ? evidenceTotal
+    : typeof scan?.progress_total === "number"
     ? scan.progress_total
     : typeof scan?.progress_data?.total === "number"
       ? scan.progress_data.total
@@ -494,6 +588,10 @@ function AccountCard({
           <dl className="mt-5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 border-y border-border py-3 text-xs">
             <dt className="text-muted">{t("discovery.credentials")}</dt>
             <dd className="text-right font-medium text-fg">{t("discovery.credentials_masked")}</dd>
+            {source === "x" ? <>
+              <dt className="text-muted">{t("discovery.download_auth")}</dt>
+              <dd className="text-right font-medium text-fg">{t(`discovery.download_auth_${account.download_auth_status}`)}</dd>
+            </> : null}
             <dt className="text-muted">{t("discovery.last_scan")}</dt>
             <dd className="text-right text-fg">{account.last_scan_completed_at ? fmt.relative(account.last_scan_completed_at) : t("discovery.never_scanned")}</dd>
             <dt className="text-muted">{t("discovery.next_scan")}</dt>
@@ -535,6 +633,9 @@ function AccountCard({
                       {t("discovery.scan_progress", { current: progressCurrent, total: progressTotal, candidates: candidatesSeen })}
                     </p>
                   ) : null}
+                  {phase === "cooldown" && scan?.progress_data?.next_retry_at ? (
+                    <p className="mt-1 text-[11px] font-normal text-muted">{t("discovery.scan_retry_at", { time: fmt.relative(scan.progress_data.next_retry_at) })}</p>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -554,6 +655,12 @@ function AccountCard({
             <button type="button" className="btn-ghost" disabled={!previewAvailable || pending} onClick={() => onDialog("reconnect")} aria-label={t("discovery.reconnect_provider", { provider: label })} title={t("discovery.reconnect_provider", { provider: label })}>
               <KeyRound aria-hidden="true" className="h-4 w-4" />
             </button>
+            {source === "x" && account.auth_method === "oauth2" ? (
+              <button type="button" className="btn-ghost" disabled={!previewAvailable || pending} onClick={() => onDialog("downloadAuth")}>
+                <KeyRound aria-hidden="true" className="h-4 w-4" />
+                {t("discovery.download_auth_manage")}
+              </button>
+            ) : null}
             <button type="button" className="btn-ghost text-danger" disabled={pending} onClick={onDelete} aria-label={t("discovery.delete_provider", { provider: label })} title={t("discovery.delete_provider", { provider: label })}>
               <Trash2 aria-hidden="true" className="h-4 w-4" />
             </button>
@@ -673,6 +780,14 @@ export default function RemoteAccountPanel({
           userId={userId}
           supportsCollectionSelectors={!!providersBySource.get(activeAccount.source)?.capabilities.supports_collection_selectors}
           autoImportAvailable={providersBySource.get(activeAccount.source)?.capabilities.remote_discovery_rollout?.auto_import === true}
+          onPrivateAccessError={onPrivateAccessError}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {activeAccount?.source === "x" && activeAccount.auth_method === "oauth2" && dialog?.kind === "downloadAuth" ? (
+        <XDownloadAuthDialog
+          account={activeAccount}
+          userId={userId}
           onPrivateAccessError={onPrivateAccessError}
           onClose={() => setDialog(null)}
         />

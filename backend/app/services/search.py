@@ -11,8 +11,9 @@ import asyncio
 import base64
 from collections import defaultdict
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timezone
+from difflib import SequenceMatcher
 import hashlib
 import json
 import logging
@@ -41,6 +42,7 @@ from app.models import (
     Asset,
     AssetSource,
     Creator,
+    CreatorAlias,
     DownloadJob,
     ImportJob,
     SourceCreator,
@@ -96,6 +98,7 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.creator_aliases import normalize_creator_alias
 from app.services.operations import inaccessible_admin_operation_types_for_permissions
 from app.services.source_search_identity import (
     ParsedSourceURL,
@@ -258,7 +261,17 @@ MEILI_TARGET_INDEX: dict[SearchTarget, str] = {
 
 INDEX_SETTINGS = {
     WORKS_INDEX: {
-        "searchableAttributes": ["title", "description", "creator_names", "tags", "source_work_ids"],
+        "searchableAttributes": [
+            "title",
+            "description",
+            "creator_names",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "tags",
+            "source_work_ids",
+        ],
         "filterableAttributes": [
             "id",
             "is_nsfw",
@@ -285,9 +298,27 @@ INDEX_SETTINGS = {
         # Without it, equal timestamps/titles can move between offset pages.
         "sortableAttributes": ["posted_ts", "created_ts", "updated_ts", "title", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_work_ids",
+            ],
+        },
     },
     CREATORS_INDEX: {
-        "searchableAttributes": ["name", "display_name", "description", "source_creator_ids"],
+        "searchableAttributes": [
+            "name",
+            "display_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "description",
+            "source_creator_ids",
+        ],
         "filterableAttributes": [
             "id",
             "is_active",
@@ -302,6 +333,15 @@ INDEX_SETTINGS = {
         ],
         "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_creator_ids",
+            ],
+        },
     },
     TAGS_INDEX: {
         "searchableAttributes": ["normalized_name", "category"],
@@ -313,6 +353,10 @@ INDEX_SETTINGS = {
         "searchableAttributes": [
             "name",
             "creator_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
             "source",
             "source_creator_id",
             "source_url",
@@ -334,9 +378,29 @@ INDEX_SETTINGS = {
         ],
         "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_creator_id",
+                "source_url",
+            ],
+        },
     },
     SUBSCRIPTIONS_INDEX: {
-        "searchableAttributes": ["name", "creator_name", "sources", "source_urls", "source_creator_ids"],
+        "searchableAttributes": [
+            "name",
+            "creator_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "sources",
+            "source_urls",
+            "source_creator_ids",
+        ],
         "filterableAttributes": [
             "id",
             "creator_id",
@@ -353,10 +417,20 @@ INDEX_SETTINGS = {
         ],
         "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_urls",
+                "source_creator_ids",
+            ],
+        },
     },
 }
 
-WORK_PROJECTION_VERSION = 3
+WORK_PROJECTION_VERSION = 4
 WORK_HYDRATION_QUERY_COUNT = 4
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
@@ -369,8 +443,12 @@ MEILI_DOCUMENT_PAYLOAD_BYTES = 4 * 1024 * 1024
 # turn a successful create/update into a failed rebuild and cleanup cycle.
 MEILI_WRITE_TIMEOUT_SECONDS = 120
 MEILI_TASK_TIMEOUT_MS = 120_000
-MEILI_INCREMENTAL_TASK_TIMEOUT_MS = 30_000
-MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 45_000
+# Incremental writes share the same NAS-backed LMDB as full rebuilds.  A
+# healthy 4 MiB document task can take more than two minutes while Meilisearch
+# compacts or batches adjacent tasks; abandoning it after 30 seconds only
+# resubmits duplicate work and prevents the durable outbox from converging.
+MEILI_INCREMENTAL_TASK_TIMEOUT_MS = 180_000
+MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 240_000
 INDEX_SETTINGS_CACHE_TTL = 30 * 24 * 60 * 60
 INDEX_WRITE_LOCK = "search:index-write"
 INDEX_WRITE_LOCK_TTL_SECONDS = 900
@@ -793,6 +871,12 @@ def _wait_for_task(
 def _settings_digest(config: dict[str, Any]) -> str:
     payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _meili_document_ids_filter(identities: Iterable[str]) -> str:
+    """Build a Meilisearch 1.12-compatible primary-key batch filter."""
+
+    return f"id IN {json.dumps(list(identities), ensure_ascii=False)}"
 
 
 def _index_revision(index: Any) -> str | None:
@@ -1334,6 +1418,141 @@ def _normalize_reference_name(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold()
 
 
+def _alias_projection_fields(aliases: Iterable[Any]) -> dict[str, list[Any]]:
+    name_kinds = {"name", "other_name"}
+    ordered = sorted(
+        aliases,
+        key=lambda item: (
+            not bool(item.is_current),
+            0 if item.kind == "name" else 1 if item.kind == "other_name" else 2,
+            str(item.source),
+            str(item.normalized_value),
+        ),
+    )
+    fields: dict[str, list[Any]] = {
+        "alias_names_current": [],
+        "alias_names_historical": [],
+        "alias_identities_current": [],
+        "alias_identities_historical": [],
+        "alias_records": [],
+    }
+    seen: dict[str, set[str]] = {
+        key: set() for key in fields if key != "alias_records"
+    }
+    for item in ordered:
+        family = "names" if item.kind in name_kinds else "identities"
+        suffix = "current" if item.is_current else "historical"
+        field = f"alias_{family}_{suffix}"
+        normalized = str(item.normalized_value)
+        if normalized not in seen[field]:
+            seen[field].add(normalized)
+            fields[field].append(str(item.value))
+        fields["alias_records"].append(
+            {
+                "value": str(item.value),
+                "normalized_value": normalized,
+                "source": str(item.source),
+                "kind": str(item.kind),
+                "is_current": bool(item.is_current),
+            }
+        )
+    return fields
+
+
+def _merge_alias_projection_fields(
+    projections: Iterable[dict[str, list[Any]]],
+) -> dict[str, list[Any]]:
+    merged = _alias_projection_fields(())
+    seen = {key: set() for key in merged if key != "alias_records"}
+    for projection in projections:
+        for key in seen:
+            for value in projection.get(key, []):
+                normalized = _normalize_reference_name(str(value))
+                if normalized not in seen[key]:
+                    seen[key].add(normalized)
+                    merged[key].append(value)
+        merged["alias_records"].extend(projection.get("alias_records", []))
+    return merged
+
+
+_ALIAS_PROJECTION_FIELDS = (
+    "alias_names_current",
+    "alias_names_historical",
+    "alias_identities_current",
+    "alias_identities_historical",
+    "alias_records",
+)
+
+
+def _strip_alias_projection_fields(hit: dict[str, Any]) -> None:
+    for field in _ALIAS_PROJECTION_FIELDS:
+        hit.pop(field, None)
+
+
+def _decorate_alias_hit(hit: dict[str, Any], query_text: str) -> None:
+    records = list(hit.get("alias_records") or [])
+    query_values = {
+        normalize_creator_alias(query_text, kind="name"),
+        normalize_creator_alias(query_text, kind="account"),
+    } - {""}
+    primary_values = {
+        normalize_creator_alias(str(hit.get(field) or ""), kind="name")
+        for field in ("name", "display_name", "creator_name")
+    } - {""}
+    if query_values & primary_values:
+        _strip_alias_projection_fields(hit)
+        return
+
+    candidates: list[tuple[int, bool, int, dict[str, Any]]] = []
+    for position, record in enumerate(records):
+        normalized = str(record.get("normalized_value") or "")
+        if not normalized:
+            continue
+        if normalized in query_values:
+            match_rank = 0
+            match_type = "exact"
+        elif any(
+            normalized.startswith(value) or value.startswith(normalized)
+            for value in query_values
+            if len(value) >= 2
+        ):
+            match_rank = 1
+            match_type = "prefix"
+        elif record.get("kind") in {"name", "other_name"} and max(
+            (
+                SequenceMatcher(None, value, normalized).ratio()
+                for value in query_values
+            ),
+            default=0.0,
+        ) >= 0.72:
+            match_rank = 2
+            match_type = "fuzzy"
+        else:
+            continue
+        candidates.append(
+            (
+                match_rank,
+                not bool(record.get("is_current")),
+                position,
+                {**record, "match_type": match_type},
+            )
+        )
+    if candidates:
+        selected = min(candidates, key=lambda item: item[:3])[3]
+        hit["matched_identity"] = {
+            key: selected.get(key)
+            for key in (
+                "creator_id",
+                "value",
+                "source",
+                "kind",
+                "is_current",
+                "match_type",
+            )
+        }
+    _strip_alias_projection_fields(hit)
+
+
 def _reference_name_expressions(name_expression: Any) -> tuple[Any, Any, Any]:
     """Return normalized name, fixed anchor key, and sortable anchor rank."""
 
@@ -1466,6 +1685,10 @@ def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     return order
 
 
+def _matching_strategy(target: SearchTarget) -> str:
+    return "last" if target == "works" else "all"
+
+
 def _search_hits(result: Any) -> tuple[list[dict], int]:
     return (
         list(getattr(result, "hits", []) or []),
@@ -1517,6 +1740,116 @@ class SearchService:
             raise SearchPermissionError(query.targets[0])
         return allowed
 
+    async def _exact_creator_aliases_for_value(
+        self,
+        value: str,
+    ) -> list[CreatorAlias]:
+        normalized_values = tuple(
+            {
+                normalize_creator_alias(value, kind="name"),
+                normalize_creator_alias(value, kind="account"),
+            }
+            - {""}
+        )
+        if not normalized_values:
+            return []
+        kind_rank = case(
+            (CreatorAlias.kind == "account", 0),
+            (CreatorAlias.kind == "url_handle", 1),
+            (CreatorAlias.kind == "source_id", 2),
+            (CreatorAlias.kind == "url", 3),
+            (CreatorAlias.kind == "name", 4),
+            else_=5,
+        )
+        return list(
+            (
+                await self.db.execute(
+                    select(CreatorAlias)
+                    .where(CreatorAlias.normalized_value.in_(normalized_values))
+                    .order_by(
+                        CreatorAlias.is_current.desc(),
+                        kind_rank,
+                        CreatorAlias.last_seen_at.desc(),
+                        CreatorAlias.creator_id,
+                    )
+                )
+            ).scalars()
+        )
+
+    async def _exact_creator_aliases(
+        self,
+        query: SearchQuery,
+    ) -> list[CreatorAlias]:
+        if len(query.terms) != 1:
+            return []
+        return await self._exact_creator_aliases_for_value(query.terms[0].value)
+
+    @staticmethod
+    def _parse_exact_alias_query(value: str, scope: SearchScope) -> SearchQuery:
+        """Represent one stored identity as a literal term.
+
+        Stored source identities may legitimately contain query-language
+        punctuation (for example Danbooru aliases with parentheses).  Exact
+        PostgreSQL resolution happens before query-language parsing, so once
+        an entire input value is known to be an identity it must not be
+        reinterpreted as grouping, a qualifier, or multiple natural-language
+        terms.
+        """
+
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        parsed = parse_search_query(f'"{escaped}"', scope)
+        return replace(parsed, raw=value)
+
+    @staticmethod
+    def _alias_filtered_query(
+        query: SearchQuery,
+        creator_ids: Iterable[UUID],
+    ) -> SearchQuery:
+        qualifier_tokens = tuple(query.qualifiers)
+        synthetic = tuple(
+            SearchQualifier(
+                key="creator",
+                value=str(creator_id),
+                negated=False,
+                quoted=False,
+                start=0,
+                end=0,
+            )
+            for creator_id in dict.fromkeys(creator_ids)
+        )
+        return replace(query, tokens=(*qualifier_tokens, *synthetic))
+
+    @staticmethod
+    def _attach_exact_alias_matches(
+        target: SearchTarget,
+        group: dict,
+        aliases: Iterable[CreatorAlias],
+    ) -> None:
+        by_creator: dict[str, CreatorAlias] = {}
+        for alias in aliases:
+            by_creator.setdefault(str(alias.creator_id), alias)
+        for item in group.get("items", []):
+            if target == "creators":
+                creator_ids = (str(item.get("id") or ""),)
+            elif target == "works":
+                creator_ids = tuple(str(value) for value in item.get("creator_ids") or ())
+            else:
+                creator_ids = (str(item.get("creator_id") or ""),)
+            alias = next(
+                (by_creator[value] for value in creator_ids if value in by_creator),
+                None,
+            )
+            if alias is None:
+                continue
+            item["matched_identity"] = {
+                "creator_id": str(alias.creator_id),
+                "value": alias.value,
+                "source": alias.source,
+                "kind": alias.kind,
+                "is_current": bool(alias.is_current),
+                "match_type": "exact",
+            }
+
     async def _resolve_creator(self, value: str, token: SearchQualifier) -> tuple[str, list[str]]:
         try:
             creator_id = UUID(value)
@@ -1527,14 +1860,28 @@ class SearchService:
             if row:
                 return str(row.id), []
 
-        normalized = value.strip().lower()
+        normalized = normalize_creator_alias(value, kind="name")
+        account_normalized = normalize_creator_alias(value, kind="account")
         rows = await self.db.execute(
             select(Creator.id, Creator.name, Creator.display_name)
             .outerjoin(SourceCreator, SourceCreator.creator_id == Creator.id)
             .where(or_(
-                func.lower(Creator.name) == normalized,
-                func.lower(func.coalesce(Creator.display_name, "")) == normalized,
+                func.lower(func.normalize(Creator.name, literal_column("NFKC"))) == normalized,
+                func.lower(
+                    func.normalize(
+                        func.coalesce(Creator.display_name, ""),
+                        literal_column("NFKC"),
+                    )
+                )
+                == normalized,
                 func.lower(SourceCreator.source_creator_id) == normalized,
+                Creator.id.in_(
+                    select(CreatorAlias.creator_id).where(
+                        CreatorAlias.normalized_value.in_(
+                            tuple({normalized, account_normalized})
+                        )
+                    )
+                ),
             ))
             .distinct()
             .limit(6)
@@ -1670,6 +2017,25 @@ class SearchService:
         repository_ids: set[UUID] = set()
         subscription_ids: set[UUID] = set()
         work_ids: set[UUID] = set()
+
+        alias_values = {
+            normalize_creator_alias(parsed.normalized_url, kind="url"),
+        }
+        if hint:
+            alias_values.add(normalize_creator_alias(hint, kind="account"))
+        creator_ids.update(
+            (
+                await self.db.execute(
+                    select(CreatorAlias.creator_id)
+                    .where(
+                        CreatorAlias.source == parsed.source,
+                        CreatorAlias.normalized_value.in_(tuple(alias_values)),
+                        CreatorAlias.kind.in_({"url", "url_handle", "account"}),
+                    )
+                    .distinct()
+                )
+            ).scalars()
+        )
 
         source_creator_matches = [
             _normalized_url_expression(SourceCreator.source_url) == normalized,
@@ -2018,7 +2384,17 @@ class SearchService:
                 "repositories": "repositories",
                 "subscriptions": "subscriptions",
             }.get(kind, scope)  # type: ignore[assignment]
-        parsed = parse_search_query(query, scope)
+        # A complete stored identity is authoritative and must be resolved
+        # before the search language interprets punctuation or whitespace.
+        # This also keeps aliases such as ``circle_name_(old)`` searchable
+        # without weakening the parser for ordinary free-text expressions.
+        raw_exact_aliases = await self._exact_creator_aliases_for_value(query)
+        url_input = query.strip().casefold().startswith(("http://", "https://"))
+        parsed = (
+            self._parse_exact_alias_query(query, scope)
+            if raw_exact_aliases and not url_input
+            else parse_search_query(query, scope)
+        )
         parsed_at = monotonic_time.perf_counter()
         permission_set = permissions or {"library", "subscriptions", "tasks", "curation"}
         targets = self._allowed_targets(parsed, permission_set)
@@ -2035,6 +2411,75 @@ class SearchService:
             "index_status": "not_needed",
             "index_lag": None,
         }
+
+        exact_aliases = raw_exact_aliases or await self._exact_creator_aliases(parsed)
+        exact_alias_targets = tuple(
+            target
+            for target in targets
+            if target in {"works", "creators", "repositories", "subscriptions"}
+        )
+        exact_alias_search = bool(exact_aliases and exact_alias_targets)
+        if exact_alias_search:
+            alias_query = self._alias_filtered_query(
+                parsed,
+                (alias.creator_id for alias in exact_aliases),
+            )
+            alias_creator_count = len({alias.creator_id for alias in exact_aliases})
+            alias_rank: dict[str, int] = {}
+            for position, alias in enumerate(exact_aliases):
+                alias_rank.setdefault(str(alias.creator_id), position)
+            for target in exact_alias_targets:
+                target_offset = offset if len(exact_alias_targets) == 1 else 0
+                target_limit = (
+                    min(limit, 10) if len(exact_alias_targets) > 1 else limit
+                )
+                # A unique identity does not need client-side creator ranking.
+                # Page it at the requested offset so prolific creators remain
+                # searchable beyond the first 1,000 related works.  Ambiguous
+                # aliases still fetch a bounded candidate window so current
+                # identities can be ranked ahead of historical ones.
+                direct_page = alias_creator_count == 1 or bool(parsed.values("sort"))
+                fetch_offset = target_offset if direct_page else 0
+                fetch_limit = (
+                    target_limit
+                    if direct_page
+                    else min(
+                        1000,
+                        max(target_offset + target_limit, alias_creator_count * 10),
+                    )
+                )
+                if target == "works":
+                    group = await self._search_works_db(
+                        alias_query,
+                        resolved,
+                        fetch_offset,
+                        fetch_limit,
+                        force_sfw=force_sfw,
+                        cursor=cursor,
+                    )
+                else:
+                    group = await self._search_identity_reference_db(
+                        target,
+                        alias_query,
+                        resolved,
+                        fetch_offset,
+                        fetch_limit,
+                        allowed_subscription_ids=allowed_subscription_ids,
+                        allowed_repository_ids=allowed_repository_ids,
+                        user_id=user_id,
+                    )
+                self._attach_exact_alias_matches(target, group, exact_aliases)
+                if not direct_page:
+                    group["items"].sort(
+                        key=lambda item: alias_rank.get(
+                            str((item.get("matched_identity") or {}).get("creator_id") or ""),
+                            len(alias_rank),
+                        )
+                    )
+                    group["items"] = group["items"][
+                        target_offset:target_offset + target_limit
+                    ]
+                groups[target] = group
 
         # Works list queries with no free text use PostgreSQL.  This keeps the
         # high-traffic gallery independent from the search index while still
@@ -2104,7 +2549,29 @@ class SearchService:
                     user_id=user_id,
                 )
 
-        meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
+        # Meilisearch 1.12 supports attribute-level typo controls but not the
+        # later ``disableOnNumbers`` setting.  A single numeric reference term
+        # is therefore authoritative in PostgreSQL: an exact stored identity
+        # was handled above, while an unknown number must not degrade into a
+        # one-digit typo match against another creator identity.
+        numeric_identity_literal = (
+            not parsed.qualifiers
+            and len(parsed.terms) == 1
+            and unicodedata.normalize(
+                "NFKC",
+                parsed.terms[0].value.strip(),
+            ).isdecimal()
+        )
+        if numeric_identity_literal and not exact_alias_search:
+            for target in targets:
+                if target in {"creators", "repositories", "subscriptions"}:
+                    groups.setdefault(target, {"total": 0, "items": []})
+
+        meili_targets = (
+            []
+            if exact_alias_search
+            else [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
+        )
         if cursor and meili_targets:
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
@@ -2142,6 +2609,13 @@ class SearchService:
                 limit,
                 user_id=user_id,
             )
+
+        # Alias projection fields exist only to drive Meilisearch relevance
+        # and explain which identity matched.  Never expose the raw projection
+        # arrays through the public search response.
+        for group in groups.values():
+            for item in group.get("items", []):
+                _strip_alias_projection_fields(item)
 
         first_target = targets[0]
         total = groups.get(first_target, {}).get("total", 0) if len(targets) == 1 else groups.get("works", {}).get("total", 0)
@@ -2207,6 +2681,7 @@ class SearchService:
             search_kwargs: dict[str, Any] = {
                 "offset": offset if len(targets) == 1 else 0,
                 "limit": target_limit,
+                "matching_strategy": _matching_strategy(target),
             }
             filter_expression = _compile_meili_filter(
                 query,
@@ -2303,6 +2778,8 @@ class SearchService:
             output: dict[str, dict] = {}
             for (target, _index_uid, _kwargs), result in zip(prepared, results):
                 hits, total = _search_hits(result)
+                for hit in hits:
+                    _decorate_alias_hit(hit, text)
                 if target == "works" and query.scope == "works":
                     for hit in hits:
                         # Preserve the public document shape without loading the
@@ -3004,6 +3481,40 @@ class SearchService:
         self._repository_maps = (by_identity, by_url)
         return self._repository_maps
 
+    async def _creator_alias_projections(
+        self,
+        creator_ids: Iterable[UUID],
+    ) -> dict[str, dict[str, list[Any]]]:
+        identities = tuple(dict.fromkeys(creator_ids))
+        if not identities:
+            return {}
+        rows = list(
+            (
+                await self.db.execute(
+                    select(CreatorAlias)
+                    .where(CreatorAlias.creator_id.in_(identities))
+                    .order_by(
+                        CreatorAlias.creator_id,
+                        CreatorAlias.is_current.desc(),
+                        CreatorAlias.kind,
+                        CreatorAlias.normalized_value,
+                    )
+                )
+            ).scalars()
+        )
+        grouped: dict[str, list[CreatorAlias]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.creator_id)].append(row)
+        projections: dict[str, dict[str, list[Any]]] = {}
+        for creator_id, aliases in grouped.items():
+            projection = _alias_projection_fields(aliases)
+            projection["alias_records"] = [
+                {**record, "creator_id": creator_id}
+                for record in projection["alias_records"]
+            ]
+            projections[creator_id] = projection
+        return projections
+
     async def _build_work_documents(self, work_ids: Iterable[UUID] | None = None) -> list[dict]:
         if work_ids is None:
             raise ValueError(
@@ -3127,6 +3638,13 @@ class SearchService:
             if source_url:
                 repository_ids[key].update(repository_by_url.get(_normalize_url(source_url), []))
 
+        all_creator_ids = {
+            UUID(creator_id)
+            for values in creator_ids.values()
+            for creator_id in values
+        }
+        alias_by_creator = await self._creator_alias_projections(all_creator_ids)
+
         asset_ids: dict[str, list[str]] = defaultdict(list)
         asset_id_sets: dict[str, set[str]] = defaultdict(set)
         asset_mimes: dict[str, set[str]] = defaultdict(set)
@@ -3159,6 +3677,10 @@ class SearchService:
             ordered_creator_names = sorted(creator_names[key])
             ordered_creator_ids = sorted(creator_ids[key])
             ordered_sources = sorted(sources[key])
+            aliases = _merge_alias_projection_fields(
+                alias_by_creator.get(creator_id, _alias_projection_fields(()))
+                for creator_id in ordered_creator_ids
+            )
             documents.append(_with_projection_hash({
                 "id": key,
                 "title": work.title or "",
@@ -3167,6 +3689,7 @@ class SearchService:
                 "creator_names": ordered_creator_names,
                 "creator_id": ordered_creator_ids[0] if ordered_creator_ids else "",
                 "creator_ids": ordered_creator_ids,
+                **aliases,
                 "repository_ids": sorted(repository_ids[key]),
                 "source": ordered_sources[0] if ordered_sources else "unknown",
                 "sources": ordered_sources,
@@ -3212,6 +3735,7 @@ class SearchService:
             creator_statement.order_by(Creator.created_at.desc())
         )).scalars().all()
         selected_ids = [creator.id for creator in rows]
+        alias_by_creator = await self._creator_alias_projections(selected_ids)
         source_rows = (await self.db.execute(
             select(SourceCreator.creator_id, SourceCreator.source, SourceCreator.source_creator_id)
             .where(
@@ -3282,6 +3806,7 @@ class SearchService:
             "sources": sorted(sources[str(creator.id)]),
             "source_creator_ids": sorted(source_ids[str(creator.id)]),
             "source_creator_keys": sorted(source_creator_keys[str(creator.id)]),
+            **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
             "created_at": _iso(creator.created_at),
             "updated_at": _iso(creator.updated_at),
             "created_ts": _timestamp(creator.created_at),
@@ -3360,6 +3885,9 @@ class SearchService:
         rows = (await self.db.execute(
             statement.order_by(SubscriptionSource.created_at.desc())
         )).all()
+        alias_by_creator = await self._creator_alias_projections(
+            creator.id for _repo, _subscription, creator in rows
+        )
         return [{
             "id": str(repo.id),
             "name": f"{repo.source}/{repo.source_creator_id}" if repo.source_creator_id else (repo.source_url or str(repo.id)),
@@ -3373,6 +3901,7 @@ class SearchService:
             "source_url": repo.source_url,
             "creator_id": str(creator.id),
             "creator_name": creator.display_name or creator.name,
+            **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
             "subscription_id": str(subscription.id),
             "subscription_name": subscription.name,
             "is_enabled": bool(repo.is_enabled),
@@ -3406,6 +3935,9 @@ class SearchService:
         rows = (await self.db.execute(
             subscription_statement.order_by(Subscription.created_at.desc())
         )).all()
+        alias_by_creator = await self._creator_alias_projections(
+            creator.id for _subscription, creator in rows
+        )
         selected_ids = [subscription.id for subscription, _creator in rows]
         source_rows = (await self.db.execute(
             select(SubscriptionSource)
@@ -3519,6 +4051,7 @@ class SearchService:
                 ),
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
+                **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
                 "is_active": bool(subscription.is_active),
                 "sync_enabled": bool(subscription.sync_enabled),
                 "sync_interval_hours": subscription.sync_interval_hours,
@@ -6078,7 +6611,7 @@ class SearchService:
             def _read_hashes(batch_ids: list[str]) -> dict[str, tuple[Any, Any]]:
                 client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
                 page = client.index(WORKS_INDEX).get_documents(
-                    ids=batch_ids,
+                    filter=_meili_document_ids_filter(batch_ids),
                     limit=len(batch_ids),
                     fields=["id", "projection_version", "projection_hash"],
                 )

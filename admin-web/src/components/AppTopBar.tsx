@@ -180,16 +180,16 @@ export default function AppTopBar({
           {showOperations && (
             <Link
               href={adminRoutes.jobs}
-              className={`relative flex h-11 min-w-11 items-center justify-center rounded-md px-2 transition-colors hover:bg-subtle ${operations.data?.summary.attention ? "text-danger" : "text-success"}`}
-              aria-label={operations.data?.summary.attention
+              className={`relative flex h-11 min-w-11 items-center justify-center rounded-md px-2 transition-colors hover:bg-subtle ${operations.data?.summary?.attention ? "text-danger" : "text-success"}`}
+              aria-label={operations.data?.summary?.attention
                 ? t("operations.topbar_attention", { count: operations.data.summary.attention })
                 : t("operations.topbar_healthy")}
-              title={operations.data?.summary.attention
+              title={operations.data?.summary?.attention
                 ? t("operations.topbar_attention", { count: operations.data.summary.attention })
                 : t("operations.topbar_healthy")}
             >
-              {operations.data?.summary.attention ? <Activity className="h-[18px] w-[18px]" aria-hidden /> : <CircleCheck className="h-[18px] w-[18px]" aria-hidden />}
-              {!!operations.data?.summary.attention && (
+              {operations.data?.summary?.attention ? <Activity className="h-[18px] w-[18px]" aria-hidden /> : <CircleCheck className="h-[18px] w-[18px]" aria-hidden />}
+              {!!operations.data?.summary?.attention && (
                 <span className="absolute right-0.5 top-0.5 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-semibold leading-4 text-white">
                   {operations.data.summary.attention > 99 ? "99+" : operations.data.summary.attention}
                 </span>

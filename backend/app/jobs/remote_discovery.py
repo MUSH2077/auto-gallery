@@ -42,7 +42,17 @@ def run_remote_discovery_scan(task_id: str):
 
     task_uuid = UUID(task_id)
     try:
-        return asyncio.run(_run(task_uuid))
+        task = asyncio.run(_run(task_uuid))
+        if task.status == "waiting":
+            from rq import Retry
+
+            progress = dict(task.progress_data or {})
+            delay = max(1, int(progress.get("retry_after_seconds") or 1))
+            # Evidence segmentation may require many short resumptions for a
+            # large following list. The persistent TaskRun remains the source
+            # of truth; RQ only supplies delayed wakeups.
+            return Retry(max=1_000_000, interval=delay)
+        return task
     except Exception:
         retries_left = 0
         try:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import random
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from inspect import isawaitable
@@ -24,8 +26,13 @@ from app.models import (
     UserSubscription,
 )
 from app.remote_discovery.classifier import IdentityMatchSignals, classify_identity
-from app.remote_discovery.common import RemoteReauthenticationRequired
-from app.remote_discovery.contract import RemoteCandidateIdentity
+from app.remote_discovery.common import (
+    MalformedRemoteResponse,
+    RemoteRateLimited,
+    RemoteReauthenticationRequired,
+)
+from app.remote_discovery.contract import RemoteCandidateEvidence, RemoteCandidateIdentity
+from app.remote_discovery.evidence import EVIDENCE_VERSION
 from app.remote_discovery.registry import DiscoveryAdapterRegistry, registry
 from app.services.remote_accounts import (
     RemoteAccountService,
@@ -49,6 +56,13 @@ from app.services.tasks import NONTERMINAL_STATUSES, TaskService
 
 DISCOVERY_QUEUE = "discovery"
 DISCOVERY_JOB_TIMEOUT = 3600
+DISCOVERY_SEGMENT_SECONDS = 300
+DISCOVERY_EVIDENCE_BATCH = {
+    ("x", "oauth2"): 25,
+    ("x", "cookie"): 10,
+    ("bilibili", "sessdata"): 10,
+}
+DISCOVERY_DEFAULT_COOLDOWN = {"x": 900, "bilibili": 300}
 
 
 def discovery_rq_job_id(task_id: UUID, attempt: int) -> str:
@@ -320,6 +334,13 @@ class RemoteDiscoveryService:
             "scan_started_at": _utc(started_at).isoformat(),
             "credential_generation": credential_generation,
             "remote_identity": remote_identity,
+            "evidence_after_id": None,
+            "evidence_total": 0,
+            "evidence_completed": 0,
+            "evidence_failed": 0,
+            "evidence_pending": 0,
+            "auto_imported_count": 0,
+            "protocol_error_streak": 0,
         }
         task = await TaskService(self.db).create_task(
             kind="discovery",
@@ -407,7 +428,7 @@ class RemoteDiscoveryService:
 
         metadata = _json_value(identity.metadata)
         links = [identity.profile_url] if identity.profile_url else []
-        for key in ("supported_links", "links", "profile_links"):
+        for key in ("supported_links", "expanded_links", "links", "profile_links"):
             value = metadata.get(key)
             if isinstance(value, list):
                 links.extend(str(item) for item in value if item)
@@ -496,6 +517,14 @@ class RemoteDiscoveryService:
             "identity_conflict": classification.identity_conflict,
         }
         if candidate is None:
+            if account.source == "pixiv":
+                evidence_status = "ready"
+            elif state == "conflict":
+                evidence_status = "not_required"
+            elif classification.confidence == "high":
+                evidence_status = "ready"
+            else:
+                evidence_status = "pending"
             candidate = DiscoveryCandidate(
                 remote_account_id=account.id,
                 user_id=account.user_id,
@@ -508,6 +537,9 @@ class RemoteDiscoveryService:
                 state=state,
                 last_seen_at=seen_at,
                 is_following=True,
+                evidence_status=evidence_status,
+                evidence_checked_at=(seen_at if evidence_status != "pending" else None),
+                evidence_version=EVIDENCE_VERSION,
             )
             self.db.add(candidate)
         else:
@@ -520,8 +552,178 @@ class RemoteDiscoveryService:
             candidate.is_following = True
             if candidate.state not in {"dismissed", "imported"}:
                 candidate.state = state
+                if account.source == "pixiv":
+                    candidate.evidence_status = "ready"
+                elif state == "conflict":
+                    candidate.evidence_status = "not_required"
+                elif classification.confidence == "high":
+                    candidate.evidence_status = "ready"
+                else:
+                    candidate.evidence_status = "pending"
+                candidate.evidence_checked_at = (
+                    seen_at if candidate.evidence_status != "pending" else None
+                )
+                candidate.evidence_error_code = None
+                candidate.evidence_version = EVIDENCE_VERSION
+            else:
+                candidate.evidence_status = "not_required"
+                candidate.evidence_error_code = None
+                candidate.evidence_version = EVIDENCE_VERSION
         await self.db.flush()
         return candidate
+
+    @staticmethod
+    def _candidate_identity(
+        account: RemoteAccount,
+        candidate: DiscoveryCandidate,
+    ) -> RemoteCandidateIdentity:
+        metadata = dict(candidate.candidate_metadata or {})
+        username = metadata.pop("username", None)
+        return RemoteCandidateIdentity(
+            source=account.source,
+            source_creator_id=candidate.source_creator_id,
+            profile_url=candidate.remote_url,
+            display_name=candidate.display_name,
+            username=str(username) if username else None,
+            metadata=metadata,
+        )
+
+    async def _apply_candidate_evidence(
+        self,
+        account: RemoteAccount,
+        candidate: DiscoveryCandidate,
+        evidence: RemoteCandidateEvidence,
+        *,
+        checked_at: datetime,
+    ) -> DiscoveryCandidate:
+        if (
+            evidence.source != account.source
+            or evidence.source_creator_id != candidate.source_creator_id
+        ):
+            raise MalformedRemoteResponse(
+                "provider returned evidence for a different remote identity"
+            )
+        identity = RemoteCandidateIdentity(
+            source=account.source,
+            source_creator_id=candidate.source_creator_id,
+            profile_url=candidate.remote_url,
+            display_name=candidate.display_name,
+            username=(candidate.candidate_metadata or {}).get("username"),
+            metadata=evidence.metadata,
+        )
+        updated = await self.upsert_candidate(
+            account,
+            identity,
+            seen_at=candidate.last_seen_at or checked_at,
+        )
+        updated.evidence_status = "ready"
+        updated.evidence_checked_at = checked_at
+        updated.evidence_error_code = None
+        updated.evidence_version = EVIDENCE_VERSION
+        return updated
+
+    async def _evidence_candidates(
+        self,
+        account: RemoteAccount,
+        *,
+        started_at: datetime,
+        after_id: UUID | None,
+        limit: int,
+    ) -> list[DiscoveryCandidate]:
+        filters = [
+            DiscoveryCandidate.remote_account_id == account.id,
+            DiscoveryCandidate.is_following.is_(True),
+            DiscoveryCandidate.state == "pending",
+            DiscoveryCandidate.evidence_status.in_({"pending", "retrying"}),
+            DiscoveryCandidate.last_seen_at >= _utc(started_at),
+        ]
+        if after_id is not None:
+            filters.append(DiscoveryCandidate.id > after_id)
+        return list(
+            (
+                await self.db.execute(
+                    select(DiscoveryCandidate)
+                    .where(*filters)
+                    .order_by(DiscoveryCandidate.id)
+                    .limit(limit)
+                    .with_for_update(of=DiscoveryCandidate, skip_locked=True)
+                )
+            ).scalars()
+        )
+
+    async def _pending_evidence_count(
+        self,
+        account_id: UUID,
+        *,
+        started_at: datetime,
+    ) -> int:
+        return int(
+            (
+                await self.db.execute(
+                    select(func.count(DiscoveryCandidate.id)).where(
+                        DiscoveryCandidate.remote_account_id == account_id,
+                        DiscoveryCandidate.is_following.is_(True),
+                        DiscoveryCandidate.state == "pending",
+                        DiscoveryCandidate.evidence_status.in_({"pending", "retrying"}),
+                        DiscoveryCandidate.last_seen_at >= _utc(started_at),
+                    )
+                )
+            ).scalar_one()
+        )
+
+    @staticmethod
+    def _cooldown_seconds(source: str, requested: int | None) -> int:
+        fallback = DISCOVERY_DEFAULT_COOLDOWN.get(source, 300)
+        return max(60, min(int(requested or fallback), 3600))
+
+    @staticmethod
+    async def _enrich_batch(
+        adapter,
+        credentials,
+        identities: list[RemoteCandidateIdentity],
+        *,
+        concurrency: int,
+    ) -> list[RemoteCandidateEvidence | Exception]:
+        """Keep provider fan-out bounded while preserving stable cursor order."""
+
+        if getattr(adapter, "source", None) == "bilibili":
+            results: list[RemoteCandidateEvidence | Exception] = []
+            protocol_streak = 0
+            for index, identity in enumerate(identities):
+                if index:
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
+                try:
+                    result = await adapter.enrich_candidate(credentials, identity)
+                except Exception as exc:
+                    result = exc
+                results.append(result)
+                protocol_streak = protocol_streak + 1 if isinstance(result, MalformedRemoteResponse) else 0
+                if protocol_streak >= 3:
+                    break
+            return results
+
+        async def enrich(identity: RemoteCandidateIdentity):
+            try:
+                return await adapter.enrich_candidate(credentials, identity)
+            except Exception as exc:  # normalized by the scan state machine
+                return exc
+
+        results: list[RemoteCandidateEvidence | Exception] = []
+        protocol_streak = 0
+        chunk_size = max(1, concurrency)
+        for offset in range(0, len(identities), chunk_size):
+            chunk = identities[offset : offset + chunk_size]
+            chunk_results = await asyncio.gather(*(enrich(identity) for identity in chunk))
+            results.extend(chunk_results)
+            for result in chunk_results:
+                protocol_streak = (
+                    protocol_streak + 1
+                    if isinstance(result, MalformedRemoteResponse)
+                    else 0
+                )
+            if protocol_streak >= 3:
+                break
+        return results
 
     async def run_scan(self, task_id: UUID) -> TaskRun:
         queued_source = (
@@ -557,7 +759,7 @@ class RemoteDiscoveryService:
                 .where(
                     TaskRun.id == task_id,
                     TaskRun.operation_type == "remote-discovery-scan",
-                    TaskRun.status.in_({"enqueued", "recovering"}),
+                    TaskRun.status.in_({"enqueued", "recovering", "waiting"}),
                 )
                 .values(
                     status="running",
@@ -663,24 +865,37 @@ class RemoteDiscoveryService:
             }
             account.scan_cursor = None
         selectors = account.collection_selectors or [{}]
+        resume_phase = str(progress.get("phase") or "queued")
+        if resume_phase == "cooldown":
+            resume_phase = "enriching"
+            progress["phase"] = "enriching"
         selector_index = int(progress.get("selector_index") or 0)
         cursor = progress.get("cursor")
         started_at = datetime.fromisoformat(str(progress["scan_started_at"]))
         pages_completed = int(progress.get("pages_completed") or 0)
         seen_count = int(progress.get("candidates_seen") or 0)
+        claimed_from_status = task.status
         await task_service.add_event(
             task,
             "status_changed",
-            from_status="enqueued",
+            from_status=claimed_from_status,
             to_status="running",
             message="Discovery scan worker claimed task",
         )
         await task_service.update_task(
             task,
-            progress={**progress, "phase": "fetching"},
+            progress={
+                **progress,
+                "phase": "enriching" if resume_phase == "enriching" else "snapshot",
+                "next_retry_at": None,
+                "retry_after_seconds": None,
+            },
             resource_state="running",
         )
         await self.db.commit()
+        segment_deadline = (
+            asyncio.get_running_loop().time() + DISCOVERY_SEGMENT_SECONDS
+        )
 
         try:
             # Credential-key resolution is part of execution, not admission.
@@ -692,34 +907,34 @@ class RemoteDiscoveryService:
                 vault=self.vault or configured_credential_vault(),
                 adapters=self.adapters,
             )
-            while selector_index < len(selectors):
+            async def advance_generation(new_generation: int) -> None:
+                nonlocal pinned_generation, progress
+
+                if self._remote_identity(account) != pinned_identity:
+                    raise RemoteCredentialGenerationChanged(
+                        "remote account identity changed during OAuth refresh"
+                    )
+                pinned_generation = new_generation
+                progress = {
+                    **progress,
+                    "credential_generation": new_generation,
+                    "remote_identity": pinned_identity,
+                }
+                task_for_pin = await self.db.get(TaskRun, task_id)
+                task_for_pin.progress_data = progress
+                if isinstance(account.scan_cursor, dict):
+                    account.scan_cursor = {
+                        **account.scan_cursor,
+                        "credential_generation": new_generation,
+                        "remote_identity": pinned_identity,
+                    }
+
+            while resume_phase != "enriching" and selector_index < len(selectors):
                 account = await self._locked_pinned_account(
                     account.id,
                     generation=pinned_generation,
                     remote_identity=pinned_identity,
                 )
-
-                async def advance_generation(new_generation: int) -> None:
-                    nonlocal pinned_generation, progress
-
-                    if self._remote_identity(account) != pinned_identity:
-                        raise RemoteCredentialGenerationChanged(
-                            "remote account identity changed during OAuth refresh"
-                        )
-                    pinned_generation = new_generation
-                    progress = {
-                        **progress,
-                        "credential_generation": new_generation,
-                        "remote_identity": pinned_identity,
-                    }
-                    task_for_pin = await self.db.get(TaskRun, task_id)
-                    task_for_pin.progress_data = progress
-                    if isinstance(account.scan_cursor, dict):
-                        account.scan_cursor = {
-                            **account.scan_cursor,
-                            "credential_generation": new_generation,
-                            "remote_identity": pinned_identity,
-                        }
 
                 credentials = account_service.credentials_for_adapter(
                     account,
@@ -760,7 +975,8 @@ class RemoteDiscoveryService:
                     "remote_identity": pinned_identity,
                 }
                 progress = {
-                    "phase": "fetching" if selector_index < len(selectors) else "finalizing",
+                    **progress,
+                    "phase": "snapshot",
                     "selector_index": selector_index,
                     "selector_count": len(selectors),
                     "cursor": cursor,
@@ -776,40 +992,295 @@ class RemoteDiscoveryService:
                 await task_service.update_task(task, progress=progress)
                 # Candidate snapshots and their cursor are one page transaction.
                 await self.db.commit()
+                if (
+                    selector_index < len(selectors)
+                    and asyncio.get_running_loop().time() >= segment_deadline
+                ):
+                    task = await self.db.get(TaskRun, task_id)
+                    progress.update(
+                        {
+                            "phase": "snapshot",
+                            "next_retry_at": None,
+                            "retry_after_seconds": 1,
+                        }
+                    )
+                    await task_service.update_task(
+                        task,
+                        status="waiting",
+                        progress=progress,
+                        resource_state="waiting",
+                    )
+                    await self.db.commit()
+                    return task
+
+            if resume_phase != "enriching":
+                account = await self._locked_pinned_account(
+                    account.id,
+                    generation=pinned_generation,
+                    remote_identity=pinned_identity,
+                )
+                await self.db.execute(
+                    update(DiscoveryCandidate)
+                    .where(
+                        DiscoveryCandidate.remote_account_id == account.id,
+                        or_(
+                            DiscoveryCandidate.last_seen_at.is_(None),
+                            DiscoveryCandidate.last_seen_at < _utc(started_at),
+                        ),
+                    )
+                    .values(is_following=False)
+                )
+                snapshot_completed_at = _now()
+                account.last_scan_completed_at = snapshot_completed_at
+                account.next_scan_at = snapshot_completed_at + timedelta(
+                    hours=account.scan_interval_hours
+                )
+                pending = await self._pending_evidence_count(
+                    account.id,
+                    started_at=started_at,
+                )
+                progress = {
+                    **progress,
+                    "phase": "enriching",
+                    "cursor": None,
+                    "evidence_after_id": None,
+                    "evidence_total": pending,
+                    "evidence_completed": 0,
+                    "evidence_failed": 0,
+                    "evidence_pending": pending,
+                    "auto_imported_count": int(progress.get("auto_imported_count") or 0),
+                    "protocol_error_streak": 0,
+                }
+                account.scan_cursor = {
+                    **progress,
+                    "started_at": _utc(started_at).isoformat(),
+                }
+                task = await self.db.get(TaskRun, task_id)
+                await task_service.update_task(task, progress=progress)
+                await self.db.commit()
 
             account = await self._locked_pinned_account(
                 account.id,
                 generation=pinned_generation,
                 remote_identity=pinned_identity,
             )
-            await self.db.execute(
-                update(DiscoveryCandidate)
-                .where(
-                    DiscoveryCandidate.remote_account_id == account.id,
-                    or_(
-                        DiscoveryCandidate.last_seen_at.is_(None),
-                        DiscoveryCandidate.last_seen_at < _utc(started_at),
+            batch_limit = DISCOVERY_EVIDENCE_BATCH.get(
+                (account.source, account.auth_method or ""),
+                25,
+            )
+            raw_after_id = progress.get("evidence_after_id")
+            after_id = UUID(str(raw_after_id)) if raw_after_id else None
+            candidates = await self._evidence_candidates(
+                account,
+                started_at=started_at,
+                after_id=after_id,
+                limit=batch_limit,
+            )
+            if candidates:
+                for candidate in candidates:
+                    candidate.evidence_status = "retrying"
+                    candidate.evidence_error_code = None
+                await self.db.commit()
+                account = await self._locked_pinned_account(
+                    account.id,
+                    generation=pinned_generation,
+                    remote_identity=pinned_identity,
+                )
+                credentials = account_service.credentials_for_adapter(
+                    account,
+                    expected_generation=pinned_generation,
+                    on_generation_advanced=advance_generation,
+                )
+                identities = [self._candidate_identity(account, item) for item in candidates]
+                await self.db.commit()
+                adapter = self.adapters.get(account.source)
+                results = await self._enrich_batch(
+                    adapter,
+                    credentials,
+                    identities,
+                    concurrency=(
+                        2
+                        if account.source == "x" and account.auth_method == "oauth2"
+                        else 1
                     ),
                 )
-                .values(is_following=False)
+
+                account = await self._locked_pinned_account(
+                    account.id,
+                    generation=pinned_generation,
+                    remote_identity=pinned_identity,
+                )
+                checked_at = _now()
+                cooldown: RemoteRateLimited | None = None
+                protocol_streak = int(progress.get("protocol_error_streak") or 0)
+                evidence_completed = int(progress.get("evidence_completed") or 0)
+                evidence_failed = int(progress.get("evidence_failed") or 0)
+                processed_candidates = candidates[: len(results)]
+                for candidate, result in zip(processed_candidates, results, strict=True):
+                    stored = await self.db.get(DiscoveryCandidate, candidate.id)
+                    if isinstance(result, RemoteReauthenticationRequired):
+                        raise result
+                    if isinstance(result, RemoteRateLimited):
+                        stored.evidence_status = "retrying"
+                        cooldown = cooldown or result
+                        continue
+                    if isinstance(result, MalformedRemoteResponse):
+                        stored.evidence_status = "failed"
+                        stored.evidence_checked_at = checked_at
+                        stored.evidence_error_code = "provider_protocol_changed"
+                        stored.evidence_version = EVIDENCE_VERSION
+                        evidence_failed += 1
+                        protocol_streak += 1
+                        continue
+                    if isinstance(result, Exception):
+                        raise result
+                    await self._apply_candidate_evidence(
+                        account,
+                        stored,
+                        result,
+                        checked_at=checked_at,
+                    )
+                    evidence_completed += 1
+                    protocol_streak = 0
+                progress = {
+                    **progress,
+                    "evidence_after_id": str(processed_candidates[-1].id),
+                    "evidence_completed": evidence_completed,
+                    "evidence_failed": evidence_failed,
+                    "protocol_error_streak": protocol_streak,
+                }
+                if account.auto_import_enabled:
+                    remaining_limit = max(
+                        0,
+                        account.auto_import_limit
+                        - int(progress.get("auto_imported_count") or 0),
+                    )
+                    if remaining_limit:
+                        imported = await self.auto_import(account, limit=remaining_limit)
+                        progress["auto_imported_count"] = int(
+                            progress.get("auto_imported_count") or 0
+                        ) + len(imported)
+                pending = await self._pending_evidence_count(
+                    account.id,
+                    started_at=started_at,
+                )
+                progress["evidence_pending"] = pending
+                task = await self.db.get(TaskRun, task_id)
+                if cooldown is not None:
+                    # Retry the same ordered slice. Rows already promoted to
+                    # ready/failed are filtered out, while the rate-limited
+                    # row remains reachable instead of being skipped forever.
+                    progress["evidence_after_id"] = str(after_id) if after_id else None
+                    delay = self._cooldown_seconds(
+                        account.source,
+                        cooldown.retry_after_seconds,
+                    )
+                    retry_at = _now() + timedelta(seconds=delay)
+                    progress.update(
+                        {
+                            "phase": "cooldown",
+                            "next_retry_at": retry_at.isoformat(),
+                            "retry_after_seconds": delay,
+                        }
+                    )
+                    account.scan_cursor = {
+                        **progress,
+                        "started_at": _utc(started_at).isoformat(),
+                    }
+                    await task_service.update_task(
+                        task,
+                        status="waiting",
+                        progress=progress,
+                        resource_state="waiting",
+                    )
+                    await self.db.commit()
+                    return task
+                if protocol_streak >= 3:
+                    progress.update(
+                        {
+                            "phase": "complete",
+                            "partial": True,
+                            "next_retry_at": None,
+                            "retry_after_seconds": None,
+                        }
+                    )
+                    account.scan_cursor = None
+                    await task_service.update_task(
+                        task,
+                        status="complete",
+                        progress=progress,
+                        result={
+                            "status": "partial",
+                            "candidates_seen": seen_count,
+                            "pages_completed": pages_completed,
+                            "evidence_completed": evidence_completed,
+                            "evidence_failed": evidence_failed,
+                            "evidence_pending": pending,
+                            "auto_imported_count": int(progress.get("auto_imported_count") or 0),
+                        },
+                    )
+                    await self.db.commit()
+                    return task
+
+            pending = await self._pending_evidence_count(
+                account.id,
+                started_at=started_at,
             )
-            account.scan_cursor = None
-            account.last_scan_completed_at = _now()
-            account.next_scan_at = account.last_scan_completed_at + timedelta(
-                hours=account.scan_interval_hours
-            )
-            auto_imported = []
-            if account.auto_import_enabled:
-                auto_imported = await self.auto_import(account)
             task = await self.db.get(TaskRun, task_id)
+            if pending:
+                progress.update(
+                    {
+                        "phase": "enriching",
+                        "evidence_pending": pending,
+                        "next_retry_at": None,
+                        "retry_after_seconds": 1,
+                    }
+                )
+                account.scan_cursor = {
+                    **progress,
+                    "started_at": _utc(started_at).isoformat(),
+                }
+                await task_service.update_task(
+                    task,
+                    status="waiting",
+                    progress=progress,
+                    resource_state="waiting",
+                )
+                await self.db.commit()
+                return task
+
+            if account.auto_import_enabled:
+                remaining_limit = max(
+                    0,
+                    account.auto_import_limit - int(progress.get("auto_imported_count") or 0),
+                )
+                if remaining_limit:
+                    imported = await self.auto_import(account, limit=remaining_limit)
+                    progress["auto_imported_count"] = int(
+                        progress.get("auto_imported_count") or 0
+                    ) + len(imported)
+            account.scan_cursor = None
+            progress.update(
+                {
+                    "phase": "complete",
+                    "cursor": None,
+                    "evidence_pending": 0,
+                    "next_retry_at": None,
+                    "retry_after_seconds": None,
+                }
+            )
             await task_service.update_task(
                 task,
                 status="complete",
-                progress={**progress, "phase": "complete", "cursor": None},
+                progress=progress,
                 result={
+                    "status": "complete",
                     "candidates_seen": seen_count,
                     "pages_completed": pages_completed,
-                    "auto_imported_count": len(auto_imported),
+                    "evidence_completed": int(progress.get("evidence_completed") or 0),
+                    "evidence_failed": int(progress.get("evidence_failed") or 0),
+                    "evidence_pending": 0,
+                    "auto_imported_count": int(progress.get("auto_imported_count") or 0),
                 },
             )
             await self.db.commit()
@@ -857,6 +1328,7 @@ class RemoteDiscoveryService:
         confidence: str | None = None,
         is_following: bool | None = None,
         local_match: bool | None = None,
+        evidence_status: str | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[int, list[DiscoveryCandidate]]:
@@ -869,6 +1341,8 @@ class RemoteDiscoveryService:
             filters.append(DiscoveryCandidate.confidence == confidence)
         if is_following is not None:
             filters.append(DiscoveryCandidate.is_following.is_(is_following))
+        if evidence_status:
+            filters.append(DiscoveryCandidate.evidence_status == evidence_status)
         if local_match is not None:
             local_creator_ids = DiscoveryCandidate.candidate_metadata["local_creator_ids"]
             has_local_creator_ids = case(
@@ -1040,8 +1514,19 @@ class RemoteDiscoveryService:
                 raw_metadata=candidate.candidate_metadata,
             )
             self.db.add(source_creator)
-        elif source_creator.creator_id is None:
-            source_creator.creator_id = creator.id
+        else:
+            if source_creator.creator_id is None:
+                source_creator.creator_id = creator.id
+            source_creator.source_url = candidate.remote_url or source_creator.source_url
+            source_creator.display_name = candidate.display_name or source_creator.display_name
+            source_creator.raw_metadata = {
+                **(
+                    source_creator.raw_metadata
+                    if isinstance(source_creator.raw_metadata, dict)
+                    else {}
+                ),
+                **dict(candidate.candidate_metadata or {}),
+            }
         await self.db.flush()
         subscription = (
             await self.db.execute(
@@ -1111,6 +1596,15 @@ class RemoteDiscoveryService:
             locked_remote_account=account,
             is_enabled=None,
         )
+        if (
+            account.source == "x"
+            and (candidate.candidate_metadata or {}).get("protected") is True
+            and account.download_auth_status != "personal"
+        ):
+            binding.auth_healthy = False
+            binding.auth_status = "unhealthy"
+            binding.auth_error_reason = "download_cookie_required"
+            binding.last_auth_checked_at = _now()
         candidate.state = "imported"
         candidate.subscription_id = subscription.id
         candidate.user_subscription_id = member.id
@@ -1118,6 +1612,13 @@ class RemoteDiscoveryService:
         candidate.dismissed_at = None
         await recompute_subscription_membership_cache(self.db, subscription.id)
         await self.db.flush()
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        await backfill_creator_alias_batch(
+            self.db,
+            (creator.id,),
+            request_projection=True,
+        )
         return candidate
 
     async def resolve_candidate(
@@ -1179,14 +1680,36 @@ class RemoteDiscoveryService:
             )
         else:
             source_creator.creator_id = creator_id
+            source_creator.source_url = candidate.remote_url or source_creator.source_url
+            source_creator.display_name = candidate.display_name or source_creator.display_name
+            source_creator.raw_metadata = {
+                **(
+                    source_creator.raw_metadata
+                    if isinstance(source_creator.raw_metadata, dict)
+                    else {}
+                ),
+                **metadata,
+            }
         candidate.candidate_metadata = metadata
         candidate.state = "pending"
         candidate.confidence = "high"
         candidate.confidence_reasons = ["manually_resolved_identity"]
         await self.db.flush()
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        await backfill_creator_alias_batch(
+            self.db,
+            (creator_id,),
+            request_projection=True,
+        )
         return candidate
 
-    async def auto_import(self, account: RemoteAccount) -> list[DiscoveryCandidate]:
+    async def auto_import(
+        self,
+        account: RemoteAccount,
+        *,
+        limit: int | None = None,
+    ) -> list[DiscoveryCandidate]:
         if not auto_import_enabled(account.source):
             return []
         allowed = {
@@ -1201,10 +1724,11 @@ class RemoteDiscoveryService:
                     DiscoveryCandidate.remote_account_id == account.id,
                     DiscoveryCandidate.state == "pending",
                     DiscoveryCandidate.is_following.is_(True),
+                    DiscoveryCandidate.evidence_status.in_({"ready", "not_required"}),
                     DiscoveryCandidate.confidence.in_(allowed),
                 )
                 .order_by(DiscoveryCandidate.created_at, DiscoveryCandidate.id)
-                .limit(account.auto_import_limit)
+                .limit(max(0, min(account.auto_import_limit, limit or account.auto_import_limit)))
             )
         ).scalars().all()
         imported = []

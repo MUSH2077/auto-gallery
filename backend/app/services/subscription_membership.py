@@ -439,6 +439,15 @@ class SubscriptionMembershipService:
         )
         await recompute_subscription_membership_cache(self.db, subscription_id)
         await self.db.flush()
+        subscription = await self.db.get(Subscription, subscription_id)
+        if subscription is not None:
+            from app.services.creator_aliases import backfill_creator_alias_batch
+
+            await backfill_creator_alias_batch(
+                self.db,
+                (subscription.creator_id,),
+                request_projection=True,
+            )
         return next(item for item in await self.list_sources(subscription_id) if item.id == source.id)
 
     async def ensure_source_binding(

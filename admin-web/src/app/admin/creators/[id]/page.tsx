@@ -41,8 +41,8 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const fmt = useI18nFormat();
   const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
   return (
-    <Link href={`/admin/works/${work.id}`} className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
-      <div className="aspect-[4/3] bg-subtle">
+    <Link href={`/admin/works/${work.id}`} className="media-motion-card group overflow-hidden rounded-md border border-border bg-white hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
+      <div className="media-motion-visual aspect-[4/3] overflow-hidden bg-subtle">
         {assetId ? (
           <WorkMediaThumbnail assetId={assetId} hasVideo={work.has_video} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" />
         ) : (

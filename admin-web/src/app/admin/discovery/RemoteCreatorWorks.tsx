@@ -127,10 +127,10 @@ function RemoteWorkCard({
   const blockedCandidate = candidate.state === "dismissed" || candidate.state === "conflict";
   return (
     <article
-      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+      className="media-motion-card overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
       style={{ contentVisibility: "auto", containIntrinsicSize: "360px" }}
     >
-      <div className="relative aspect-[4/3] overflow-hidden bg-subtle">
+      <div className="media-motion-visual relative aspect-[4/3] overflow-hidden bg-subtle">
         {work.thumbnail_url ? (
           <button
             type="button"
@@ -147,7 +147,7 @@ function RemoteWorkCard({
               loading="lazy"
               decoding="async"
               className={`h-full w-full object-cover transition duration-300 ${
-                sensitive && !revealed ? "scale-110 blur-xl" : "hover:scale-[1.03]"
+                sensitive && !revealed ? "scale-110 blur-xl" : ""
               }`}
             />
           </button>

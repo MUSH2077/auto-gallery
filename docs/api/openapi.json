@@ -1173,6 +1173,74 @@
         "title": "ConflictDecision",
         "type": "object"
       },
+      "CreatorAliasRead": {
+        "properties": {
+          "creator_id": {
+            "format": "uuid",
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "normalized_value": {
+            "title": "Normalized Value",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "creator_id",
+          "value",
+          "normalized_value",
+          "source",
+          "kind",
+          "is_current",
+          "first_seen_at",
+          "last_seen_at"
+        ],
+        "title": "CreatorAliasRead",
+        "type": "object"
+      },
       "CreatorCreate": {
         "properties": {
           "description": {
@@ -1545,6 +1613,16 @@
               }
             ],
             "title": "Last Synced At"
+          },
+          "matched_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchedCreatorIdentityRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "name": {
             "title": "Name",
@@ -2779,6 +2857,47 @@
               }
             ],
             "title": "Display Name"
+          },
+          "evidence_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Checked At"
+          },
+          "evidence_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Error Code"
+          },
+          "evidence_status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "ready",
+              "retrying",
+              "failed",
+              "not_required"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
+          "evidence_version": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Evidence Version",
+            "type": "integer"
           },
           "id": {
             "format": "uuid",
@@ -4539,6 +4658,50 @@
         "title": "LoginRequest",
         "type": "object"
       },
+      "MatchedCreatorIdentityRead": {
+        "properties": {
+          "creator_id": {
+            "format": "uuid",
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "match_type": {
+            "enum": [
+              "exact",
+              "prefix",
+              "fuzzy"
+            ],
+            "title": "Match Type",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "creator_id",
+          "value",
+          "source",
+          "kind",
+          "is_current",
+          "match_type"
+        ],
+        "title": "MatchedCreatorIdentityRead",
+        "type": "object"
+      },
       "MeOut": {
         "properties": {
           "display_name": {
@@ -5539,7 +5702,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 4,
+            "maxItems": 5,
             "title": "Scopes",
             "type": "array"
           },
@@ -5637,6 +5800,35 @@
             "title": "Credential Mask",
             "type": "object"
           },
+          "download_auth_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Auth Error Reason"
+          },
+          "download_auth_mask": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Download Auth Mask",
+            "type": "object"
+          },
+          "download_auth_status": {
+            "default": "unavailable",
+            "enum": [
+              "personal",
+              "anonymous_only",
+              "unhealthy",
+              "unavailable"
+            ],
+            "title": "Download Auth Status",
+            "type": "string"
+          },
           "has_credentials": {
             "default": false,
             "title": "Has Credentials",
@@ -5662,6 +5854,18 @@
               }
             ],
             "title": "Last Authenticated At"
+          },
+          "last_download_auth_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Download Auth Checked At"
           },
           "last_scan_completed_at": {
             "anyOf": [
@@ -5909,7 +6113,7 @@
                 "items": {
                   "type": "string"
                 },
-                "maxItems": 4,
+                "maxItems": 5,
                 "type": "array"
               },
               {
@@ -8133,6 +8337,71 @@
         "title": "SearchComposeRequest",
         "type": "object"
       },
+      "SearchGroupRead": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResultRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "SearchGroupRead",
+        "type": "object"
+      },
+      "SearchResponseRead": {
+        "additionalProperties": true,
+        "properties": {
+          "canonical_query": {
+            "default": "",
+            "title": "Canonical Query",
+            "type": "string"
+          },
+          "groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SearchGroupRead"
+            },
+            "title": "Groups",
+            "type": "object"
+          },
+          "query": {
+            "default": "",
+            "title": "Query",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "SearchResponseRead",
+        "type": "object"
+      },
+      "SearchResultRead": {
+        "additionalProperties": true,
+        "properties": {
+          "matched_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchedCreatorIdentityRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SearchResultRead",
+        "type": "object"
+      },
       "SourceCapabilitiesRead": {
         "properties": {
           "can_download": {
@@ -9034,6 +9303,16 @@
               }
             ],
             "title": "Latest Job Status"
+          },
+          "matched_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchedCreatorIdentityRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "membership_id": {
             "anyOf": [
@@ -11209,6 +11488,21 @@
         "title": "WorkRead",
         "type": "object"
       },
+      "XDownloadAuthUpdate": {
+        "properties": {
+          "cookie": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "title": "Cookie",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cookie"
+        ],
+        "title": "XDownloadAuthUpdate",
+        "type": "object"
+      },
       "XOAuthCallbackRequest": {
         "properties": {
           "code": {
@@ -13142,6 +13436,71 @@
           "system"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/admin/data/creator-aliases/backfill": {
+      "post": {
+        "description": "Enqueue the resumable projection of stored creator identity evidence.",
+        "operationId": "post_api_v1_admin_data_creator_aliases_backfill",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Backfill Creator Aliases Operation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/dedup/cases": {
@@ -16694,6 +17053,97 @@
         ]
       }
     },
+    "/api/v1/creators/{creator_id}/aliases": {
+      "get": {
+        "description": "List the structured current and historical identities of a creator.",
+        "operationId": "get_api_v1_creators_creator_id_aliases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "creator_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Creator Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_history",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include History",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CreatorAliasRead"
+                  },
+                  "title": "Response Get Api V1 Creators Creator Id Aliases",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Creator Aliases",
+        "tags": [
+          "creators"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
+        ]
+      }
+    },
     "/api/v1/creators/{creator_id}/curation": {
       "post": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -19520,6 +19970,22 @@
                 }
               ],
               "title": "Local Match"
+            }
+          },
+          {
+            "in": "query",
+            "name": "evidence_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Evidence Status"
             }
           },
           {
@@ -24255,6 +24721,161 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/remote-accounts/{account_id}/download-auth": {
+      "delete": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "delete_api_v1_remote_accounts_account_id_download_auth",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Remote Account Download Auth",
+        "tags": [
+          "remote-accounts"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      },
+      "put": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "put_api_v1_remote_accounts_account_id_download_auth",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/XDownloadAuthUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteAccountRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Remote Account Download Auth",
+        "tags": [
+          "remote-accounts"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "subscriptions"
+        ]
+      }
+    },
     "/api/v1/remote-accounts/{account_id}/test": {
       "post": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -25205,7 +25826,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SearchResponseRead"
                 }
               }
             },
@@ -25262,8 +25883,7 @@
           "subscriptions",
           "tasks",
           "upload"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/search/assist": {

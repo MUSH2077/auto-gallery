@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -48,3 +49,34 @@ class ReferenceNameAnchorsRead(BaseModel):
     direction: Literal["asc", "desc"]
     total: int = Field(ge=0)
     items: list[ReferenceNameAnchorRead]
+
+
+class MatchedCreatorIdentityRead(BaseModel):
+    creator_id: UUID
+    value: str
+    source: str
+    kind: str
+    is_current: bool
+    match_type: Literal["exact", "prefix", "fuzzy"]
+
+
+class SearchResultRead(BaseModel):
+    matched_identity: MatchedCreatorIdentityRead | None = None
+
+    model_config = {"extra": "allow"}
+
+
+class SearchGroupRead(BaseModel):
+    total: int = 0
+    items: list[SearchResultRead] = Field(default_factory=list)
+
+    model_config = {"extra": "allow"}
+
+
+class SearchResponseRead(BaseModel):
+    query: str = ""
+    canonical_query: str = ""
+    groups: dict[str, SearchGroupRead] = Field(default_factory=dict)
+    total: int = 0
+
+    model_config = {"extra": "allow"}

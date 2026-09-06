@@ -1979,6 +1979,39 @@ test("works page shows aggregate preview progress and refreshes it", async ({ pa
   await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
 });
 
+test("works route keeps the native page scrollbar and document scrolling", async ({ page }) => {
+  const works = Array.from({ length: 30 }, (_, index) => ({
+    id: `scroll-work-${index}`,
+    title: `Scroll work ${index}`,
+    description: null,
+    posted_at: "2026-08-11T00:00:00Z",
+    is_nsfw: false,
+    is_ai_generated: false,
+    asset_count: 0,
+    is_favorite: false,
+    created_at: "2026-08-11T00:00:00Z",
+    updated_at: "2026-08-11T00:00:00Z",
+  }));
+  await page.route("**/api/v1/search**", (route) => route.fulfill({ json: {
+    query: "",
+    canonical_query: "",
+    parsed: { raw: "", canonical: "", scope: "works", targets: ["works"], tokens: [] },
+    groups: { works: { items: works, total: works.length } },
+    total: works.length,
+    available_filters: {},
+  } }));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/admin/works");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+  await expect(page.locator("html")).not.toHaveClass(/works-scrollbar-hidden/);
+  await expect.poll(() => page.evaluate(
+    () => window.getComputedStyle(document.documentElement).scrollbarWidth,
+  )).not.toBe("none");
+  const before = await page.evaluate(() => window.scrollY);
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before);
+});
+
 test("system and source tabs preserve module-level permissions", async ({ page }) => {
   let healthRequests = 0;
   let sourceRequests = 0;
@@ -2272,7 +2305,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
     await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
-    await expect(page.locator("#main-content .page-item").last()).toHaveCSS("opacity", "1");
+    await expect(page.getByRole("list", { name: "Subscriptions" }).getByRole("listitem").last()).toBeVisible();
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])

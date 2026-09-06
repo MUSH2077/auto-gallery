@@ -17,4 +17,9 @@ class Creator(TimestampMixin, Base):
 
     source_creators = relationship("SourceCreator", back_populates="creator")
     creator_links = relationship("CreatorLink", back_populates="creator")
+    aliases = relationship(
+        "CreatorAlias",
+        back_populates="creator",
+        cascade="all, delete-orphan",
+    )
     subscriptions = relationship("Subscription", back_populates="creator")

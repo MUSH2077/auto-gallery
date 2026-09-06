@@ -117,7 +117,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 
 - **为什么用 RQ**：比 Celery 更简单，使用已有的 Redis。`download_job`/`import_job` 数据库表是真实数据源，队列后端可替换。
 - **逐来源下载队列**：每个来源有独立的 RQ 队列（`downloads:pixiv`、`downloads:danbooru` 等）以隔离——一个慢来源不会阻塞另一个。`worker-download` 容器监听所有来源队列。
-- **远端发现队列**：`worker-operations` 监督独立的 `discovery` 子队列。scheduler
+- **远端发现队列**：`worker-discovery` 独占并监督 `discovery` 队列。scheduler
   只准入到期远端账号；provider 分页与游标 checkpoint 在子 worker 中执行。任务只携带不透明的
   task/account ID，绝不携带凭据。
 - **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。

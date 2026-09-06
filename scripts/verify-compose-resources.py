@@ -25,6 +25,7 @@ APPLICATION_SERVICE_NAMES = (
     "worker-download",
     "worker-import",
     "worker-operations",
+    "worker-discovery",
     "scheduler",
     "admin-web",
 )
@@ -222,7 +223,7 @@ def verify_base(config: dict) -> None:
     services = config["services"]
     verify_resource_limits(services)
 
-    for name in ("worker-download", "worker-import", "worker-operations", "scheduler"):
+    for name in ("worker-download", "worker-import", "worker-operations", "worker-discovery", "scheduler"):
         service = services[name]
         require(service.get("init") is True, f"{name}: init must be enabled")
         require(service.get("stop_grace_period") == "1m0s", f"{name}: bad stop grace period")
@@ -263,6 +264,7 @@ def verify_base(config: dict) -> None:
         "worker-download",
         "worker-import",
         "worker-operations",
+        "worker-discovery",
         "scheduler",
     ):
         require(
@@ -302,7 +304,20 @@ def verify_base(config: dict) -> None:
         "--with-scheduler" in services["worker-operations"]["command"],
         "operations worker must promote queue-scoped delayed retries",
     )
-    for name in ("worker-download", "worker-import", "worker-operations", "scheduler"):
+    require(
+        "--with-scheduler" in services["worker-discovery"]["command"],
+        "discovery worker must promote queue-scoped delayed retries",
+    )
+    require(
+        "WORKER_EXTRA_QUEUES" not in services["worker-operations"].get("environment", {}),
+        "operations worker must not consume discovery",
+    )
+    require(
+        "worker_entrypoint.py discovery 1 --with-scheduler"
+        in " ".join(services["worker-discovery"]["command"]),
+        "discovery must have one dedicated scheduler-owning worker",
+    )
+    for name in ("worker-download", "worker-import", "worker-operations", "worker-discovery", "scheduler"):
         probe = " ".join(services[name]["healthcheck"]["test"])
         require("scripts/check_worker_health.py" in probe, f"{name}: supervisor-aware health probe missing")
 

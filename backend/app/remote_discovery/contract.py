@@ -78,6 +78,21 @@ class RemoteCandidateIdentity:
 
 
 @dataclass(frozen=True)
+class RemoteCandidateEvidence:
+    source: RemoteSource
+    source_creator_id: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_remote_source(self.source)
+        if not self.source_creator_id.strip():
+            raise ValueError("source_creator_id must not be empty")
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("candidate evidence metadata must be a mapping")
+        object.__setattr__(self, "metadata", _freeze(self.metadata))
+
+
+@dataclass(frozen=True)
 class RemoteCreatorPublicProfile:
     gender: str | None = None
     region: str | None = None
@@ -313,6 +328,19 @@ class RemoteDiscoveryAdapter(ABC):
         source_work_id: str,
     ) -> RemoteWorkState:
         raise NotImplementedError(f"{self.source} does not support remote work state")
+
+    async def enrich_candidate(
+        self,
+        credentials: RedactedCredentials | Mapping[str, Any],
+        identity: RemoteCandidateIdentity,
+    ) -> RemoteCandidateEvidence:
+        if identity.source != self.source:
+            raise ValueError("candidate source does not match discovery adapter")
+        return RemoteCandidateEvidence(
+            source=identity.source,
+            source_creator_id=identity.source_creator_id,
+            metadata=identity.metadata,
+        )
 
     async def fetch_creator_profile(
         self,

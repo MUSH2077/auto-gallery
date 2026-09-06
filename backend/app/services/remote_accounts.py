@@ -53,7 +53,9 @@ _VALID_AUTH_METHODS = {
     "bilibili": frozenset({"sessdata"}),
 }
 
-_X_SCOPES = frozenset({"users.read", "follows.read", "list.read", "offline.access"})
+_X_SCOPES = frozenset(
+    {"tweet.read", "users.read", "follows.read", "list.read", "offline.access"}
+)
 _MAX_SELECTORS = 200
 _MAX_SELECTOR_BYTES = 64 * 1024
 _NUMERIC_REMOTE_ID = re.compile(r"-?[0-9]{1,32}\Z")
@@ -212,6 +214,7 @@ class RemoteAccountService:
         metadata = account.credential_metadata
         if isinstance(metadata, dict) and isinstance(metadata.get("fields"), list):
             fields = [str(field) for field in metadata["fields"]]
+        discovery_fields = [field for field in fields if field != "download_cookie"]
         return RemoteAccountRead.model_validate(
             {
                 "id": account.id,
@@ -226,6 +229,12 @@ class RemoteAccountService:
                 "auth_status": account.auth_status,
                 "auth_error_reason": account.auth_error_reason,
                 "last_authenticated_at": account.last_authenticated_at,
+                "download_auth_status": account.download_auth_status,
+                "download_auth_error_reason": account.download_auth_error_reason,
+                "last_download_auth_checked_at": account.last_download_auth_checked_at,
+                "download_auth_mask": (
+                    {"cookie": "••••"} if "download_cookie" in fields else {}
+                ),
                 "last_scan_started_at": account.last_scan_started_at,
                 "last_scan_completed_at": account.last_scan_completed_at,
                 "next_scan_at": account.next_scan_at,
@@ -234,7 +243,7 @@ class RemoteAccountService:
                 "auto_import_min_confidence": account.auto_import_min_confidence,
                 "auto_import_limit": account.auto_import_limit,
                 "has_credentials": bool(account.credential_ciphertext),
-                "credential_mask": {field: "••••" for field in fields},
+                "credential_mask": {field: "••••" for field in discovery_fields},
                 "created_at": account.created_at,
                 "updated_at": account.updated_at,
             }
@@ -250,7 +259,12 @@ class RemoteAccountService:
         RemoteAccountService._validate_auth_method(source, auth_method)
         allowed_fields = {
             ("pixiv", "refresh_token"): {"refresh_token"},
-            ("x", "oauth2"): {"access_token", "refresh_token", "client_id"},
+            ("x", "oauth2"): {
+                "access_token",
+                "refresh_token",
+                "client_id",
+                "download_cookie",
+            },
             ("x", "cookie"): {"cookie"},
             ("bilibili", "sessdata"): {"SESSDATA"},
         }[(source, auth_method)]
@@ -394,6 +408,8 @@ class RemoteAccountService:
                 for key in ("access_token", "refresh_token", "client_id")
                 if isinstance(rotated.get(key), str) and rotated[key]
             }
+            if isinstance(stored.get("download_cookie"), str) and stored["download_cookie"]:
+                persisted["download_cookie"] = stored["download_cookie"]
             self._validate_credentials("x", "oauth2", persisted)
             previous_generation = state["generation"]
             current.credential_ciphertext = self.vault.encrypt(
@@ -536,6 +552,10 @@ class RemoteAccountService:
             payload.get("scopes") or [],
             payload.get("collection_selectors") or [],
         )
+        if source == "x" and auth_method == "oauth2" and set(scopes) != _X_SCOPES:
+            raise ValueError("X OAuth account requires the complete discovery scope grant")
+        if source == "x" and auth_method == "cookie" and scopes:
+            raise ValueError("X Cookie accounts do not accept OAuth scopes")
         existing = (
             await self.db.execute(
                 select(RemoteAccount)
@@ -562,6 +582,12 @@ class RemoteAccountService:
         account.auth_status = "untested"
         account.auth_error_reason = None
         account.last_authenticated_at = None
+        account.download_auth_status = (
+            "personal" if source == "x" and auth_method == "cookie"
+            else "anonymous_only" if source == "x" else "unavailable"
+        )
+        account.download_auth_error_reason = None
+        account.last_download_auth_checked_at = None
         account.scan_cursor = None
         account.last_scan_started_at = None
         account.last_scan_completed_at = None
@@ -622,6 +648,14 @@ class RemoteAccountService:
             if data.get("collection_selectors") is not None
             else account.collection_selectors or [],
         )
+        if (
+            account.source == "x"
+            and requested_auth_method == "oauth2"
+            and set(scopes) != _X_SCOPES
+        ):
+            raise ValueError("X OAuth account requires the complete discovery scope grant")
+        if account.source == "x" and requested_auth_method == "cookie" and scopes:
+            raise ValueError("X Cookie accounts do not accept OAuth scopes")
         account.auth_method = requested_auth_method
         for field in _ACCOUNT_UPDATE_FIELDS - {
             "auth_method",
@@ -634,8 +668,18 @@ class RemoteAccountService:
         account.collection_selectors = selectors
         if credentials is not None:
             self._encrypt(account, credentials)
+            account.scan_cursor = None
+            account.next_scan_at = None
             account.auth_status = "untested"
             account.auth_error_reason = None
+            if account.source == "x":
+                account.download_auth_status = (
+                    "personal"
+                    if requested_auth_method == "cookie"
+                    or bool(credentials.get("download_cookie"))
+                    else "anonymous_only"
+                )
+                account.download_auth_error_reason = None
             await self._set_binding_health(account, healthy=True)
         elif account.is_enabled != was_enabled:
             await self._recompute_binding_caches(
@@ -749,6 +793,142 @@ class RemoteAccountService:
             pinned_generation=pinned_generation,
         )
         return collections
+
+    async def set_download_auth(
+        self,
+        account_id: UUID,
+        cookie: str,
+    ) -> RemoteAccountRead:
+        """Verify and merge an X OAuth download cookie without changing discovery health."""
+
+        account = await self._account(account_id, lock=True)
+        require_preview(account.source)
+        if account.source != "x" or account.auth_method != "oauth2":
+            raise ValueError("Download authentication is only available for X OAuth accounts")
+        normalized_cookie = str(cookie).strip()
+        self._validate_credentials("x", "cookie", {"cookie": normalized_cookie})
+        pinned_identity = self._credential_use_identity(account)
+        pinned_generation = int(account.credential_generation or 0)
+        expected_remote_user_id = account.remote_user_id
+        await self.db.commit()
+        try:
+            identity = await self.adapters.get("x").validate_account(
+                RedactedCredentials(
+                    {"auth_method": "cookie", "cookie": normalized_cookie}
+                )
+            )
+        except Exception:
+            current = await self._relock_provider_result(
+                account_id,
+                pinned_identity=pinned_identity,
+                pinned_generation=pinned_generation,
+            )
+            current.download_auth_status = "unhealthy"
+            current.download_auth_error_reason = "download_cookie_invalid"
+            current.last_download_auth_checked_at = datetime.now(timezone.utc)
+            await self.db.flush()
+            raise
+        account = await self._relock_provider_result(
+            account_id,
+            pinned_identity=pinned_identity,
+            pinned_generation=pinned_generation,
+        )
+        if expected_remote_user_id and identity.source_creator_id != expected_remote_user_id:
+            account.download_auth_status = "unhealthy"
+            account.download_auth_error_reason = "download_identity_mismatch"
+            account.last_download_auth_checked_at = datetime.now(timezone.utc)
+            await self.db.flush()
+            raise ValueError("X download Cookie belongs to a different remote account")
+        stored = self.vault.decrypt(
+            account.credential_ciphertext,
+            user_id=account.user_id,
+            source=account.source,
+            account_id=account.id,
+        ).materialize()
+        stored["download_cookie"] = normalized_cookie
+        self._encrypt(account, stored)
+        account.scan_cursor = None
+        account.next_scan_at = None
+        checked_at = datetime.now(timezone.utc)
+        account.download_auth_status = "personal"
+        account.download_auth_error_reason = None
+        account.last_download_auth_checked_at = checked_at
+        await self._heal_download_cookie_bindings(account, checked_at=checked_at)
+        await self.db.flush()
+        await self.db.refresh(account)
+        return self._read(account)
+
+    async def clear_download_auth(self, account_id: UUID) -> None:
+        account = await self._account(account_id, lock=True)
+        require_preview(account.source)
+        if account.source != "x" or account.auth_method != "oauth2":
+            raise ValueError("Download authentication is only available for X OAuth accounts")
+        stored = self.vault.decrypt(
+            account.credential_ciphertext,
+            user_id=account.user_id,
+            source=account.source,
+            account_id=account.id,
+        ).materialize()
+        stored.pop("download_cookie", None)
+        self._encrypt(account, stored)
+        account.scan_cursor = None
+        account.next_scan_at = None
+        account.download_auth_status = "anonymous_only"
+        account.download_auth_error_reason = None
+        account.last_download_auth_checked_at = datetime.now(timezone.utc)
+        await self._pause_protected_x_bindings(account)
+        await self.db.flush()
+
+    async def _heal_download_cookie_bindings(
+        self,
+        account: RemoteAccount,
+        *,
+        checked_at: datetime,
+    ) -> None:
+        bindings = await self._locked_account_bindings(account.id)
+        for binding in bindings:
+            if binding.auth_error_reason == "download_cookie_required":
+                binding.auth_healthy = True
+                binding.auth_status = "healthy"
+                binding.auth_error_reason = None
+                binding.last_auth_checked_at = checked_at
+        await self._recompute_binding_caches(bindings)
+
+    async def _pause_protected_x_bindings(self, account: RemoteAccount) -> None:
+        from app.models import SourceCreator, SubscriptionSource
+
+        rows = (
+            await self.db.execute(
+                select(UserSubscriptionSource, SourceCreator)
+                .join(
+                    SubscriptionSource,
+                    SubscriptionSource.id
+                    == UserSubscriptionSource.subscription_source_id,
+                )
+                .outerjoin(
+                    SourceCreator,
+                    (SourceCreator.source == SubscriptionSource.source)
+                    & (
+                        SourceCreator.source_creator_id
+                        == SubscriptionSource.source_creator_id
+                    ),
+                )
+                .where(UserSubscriptionSource.remote_account_id == account.id)
+                .order_by(UserSubscriptionSource.id)
+                .with_for_update(of=UserSubscriptionSource)
+            )
+        ).all()
+        changed: list[UserSubscriptionSource] = []
+        checked_at = datetime.now(timezone.utc)
+        for binding, creator in rows:
+            metadata = creator.raw_metadata if creator is not None else None
+            if isinstance(metadata, dict) and metadata.get("protected") is True:
+                binding.auth_healthy = False
+                binding.auth_status = "unhealthy"
+                binding.auth_error_reason = "download_cookie_required"
+                binding.last_auth_checked_at = checked_at
+                changed.append(binding)
+        await self._recompute_binding_caches(changed)
 
     async def fetch_work_state(self, source: str, source_work_id: str) -> RemoteWorkState:
         """Fetch volatile work state using only this user's healthy account."""

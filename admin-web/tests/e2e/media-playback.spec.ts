@@ -33,6 +33,14 @@ const WORK = {
   updated_at: "2026-07-31T08:00:00Z",
 };
 
+const SECOND_WORK = {
+  ...WORK,
+  id: "image-work",
+  title: "Generated still study",
+  thumbnail_asset_id: "asset-image",
+  asset_count: 1,
+};
+
 const VIDEO_ASSET = {
   id: "asset-video",
   file_name: "generated-blue-clip.mp4",
@@ -158,11 +166,44 @@ async function installMediaRoutes(context: BrowserContext, calls: string[]) {
         },
       });
     }
+    if (path === "/api/v1/tasks") {
+      return route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 50 } });
+    }
+    if (path === "/api/v1/system/scheduler-decisions") {
+      return route.fulfill({ json: { updated_at: "2026-07-31T08:00:00Z", scheduler_enabled: true, timezone: "UTC", items: [] } });
+    }
+    if (path === "/api/v1/operations/overview") {
+      return route.fulfill({ json: {
+        view: url.searchParams.get("view") || "attention",
+        total: 0,
+        summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+        items: [],
+      } });
+    }
+    if (path === "/api/v1/works/derivative-progress") {
+      return route.fulfill({ json: {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        processing: 0,
+        failed: 0,
+        remaining: 0,
+        affected_works: 0,
+        completion_percent: 100,
+        status: "idle",
+        last_completed_at: null,
+        oldest_unfinished_at: null,
+        stall_after_seconds: 300,
+      } });
+    }
     if (path === "/api/v1/works/video-work") {
       return route.fulfill({ json: WORK });
     }
     if (path === "/api/v1/works/video-work/assets") {
       return route.fulfill({ json: [VIDEO_ASSET, IMAGE_ASSET] });
+    }
+    if (path === "/api/v1/works/image-work/assets") {
+      return route.fulfill({ json: [IMAGE_ASSET] });
     }
     if (/^\/api\/v1\/works\/video-work\/(sources|tags)$/.test(path)) {
       return route.fulfill({ json: [] });
@@ -180,13 +221,14 @@ async function installMediaRoutes(context: BrowserContext, calls: string[]) {
     }
     if (path === "/api/v1/search") {
       const item = { ...WORK, has_video: true, preview_asset_ids: ["asset-video", "asset-image"] };
+      const secondItem = { ...SECOND_WORK, has_video: false, preview_asset_ids: ["asset-image"] };
       return route.fulfill({
         json: {
           query: url.searchParams.get("q") || "",
           canonical_query: url.searchParams.get("q") || "",
           parsed: { raw: "", canonical: "", scope: url.searchParams.get("scope") || "works", targets: ["works"], tokens: [] },
           groups: {
-            works: { total: 1, items: [item] },
+            works: { total: 2, items: [item, secondItem] },
             creators: { total: 0, items: [] },
             tags: { total: 0, items: [] },
             repositories: { total: 0, items: [] },
@@ -212,7 +254,7 @@ test("video remains poster-only until click and switching assets unloads playbac
   await installMediaRoutes(context, calls);
 
   await page.goto("/admin/works");
-  await expect(page.getByRole("heading", { name: "Works" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Works", exact: true })).toBeVisible();
   await expect(page.getByText("Video", { exact: true }).first()).toBeVisible();
   await expect(page.locator("video")).toHaveCount(0);
   await expect.poll(() => calls.some((call) => call.includes("playback-ticket"))).toBe(false);
@@ -255,4 +297,29 @@ test("mobile video player is keyboard reachable without horizontal overflow", as
     document.documentElement.scrollWidth <= document.documentElement.clientWidth
   ))).toBe(true);
   await page.screenshot({ path: "/tmp/auto-gallery-media-mobile.png", fullPage: false });
+});
+
+test("slideshow keeps a complete foreground image over a softened canvas and exposes a thumbnail rail", async ({ context, page }) => {
+  const calls: string[] = [];
+  await installMediaRoutes(context, calls);
+  await page.goto("/admin/works");
+
+  await page.getByRole("button", { name: "Slideshow" }).click();
+  const dialog = page.getByRole("dialog", { name: "Slideshow" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("slideshow-stage")).toBeVisible();
+  await expect(dialog.getByTestId("slideshow-backdrop")).toBeVisible();
+  const thumbnails = dialog.getByRole("list", { name: "Slide thumbnails" });
+  await expect(thumbnails).toBeVisible();
+  await expect(thumbnails.getByRole("button")).toHaveCount(2);
+  await expect.poll(async () => dialog.locator('[data-slideshow-foreground="true"] img').evaluateAll((images) => (
+    images.some((image) => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)
+  ))).toBe(true);
+  await page.screenshot({ path: "/tmp/auto-gallery-slideshow-canvas.png", fullPage: false });
+
+  await thumbnails.getByRole("button").nth(1).click();
+  await expect(thumbnails.getByRole("button").nth(1)).toHaveAttribute("aria-current", "true");
+  await expect(dialog).toContainText("2 / 2");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });

@@ -39,6 +39,10 @@ services:
     restart: "no"
     labels: *test-labels
     extra_hosts: !reset []
+  worker-discovery:
+    restart: "no"
+    labels: *test-labels
+    extra_hosts: !reset []
   scheduler:
     restart: "no"
     labels: *test-labels

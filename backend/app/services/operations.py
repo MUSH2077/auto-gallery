@@ -45,6 +45,7 @@ _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "admin-rebuild": "maintenance",
     "admin-disk-import": "maintenance",
     "admin-creator-reenrich": "maintenance",
+    "admin-creator-alias-backfill": "maintenance",
     "danbooru-mapping-refresh": "maintenance",
     "admin-search-reindex": "search_index",
     "admin-curation-backfill": "import_db",
@@ -152,6 +153,12 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "admin-creator-reenrich",
             "app.jobs.admin_operations.run_creator_reenrich_operation",
             scopes=("library:creator-reenrich:active",),
+            timeout=7200,
+        ),
+        _spec(
+            "admin-creator-alias-backfill",
+            "app.jobs.admin_operations.run_creator_alias_backfill_operation",
+            scopes=("library:creator-alias-backfill:active",),
             timeout=7200,
         ),
         _spec(

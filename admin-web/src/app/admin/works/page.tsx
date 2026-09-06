@@ -119,7 +119,7 @@ function WorkCard({
   return (
     <article
       ref={cardRef}
-      className={`card-interactive relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
+      className={`card-interactive media-motion-card relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
       style={entrance?.style}
       onMouseEnter={() => {
         onCancelClosePreview();
@@ -144,7 +144,7 @@ function WorkCard({
         aria-label={t("common.open_item", { name: w.title || t("works.untitled") })}
         className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
-      <div className="pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
+      <div className="media-motion-visual pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
         <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} />
         {selectable && (
           <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">

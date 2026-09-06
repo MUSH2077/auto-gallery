@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { adminRoutes } from "@/lib/adminRoutes";
-import { usePresence } from "@/lib/motion";
+import { motionConfig, usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
 import AppTopBar from "@/components/AppTopBar";
@@ -71,6 +71,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
   const previousPathRef = useRef(pathname);
   const restoreDrawerFocusRef = useRef(true);
+
+  useEffect(() => {
+    const disabled = !motionConfig.shouldAnimate();
+    document.documentElement.classList.toggle("media-motion-disabled", disabled);
+    return () => document.documentElement.classList.remove("media-motion-disabled");
+  }, []);
 
   useLayoutEffect(() => {
     try {

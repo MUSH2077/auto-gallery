@@ -463,6 +463,7 @@ export type RemoteDiscoverySource = "pixiv" | "x" | "bilibili";
 export type RemoteAuthMethod = "refresh_token" | "oauth2" | "cookie" | "sessdata";
 export type DiscoveryConfidence = "high" | "medium" | "low";
 export type DiscoveryCandidateState = "pending" | "dismissed" | "imported" | "conflict";
+export type DiscoveryEvidenceStatus = "pending" | "ready" | "retrying" | "failed" | "not_required";
 
 export interface RemoteCollection {
   id: string;
@@ -483,6 +484,10 @@ export interface RemoteAccountRead {
   auth_status?: string | null;
   auth_error_reason?: string | null;
   last_authenticated_at?: string | null;
+  download_auth_status: "personal" | "anonymous_only" | "unhealthy" | "unavailable";
+  download_auth_error_reason?: string | null;
+  last_download_auth_checked_at?: string | null;
+  download_auth_mask: Record<string, string>;
   last_scan_started_at?: string | null;
   last_scan_completed_at?: string | null;
   next_scan_at?: string | null;
@@ -532,6 +537,10 @@ export interface DiscoveryCandidate {
   imported_at?: string | null;
   last_seen_at?: string | null;
   is_following: boolean;
+  evidence_status: DiscoveryEvidenceStatus;
+  evidence_checked_at?: string | null;
+  evidence_error_code?: string | null;
+  evidence_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -626,6 +635,7 @@ export interface DiscoveryCandidateFilters {
   confidence?: DiscoveryConfidence;
   isFollowing?: boolean;
   localMatch?: boolean;
+  evidenceStatus?: DiscoveryEvidenceStatus;
   offset?: number;
   limit?: number;
 }
@@ -674,8 +684,31 @@ export interface Creator {
   repository_count?: number;
   last_synced_at?: string;
   curation_state?: CurationState;
+  matched_identity?: MatchedCreatorIdentity | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MatchedCreatorIdentity {
+  creator_id: string;
+  value: string;
+  source: string;
+  kind: "name" | "account" | "source_id" | "url" | "url_handle" | "other_name" | string;
+  is_current: boolean;
+  match_type: "exact" | "prefix" | "fuzzy";
+}
+
+export interface CreatorAlias {
+  id: string;
+  creator_id: string;
+  value: string;
+  normalized_value: string;
+  source: string;
+  kind: string;
+  is_current: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  source_ref?: string | null;
 }
 
 export interface CreatorListResponse {
@@ -788,6 +821,7 @@ export interface Subscription {
     selection_reason: string;
   } | null;
   next_sync_at?: string | null;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export type SubscriptionLatestStateKind =
@@ -1270,6 +1304,7 @@ export interface WorkListItem {
 export interface SearchWorkResult extends WorkListItem {
   description?: string;
   tags?: string[];
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface Work {
@@ -1335,6 +1370,7 @@ export interface CreatorSearchHit {
   last_synced_at?: string | null;
   created_at: string;
   updated_at?: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface TagSearchHit {
@@ -1427,6 +1463,7 @@ export interface RepositorySearchHit {
   last_synced_at?: string | null;
   created_at: string;
   updated_at: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface SubscriptionSearchHit {
@@ -1451,6 +1488,7 @@ export interface SubscriptionSearchHit {
   latest_job_created_at?: string | null;
   created_at: string;
   updated_at: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface SearchGroups {

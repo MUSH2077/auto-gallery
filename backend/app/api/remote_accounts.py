@@ -14,6 +14,7 @@ from app.schemas.remote_discovery import (
     RemoteAccountCreate,
     RemoteAccountRead,
     RemoteAccountUpdate,
+    XDownloadAuthUpdate,
     XOAuthCallbackRequest,
 )
 from app.services.redis_client import get_redis
@@ -165,6 +166,50 @@ async def x_oauth_callback(
     except (ValueError, RuntimeError) as exc:
         await db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{account_id}/download-auth", response_model=RemoteAccountRead)
+async def put_remote_account_download_auth(
+    account_id: UUID,
+    data: XDownloadAuthUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteAccountService(db, user.id).set_download_auth(
+            account_id,
+            data.cookie,
+        )
+        await db.commit()
+        return result
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
+    except (ValueError, RemoteDiscoveryUnavailable) as exc:
+        # Download-auth validation records only a non-sensitive reason and does
+        # not damage the account's discovery authentication health.
+        await db.commit()
+        raise _not_found_or_bad_request(exc) from exc
+    except Exception as exc:
+        await db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "download_auth_validation_failed"},
+        ) from exc
+
+
+@router.delete("/{account_id}/download-auth", status_code=204)
+async def delete_remote_account_download_auth(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        await RemoteAccountService(db, user.id).clear_download_auth(account_id)
+        await db.commit()
+    except (ValueError, RuntimeError, RemoteDiscoveryUnavailable) as exc:
+        await db.rollback()
+        raise _not_found_or_bad_request(exc) from exc
 
 
 @router.get("/{account_id}", response_model=RemoteAccountRead)

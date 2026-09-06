@@ -2,6 +2,7 @@ from app.models.base import Base, TimestampMixin
 from app.models.creator import Creator
 from app.models.source_creator import SourceCreator
 from app.models.creator_link import CreatorLink
+from app.models.creator_alias import CreatorAlias
 from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.models.asset import Asset
@@ -51,6 +52,7 @@ __all__ = [
     "Creator",
     "SourceCreator",
     "CreatorLink",
+    "CreatorAlias",
     "Work",
     "WorkSource",
     "Asset",

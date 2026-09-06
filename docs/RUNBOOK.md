@@ -45,7 +45,7 @@ controller latch key.
 docker compose build backend admin-web
 
 # 2. Freeze every writer, then the foreground application
-docker compose stop -t 120 worker-download worker-import worker-operations scheduler
+docker compose stop -t 120 worker-download worker-import worker-operations worker-discovery scheduler
 docker compose stop -t 120 admin-web backend
 
 # 3. Create and verify the checksummed rollback point before any migration.
@@ -75,7 +75,7 @@ if ! VERIFY_SCOPE=core bash scripts/verify-runtime.sh; then
   echo "Core verification failed; workers remain stopped" >&2
   exit 1
 fi
-docker compose up -d worker-download worker-import worker-operations scheduler
+docker compose up -d worker-download worker-import worker-operations worker-discovery scheduler
 VERIFY_SCOPE=full bash scripts/verify-runtime.sh
 ```
 
@@ -129,6 +129,7 @@ docker compose run --rm backend python scripts/backfill_video_assets.py --apply
 | `worker-download` | Supervisor heartbeat + gallery-dl exists | 30s | 10s |
 | `worker-import` | Supervisor heartbeat | 30s | 10s |
 | `worker-operations` | Supervisor heartbeat | 30s | 10s |
+| `worker-discovery` | Supervisor heartbeat | 30s | 10s |
 | `scheduler` | Supervisor heartbeat | 30s | 10s |
 | `admin-web` | `wget /admin/login` | 15s | 5s |
 
@@ -334,19 +335,19 @@ bash scripts/deploy.sh
 
 ## Remote discovery rollout and recovery
 
-`worker-operations` supervises a separate `discovery` RQ child queue in the
+`worker-discovery` exclusively supervises the `discovery` RQ queue in the
 same bounded container. The scheduler only admits due, enabled, credentialed,
 healthy accounts; the discovery worker fetches pages and checkpoints the
 cursor. Neither scheduler nor Redis carries credential plaintext. Inspect both
 parents when diagnosing admission:
 
 ```bash
-docker compose logs --tail=200 scheduler worker-operations
+docker compose logs --tail=200 scheduler worker-discovery
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" LLEN rq:queue:discovery
 ```
 
 Enable stages one at a time and recreate backend, scheduler, and
-worker-operations after each `.env` change:
+worker-discovery after each `.env` change:
 
 1. `REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=true`
 2. `REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED=true`

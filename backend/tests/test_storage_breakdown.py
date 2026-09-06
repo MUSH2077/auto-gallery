@@ -485,3 +485,178 @@ async def test_storage_breakdown_only_assigns_repository_for_exact_source_identi
         async with async_session() as db:
             await _clear_identity_tables(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_storage_breakdown_uses_work_source_identity_for_username_directory():
+    """A provider username directory must resolve through its imported works."""
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.subscription import Subscription
+    from app.models.subscription_source import SubscriptionSource
+    from app.models.work import Work
+    from app.models.work_source import WorkSource
+
+    settings_api.invalidate_storage_breakdown_cache()
+    try:
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+            creator = Creator(name="numeric-pixiv-owner", display_name="Numeric Pixiv Owner")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="Numeric Pixiv Owner")
+            db.add(subscription)
+            await db.flush()
+            repository = SubscriptionSource(
+                subscription_id=subscription.id,
+                source="pixiv",
+                source_creator_id="104836911",
+                source_url="https://www.pixiv.net/users/104836911",
+            )
+            work = Work(title="Imported Pixiv work")
+            db.add_all([
+                repository,
+                work,
+                SourceCreator(
+                    creator_id=creator.id,
+                    source="pixiv",
+                    source_creator_id="104836911",
+                    source_url="https://www.pixiv.net/users/104836911",
+                    display_name="Numeric Pixiv Owner",
+                ),
+            ])
+            await db.flush()
+            db.add_all([
+                WorkSource(
+                    work_id=work.id,
+                    source="pixiv",
+                    source_work_id="9001",
+                    source_creator_id="104836911",
+                    source_url="https://www.pixiv.net/artworks/9001",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="pixiv/user_jjem4255/9001/9001_p0.jpg",
+                    source="pixiv",
+                    creator_dir="user_jjem4255",
+                    source_work_id="9001",
+                    file_name="9001_p0.jpg",
+                    artifact_type="image",
+                    file_size=1024,
+                    state="done",
+                ),
+            ])
+            await db.commit()
+
+            payload = await settings_api.storage_breakdown(db=db)
+
+            assert payload["unlinked_repositories"] == []
+            assert len(payload["creator_tree"]) == 1
+            node = payload["creator_tree"][0]
+            assert node["creator_id"] == str(creator.id)
+            assert node["display_name"] == "Numeric Pixiv Owner"
+            assert node["repositories"] == [{
+                "repository_id": str(repository.id),
+                "source": "pixiv",
+                "source_display_name": "Pixiv",
+                "disk_source": "pixiv",
+                "directory_name": "user_jjem4255",
+                "size_mb": 0.0,
+                "logical_size_mb": 0.0,
+                "work_count": 1,
+            }]
+    finally:
+        settings_api.invalidate_storage_breakdown_cache()
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_storage_breakdown_does_not_hide_conflicting_work_identities():
+    """A directory containing works from multiple creators must remain unlinked."""
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models.creator import Creator
+    from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
+    from app.models.work import Work
+    from app.models.work_source import WorkSource
+
+    settings_api.invalidate_storage_breakdown_cache()
+    try:
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+            first_creator = Creator(name="conflicting-work-owner-a")
+            second_creator = Creator(name="conflicting-work-owner-b")
+            first_work = Work(title="First imported work")
+            second_work = Work(title="Second imported work")
+            db.add_all([first_creator, second_creator, first_work, second_work])
+            await db.flush()
+            db.add_all([
+                SourceCreator(
+                    creator_id=first_creator.id,
+                    source="x",
+                    source_creator_id="owner-a",
+                    source_url="https://x.com/shared_username",
+                ),
+                SourceCreator(
+                    creator_id=second_creator.id,
+                    source="x",
+                    source_creator_id="owner-b",
+                    source_url="https://x.com/owner_b",
+                ),
+                WorkSource(
+                    work_id=first_work.id,
+                    source="x",
+                    source_work_id="work-a",
+                    source_creator_id="owner-a",
+                ),
+                WorkSource(
+                    work_id=second_work.id,
+                    source="x",
+                    source_work_id="work-b",
+                    source_creator_id="owner-b",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/shared_username/work-a.jpg",
+                    source="x",
+                    creator_dir="shared_username",
+                    source_work_id="work-a",
+                    file_name="work-a.jpg",
+                    artifact_type="image",
+                    file_size=1,
+                    state="done",
+                ),
+                StorageArtifact(
+                    storage_root="downloads",
+                    file_path="twitter/shared_username/work-b.jpg",
+                    source="x",
+                    creator_dir="shared_username",
+                    source_work_id="work-b",
+                    file_name="work-b.jpg",
+                    artifact_type="image",
+                    file_size=1,
+                    state="done",
+                ),
+            ])
+            await db.commit()
+
+            payload = await settings_api.storage_breakdown(db=db)
+
+            assert payload["creator_tree"] == []
+            assert [
+                row["directory_name"]
+                for row in payload["unlinked_repositories"]
+            ] == ["shared_username"]
+    finally:
+        settings_api.invalidate_storage_breakdown_cache()
+        async with async_session() as db:
+            await _clear_identity_tables(db)
+        await engine.dispose()

@@ -102,6 +102,15 @@ const subscription = {
   updated_at: "2026-07-28T10:00:00Z",
 };
 
+const pixivIdentity = {
+  creator_id: "creator-atlas",
+  value: "user_dsnj5842",
+  source: "pixiv",
+  kind: "account",
+  is_current: true,
+  match_type: "exact",
+};
+
 const TARGETS = ["works", "creators", "tags", "repositories", "subscriptions"] as const;
 
 function parseQuery(raw: string, scope: string) {
@@ -289,13 +298,14 @@ async function installSearchFixtures(context: BrowserContext) {
       const query = url.searchParams.get("q") || "";
       const scope = url.searchParams.get("scope") || "global";
       const parsed = parseQuery(query, scope);
+      const identity = query === "user_dsnj5842" ? pixivIdentity : undefined;
       const groups: Record<string, { total: number; items: unknown[] }> = {};
       for (const target of parsed.targets) {
-        if (target === "works") groups.works = { total: 1, items: [work] };
-        if (target === "creators") groups.creators = { total: 1, items: [creator] };
+        if (target === "works") groups.works = { total: 1, items: [{ ...work, matched_identity: identity }] };
+        if (target === "creators") groups.creators = { total: 1, items: [{ ...creator, matched_identity: identity }] };
         if (target === "tags") groups.tags = { total: 1, items: [tag] };
-        if (target === "repositories") groups.repositories = { total: 1, items: [repository] };
-        if (target === "subscriptions") groups.subscriptions = { total: 1, items: [subscription] };
+        if (target === "repositories") groups.repositories = { total: 1, items: [{ ...repository, matched_identity: identity }] };
+        if (target === "subscriptions") groups.subscriptions = { total: 1, items: [{ ...subscription, matched_identity: identity }] };
         if (target === "tasks") groups.tasks = { total: 0, items: [] };
         if (target === "scheduler") groups.scheduler = { total: 0, items: [] };
       }
@@ -408,6 +418,16 @@ test("global search groups five entity types and supports keyboard suggestions a
   await page.getByRole("button", { name: "Remove search condition: tag:aurora" }).click();
   await expect(input).toHaveValue("");
   await expect(page).not.toHaveURL(/(?:\\?|&)q=/);
+});
+
+test("identity searches explain Pixiv account matches on every reference surface", async ({ page }) => {
+  await page.goto("/admin/search?q=user_dsnj5842");
+  await expect(page.getByText("Matched via Pixiv account @user_dsnj5842", { exact: true })).toHaveCount(4);
+
+  for (const surface of ["creators", "subscriptions"] as const) {
+    await page.goto(`/admin/${surface}?q=user_dsnj5842`);
+    await expect(page.getByText("Matched via Pixiv account @user_dsnj5842", { exact: true })).toBeVisible();
+  }
 });
 
 test("qualifier suggestions explain their purpose and example", async ({ page }) => {

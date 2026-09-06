@@ -15,6 +15,7 @@ import pytest
 
 PREDECESSOR_REVISION = "a6c8e0f2b4d7"
 NULLABLE_REVISION = "b8d0f2a4c6e9"
+CURRENT_HEAD_REVISION = "d0f2a4c6e8b1"
 
 
 def _database_url(test_database_url: str, marker: str) -> tuple[str, str, str]:
@@ -144,7 +145,7 @@ def test_nullable_download_source_is_the_only_head_and_matches_model():
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"{NULLABLE_REVISION} (head)"
+    assert result.stdout.strip() == f"{CURRENT_HEAD_REVISION} (head)"
     assert Base.metadata.tables["download_jobs"].c.subscription_source_id.nullable
 
 
@@ -167,12 +168,12 @@ def test_predecessor_upgrade_and_fail_closed_downgrade_round_trip(
             "NO",
         )
 
-        upgraded = _alembic(database_url, "upgrade", "head")
+        upgraded = _alembic(database_url, "upgrade", NULLABLE_REVISION)
         assert upgraded.returncode == 0, upgraded.stderr
         assert asyncio.run(_schema_state(asyncpg_url)) == (NULLABLE_REVISION, "YES")
         download_id = asyncio.run(_insert_manual_download(asyncpg_url, "1"))
 
-        repeated = _alembic(database_url, "upgrade", "head")
+        repeated = _alembic(database_url, "upgrade", NULLABLE_REVISION)
         assert repeated.returncode == 0, repeated.stderr
         rejected = _alembic(database_url, "downgrade", PREDECESSOR_REVISION)
         assert rejected.returncode != 0
@@ -187,7 +188,7 @@ def test_predecessor_upgrade_and_fail_closed_downgrade_round_trip(
             PREDECESSOR_REVISION,
             "NO",
         )
-        restored = _alembic(database_url, "upgrade", "head")
+        restored = _alembic(database_url, "upgrade", NULLABLE_REVISION)
         assert restored.returncode == 0, restored.stderr
         assert asyncio.run(_schema_state(asyncpg_url)) == (NULLABLE_REVISION, "YES")
         asyncio.run(_insert_manual_download(asyncpg_url, "2"))
@@ -211,7 +212,10 @@ def test_fresh_head_accepts_manual_download_without_subscription_source(
         assert upgraded.returncode == 0, upgraded.stderr
         repeated = _alembic(database_url, "upgrade", "head")
         assert repeated.returncode == 0, repeated.stderr
-        assert asyncio.run(_schema_state(asyncpg_url)) == (NULLABLE_REVISION, "YES")
+        assert asyncio.run(_schema_state(asyncpg_url)) == (
+            CURRENT_HEAD_REVISION,
+            "YES",
+        )
         asyncio.run(_insert_manual_download(asyncpg_url, "3"))
     finally:
         asyncio.run(_drop_database(test_db_base_url, database_name))

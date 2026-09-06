@@ -5,7 +5,7 @@ import { useT, type TFunction } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type SearchQualifierToken, type SearchResponse, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
@@ -515,7 +515,7 @@ function SubscriptionsContent() {
       )}
 
       <ReferenceListLayout
-        rail={anchorsAvailable && anchors.data ? (
+        rail={anchorsAvailable && Array.isArray(anchors.data?.items) ? (
           <ReferenceNameRail
             items={anchors.data.items}
             ariaLabel={t("reference_list.anchors_label")}
@@ -624,6 +624,7 @@ function SubscriptionsContent() {
                       {creatorName}
                     </button>
                   </div>
+                  <MatchedIdentityBadge identity={s.matched_identity} />
                   <div className="entity-meta">
                     <span>{t("subscriptions.sources_summary", { enabled: summary?.enabled_source_count ?? s.enabled_source_count ?? 0, total: summary?.source_count ?? s.source_count ?? 0 })}</span>
                     <span>{t("subscriptions.last_success", { time: fmt.relative(s.last_synced_at, "subscriptions.never") })}</span>

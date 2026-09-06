@@ -73,10 +73,22 @@ async def list_subscriptions(
         for item in result["groups"]["subscriptions"]["items"]
         if (item.get("id") if isinstance(item, dict) else getattr(item, "id", None))
     ]
+    matched_identities = {
+        UUID(str(item["id"])): item.get("matched_identity")
+        for item in result["groups"]["subscriptions"]["items"]
+        if isinstance(item, dict) and item.get("id") and item.get("matched_identity")
+    }
     owned = []
     for subscription_id in candidate_ids:
         try:
-            owned.append(await membership_service.get(subscription_id))
+            item = await membership_service.get(subscription_id)
+            if subscription_id in matched_identities:
+                setattr(
+                    item,
+                    "matched_identity",
+                    matched_identities[subscription_id],
+                )
+            owned.append(item)
         except ValueError:
             continue
     return owned[:limit]

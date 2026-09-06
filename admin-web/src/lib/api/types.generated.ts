@@ -467,6 +467,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/data/creator-aliases/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backfill Creator Aliases Operation
+         * @description Enqueue the resumable projection of stored creator identity evidence.
+         */
+        post: operations["post_api_v1_admin_data_creator_aliases_backfill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dedup/cases": {
         parameters: {
             query?: never;
@@ -1362,6 +1382,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         patch: operations["patch_api_v1_creators_creator_id"];
+        trace?: never;
+    };
+    "/api/v1/creators/{creator_id}/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Creator Aliases
+         * @description List the structured current and historical identities of a creator.
+         */
+        get: operations["get_api_v1_creators_creator_id_aliases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/creators/{creator_id}/curation": {
@@ -3045,6 +3085,30 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-accounts/{account_id}/download-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Remote Account Download Auth
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        put: operations["put_api_v1_remote_accounts_account_id_download_auth"];
+        post?: never;
+        /**
+         * Delete Remote Account Download Auth
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        delete: operations["delete_api_v1_remote_accounts_account_id_download_auth"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4988,6 +5052,41 @@ export interface components {
              */
             winner: "canonical" | "staged";
         };
+        /** CreatorAliasRead */
+        CreatorAliasRead: {
+            /**
+             * Creator Id
+             * Format: uuid
+             */
+            creator_id: string;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Kind */
+            kind: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Normalized Value */
+            normalized_value: string;
+            /** Source */
+            source: string;
+            /** Source Ref */
+            source_ref?: string | null;
+            /** Value */
+            value: string;
+        };
         /** CreatorCreate */
         CreatorCreate: {
             /** Description */
@@ -5119,6 +5218,7 @@ export interface components {
             is_favorite: boolean;
             /** Last Synced At */
             last_synced_at?: string | null;
+            matched_identity?: components["schemas"]["MatchedCreatorIdentityRead"] | null;
             /** Name */
             name: string;
             /** Repository Count */
@@ -5598,6 +5698,21 @@ export interface components {
             dismissed_at?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Evidence Checked At */
+            evidence_checked_at?: string | null;
+            /** Evidence Error Code */
+            evidence_error_code?: string | null;
+            /**
+             * Evidence Status
+             * @default pending
+             * @enum {string}
+             */
+            evidence_status: "pending" | "ready" | "retrying" | "failed" | "not_required";
+            /**
+             * Evidence Version
+             * @default 1
+             */
+            evidence_version: number;
             /**
              * Id
              * Format: uuid
@@ -6259,6 +6374,27 @@ export interface components {
             /** Username */
             username: string;
         };
+        /** MatchedCreatorIdentityRead */
+        MatchedCreatorIdentityRead: {
+            /**
+             * Creator Id
+             * Format: uuid
+             */
+            creator_id: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Kind */
+            kind: string;
+            /**
+             * Match Type
+             * @enum {string}
+             */
+            match_type: "exact" | "prefix" | "fuzzy";
+            /** Source */
+            source: string;
+            /** Value */
+            value: string;
+        };
         /** MeOut */
         MeOut: {
             /** Display Name */
@@ -6654,6 +6790,18 @@ export interface components {
             credential_mask?: {
                 [key: string]: string;
             };
+            /** Download Auth Error Reason */
+            download_auth_error_reason?: string | null;
+            /** Download Auth Mask */
+            download_auth_mask?: {
+                [key: string]: string;
+            };
+            /**
+             * Download Auth Status
+             * @default unavailable
+             * @enum {string}
+             */
+            download_auth_status: "personal" | "anonymous_only" | "unhealthy" | "unavailable";
             /**
              * Has Credentials
              * @default false
@@ -6668,6 +6816,8 @@ export interface components {
             is_enabled: boolean;
             /** Last Authenticated At */
             last_authenticated_at?: string | null;
+            /** Last Download Auth Checked At */
+            last_download_auth_checked_at?: string | null;
             /** Last Scan Completed At */
             last_scan_completed_at?: string | null;
             /** Last Scan Started At */
@@ -7437,6 +7587,48 @@ export interface components {
             /** Value */
             value?: string | null;
         };
+        /** SearchGroupRead */
+        SearchGroupRead: {
+            /** Items */
+            items?: components["schemas"]["SearchResultRead"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SearchResponseRead */
+        SearchResponseRead: {
+            /**
+             * Canonical Query
+             * @default
+             */
+            canonical_query: string;
+            /** Groups */
+            groups?: {
+                [key: string]: components["schemas"]["SearchGroupRead"];
+            };
+            /**
+             * Query
+             * @default
+             */
+            query: string;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SearchResultRead */
+        SearchResultRead: {
+            matched_identity?: components["schemas"]["MatchedCreatorIdentityRead"] | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** SourceCapabilitiesRead */
         SourceCapabilitiesRead: {
             /** Can Download */
@@ -7737,6 +7929,7 @@ export interface components {
             latest_job_id?: string | null;
             /** Latest Job Status */
             latest_job_status?: string | null;
+            matched_identity?: components["schemas"]["MatchedCreatorIdentityRead"] | null;
             /** Membership Id */
             membership_id?: string | null;
             /** Name */
@@ -8461,6 +8654,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** XDownloadAuthUpdate */
+        XDownloadAuthUpdate: {
+            /** Cookie */
+            cookie: string;
         };
         /** XOAuthCallbackRequest */
         XOAuthCallbackRequest: {
@@ -9595,6 +9793,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_data_creator_aliases_backfill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -11989,6 +12234,57 @@ export interface operations {
             };
         };
     };
+    get_api_v1_creators_creator_id_aliases: {
+        parameters: {
+            query?: {
+                include_history?: boolean;
+            };
+            header?: never;
+            path: {
+                creator_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatorAliasRead"][];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_creators_creator_id_curation: {
         parameters: {
             query?: never;
@@ -13688,6 +13984,7 @@ export interface operations {
                 confidence?: string | null;
                 is_following?: boolean | null;
                 local_match?: boolean | null;
+                evidence_status?: string | null;
                 offset?: number;
                 limit?: number;
             };
@@ -16544,6 +16841,106 @@ export interface operations {
             };
         };
     };
+    put_api_v1_remote_accounts_account_id_download_auth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["XDownloadAuthUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteAccountRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_api_v1_remote_accounts_account_id_download_auth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_remote_accounts_account_id_test: {
         parameters: {
             query?: never;
@@ -17075,7 +17472,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["SearchResponseRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

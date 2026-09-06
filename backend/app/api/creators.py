@@ -13,6 +13,7 @@ from app.schemas.curation import CreatorCurationRequest, CurationCommitRead
 from app.schemas.source_creator import SourceCreatorCreate, SourceCreatorRead
 from app.schemas.creator_link import CreatorLinkCreate, CreatorLinkRead, CreatorLinkUpdate
 from app.schemas.creator_reference import CreatorReferencesRead
+from app.schemas.creator_alias import CreatorAliasRead
 from app.schemas.deletion import (
     BatchDeletionRequest,
     DeletionPreviewResponse,
@@ -210,6 +211,25 @@ async def get_creator_references(
 
     try:
         return await CreatorReferenceService(db, user.id).get_references(creator_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Creator not found") from exc
+
+
+@router.get("/{creator_id}/aliases", response_model=list[CreatorAliasRead])
+async def get_creator_aliases(
+    creator_id: UUID,
+    include_history: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+):
+    """List the structured current and historical identities of a creator."""
+    from app.services.creator_aliases import list_creator_aliases
+
+    try:
+        return await list_creator_aliases(
+            db,
+            creator_id,
+            include_history=include_history,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Creator not found") from exc
 

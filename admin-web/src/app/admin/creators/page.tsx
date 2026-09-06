@@ -2,7 +2,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
+import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";
@@ -487,7 +487,7 @@ function CreatorsContent() {
       )}
 
       <ReferenceListLayout
-        rail={anchorsAvailable && anchors.data ? (
+        rail={anchorsAvailable && Array.isArray(anchors.data?.items) ? (
           <ReferenceNameRail
             items={anchors.data.items}
             ariaLabel={t("reference_list.anchors_label")}
@@ -565,6 +565,7 @@ function CreatorsContent() {
                   {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success">{t("creators.sub_badge")}</span>}
                 </div>
                 {c.description && <p className="entity-supporting">{c.description}</p>}
+                <MatchedIdentityBadge identity={c.matched_identity} />
                 <div className="entity-meta">
                   <span>{t("creators.repository_count", { count: c.repository_count ?? 0 })}</span>
                   <span>{t("creators.source_count", { count: c.source_count ?? 0 })}</span>

@@ -48,6 +48,10 @@ function account(overrides: Record<string, unknown> = {}) {
     auto_import_limit: 25,
     has_credentials: true,
     credential_mask: { refresh_token: "••••" },
+    download_auth_status: "unavailable",
+    download_auth_error_reason: null,
+    last_download_auth_checked_at: null,
+    download_auth_mask: {},
     created_at: now,
     updated_at: now,
     ...overrides,
@@ -71,6 +75,10 @@ function candidate(id: string, overrides: Record<string, unknown> = {}) {
     },
     confidence: "high",
     confidence_reasons: ["pixiv_illustration_preview"],
+    evidence_status: "ready",
+    evidence_checked_at: now,
+    evidence_error_code: null,
+    evidence_version: 1,
     state: "pending",
     subscription_id: null,
     user_subscription_id: null,
@@ -96,6 +104,7 @@ type FixtureOptions = {
   oauthCallbackDelayMs?: number;
   accountConnectStatus?: number;
   accountConnectDelayMs?: number;
+  scans?: Record<string, unknown>[];
   onOAuthCallback?: (request: { method: string; url: string; body: Record<string, unknown> | null }) => void;
   onPrivateRequest?: (user: "a" | "b", path: string) => void;
   onMutation?: (path: string, body: Record<string, unknown>) => void;
@@ -180,7 +189,7 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
         remote_user_id: "x-user-id",
         remote_username: "x_artist",
         auth_method: "oauth2",
-        scopes: ["users.read", "follows.read", "list.read", "offline.access"],
+        scopes: ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
         credential_mask: { access_token: "••••", refresh_token: "••••" },
       });
       accounts = [...accounts.filter((item) => item.source !== "x"), connected];
@@ -196,6 +205,31 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     }
     if (accountMatch && request.method() === "DELETE") {
       accounts = accounts.filter((item) => item.id !== accountMatch[1]);
+      return route.fulfill({ status: 204 });
+    }
+    const downloadAuthMatch = path.match(/^\/api\/v1\/remote-accounts\/([^/]+)\/download-auth$/);
+    if (downloadAuthMatch && request.method() === "PUT") {
+      options.onMutation?.(path, body || {});
+      const existing = accounts.find((item) => item.id === downloadAuthMatch[1]) || account();
+      const updated = {
+        ...existing,
+        download_auth_status: "personal",
+        download_auth_error_reason: null,
+        last_download_auth_checked_at: now,
+        download_auth_mask: { cookie: "••••" },
+      };
+      accounts = accounts.map((item) => item.id === downloadAuthMatch[1] ? updated : item);
+      return json(route, updated);
+    }
+    if (downloadAuthMatch && request.method() === "DELETE") {
+      options.onMutation?.(path, {});
+      accounts = accounts.map((item) => item.id === downloadAuthMatch[1] ? {
+        ...item,
+        download_auth_status: "anonymous_only",
+        download_auth_error_reason: null,
+        last_download_auth_checked_at: null,
+        download_auth_mask: {},
+      } : item);
       return route.fulfill({ status: 204 });
     }
     if (/\/api\/v1\/remote-accounts\/[^/]+\/test$/.test(path)) {
@@ -220,13 +254,15 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       return json(route, { id: "scan-task", kind: "discovery", operation_type: "remote-discovery-scan", status: "enqueued", progress_data: { stage: "queued", current: 0, total: 1 }, created_at: now }, 201);
     }
     if (path === "/api/v1/discovery/scans" && request.method() === "GET") {
-      return json(route, { total: 1, items: [{ id: "scan-task", kind: "discovery", operation_type: "remote-discovery-scan", status: "complete", progress_data: { stage: "complete", current: 1, total: 1 }, created_at: now, updated_at: now }] });
+      const scans = options.scans || [{ id: "scan-task", kind: "discovery", operation_type: "remote-discovery-scan", status: "complete", progress_data: { phase: "complete", current: 1, total: 1 }, created_at: now, updated_at: now }];
+      return json(route, { total: scans.length, items: scans });
     }
     if (path === "/api/v1/discovery/candidates" && request.method() === "GET") {
       await options.candidateWait?.(url);
       if (options.candidatesStatus) return json(route, { detail: "not available" }, options.candidatesStatus);
       const state = url.searchParams.get("state");
       const confidence = url.searchParams.get("confidence");
+      const evidenceStatus = url.searchParams.get("evidence_status");
       const following = url.searchParams.get("is_following");
       const localMatch = url.searchParams.get("local_match");
       const accountId = url.searchParams.get("remote_account_id");
@@ -235,6 +271,7 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
       const filtered = candidates.filter((item) =>
         (!state || item.state === state)
         && (!confidence || item.confidence === confidence)
+        && (!evidenceStatus || item.evidence_status === evidenceStatus)
         && (!accountId || item.remote_account_id === accountId)
         && (following === null || String(item.is_following) === following)
         && (localMatch === null || String(
@@ -477,7 +514,7 @@ test("scans, filters, imports without immediate sync, dismisses and restores vis
 
   await page.getByRole("table").getByRole("checkbox", { name: "Select Artist two" }).check();
   await page.getByRole("button", { name: "Ignore selected" }).click();
-  await page.getByLabel("Status filter").selectOption("dismissed");
+  await page.getByLabel("Status filter", { exact: true }).selectOption("dismissed");
   await expect(page.getByRole("table").getByText("Artist two")).toBeVisible();
   await page.getByRole("table").getByRole("button", { name: "Restore Artist two" }).click();
   expect(mutations.some((item) => item.body.action === "dismiss")).toBe(true);
@@ -714,9 +751,10 @@ test("switches users in one session without flashing or reusing private discover
 
   await page.getByRole("button", { name: "User menu" }).click();
   await page.getByRole("menuitem", { name: "Sign Out" }).click();
-  await expect(page.getByRole("heading", { name: "auto-gallery" })).toBeVisible();
+  await expect(page.getByTestId("login-hero")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign In" })).toBeVisible();
   await page.getByLabel("Username").fill("discovery-viewer-b");
-  await page.getByLabel("Password").fill("fixture-password");
+  await page.getByLabel("Password", { exact: true }).fill("fixture-password");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page.getByRole("button", { name: "User menu" })).toHaveAttribute("title", "Discovery Viewer B");
 
@@ -1033,6 +1071,114 @@ test("closed auto gate shows a configured policy as paused and preserves it on s
   expect(settingsMutation?.body).not.toHaveProperty("auto_import_enabled");
   expect(settingsMutation?.body).not.toHaveProperty("auto_import_min_confidence");
   expect(settingsMutation?.body).not.toHaveProperty("auto_import_limit");
+});
+
+test("filters tentative evidence and warns before a manual import", async ({ context, page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installFixtures(context, {
+    accounts: [account()],
+    candidates: [
+      candidate("ready"),
+      candidate("pending", {
+        confidence: "medium",
+        confidence_reasons: ["art_bio"],
+        evidence_status: "pending",
+        evidence_checked_at: null,
+      }),
+    ],
+  });
+  await page.goto("/admin/discovery");
+
+  await page.getByLabel("Evidence status filter").selectOption("pending");
+  const pendingRow = page.getByRole("table").getByRole("row").filter({ hasText: "Artist pending" });
+  await expect(pendingRow).toContainText("Medium · Tentative");
+  await expect(pendingRow).toContainText("Pending");
+  await expect(page.getByRole("table").getByText("Artist ready")).toHaveCount(0);
+
+  await pendingRow.getByRole("checkbox", { name: "Select Artist pending" }).check();
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText("Evidence is incomplete for 1 candidates");
+  await expect(page.getByLabel("Sync immediately")).toBeEnabled();
+});
+
+test("shows discovery cooldown progress independently from account health", async ({ context, page }) => {
+  const xAccount = account({
+    id: "acc-x",
+    source: "x",
+    auth_method: "oauth2",
+    scopes: ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
+    remote_user_id: "x-user-id",
+    remote_username: "x_artist",
+    download_auth_status: "anonymous_only",
+  });
+  await installFixtures(context, {
+    accounts: [xAccount],
+    scans: [{
+      id: "scan-x",
+      kind: "discovery",
+      operation_type: "remote-discovery-scan",
+      status: "waiting",
+      triggering_remote_account_id: "acc-x",
+      progress_data: {
+        phase: "cooldown",
+        candidates_seen: 31,
+        evidence_total: 25,
+        evidence_completed: 8,
+        evidence_failed: 2,
+        next_retry_at: "2026-09-02T08:05:00Z",
+      },
+      created_at: now,
+      updated_at: now,
+    }],
+  });
+  await page.goto("/admin/discovery");
+
+  const xCard = page.getByRole("article", { name: "X remote account" });
+  await expect(xCard.getByText("Rate limited; cooling down")).toBeVisible();
+  await expect(xCard.getByRole("progressbar", { name: "Rate limited; cooling down" })).toHaveAttribute("aria-valuenow", "40");
+  await expect(xCard.getByText("Collection 10/25 · 31 candidates seen")).toBeVisible();
+  await expect(xCard.getByText("Healthy", { exact: true })).toBeVisible();
+});
+
+test("manages an identity-bound X download Cookie and blocks protected immediate sync without it", async ({ context, page }) => {
+  const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const xAccount = account({
+    id: "acc-x",
+    source: "x",
+    auth_method: "oauth2",
+    scopes: ["tweet.read", "users.read", "follows.read", "list.read", "offline.access"],
+    remote_user_id: "x-user-id",
+    remote_username: "x_artist",
+    download_auth_status: "anonymous_only",
+  });
+  await installFixtures(context, {
+    accounts: [xAccount],
+    candidates: [candidate("protected", {
+      remote_account_id: "acc-x",
+      remote_url: "https://x.com/protected_artist",
+      metadata: { username: "protected_artist", protected: true, local_creator_ids: [] },
+    })],
+    onMutation: (path, body) => mutations.push({ path, body }),
+  });
+  await page.goto("/admin/discovery");
+
+  await page.getByRole("table").getByRole("checkbox", { name: "Select Artist protected" }).check();
+  await page.getByRole("button", { name: "Import selected" }).click();
+  await expect(page.getByText("The selection includes a protected X source.")).toBeVisible();
+  await expect(page.getByLabel("Sync immediately")).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("button", { name: "Download auth", exact: true }).click();
+  await page.getByLabel("X Cookie").fill("auth_token=browser-only-secret");
+  await page.getByRole("button", { name: "Verify and save" }).click();
+  await expect(page.getByText("Personal Cookie healthy")).toBeVisible();
+  expect(mutations.find((mutation) => mutation.path.endsWith("/download-auth") && mutation.body.cookie)?.body)
+    .toEqual({ cookie: "auth_token=browser-only-secret" });
+
+  await page.getByRole("button", { name: "Download auth", exact: true }).click();
+  await page.getByRole("button", { name: "Clear Cookie" }).click();
+  await expect(page.getByText("Public content only (anonymous)")).toBeVisible();
+  expect(mutations.some((mutation) => mutation.path.endsWith("/download-auth") && !mutation.body.cookie)).toBe(true);
 });
 
 test("keeps the account and candidate workbench usable on mobile", async ({ context, page }) => {

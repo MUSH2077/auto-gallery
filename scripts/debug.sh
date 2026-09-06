@@ -12,7 +12,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONTAINERS=(backend worker-download worker-import worker-operations scheduler admin-web postgres redis meilisearch)
+CONTAINERS=(backend worker-download worker-import worker-operations worker-discovery scheduler admin-web postgres redis meilisearch)
 OK=0; WARN=0; ERR=0
 
 header(){ echo -e "\n${BOLD}${CYAN}═══ $1 ═══${NC}"; }
@@ -55,7 +55,7 @@ done
 
 # ═══ 2. Error Logs ═══
 header "Recent Errors (last 5 per container)"
-for c in backend worker-download worker-import worker-operations scheduler; do
+for c in backend worker-download worker-import worker-operations worker-discovery scheduler; do
     name="auto-gallery-${c}-1"
     n=$(docker logs "$name" --tail 100 2>&1 | grep -ciE 'error|exception|traceback|timeout|stalled|failed' || true)
     [ "$n" -eq 0 ] && { ok "$c: clean"; continue; }

@@ -121,7 +121,7 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
-- **Remote discovery queue**: `worker-operations` supervises an independent
+- **Remote discovery queue**: `worker-discovery` exclusively supervises the independent
   `discovery` child queue. The scheduler only admits due remote accounts;
   provider pagination and cursor checkpoints run in the child worker. Jobs
   carry opaque task/account IDs and never credential material.

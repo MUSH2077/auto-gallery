@@ -45,6 +45,17 @@ class SubscriptionService:
         self.db = db
         self.repo = SubscriptionRepository(db)
 
+    async def _refresh_creator_aliases(self, creator_ids) -> None:
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        ids = tuple(dict.fromkeys(item for item in creator_ids if item is not None))
+        if ids:
+            await backfill_creator_alias_batch(
+                self.db,
+                ids,
+                request_projection=False,
+            )
+
     async def _work_ids_for_repository_states(
         self,
         states: list[tuple[str, str | None, str | None]],
@@ -116,6 +127,7 @@ class SubscriptionService:
         if merged.get("schedule_mode") != "calendar":
             merged["schedule_rule"] = None
         sub = await self.repo.create(merged)
+        await self._refresh_creator_aliases((sub.creator_id,))
         await request_search_projection(
             self.db,
             creator_ids=[sub.creator_id],
@@ -241,6 +253,7 @@ class SubscriptionService:
 
         creator_ids = {old_creator_id, sub.creator_id}
         creator_ids.discard(None)
+        await self._refresh_creator_aliases(creator_ids)
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -285,6 +298,8 @@ class SubscriptionService:
 
         # 3. Delete the subscription
         await self.db.delete(sub)
+        await self.db.flush()
+        await self._refresh_creator_aliases((creator_id,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -314,6 +329,7 @@ class SubscriptionService:
             ss.source_creator_id,
             ss.source_url,
         )])
+        await self._refresh_creator_aliases((creator_id,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -354,6 +370,7 @@ class SubscriptionService:
             old_state,
             (ss.source, ss.source_creator_id, ss.source_url),
         ])
+        await self._refresh_creator_aliases((sub.creator_id if sub else None,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -380,6 +397,7 @@ class SubscriptionService:
             ss.source_url,
         )])
         await self.repo.delete_source(ss)
+        await self._refresh_creator_aliases((sub.creator_id if sub else None,))
         await request_search_projection(
             self.db,
             affected_work_ids,

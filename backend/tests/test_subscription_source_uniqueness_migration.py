@@ -15,7 +15,7 @@ import pytest
 
 PREDECESSOR_REVISION = "0d7e8f9a1b2c"
 ALIGNMENT_REVISION = "a6c8e0f2b4d7"
-CURRENT_HEAD_REVISION = "b8d0f2a4c6e9"
+CURRENT_HEAD_REVISION = "d0f2a4c6e8b1"
 OLD_CONSTRAINT = "uq_subscription_sources_sub_source"
 NEW_CONSTRAINT = "uq_subscription_sources_sub_url"
 OWNERSHIP_CONSTRAINT = "uq_subscription_sources_id_subscription"
@@ -246,7 +246,7 @@ def test_upgrade_refuses_duplicate_urls_then_allows_distinct_and_null_identities
         asyncio.run(_seed_subscription(asyncpg_url))
         asyncio.run(seed_duplicate_urls())
 
-        rejected = _alembic(database_url, "upgrade", "head")
+        rejected = _alembic(database_url, "upgrade", ALIGNMENT_REVISION)
         assert rejected.returncode != 0
         assert "duplicate non-null subscription source URLs" in rejected.stderr
         assert asyncio.run(_constraints(asyncpg_url)) == {
@@ -255,9 +255,9 @@ def test_upgrade_refuses_duplicate_urls_then_allows_distinct_and_null_identities
         }
 
         asyncio.run(remove_conflict())
-        upgraded = _alembic(database_url, "upgrade", "head")
+        upgraded = _alembic(database_url, "upgrade", ALIGNMENT_REVISION)
         assert upgraded.returncode == 0, upgraded.stderr
-        repeated = _alembic(database_url, "upgrade", "head")
+        repeated = _alembic(database_url, "upgrade", ALIGNMENT_REVISION)
         assert repeated.returncode == 0, repeated.stderr
         assert asyncio.run(_constraints(asyncpg_url)) == {
             NEW_CONSTRAINT: ("subscription_id", "source_url"),

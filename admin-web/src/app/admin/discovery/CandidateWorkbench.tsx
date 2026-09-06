@@ -14,6 +14,7 @@ import {
   type DiscoveryCandidate,
   type DiscoveryCandidateState,
   type DiscoveryConfidence,
+  type DiscoveryEvidenceStatus,
   type RemoteAccountRead,
   type RemoteDiscoverySource,
 } from "@/lib/api";
@@ -82,7 +83,7 @@ function ConfidenceDetails({ candidate }: { candidate: DiscoveryCandidate }) {
   const tone = candidate.confidence === "high" ? "up" : candidate.confidence === "medium" ? "warning" : "unknown";
   return (
     <div className="min-w-[10rem]">
-      <StatusBadge status={tone} label={t(`discovery.confidence_${candidate.confidence}`)} />
+      <StatusBadge status={tone} label={`${t(`discovery.confidence_${candidate.confidence}`)}${["ready", "not_required"].includes(candidate.evidence_status) ? "" : ` · ${t("discovery.confidence_tentative")}`}`} />
       <ul className="mt-1.5 space-y-0.5 text-xs leading-4 text-muted">
         {(candidate.confidence_reasons || []).slice(0, 3).map((reason, index) => (
           <li key={`${typeof reason === "string" ? reason : "reason"}-${index}`}>• {confidenceReasonLabel(t, reason)}</li>
@@ -90,6 +91,16 @@ function ConfidenceDetails({ candidate }: { candidate: DiscoveryCandidate }) {
       </ul>
     </div>
   );
+}
+
+function EvidenceStatus({ candidate }: { candidate: DiscoveryCandidate }) {
+  const t = useT();
+  const tone = candidate.evidence_status === "ready" || candidate.evidence_status === "not_required"
+    ? "up"
+    : candidate.evidence_status === "failed"
+      ? "failed"
+      : "warning";
+  return <StatusBadge status={tone} label={t(`discovery.evidence_${candidate.evidence_status}`)} />;
 }
 
 function CandidateIdentity({
@@ -195,12 +206,16 @@ function ImportDialog({
   pending,
   onClose,
   onConfirm,
+  unfinishedCount,
+  syncDisabled,
 }: {
   count: number;
   open: boolean;
   pending: boolean;
   onClose: () => void;
   onConfirm: (syncNow: boolean) => void;
+  unfinishedCount: number;
+  syncDisabled: boolean;
 }) {
   const t = useT();
   const [syncNow, setSyncNow] = useState(false);
@@ -210,8 +225,10 @@ function ImportDialog({
   return (
     <Modal open={open} onClose={onClose} title={t("discovery.import_title")}>
       <p className="text-sm leading-5 text-muted">{t("discovery.import_message", { count })}</p>
+      {unfinishedCount > 0 ? <p role="alert" className="mt-3 rounded-md border border-warning/30 bg-warning-subtle p-3 text-sm text-warning">{t("discovery.import_evidence_warning", { count: unfinishedCount })}</p> : null}
+      {syncDisabled ? <p className="mt-3 rounded-md border border-border bg-subtle p-3 text-sm text-muted">{t("discovery.protected_download_cookie_required")}</p> : null}
       <label className="mt-4 flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm text-fg">
-        <input type="checkbox" className="rounded" checked={syncNow} onChange={(event) => setSyncNow(event.target.checked)} />
+        <input type="checkbox" className="rounded" disabled={syncDisabled} checked={syncNow && !syncDisabled} onChange={(event) => setSyncNow(event.target.checked)} />
         {t("discovery.sync_immediately")}
       </label>
       <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -250,6 +267,9 @@ export default function CandidateWorkbench({
   const [status, setStatus] = useState<DiscoveryCandidateState | "">(() => (
     paramValue(searchParams.get("status"), ["pending", "dismissed", "imported", "conflict"] as const)
   ));
+  const [evidence, setEvidence] = useState<DiscoveryEvidenceStatus | "">(() => (
+    paramValue(searchParams.get("evidence"), ["pending", "ready", "retrying", "failed", "not_required"] as const)
+  ));
   const [following, setFollowing] = useState<"" | "true" | "false">(() => (
     paramValue(searchParams.get("following"), ["true", "false"] as const)
   ));
@@ -269,6 +289,7 @@ export default function CandidateWorkbench({
   const desktopLayout = useDesktopCandidateLayout();
   const storageKey = `discovery-workbench:${userId}`;
   const accountBySource = useMemo(() => new Map(accounts.map((account) => [account.source, account])), [accounts]);
+  const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const accountId = provider ? accountBySource.get(provider)?.id : undefined;
   const effectiveState = status || (local === "conflict" ? "conflict" : undefined);
   const filters = {
@@ -277,6 +298,7 @@ export default function CandidateWorkbench({
     confidence: confidence || undefined,
     isFollowing: following === "" ? undefined : following === "true",
     localMatch: local === "matched" ? true : local === "unmatched" ? false : undefined,
+    evidenceStatus: evidence || undefined,
     offset: (page - 1) * PAGE_SIZE,
     limit: PAGE_SIZE,
   };
@@ -286,12 +308,13 @@ export default function CandidateWorkbench({
     if (provider) next.set("provider", provider);
     if (confidence) next.set("confidence", confidence);
     if (status) next.set("status", status);
+    if (evidence) next.set("evidence", evidence);
     if (following) next.set("following", following);
     if (local) next.set("local", local);
     if (page > 1) next.set("page", String(page));
     const query = next.toString();
     return `${adminRoutes.discovery}${query ? `?${query}` : ""}`;
-  }, [confidence, following, local, page, provider, status]);
+  }, [confidence, evidence, following, local, page, provider, status]);
 
   useEffect(() => {
     if (window.location.pathname === adminRoutes.discovery
@@ -439,6 +462,13 @@ export default function CandidateWorkbench({
   const selectedPending = selectedRows.filter((candidate) => candidate.state === "pending" && previewEnabledAccountIds.has(candidate.remote_account_id)).map((candidate) => candidate.id);
   const selectedDismissable = selectedRows.filter((candidate) => candidate.state === "pending" || candidate.state === "conflict").map((candidate) => candidate.id);
   const selectedDismissed = selectedRows.filter((candidate) => candidate.state === "dismissed").map((candidate) => candidate.id);
+  const importRows = visible.filter((candidate) => importIds.includes(candidate.id));
+  const unfinishedImportCount = importRows.filter((candidate) => !["ready", "not_required"].includes(candidate.evidence_status)).length;
+  const protectedSyncBlocked = importRows.some((candidate) => (
+    candidate.metadata?.protected === true
+    && accountById.get(candidate.remote_account_id)?.source === "x"
+    && accountById.get(candidate.remote_account_id)?.download_auth_status !== "personal"
+  ));
 
   if (!enabled) return null;
 
@@ -454,6 +484,17 @@ export default function CandidateWorkbench({
             <select className="select w-full sm:min-w-36" value={provider} onChange={(event) => { setProvider(event.target.value as typeof provider); resetFilters(); }}>
               <option value="">{t("discovery.filter_all")}</option>
               {accounts.map((account) => <option key={account.id} value={account.source}>{providerLabel(t, account.source)}</option>)}
+            </select>
+          </label>
+          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
+            <span>{t("discovery.filter_evidence")}</span>
+            <select className="select w-full sm:min-w-36" value={evidence} onChange={(event) => { setEvidence(event.target.value as typeof evidence); resetFilters(); }}>
+              <option value="">{t("discovery.filter_all")}</option>
+              <option value="pending">{t("discovery.evidence_pending")}</option>
+              <option value="retrying">{t("discovery.evidence_retrying")}</option>
+              <option value="ready">{t("discovery.evidence_ready")}</option>
+              <option value="failed">{t("discovery.evidence_failed")}</option>
+              <option value="not_required">{t("discovery.evidence_not_required")}</option>
             </select>
           </label>
           <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
@@ -547,6 +588,7 @@ export default function CandidateWorkbench({
                     <th className="px-3 py-3 text-left">{t("discovery.candidate_identity")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.provider")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.confidence")}</th>
+                    <th className="px-3 py-3 text-left">{t("discovery.evidence")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.local_match")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.remote_status")}</th>
                     <th className="px-3 py-3 text-left">{t("discovery.updated")}</th>
@@ -572,6 +614,7 @@ export default function CandidateWorkbench({
                         <td className="px-3 py-3"><CandidateIdentity candidate={candidate} loadMedia={desktopLayout === true} /></td>
                         <td className="px-3 py-3"><span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${getSourceBadgeColor(source)}`}>{providerLabel(t, source)}</span></td>
                         <td className="px-3 py-3"><ConfidenceDetails candidate={candidate} /></td>
+                        <td className="px-3 py-3"><EvidenceStatus candidate={candidate} /></td>
                         <td className="px-3 py-3" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><LocalMatch candidate={candidate} /></td>
                         <td className="px-3 py-3"><StatusBadge status={candidate.is_following ? "up" : "warning"} label={t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")} /></td>
                         <td className="px-3 py-3 text-xs text-muted"><span className="whitespace-nowrap">{fmt.dateTime(candidate.updated_at)}</span></td>
@@ -606,6 +649,7 @@ export default function CandidateWorkbench({
                       <div><p className="mb-1 text-muted">{t("discovery.provider")}</p><span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${getSourceBadgeColor(source)}`}>{providerLabel(t, source)}</span></div>
                       <div><p className="mb-1 text-muted">{t("discovery.remote_status")}</p><p className="font-medium text-fg">{t(candidate.is_following ? "discovery.following" : "discovery.unfollowed")}</p></div>
                       <div className="col-span-2"><ConfidenceDetails candidate={candidate} /></div>
+                      <div className="col-span-2"><p className="mb-1 text-muted">{t("discovery.evidence")}</p><EvidenceStatus candidate={candidate} /></div>
                       <div className="col-span-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><LocalMatch candidate={candidate} /></div>
                     </div>
                     <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
@@ -623,7 +667,7 @@ export default function CandidateWorkbench({
         ) : null}
       </SectionPanel>
 
-      <ImportDialog count={importIds.length} open={importIds.length > 0} pending={batch.isPending} onClose={() => setImportIds([])} onConfirm={(syncNow) => batch.mutate({ ids: importIds, action: "import", syncNow })} />
+      <ImportDialog count={importIds.length} unfinishedCount={unfinishedImportCount} syncDisabled={protectedSyncBlocked} open={importIds.length > 0} pending={batch.isPending} onClose={() => setImportIds([])} onConfirm={(syncNow) => batch.mutate({ ids: importIds, action: "import", syncNow: syncNow && !protectedSyncBlocked })} />
       <ConflictResolutionDialog candidate={resolveCandidate} open={!!resolveCandidate} pending={resolve.isPending} error={resolveError} onClose={() => { setResolveCandidate(null); setResolveError(null); }} onResolve={(value) => resolve.mutate(value)} />
     </>
   );

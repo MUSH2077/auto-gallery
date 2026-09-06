@@ -146,8 +146,8 @@ export default function TagDetailPage() {
             <>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {works.data.items.map((w: any) => (
-                  <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle transition-colors">
-                    <div className="aspect-[4/3] bg-subtle">
+                  <Link key={w.id} href={`/admin/works/${w.id}`} className="media-motion-card group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle">
+                    <div className="media-motion-visual aspect-[4/3] overflow-hidden bg-subtle">
                       {w.thumbnail_asset_id ? (
                         <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" />
                       ) : (

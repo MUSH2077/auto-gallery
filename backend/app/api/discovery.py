@@ -6,10 +6,12 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequirePermission
 from app.database import get_db
+from app.models import DiscoveryCandidate, RemoteAccount
 from app.schemas.remote_discovery import (
     DiscoveryCandidateBatchAction,
     DiscoveryCandidateRead,
@@ -119,6 +121,7 @@ async def list_discovery_candidates(
     confidence: str | None = None,
     is_following: bool | None = None,
     local_match: bool | None = None,
+    evidence_status: str | None = None,
     offset: int = 0,
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -131,6 +134,7 @@ async def list_discovery_candidates(
         confidence=confidence,
         is_following=is_following,
         local_match=local_match,
+        evidence_status=evidence_status,
         offset=offset,
         limit=limit,
     )
@@ -276,6 +280,28 @@ async def batch_discovery_candidates(
 ):
     service = RemoteDiscoveryService(db)
     try:
+        if data.action == "import" and data.immediate_sync:
+            protected_rows = (
+                await db.execute(
+                    select(DiscoveryCandidate, RemoteAccount)
+                    .join(
+                        RemoteAccount,
+                        RemoteAccount.id == DiscoveryCandidate.remote_account_id,
+                    )
+                    .where(
+                        DiscoveryCandidate.user_id == user.id,
+                        DiscoveryCandidate.id.in_(data.ids),
+                        RemoteAccount.user_id == user.id,
+                        RemoteAccount.source == "x",
+                    )
+                )
+            ).all()
+            if any(
+                (candidate.candidate_metadata or {}).get("protected") is True
+                and account.download_auth_status != "personal"
+                for candidate, account in protected_rows
+            ):
+                raise ValueError("download_cookie_required")
         candidates = await service.batch_action(user.id, data.ids, action=data.action)
         subscription_ids = {
             candidate.subscription_id
@@ -324,6 +350,28 @@ async def resolve_discovery_candidate(
 ):
     service = RemoteDiscoveryService(db)
     try:
+        if data.immediate_sync:
+            protected_row = (
+                await db.execute(
+                    select(DiscoveryCandidate, RemoteAccount)
+                    .join(
+                        RemoteAccount,
+                        RemoteAccount.id == DiscoveryCandidate.remote_account_id,
+                    )
+                    .where(
+                        DiscoveryCandidate.id == candidate_id,
+                        DiscoveryCandidate.user_id == user.id,
+                        RemoteAccount.user_id == user.id,
+                        RemoteAccount.source == "x",
+                    )
+                )
+            ).first()
+            if (
+                protected_row is not None
+                and (protected_row[0].candidate_metadata or {}).get("protected") is True
+                and protected_row[1].download_auth_status != "personal"
+            ):
+                raise ValueError("download_cookie_required")
         await service.resolve_candidate(
             user.id,
             candidate_id,

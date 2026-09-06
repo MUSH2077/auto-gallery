@@ -237,8 +237,19 @@ def test_private_discovery_models_register_ownership_and_source_constraints():
     assert isinstance(accounts.c.scan_cursor.type, JSONB)
     assert isinstance(accounts.c.scopes.type, JSONB)
     assert isinstance(accounts.c.collection_selectors.type, JSONB)
+    assert {
+        "download_auth_status",
+        "download_auth_error_reason",
+        "last_download_auth_checked_at",
+    }.issubset(accounts.c.keys())
     assert isinstance(candidates.c.metadata.type, JSONB)
     assert candidates.c.is_following.nullable is False
+    assert {
+        "evidence_status",
+        "evidence_checked_at",
+        "evidence_error_code",
+        "evidence_version",
+    }.issubset(candidates.c.keys())
     membership_checks = {
         constraint.name
         for constraint in memberships.constraints
@@ -373,6 +384,7 @@ def test_remote_account_read_and_repr_never_expose_ciphertext():
         auto_import_enabled=False,
         auto_import_min_confidence="high",
         auto_import_limit=25,
+        download_auth_status="anonymous_only",
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -383,6 +395,7 @@ def test_remote_account_read_and_repr_never_expose_ciphertext():
     assert payload["auth_method"] == "oauth2"
     assert payload["scopes"] == ["users.read", "follows.read"]
     assert payload["collection_selectors"] == [{"list_id": "123"}]
+    assert payload["download_auth_status"] == "anonymous_only"
     assert "ciphertext-that-must-stay-private" not in repr(account)
 
 
@@ -409,6 +422,10 @@ def test_candidate_read_uses_canonical_identity_and_remote_follow_state():
 
     assert payload["source_creator_id"] == "12539859"
     assert payload["is_following"] is True
+    assert payload["evidence_status"] == "pending"
+    assert payload["evidence_checked_at"] is None
+    assert payload["evidence_error_code"] is None
+    assert payload["evidence_version"] == 1
     assert "remote_creator_id" not in payload
 
 

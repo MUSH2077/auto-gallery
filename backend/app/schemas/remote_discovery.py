@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
 
@@ -12,6 +12,7 @@ from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule
 RemoteSource = Literal["pixiv", "x", "bilibili"]
 Confidence = Literal["high", "medium", "low"]
 CandidateState = Literal["pending", "dismissed", "imported", "conflict"]
+EvidenceStatus = Literal["pending", "ready", "retrying", "failed", "not_required"]
 AuthMethod = Literal["refresh_token", "oauth2", "cookie", "sessdata"]
 StoredScheduleMode = Literal["interval", "calendar", "manual"]
 
@@ -119,7 +120,7 @@ class RemoteAccountCreate(BaseModel):
     remote_user_id: str | None = Field(default=None, max_length=255)
     remote_username: str | None = Field(default=None, max_length=255)
     auth_method: AuthMethod | None = None
-    scopes: list[str] = Field(default_factory=list, max_length=4)
+    scopes: list[str] = Field(default_factory=list, max_length=5)
     collection_selectors: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     is_enabled: bool = True
     scan_interval_hours: int = Field(default=24, ge=1)
@@ -146,7 +147,7 @@ class RemoteAccountUpdate(BaseModel):
     remote_user_id: str | None = Field(default=None, max_length=255)
     remote_username: str | None = Field(default=None, max_length=255)
     auth_method: AuthMethod | None = None
-    scopes: list[str] | None = Field(default=None, max_length=4)
+    scopes: list[str] | None = Field(default=None, max_length=5)
     collection_selectors: list[dict[str, Any]] | None = Field(default=None, max_length=200)
     is_enabled: bool | None = None
     scan_interval_hours: int | None = Field(default=None, ge=1)
@@ -159,6 +160,10 @@ class RemoteAccountUpdate(BaseModel):
 class XOAuthCallbackRequest(BaseModel):
     state: str = Field(min_length=20, max_length=200)
     code: str = Field(min_length=1, max_length=2000)
+
+
+class XDownloadAuthUpdate(BaseModel):
+    cookie: str = Field(min_length=1, max_length=16_384)
 
 
 class RemoteAccountRead(BaseModel):
@@ -174,6 +179,12 @@ class RemoteAccountRead(BaseModel):
     auth_status: str | None = None
     auth_error_reason: str | None = None
     last_authenticated_at: datetime | None = None
+    download_auth_status: Literal[
+        "personal", "anonymous_only", "unhealthy", "unavailable"
+    ] = "unavailable"
+    download_auth_error_reason: str | None = None
+    last_download_auth_checked_at: datetime | None = None
+    download_auth_mask: dict[str, str] = Field(default_factory=dict)
     last_scan_started_at: datetime | None = None
     last_scan_completed_at: datetime | None = None
     next_scan_at: datetime | None = None
@@ -219,8 +230,22 @@ class DiscoveryCandidateRead(BaseModel):
     imported_at: datetime | None = None
     last_seen_at: datetime | None = None
     is_following: bool
+    evidence_status: EvidenceStatus = "pending"
+    evidence_checked_at: datetime | None = None
+    evidence_error_code: str | None = None
+    evidence_version: int = Field(default=1, ge=1)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("evidence_status", mode="before")
+    @classmethod
+    def default_evidence_status(cls, value):
+        return value or "pending"
+
+    @field_validator("evidence_version", mode="before")
+    @classmethod
+    def default_evidence_version(cls, value):
+        return value or 1
 
     model_config = {"from_attributes": True}
 

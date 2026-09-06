@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.schemas.curation import CurationStateRead
+from app.schemas.search import MatchedCreatorIdentityRead
 
 
 class CreatorCreate(BaseModel):
@@ -41,6 +42,7 @@ class CreatorRead(BaseModel):
     repository_count: int | None = None
     last_synced_at: datetime | None = None
     curation_state: CurationStateRead | None = None
+    matched_identity: MatchedCreatorIdentityRead | None = None
     created_at: datetime
     updated_at: datetime
 

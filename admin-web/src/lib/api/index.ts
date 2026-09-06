@@ -152,6 +152,10 @@ export const api = {
   },
 
   getCreator: (id: string) => request<T.Creator>(`/api/v1/creators/${id}`),
+  listCreatorAliases: (id: string, includeHistory = true) =>
+    request<T.CreatorAlias[]>(
+      `/api/v1/creators/${id}/aliases?include_history=${includeHistory}`,
+    ),
   getCreatorTimeline: (creatorId: string, fromDate?: string, toDate?: string) => {
       const q = new URLSearchParams();
       if (fromDate) q.set("from_date", fromDate);
@@ -991,6 +995,7 @@ export const queryKeys = {
       filters?.confidence || "all",
       filters?.isFollowing === undefined ? "all" : filters.isFollowing,
       filters?.localMatch === undefined ? "all" : filters.localMatch,
+      filters?.evidenceStatus || "all",
       filters?.offset || 0,
       filters?.limit || 25,
     ] as const,
