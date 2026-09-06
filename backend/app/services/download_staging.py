@@ -21,6 +21,7 @@ from typing import Any
 
 MANIFEST_NAME = ".auto-gallery-stage.json"
 MANIFEST_VERSION = 1
+RETAINED_PROMOTION_DIR = ".auto-gallery-promote-retained"
 MAX_SAFE_METADATA_BYTES = 8 * 1024 * 1024
 _INCOMPLETE_SUFFIXES = (
     ".part",
@@ -204,34 +205,57 @@ class DownloadStage:
         self._write_manifest()
 
     def promote(self, *, provider: Any | None = None) -> StagePromotion:
-        """Promote completed files without ever replacing an existing target."""
+        """Promote completed files using two durable whole-batch checkpoints."""
 
         staged_files = self._completed_staged_files()
-        planned = self._manifest.setdefault("planned", {})
-        promoted = self._manifest.setdefault("promoted", {})
+        batch = self._manifest.get("promotion_batch")
+        if isinstance(batch, dict) and batch.get("state") == "promoted":
+            new_paths = self._new_paths_after_promoted_batch(batch, staged_files)
+            if not new_paths:
+                return self._finish_promoted_batch(batch)
+            entries = self._validate_promoted_batch(batch)
+            self._cleanup_promoted_sources(entries, preserve=new_paths)
+            self._manifest.pop("promotion_batch", None)
+            staged_files = self._completed_staged_files()
+        if not isinstance(batch, dict) or batch.get("state") != "prepared":
+            batch = self._prepare_promotion_batch(staged_files, provider=provider)
+        return self._execute_promotion_batch(batch, provider=provider)
+
+    def _prepare_promotion_batch(
+        self,
+        staged_files: dict[str, Path],
+        *,
+        provider: Any | None,
+    ) -> dict[str, Any]:
+        """Persist every mutation and recovery source before touching targets."""
+
+        planned = dict(self._manifest.get("planned") or {})
+        promoted = dict(self._manifest.get("promoted") or {})
+        metadata_updates = dict(self._manifest.get("metadata_updates") or {})
         for relative, staged in staged_files.items():
             planned[relative] = _file_identity(staged)
 
-        self._manifest["state"] = "promoting"
-        self._manifest["conflicts"] = []
-        self._manifest["conflict_details"] = []
-        metadata_updates = dict(self._manifest.get("metadata_updates") or {})
-        self._manifest["metadata_updates"] = metadata_updates
-        # The complete recovery plan is durable before the first canonical link.
-        self._write_manifest()
-
+        entries: dict[str, dict[str, Any]] = {}
         conflicts: list[str] = []
         conflict_details: list[dict[str, Any]] = []
         for relative in sorted(planned):
             staged = self.root / Path(PurePosixPath(relative))
-            target = self._canonical_target(relative)
+            target = self._canonical_target(relative, create_parent=False)
+            entry: dict[str, Any] = {
+                "relative_path": relative,
+                "planned_identity": planned[relative],
+            }
             if staged.exists() or staged.is_symlink():
                 self._validate_regular_file(staged, label="staged")
                 if target.exists() or target.is_symlink():
                     if target.is_symlink() or not target.is_file():
                         conflicts.append(relative)
                         conflict_details.append(_conflict_detail(relative, staged, target))
-                    elif not _files_equal(staged, target):
+                        continue
+                    if _files_equal(staged, target):
+                        entry["action"] = "accept_existing"
+                        entry["target_identity"] = _file_identity(target)
+                    else:
                         update = _safe_metadata_update(
                             relative,
                             staged,
@@ -242,8 +266,16 @@ class DownloadStage:
                         if update is None:
                             conflicts.append(relative)
                             conflict_details.append(_conflict_detail(relative, staged, target))
-                        else:
-                            metadata_updates[relative] = update
+                            continue
+                        metadata_updates[relative] = update
+                        entry.update({
+                            "action": "replace_metadata",
+                            "retained_path": self._retained_relative(relative),
+                            "previous_sha256": update["previous_sha256"],
+                            "replacement_sha256": update["replacement_sha256"],
+                        })
+                else:
+                    entry["action"] = "link"
             elif target.exists() or target.is_symlink():
                 if target.is_symlink() or not target.is_file():
                     conflicts.append(relative)
@@ -255,129 +287,444 @@ class DownloadStage:
                     isinstance(recovered_update, dict)
                     and recovered_update.get("replacement_sha256") == _sha256(target)
                 ):
-                    recovered_update["state"] = "applied"
-                    promoted[relative] = target_identity
-                elif not (
+                    entry.update({
+                        "action": "recovered_metadata",
+                        "replacement_sha256": recovered_update["replacement_sha256"],
+                    })
+                elif (
                     _same_inode(planned.get(relative), target_identity)
                     or _same_inode(promoted.get(relative), target_identity)
                 ):
+                    entry["action"] = "recovered_link"
+                else:
                     conflicts.append(relative)
                     conflict_details.append(_conflict_detail(relative, staged, target))
+                    continue
+                entry["target_identity"] = target_identity
             else:
                 raise DownloadStageError(
                     f"planned staged file is missing from both trees: {relative}"
                 )
+            entries[relative] = entry
 
-        self._manifest["metadata_updates"] = metadata_updates
-        self._write_manifest()
         if conflicts:
-            self._manifest["state"] = "conflict"
-            self._manifest["conflicts"] = conflicts
-            self._manifest["conflict_details"] = conflict_details
+            self._manifest.update({
+                "state": "conflict",
+                "planned": planned,
+                "promoted": promoted,
+                "metadata_updates": metadata_updates,
+                "conflicts": conflicts,
+                "conflict_details": conflict_details,
+            })
             self._write_manifest()
             raise DownloadStageConflict(conflicts, conflict_details)
 
+        batch = {"state": "prepared", "entries": entries}
+        self._manifest.update({
+            "state": "promoting",
+            "planned": planned,
+            "promoted": promoted,
+            "metadata_updates": metadata_updates,
+            "conflicts": [],
+            "conflict_details": [],
+            "promotion_batch": batch,
+        })
+        self._write_manifest()
+        return batch
+
+    def _execute_promotion_batch(
+        self,
+        batch: dict[str, Any],
+        *,
+        provider: Any | None,
+    ) -> StagePromotion:
+        """Apply a prepared batch, sync directories once, and checkpoint it."""
+
+        entries = batch.get("entries")
+        if not isinstance(entries, dict):
+            raise DownloadStageManifestError("invalid prepared promotion batch")
+        promoted = dict(self._manifest.get("promoted") or {})
+        metadata_updates = dict(self._manifest.get("metadata_updates") or {})
+        affected_directories: set[Path] = set()
         canonical_paths: list[Path] = []
-        for relative in sorted(planned):
+
+        for relative in sorted(entries):
+            entry = entries[relative]
+            if not isinstance(entry, dict) or entry.get("relative_path") != relative:
+                raise DownloadStageManifestError("invalid promotion batch entry")
             staged = self.root / Path(PurePosixPath(relative))
-            target = self._canonical_target(relative)
-            if staged.exists() or staged.is_symlink():
-                self._validate_regular_file(staged, label="staged")
-                if target.exists() or target.is_symlink():
-                    # Re-check at the mutation boundary.  A target can appear
-                    # or be replaced after preflight while another process is
-                    # writing the canonical tree.  Never discard the staged
-                    # copy merely because the path now exists.
-                    if target.is_symlink() or not target.is_file():
-                        detail = _conflict_detail(relative, staged, target)
-                        self._record_runtime_conflict(relative, detail=detail)
-                        raise DownloadStageConflict([relative], [detail])
-                    if not _files_equal(staged, target):
-                        expected_update = metadata_updates.get(relative)
-                        current_update = _safe_metadata_update(
-                            relative,
-                            staged,
-                            target,
-                            provider=provider,
-                            expected_source=self.source,
-                        )
-                        if (
-                            not isinstance(expected_update, dict)
-                            or current_update is None
-                            or expected_update.get("previous_sha256") != current_update.get("previous_sha256")
-                            or expected_update.get("replacement_sha256") != current_update.get("replacement_sha256")
-                        ):
-                            detail = _conflict_detail(relative, staged, target)
-                            self._record_runtime_conflict(relative, detail=detail)
-                            raise DownloadStageConflict([relative], [detail])
-                        # The previous payload is already durable in the stage
-                        # manifest.  A crash after replace is recovered by the
-                        # replacement hash during the next promote() call.
-                        os.replace(staged, target)
-                        _fsync_directory(target.parent)
-                        promoted[relative] = _file_identity(target)
-                        expected_update["state"] = "applied"
-                        metadata_updates[relative] = expected_update
-                        self._manifest["promoted"] = promoted
-                        self._manifest["metadata_updates"] = metadata_updates
-                        self._write_manifest()
-                        canonical_paths.append(target)
-                        continue
-                    target_identity = _file_identity(target)
-                    recovered_update = metadata_updates.get(relative)
-                    if (
-                        isinstance(recovered_update, dict)
-                        and recovered_update.get("replacement_sha256") == _sha256(target)
-                    ):
-                        recovered_update["state"] = "applied"
-                    if not os.path.samefile(staged, target):
-                        # Record the accepted canonical identity before removing
-                        # the redundant staged copy.  This closes the recovery
-                        # gap for identical files that were not hard-linked by us.
-                        promoted[relative] = target_identity
-                        self._write_manifest()
-                        if not _same_inode(target_identity, _file_identity(target)):
-                            detail = _conflict_detail(relative, staged, target)
-                            self._record_runtime_conflict(relative, detail=detail)
-                            raise DownloadStageConflict([relative], [detail])
-                    staged.unlink()
-                else:
-                    try:
-                        os.link(staged, target, follow_symlinks=False)
-                    except FileExistsError:
-                        if target.is_symlink() or not target.is_file() or not _files_equal(staged, target):
-                            detail = _conflict_detail(relative, staged, target)
-                            self._record_runtime_conflict(relative, detail=detail)
-                            raise DownloadStageConflict([relative], [detail])
-                        promoted[relative] = _file_identity(target)
-                        self._write_manifest()
-                    except OSError as exc:
-                        raise DownloadStageError(
-                            f"same-volume promotion failed for {relative}: {type(exc).__name__}"
-                        ) from exc
-                    # Make the canonical directory entry durable before the
-                    # staged name is removed.  This preserves at least one
-                    # recoverable link across a power loss.
-                    _fsync_directory(target.parent)
-                    promoted[relative] = _file_identity(target)
-                    self._write_manifest()
-                    staged.unlink()
+            target = self._canonical_target(relative, create_parent=False)
+            action = entry.get("action")
+            if action in {"replace_metadata", "recovered_metadata"}:
+                self._apply_metadata_promotion(
+                    relative,
+                    entry,
+                    staged,
+                    target,
+                    provider=provider,
+                    affected_directories=affected_directories,
+                )
+                update = metadata_updates.get(relative)
+                if not isinstance(update, dict):
+                    raise DownloadStageManifestError(
+                        f"metadata recovery plan is missing: {relative}"
+                    )
+                update["state"] = "applied"
+                metadata_updates[relative] = update
+            else:
+                self._apply_file_promotion(
+                    relative,
+                    entry,
+                    staged,
+                    target,
+                    affected_directories=affected_directories,
+                )
+
+            if action != "accept_existing":
+                self._add_directory_barriers(
+                    target.parent,
+                    boundary=self.download_root,
+                    affected_directories=affected_directories,
+                )
+            if action in {"replace_metadata", "recovered_metadata"}:
+                self._add_directory_barriers(
+                    staged.parent,
+                    boundary=self.root,
+                    affected_directories=affected_directories,
+                )
+                self._add_directory_barriers(
+                    self._retained_path(relative, entry).parent,
+                    boundary=self.root,
+                    affected_directories=affected_directories,
+                )
+
             if not target.exists() or target.is_symlink() or not target.is_file():
                 raise DownloadStageError(f"promoted target is unavailable: {relative}")
-            promoted[relative] = _file_identity(target)
+            target_identity = _file_identity(target)
+            if action not in {"replace_metadata", "recovered_metadata"} and (
+                staged.exists() or staged.is_symlink()
+            ):
+                if not _files_equal(staged, target) or not _same_inode(
+                    target_identity,
+                    _file_identity(target),
+                ):
+                    self._runtime_conflict(relative, staged, target)
+            promoted[relative] = target_identity
             canonical_paths.append(target)
 
-        self._manifest["state"] = "promoted"
-        self._manifest["promoted"] = promoted
-        self._manifest["metadata_updates"] = metadata_updates
+        for directory in sorted(affected_directories, key=lambda path: str(path)):
+            _fsync_directory(directory)
+
+        for relative in sorted(entries):
+            target = self._canonical_target(relative, create_parent=False)
+            if (
+                not target.exists()
+                or target.is_symlink()
+                or not target.is_file()
+                or not _same_inode(promoted.get(relative), _file_identity(target))
+            ):
+                staged = self.root / Path(PurePosixPath(relative))
+                self._runtime_conflict(relative, staged, target)
+
+        batch["state"] = "promoted"
+        self._manifest.update({
+            "state": "promoted",
+            "promoted": promoted,
+            "metadata_updates": metadata_updates,
+            "promotion_batch": batch,
+        })
+        # This one manifest commit covers every canonical mutation in the batch.
         self._write_manifest()
+        self._cleanup_promoted_sources(entries)
+        return self._promotion_result(canonical_paths, metadata_updates)
+
+    def _apply_file_promotion(
+        self,
+        relative: str,
+        entry: dict[str, Any],
+        staged: Path,
+        target: Path,
+        *,
+        affected_directories: set[Path],
+    ) -> None:
+        action = entry.get("action")
+        if action not in {"link", "accept_existing", "recovered_link"}:
+            raise DownloadStageManifestError(
+                f"invalid file promotion action: {action!r}"
+            )
+        staged_exists = staged.exists() or staged.is_symlink()
+        if staged_exists:
+            self._validate_regular_file(staged, label="staged")
+            if not _same_inode(entry.get("planned_identity"), _file_identity(staged)):
+                raise DownloadStageManifestError(
+                    f"staged file changed after promotion planning: {relative}"
+                )
+
+        if action == "recovered_link" and not staged_exists:
+            if self._target_has_recorded_identity(relative, entry, target):
+                return
+            self._runtime_conflict(relative, staged, target)
+
+        if not staged_exists:
+            if self._target_has_recorded_identity(relative, entry, target):
+                return
+            raise DownloadStageError(
+                f"planned staged file is missing from both trees: {relative}"
+            )
+
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file() or not _files_equal(staged, target):
+                self._runtime_conflict(relative, staged, target)
+            return
+
+        self._ensure_parent(target.parent, affected_directories)
+        try:
+            os.link(staged, target, follow_symlinks=False)
+        except FileExistsError:
+            if target.is_symlink() or not target.is_file() or not _files_equal(staged, target):
+                self._runtime_conflict(relative, staged, target)
+        except OSError as exc:
+            raise DownloadStageError(
+                f"same-volume promotion failed for {relative}: {type(exc).__name__}"
+            ) from exc
+        affected_directories.add(target.parent)
+
+    def _apply_metadata_promotion(
+        self,
+        relative: str,
+        entry: dict[str, Any],
+        staged: Path,
+        target: Path,
+        *,
+        provider: Any | None,
+        affected_directories: set[Path],
+    ) -> None:
+        expected_update = (self._manifest.get("metadata_updates") or {}).get(relative)
+        if not isinstance(expected_update, dict):
+            raise DownloadStageManifestError(f"metadata recovery plan is missing: {relative}")
+        replacement_sha = str(expected_update.get("replacement_sha256") or "")
+        previous_sha = str(expected_update.get("previous_sha256") or "")
+        retained = self._retained_path(relative, entry)
+        source = staged if staged.exists() or staged.is_symlink() else retained
+        if source.exists() or source.is_symlink():
+            self._validate_regular_file(source, label="staged recovery")
+            if _sha256(source) != replacement_sha:
+                self._runtime_conflict(relative, source, target)
+
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
+                self._runtime_conflict(relative, source, target)
+            target_sha = _sha256(target)
+            if target_sha == replacement_sha:
+                return
+            if target_sha != previous_sha or not source.exists():
+                self._runtime_conflict(relative, source, target)
+            current_update = _safe_metadata_update(
+                relative,
+                source,
+                target,
+                provider=provider,
+                expected_source=self.source,
+            )
+            if (
+                current_update is None
+                or current_update.get("previous_sha256") != previous_sha
+                or current_update.get("replacement_sha256") != replacement_sha
+            ):
+                self._runtime_conflict(relative, source, target)
+            self._ensure_retained_copy(source, retained, affected_directories)
+            if source != staged:
+                self._ensure_parent(staged.parent, affected_directories)
+                try:
+                    os.link(source, staged, follow_symlinks=False)
+                except FileExistsError:
+                    if staged.is_symlink() or not staged.is_file() or _sha256(staged) != replacement_sha:
+                        self._runtime_conflict(relative, staged, target)
+                affected_directories.add(staged.parent)
+            os.replace(staged, target)
+            affected_directories.update({staged.parent, target.parent})
+            return
+
+        if not source.exists():
+            raise DownloadStageError(
+                f"metadata replacement is missing from both trees: {relative}"
+            )
+        self._ensure_retained_copy(source, retained, affected_directories)
+        self._ensure_parent(target.parent, affected_directories)
+        try:
+            os.link(source, target, follow_symlinks=False)
+        except FileExistsError:
+            if target.is_symlink() or not target.is_file() or _sha256(target) != replacement_sha:
+                self._runtime_conflict(relative, source, target)
+        affected_directories.add(target.parent)
+
+    def _ensure_retained_copy(
+        self,
+        source: Path,
+        retained: Path,
+        affected_directories: set[Path],
+    ) -> None:
+        self._ensure_parent(retained.parent, affected_directories)
+        if retained.exists() or retained.is_symlink():
+            self._validate_regular_file(retained, label="retained staged")
+            if not os.path.samefile(source, retained) and not _files_equal(source, retained):
+                raise DownloadStageManifestError("retained metadata recovery copy changed")
+            return
+        try:
+            os.link(source, retained, follow_symlinks=False)
+        except FileExistsError:
+            self._validate_regular_file(retained, label="retained staged")
+            if not _files_equal(source, retained):
+                raise DownloadStageManifestError("retained metadata recovery copy changed")
+        affected_directories.add(retained.parent)
+
+    def _finish_promoted_batch(self, batch: dict[str, Any]) -> StagePromotion:
+        entries = self._validate_promoted_batch(batch)
+        self._cleanup_promoted_sources(entries)
+        return self._promotion_result(
+            [self._canonical_target(relative, create_parent=False) for relative in sorted(entries)],
+            dict(self._manifest.get("metadata_updates") or {}),
+        )
+
+    def _validate_promoted_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
+        entries = batch.get("entries")
+        if not isinstance(entries, dict):
+            raise DownloadStageManifestError("invalid promoted promotion batch")
+        promoted = self._manifest.get("promoted") or {}
+        for relative in sorted(entries):
+            target = self._canonical_target(relative, create_parent=False)
+            if (
+                not target.exists()
+                or target.is_symlink()
+                or not target.is_file()
+                or not _same_inode(promoted.get(relative), _file_identity(target))
+            ):
+                staged = self.root / Path(PurePosixPath(relative))
+                self._runtime_conflict(relative, staged, target)
+        return entries
+
+    def _new_paths_after_promoted_batch(
+        self,
+        batch: dict[str, Any],
+        staged_files: dict[str, Path],
+    ) -> set[str]:
+        entries = batch.get("entries")
+        if not isinstance(entries, dict):
+            raise DownloadStageManifestError("invalid promoted promotion batch")
+        new_paths: set[str] = set()
+        for relative, staged in staged_files.items():
+            entry = entries.get(relative)
+            if (
+                not isinstance(entry, dict)
+                or not _same_inode(entry.get("planned_identity"), _file_identity(staged))
+            ):
+                new_paths.add(relative)
+        return new_paths
+
+    def _cleanup_promoted_sources(
+        self,
+        entries: dict[str, Any],
+        *,
+        preserve: set[str] | None = None,
+    ) -> None:
+        preserve = preserve or set()
+        for relative in sorted(entries):
+            if relative in preserve:
+                continue
+            entry = entries[relative]
+            staged = self.root / Path(PurePosixPath(relative))
+            retained = (
+                self._retained_path(relative, entry)
+                if isinstance(entry, dict) and entry.get("retained_path")
+                else None
+            )
+            if staged.exists() or staged.is_symlink():
+                self._validate_regular_file(staged, label="staged cleanup")
+                staged.unlink()
+            if retained is not None and (retained.exists() or retained.is_symlink()):
+                self._validate_regular_file(retained, label="retained staged cleanup")
+                retained.unlink()
         self._remove_empty_directories()
+
+    def _promotion_result(
+        self,
+        canonical_paths: list[Path],
+        metadata_updates: dict[str, Any],
+    ) -> StagePromotion:
         applied_updates = tuple(
             dict(update)
             for _, update in sorted(metadata_updates.items())
             if isinstance(update, dict) and update.get("state") == "applied"
         )
         return StagePromotion(tuple(canonical_paths), metadata_updates=applied_updates)
+
+    def _target_has_recorded_identity(
+        self,
+        relative: str,
+        entry: dict[str, Any],
+        target: Path,
+    ) -> bool:
+        if not target.exists() or target.is_symlink() or not target.is_file():
+            return False
+        identity = _file_identity(target)
+        return any(
+            _same_inode(expected, identity)
+            for expected in (
+                entry.get("target_identity"),
+                entry.get("planned_identity"),
+                (self._manifest.get("planned") or {}).get(relative),
+                (self._manifest.get("promoted") or {}).get(relative),
+            )
+        )
+
+    def _runtime_conflict(self, relative: str, staged: Path, target: Path) -> None:
+        detail = _conflict_detail(relative, staged, target)
+        self._record_runtime_conflict(relative, detail=detail)
+        raise DownloadStageConflict([relative], [detail])
+
+    def _retained_relative(self, relative: str) -> str:
+        return (Path(RETAINED_PROMOTION_DIR) / Path(PurePosixPath(relative))).as_posix()
+
+    def _retained_path(self, relative: str, entry: dict[str, Any]) -> Path:
+        expected = self._retained_relative(relative)
+        recorded = str(entry.get("retained_path") or expected)
+        if recorded != expected:
+            raise DownloadStageManifestError(
+                f"invalid retained promotion path: {recorded!r}"
+            )
+        return self.root / Path(PurePosixPath(recorded))
+
+    def _ensure_parent(
+        self,
+        directory: Path,
+        affected_directories: set[Path],
+    ) -> None:
+        missing: list[Path] = []
+        current = directory
+        while not current.exists():
+            missing.append(current)
+            current = current.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        for created in missing:
+            affected_directories.add(created.parent)
+
+    @staticmethod
+    def _add_directory_barriers(
+        directory: Path,
+        *,
+        boundary: Path,
+        affected_directories: set[Path],
+    ) -> None:
+        try:
+            directory.relative_to(boundary)
+        except ValueError as exc:
+            raise DownloadStageError("promotion directory escapes managed root") from exc
+        current = directory
+        while True:
+            affected_directories.add(current)
+            if current == boundary:
+                return
+            current = current.parent
 
     def resolve_conflicts(
         self,
@@ -715,6 +1062,8 @@ class DownloadStage:
                 directory = current / directory_name
                 if directory.is_symlink():
                     raise DownloadStageError(f"staged directory symlink is not allowed: {directory_name}")
+                if current == self.root and directory_name == RETAINED_PROMOTION_DIR:
+                    directory_names.remove(directory_name)
             for file_name in file_names:
                 path = current / file_name
                 if path == self.manifest_path or file_name.startswith(f".{MANIFEST_NAME}."):
@@ -727,10 +1076,11 @@ class DownloadStage:
                 completed[relative] = path
         return completed
 
-    def _canonical_target(self, relative: str) -> Path:
+    def _canonical_target(self, relative: str, *, create_parent: bool = True) -> Path:
         _validate_relative(relative)
         target = self.download_root.joinpath(*PurePosixPath(relative).parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        if create_parent:
+            target.parent.mkdir(parents=True, exist_ok=True)
         try:
             target.parent.resolve().relative_to(self.download_root)
         except ValueError as exc:
