@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
+from time import monotonic
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -38,6 +40,7 @@ VISIBLE = "visible"
 TRASHED = "trashed"
 PURGED = "purged"
 ARCHIVED = "archived"
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -1124,19 +1127,33 @@ class CurationService:
         await self.db.commit()
         async with adaptive_resource_slice(
             "import_db", resource_owner or "curation-baseline-backfill",
-            lane="background", max_work_units=self.COMMIT_WORK_LIMIT,
+            lane="background", max_work_units=1 if state.get("phase") == "works" else self.COMMIT_WORK_LIMIT,
             max_slice_seconds=20.0, wait_for_capacity=False, cooldown_result=cooldown,
         ) as limits:
             if limits is None:
                 return {"status": "pending", "continuation": state,
                         "successor_delay_seconds": 2.0}
-            result = await self._run_backfill_slice(state, max(1, int(limits.work_units)))
+            started = monotonic()
+            deadline = started + limits.slice_seconds if limits.slice_seconds is not None else None
+            result = await self._run_backfill_slice(state, max(1, int(limits.work_units)), deadline=deadline)
             await self.db.commit()
+            elapsed = monotonic() - started
+            logger.info("Curation baseline slice complete", extra={"resource_slice": {
+                "elapsed_seconds": elapsed, "limit_seconds": limits.slice_seconds,
+                "overrun_seconds": max(0.0, elapsed - limits.slice_seconds) if limits.slice_seconds is not None else 0.0,
+                "work_chunk_limit": self.COMMIT_WORK_LIMIT,
+            }})
         if result["status"] == "pending":
             result["successor_delay_seconds"] = max(2.0, cooldown.get("seconds", 0.0))
         return result
 
-    async def _run_backfill_slice(self, continuation: dict, work_units: int) -> dict:
+    async def _commit_backfill_unit(self) -> None:
+        from app.services.operations import fence_current_admin_operation_transaction
+
+        await fence_current_admin_operation_transaction(self.db)
+        await self.db.commit()
+
+    async def _run_backfill_slice(self, continuation: dict, work_units: int, *, deadline: float | None = None) -> dict:
         from contextlib import aclosing
 
         created = {"creators": 0, "repositories": 0, "work_groups": 0}
@@ -1172,7 +1189,9 @@ class CurationService:
             )
             commit.stats = {"creator_count": 1}
             created["creators"] += 1
-            await self.db.commit()
+            await self._commit_backfill_unit()
+            if deadline is not None and monotonic() >= deadline:
+                break
         if created["creators"]:
             return {"status": "pending", "created": created, "skipped": skipped,
                     "continuation": continuation}
@@ -1215,7 +1234,9 @@ class CurationService:
             )
             commit.stats = {"repository_count": 1}
             created["repositories"] += 1
-            await self.db.commit()
+            await self._commit_backfill_unit()
+            if deadline is not None and monotonic() >= deadline:
+                break
         if created["repositories"]:
             return {"status": "pending", "created": created, "skipped": skipped,
                     "continuation": continuation}
@@ -1298,7 +1319,9 @@ class CurationService:
                     )
                 commit.stats = {"work_count": len(works), "baseline": True}
                 created["work_groups"] += 1
-                await self.db.commit()
+                # Existing 25-work dedupe chunks are atomic scheduling units;
+                # shrinking one to an adaptive grant would rewrite its key.
+                await self._commit_backfill_unit()
 
                 return {"status": "pending", "created": created, "skipped": skipped,
                         "continuation": continuation}

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -228,6 +228,36 @@ class RepoResolver:
                 if desc.key() not in result:
                     result[desc.key()] = (desc, [])
                 result[desc.key()][1].append(change)
+        return result
+
+    async def repository_page(self, *, after: tuple[str, str] | None = None, limit: int = 25) -> list[RepoDescriptor]:
+        """Resolve one source/creator page before a bounded initialization slice."""
+        stmt = (select(WorkSource.source, WorkSource.source_creator_id)
+                .where(WorkSource.source_creator_id.isnot(None), WorkSource.source_creator_id != "")
+                .distinct().order_by(WorkSource.source, WorkSource.source_creator_id).limit(limit))
+        if after is not None:
+            stmt = stmt.where(tuple_(WorkSource.source, WorkSource.source_creator_id) > tuple_(*after))
+        keys = list((await self.db.execute(stmt)).all())
+        if not keys:
+            return []
+        # Hydrate only the page's subscription mapping. The full-library
+        # resolver remains available to callers that actually need it.
+        repos = (await self.db.execute(select(SubscriptionSource)
+            .where(tuple_(SubscriptionSource.source, SubscriptionSource.source_creator_id).in_(keys))
+            .order_by(SubscriptionSource.created_at))).scalars().all()
+        page_resolver = RepoResolver(self.db)
+        page_resolver._repo_lookup = {}
+        for repo in repos:
+            page_resolver._repo_lookup.setdefault((repo.source, repo.source_creator_id), repo)
+        result = []
+        for source, creator_id in keys:
+            ws = (await self.db.execute(select(WorkSource).where(
+                WorkSource.source == source, WorkSource.source_creator_id == creator_id)
+                .order_by(WorkSource.id).limit(1))).scalar_one_or_none()
+            if ws is not None:
+                descriptor = await page_resolver._descriptor_for_work_source(ws)
+                if descriptor is not None:
+                    result.append(descriptor)
         return result
 
     async def all_repositories(self) -> list[RepoDescriptor]:

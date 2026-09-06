@@ -11,6 +11,7 @@ import logging
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -59,6 +60,7 @@ class GitlleryService:
         self.last_projection_high_water: tuple[datetime, UUID] | None = None
         self.continuation: dict | None = None
         self.successor_delay_seconds = 2.0
+        self._validated_bulk_watermarks: dict[UUID, datetime] = {}
 
     async def _changes_for_commit(self, commit_id: UUID) -> list[CurationChange]:
         rows = await self.db.execute(
@@ -410,7 +412,9 @@ class GitlleryService:
         this slice; repository append checks make that replay idempotent.
         """
         from contextlib import aclosing
+        from contextlib import AsyncExitStack
         from app.services.heavy_io import adaptive_resource_slice
+        from app.services.operations import fence_current_admin_operation_transaction
 
         state = dict(continuation or {})
         self.continuation = None
@@ -456,18 +460,27 @@ class GitlleryService:
         ) as limits:
             if limits is None:
                 return counts
+            started = monotonic()
             selected = prepared[:max(1, min(int(limits.work_units), len(prepared)))]
             for commit, sliced in selected:
-                for rid, (desc, repo_changes) in sliced.items():
-                    async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
+                async with AsyncExitStack() as locks:
+                    # Acquire nonwaiting filesystem publication locks before
+                    # opening the fenced business transaction.
+                    for rid in sorted(sliced):
+                        acquired = await locks.enter_async_context(redis_lock(f"gitllery:{rid}", ttl_seconds=300))
                         if not acquired:
                             raise RuntimeError(f"gitllery repository {rid} is busy")
+                    intent = (await self.db.execute(select(GitlleryProjectionOutbox)
+                        .where(GitlleryProjectionOutbox.commit_id == commit.id)
+                        .with_for_update())).scalar_one_or_none()
+                    # Domain rows precede TaskRun in the global lock order.
+                    # Keep this fence until disk publication and ack commit.
+                    await fence_current_admin_operation_transaction(self.db)
+                    for rid, (desc, repo_changes) in sliced.items():
                         repo = self._repo_for(desc)
                         self._ensure_init(repo, desc)
-                        # A successor can start beyond a repository watermark;
-                        # compare durable keys instead of searching from root.
-                        already_present = await self._assert_append_order(repo, commit)
-                        await self.db.commit()
+                        already_present = await self._assert_append_order(
+                            repo, commit, completed_intent=intent is not None and intent.state == "complete")
                         if already_present:
                             continue
                         new_hash = self._apply_commit_to_repo(
@@ -475,9 +488,12 @@ class GitlleryService:
                         )
                         if new_hash is not None:
                             counts[rid] = counts.get(rid, 0) + 1
-                # Fence each disk prefix before another commit can move HEAD.
-                await self._complete_bulk_outbox([commit.id])
+                    await self._complete_bulk_outbox([commit.id])
                 state["after"] = [commit.created_at.isoformat(), str(commit.id)]
+                if limits.slice_seconds is not None and monotonic() - started >= limits.slice_seconds:
+                    break
+            logger.info("Git history slice complete", extra={"resource_slice": {
+                "elapsed_seconds": monotonic() - started, "limit_seconds": limits.slice_seconds}})
         self.successor_delay_seconds = max(2.0, cooldown.get("seconds", 0.0))
         if counts:
             _invalidate_status_cache()
@@ -488,6 +504,8 @@ class GitlleryService:
 
         if not commit_ids:
             return
+        from app.services.operations import fence_current_admin_operation_transaction
+
         await self.db.execute(
             update(GitlleryProjectionOutbox)
             .where(
@@ -502,6 +520,7 @@ class GitlleryService:
                 projection_stats={"mode": "bulk_sync"},
             )
         )
+        await fence_current_admin_operation_transaction(self.db)
         await self.db.commit()
 
     async def backfill(
@@ -512,13 +531,16 @@ class GitlleryService:
     ) -> dict[str, int]:
         """Initialize a bounded repository prefix, then continue history."""
         from app.services.heavy_io import adaptive_resource_slice
+        from app.services.operations import fence_current_admin_operation_transaction
 
         state = dict(continuation or {})
         if state.get("phase") == "project":
             return await self.project_pending(resource_owner=resource_owner, continuation=state)
-        descriptors = sorted(await RepoResolver(self.db).all_repositories(), key=lambda d: d.key())
+        descriptors = await RepoResolver(self.db).repository_page(
+            after=tuple(state["repository_cursor"]) if state.get("repository_cursor") else None,
+            limit=self._BULK_BATCH,
+        )
         await self.db.commit()
-        descriptors = [d for d in descriptors if d.key() > state.get("repository_after", "")]
         self.continuation = state
         if not descriptors:
             state["phase"] = "project"
@@ -531,12 +553,18 @@ class GitlleryService:
         ) as limits:
             if limits is None:
                 return {}
+            started = monotonic()
             for desc in descriptors[:max(1, int(limits.work_units))]:
                 async with redis_lock(f"gitllery:{desc.key()}", ttl_seconds=300) as acquired:
                     if not acquired:
                         raise RuntimeError(f"gitllery repository {desc.key()} is busy")
+                    await fence_current_admin_operation_transaction(self.db)
                     self._ensure_init(self._repo_for(desc), desc)
+                    await self.db.commit()
                 state["repository_after"] = desc.key()
+                state["repository_cursor"] = [desc.source, desc.source_creator_id]
+                if limits.slice_seconds is not None and monotonic() - started >= limits.slice_seconds:
+                    break
         self.successor_delay_seconds = max(2.0, cooldown.get("seconds", 0.0))
         return {}
 
@@ -612,6 +640,8 @@ class GitlleryService:
         self,
         repo: GitlleryRepo,
         commit: CurationCommit,
+        *,
+        completed_intent: bool = False,
     ) -> bool:
         """Refuse a historical live-HEAD replay; gaps require staged rebuild."""
 
@@ -642,6 +672,19 @@ class GitlleryService:
         if watermark_ts.tzinfo is None:
             watermark_ts = watermark_ts.replace(tzinfo=timezone.utc)
         if (current_ts, commit.id) < (watermark_ts, watermark_id):
+            if completed_intent:
+                # A completed intent plus a valid durable watermark proves
+                # this prefix. Deep parent scans belong to incomplete/gap
+                # recovery, not every commit of an ordinary reconciliation.
+                if watermark_id not in self._validated_bulk_watermarks:
+                    stored_ts = (await self.db.execute(select(CurationCommit.created_at)
+                        .where(CurationCommit.id == watermark_id))).scalar_one_or_none()
+                    if stored_ts is None:
+                        raise RuntimeError("Gitllery manifest watermark is absent from PostgreSQL")
+                    self._validated_bulk_watermarks[watermark_id] = stored_ts
+                if self._validated_bulk_watermarks[watermark_id] != watermark_ts:
+                    raise RuntimeError("Gitllery manifest watermark timestamp does not match PostgreSQL")
+                return True
             if await asyncio.to_thread(
                 repo.has_projected_db_commit_id,
                 str(commit.id),
