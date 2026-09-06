@@ -210,7 +210,7 @@ async def _advance(receipt, token, client, deadline):
                 await _save(receipt, token, deadline, phase="documents")
             else:
                 settings_payload = desired
-        await durable(remote_flight.create_marker, str(receipt.id))
+        await durable(remote_flight.create_marker, str(receipt.id), "maintenance" if receipt.action == "swap" else "search_index")
         # Durable intent MUST precede HTTP; a crash here is conservatively
         # ambiguous even if no request was actually sent.
         await durable(remote_flight.record_task, str(receipt.id), None)
@@ -236,6 +236,8 @@ async def _advance(receipt, token, client, deadline):
             task = await request(client, method, path, deadline, settings_payload if settings_payload is not None else receipt.payload)
             uid = int(task["taskUid"])
         except httpx.HTTPStatusError as exc:
+            if receipt.action == "drop" and exc.response.status_code == 404:
+                return await _finalize(receipt, token, deadline)
             if 400 <= exc.response.status_code < 500:
                 return await _finalize(receipt, token, deadline, error=str(exc))
             await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=str(exc)[:4000])
@@ -259,6 +261,8 @@ async def _advance(receipt, token, client, deadline):
             return result("pending", delay=2)
         return await _finalize(receipt, token, deadline)
     if task["status"] in ("failed", "canceled"):
+        if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
+            return await _finalize(receipt, token, deadline)
         return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
     delay = min(15, 2 * 2 ** min(receipt.poll_count + 1, 3))
     await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=delay), lease_until=None, poll_count=receipt.poll_count + 1)
@@ -281,7 +285,15 @@ async def _run_locked(limit, client, deadline):
         if receipt:
             if token is None:
                 return result("pending", delay=max(2, (receipt.available_at - now()).total_seconds()))
-            if receipt.state == "prepared" and await durable(remote_flight.read_marker) is None:
+            if receipt.state == "prepared":
+                marker = await durable(remote_flight.read_marker)
+                if marker:
+                    if marker["owner"] != str(receipt.id):
+                        return result("ambiguous")
+                    # Prepared SQL proves this command has not been submitted.
+                    # A prior settings task is already terminal, or this marker
+                    # preceded the submitting commit. Re-admit every new write.
+                    await durable(remote_flight.clear_marker, str(receipt.id))
                 return await _admitted(limit, client, deadline, receipt, token)
             return await _advance(receipt, token, client, deadline)
         marker = await durable(remote_flight.read_marker)

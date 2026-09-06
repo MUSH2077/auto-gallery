@@ -278,7 +278,10 @@ async def test_oversized_rebuild_document_fails_durably_without_remote_write(del
         async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
             outcome = await delivery.run_delivery_slice(client=client)
         assert outcome["status"] == "error"
-        assert (await search_rebuild.rebuild_status(started["build_id"]))["status"] == "error"
+        state = await search_rebuild.rebuild_status(started["build_id"])
+        assert state["status"] == "pending"
+        assert state["phase"] == "discard_replay"
+        assert "exceeds 4194304 bytes" in state["message"]
         assert remote.writes == []
     finally:
         async with async_session() as db:
@@ -301,7 +304,10 @@ async def test_cancelled_owner_prevents_next_rebuild_write(delivery):
             outcome = await delivery.run_delivery_slice(client=client)
         assert outcome["status"] == "error"
         assert remote.writes == []
-        assert (await search_rebuild.rebuild_status(started["build_id"]))["status"] == "error"
+        state = await search_rebuild.rebuild_status(started["build_id"])
+        assert state["status"] == "pending"
+        assert state["phase"] == "discard_replay"
+        assert "owner stopped" in state["message"]
     finally:
         async with async_session() as db:
             await db.execute(text("DELETE FROM task_runs WHERE id=:id"), {"id": owner})
@@ -391,7 +397,8 @@ async def test_legacy_owner_is_completed_when_durable_cleanup_finishes(delivery)
 
 
 @pytest.mark.asyncio
-async def test_failed_old_index_cleanup_does_not_fail_completed_swap(delivery):
+@pytest.mark.parametrize("code", ["index_not_found", "internal"])
+async def test_failed_old_index_cleanup_does_not_fail_completed_swap(delivery, code):
     from app.models.search_rebuild import SearchRebuild
     from app.services import search_rebuild
     started = await search_rebuild.start_rebuild((TAGS_INDEX,))
@@ -402,7 +409,7 @@ async def test_failed_old_index_cleanup_does_not_fail_completed_swap(delivery):
     remote = Meili()
     def fail_cleanup(request):
         if request.url.path.startswith("/tasks/"):
-            return httpx.Response(200, json={"status": "failed", "error": {"code": "index_not_found"}})
+            return httpx.Response(200, json={"status": "failed", "error": {"code": code}})
         return remote(request)
     async with httpx.AsyncClient(transport=httpx.MockTransport(fail_cleanup)) as client:
         await delivery.run_delivery_slice(client=client)
@@ -410,7 +417,7 @@ async def test_failed_old_index_cleanup_does_not_fail_completed_swap(delivery):
         await delivery.run_delivery_slice(client=client)
     status = await search_rebuild.rebuild_status(started["build_id"])
     assert status["status"] == "ok"
-    assert "cleanup" in status["message"].lower()
+    assert ("cleanup" in status["message"].lower()) == (code != "index_not_found")
 
 
 def test_rebuild_prepared_receipt_has_execution_lease():

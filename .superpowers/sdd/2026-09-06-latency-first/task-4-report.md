@@ -91,3 +91,32 @@ Final consolidated command:
 One additional writer-contention regression then demonstrated that a busy local writer could bypass the registered admin handoff (`KeyError: _admin_handoff`). The admin handler now persists the same delayed handoff for this transient condition; it does not terminally fail a queued rebuild because a poll owns the writer lock.
 
 Post-contention-fix verification: `.superpowers/run-tests -q tests/test_search_rebuild_delivery.py --disable-warnings --maxfail=1` — **16 passed in 50.16s**. Ruff on the last changed handler/test and `git diff --check` passed. Status: **Complete with concerns** (approved unresolved-POST ambiguity; full-import/120-second pending acceptance and full backend regression remain root-owned Task 5).
+
+## Task 4B independent-review recovery fixes
+
+Four Important findings were reproduced before changing implementation (seven behavioral failures in `tests/test_search_delivery_recovery.py`, 5.92s):
+
+- Prepared receipts with an owned marker submitted despite denied capacity, for both marker-before-submitting and prior-settings-marker recovery.
+- Flushing isolated Redis immediately before the grant EVAL erased the separately restored remote reservation and incorrectly admitted an over-budget import.
+- A submitted swap persisted the search profile and admitted ingest/network after releasing its local maintenance lock.
+- Remote failure or owner cancellation (including cancellation after confirmed swap) made rebuilds terminal before staging/replay cleanup.
+
+Every prepared command now clears only an owned marker whose SQL state proves the command has not been submitted, then passes through normal hard resource admission. An unrelated marker remains ambiguous. Pending/submitting commands continue the existing identity/poll path. Marker reconciliation and memory grant now execute as one Lua command carrying the filesystem payload; a Redis restart immediately before that command cannot erase remote accounting. The filesystem guard still orders marker transitions against the entire grant. Lua also enforces the marker's profile exclusion when an admission raced its initial marker read.
+
+Remote markers persist the actual command workload/profile and its reservation size. Swap tasks use maintenance; every local lane and Redis admission excludes ingest/network as well as background/maintenance until terminal receipt commit clears that marker. Resource health includes the durable remote reservation and reports its maintenance profile after the local lease disappears.
+
+Failed/cancelled rebuilds remain in active `cleaning_failure` state. They discard unswapped replay evidence in bounded chunks, then delete only their own staging indexes through durable remote receipts. A persisted `swapped` flag is written only with confirmed swap success; cancellation after that point may safely finish exact-version replay acknowledgment before cleanup. The original failure is retained through cleanup, and only completed cleanup changes the build to terminal failed. Failed cleanup tasks retry after a durable 15-second write delay; confirmed index-not-found is already-clean success. A further regression caught a failed cleanup task still leaking staging before this retry change (1 RED in 2.89s). Unknown cleanup POST outcomes retain the same fail-closed reconciliation requirement as other writes.
+
+These fixes use existing receipt/build JSON and string states; no additional schema migration is required. Existing pre-candidate terminal failed builds created by the earlier implementation are not automatically reopened. Candidate rollout must still drain old writers and preserve the shared marker volume. No production or NAS services/data were touched. The old resource-governance semantic Redis fake was updated to support marker deletion and the extended atomic Lua arguments; real Redis restart/interleaving tests remain authoritative.
+
+Review-fix GREEN verification (isolated serialized wrapper):
+
+```
+.superpowers/run-tests -q tests/test_resource_governance.py tests/test_latency_resource_lanes.py tests/test_search_delivery_recovery.py tests/test_search_rebuild_delivery.py tests/test_search_delivery.py tests/test_resource_pressure.py tests/test_resource_aware_worker.py tests/test_outbox_successor_contract.py --disable-warnings --maxfail=1
+193 passed in 86.39s (0:01:26)
+
+.superpowers/run-tests -q tests/test_search_delivery_recovery.py --disable-warnings --maxfail=1
+8 passed in 13.29s
+```
+
+The last recovery rerun adds an actual pending swap poll, Redis loss while still pending, persisted confirmed-swap evidence, and explicit prior-settings phase recovery. Ruff `--no-cache` passed on all seven touched Python paths; `git diff --check` passed. Two intermediate compatibility assertions were corrected: the existing oversized builder uses a byte count in its error message, and index-not-found cleanup now correctly succeeds without an error warning. No full backend suite ran. Review-fix status: **Complete with concerns**, retaining the previously approved unknown-POST reconciliation / shared-marker-volume limitations.

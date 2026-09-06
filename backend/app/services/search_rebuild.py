@@ -99,6 +99,17 @@ def _receipt(build, uid, action, payload, progress, *, phase=None, versions=()):
                    continuation={"phase": phase or build.phase, "progress": progress})
 
 
+def _begin_failure(build, error):
+    if build.state == "cleaning_failure":
+        return
+    build.state = "cleaning_failure"
+    build.last_error = str(error)[:4000]
+    # Only confirmed swap success permits live outbox acknowledgment. Otherwise
+    # discard replay evidence without consuming the ordinary pending versions.
+    build.phase = "acknowledge" if build.progress.get("swapped") else "discard_replay"
+    build.progress = {**build.progress, "position": 0, "cursor": None}
+
+
 async def prepare_next(limit, deadline, client):
     """Return None without a rebuild, a receipt, or a local phase-progress result."""
     from app.services.search_delivery import session, result, request, now, set_sql_budget
@@ -109,15 +120,14 @@ async def prepare_next(limit, deadline, client):
             return None
         # An admin cancellation prevents new remote commands; accepted commands
         # already in receipts are polled first by the delivery engine.
-        if build.owner:
+        if build.owner and build.state != "cleaning_failure":
             from app.models.task_run import TaskRun
             try:
                 task = await db.get(TaskRun, UUID(build.owner))
             except ValueError:
                 task = None
             if task and task.status in ("cancelled", "failed", "stale"):
-                build.state = "failed"
-                build.last_error = "Rebuild owner stopped before the next remote command"
+                _begin_failure(build, "Rebuild owner stopped before the next remote command")
                 await db.commit()
                 return result("error")
         progress = dict(build.progress)
@@ -216,12 +226,13 @@ async def prepare_next(limit, deadline, client):
                 build.progress = progress
         elif build.phase == "swap":
             receipt = _receipt(build, "*", "swap", [{"indexes": [index, f"{index}__staging_{build.id.hex[:12]}"]} for index in indexes],
-                               {**progress, "position": 0, "cursor": None}, phase="acknowledge")
-        elif build.phase == "acknowledge":
+                               {**progress, "position": 0, "cursor": None, "swapped": True}, phase="acknowledge")
+        elif build.phase in ("acknowledge", "discard_replay"):
             rows = list((await db.execute(select(Replay).where(Replay.build_id == build.id).limit(500))).scalars())
             if rows:
-                await db.execute(update(Outbox).where(or_(*(and_(Outbox.id == row.outbox_id, Outbox.version == row.version) for row in rows)))
-                                 .values(completed_at=now(), lease_until=None, last_error=None))
+                if build.phase == "acknowledge":
+                    await db.execute(update(Outbox).where(or_(*(and_(Outbox.id == row.outbox_id, Outbox.version == row.version) for row in rows)))
+                                     .values(completed_at=now(), lease_until=None, last_error=None))
                 await db.execute(delete(Replay).where(Replay.build_id == build.id, Replay.outbox_id.in_([row.outbox_id for row in rows])))
             else:
                 build.phase = "cleanup"
@@ -239,12 +250,18 @@ async def prepare_next(limit, deadline, client):
 async def complete_receipt(db, receipt, *, error=None):
     build = (await db.execute(select(Build).where(Build.id == receipt.rebuild_id).with_for_update())).scalar_one()
     if error and receipt.action != "drop":
-        build.state = "failed"
-        build.last_error = error
-        await _finish_legacy_owner(db, build)
+        _begin_failure(build, error)
         return
     if error:
-        build.last_error = f"Old index cleanup failed: {error}"
+        if build.state == "cleaning_failure":
+            build.progress = {**build.progress, "cleanup_error": str(error)[:4000]}
+            # Keep the failed build active until its own staging index is
+            # confirmed deleted. A failed task is safe to retry after backoff.
+            from app.services.search_delivery import now
+            receipt.write_available_at = now() + timedelta(seconds=15)
+            return
+        else:
+            build.last_error = f"Old index cleanup failed: {error}"
     if receipt.versions:
         statement = insert(Replay).values([
             {"build_id": build.id, "outbox_id": UUID(identity), "version": version}
@@ -256,7 +273,7 @@ async def complete_receipt(db, receipt, *, error=None):
     build.phase = receipt.continuation["phase"]
     build.progress = receipt.continuation["progress"]
     if build.phase == "complete":
-        build.state = "complete"
+        build.state = "failed" if build.state == "cleaning_failure" else "complete"
         await _finish_legacy_owner(db, build)
 
 
@@ -265,9 +282,7 @@ async def fail_active(error, deadline):
     async with session(deadline) as db:
         build = (await db.execute(select(Build).where(ACTIVE_BUILD).with_for_update())).scalar_one_or_none()
         if build:
-            build.state = "failed"
-            build.last_error = str(error)[:4000]
-            await _finish_legacy_owner(db, build)
+            _begin_failure(build, error)
         await db.commit()
 
 

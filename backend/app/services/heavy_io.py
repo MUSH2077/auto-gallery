@@ -441,13 +441,13 @@ class LocalResourceLocks:
                         held.release()
                     return False
                 acquired.append(lock)
-            if self.remote_exclusive:
-                from app.services.remote_search_flight import read_marker
+            from app.services.remote_search_flight import read_marker
 
-                if read_marker() is not None:
-                    for held in reversed(acquired):
-                        held.release()
-                    return False
+            marker = read_marker()
+            if marker and (self.remote_exclusive or marker.get("profile") == "maintenance"):
+                for held in reversed(acquired):
+                    held.release()
+                return False
             return True
         except BaseException:
             for held in reversed(acquired):
@@ -747,7 +747,7 @@ class RenewableRedisLease:
             from app.services.remote_search_flight import reconcile_reservation, reserve_memory
 
             marker = await asyncio.to_thread(reconcile_reservation, self.redis)
-            if marker and (HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
+            if marker and (marker.get("profile") == "maintenance" or HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
                 self.denial_reason = "remote_search_in_flight"
                 return False
             for key in self.keys:
@@ -774,7 +774,9 @@ class RenewableRedisLease:
                     ok = int(result or 0) == 1
                     if not ok:
                         self.denial_reason = (
-                            "resource_reservation_capacity"
+                            "remote_search_in_flight"
+                            if int(result or 0) == -4
+                            else "resource_reservation_capacity"
                             if int(result or 0) in {-1, -2}
                             else "background_yield_to_ingest"
                             if int(result or 0) == -3
@@ -895,6 +897,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                 RESOURCE_NETWORK_TOKEN_KEY,
                 RESOURCE_DISK_TOKEN_KEY,
                 RESOURCE_BACKGROUND_TOKEN_KEY,
+                "lock:resource-budget:remote-search",
                 *(profile_lease_key(profile) for profile in (
                     "import_db",
                     "image_derive",
@@ -987,7 +990,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
         ),
         "ingest_active": any(RESOURCE_DISK_TOKEN_KEY in value["keys"] for value in active),
         "background_active": any(RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"] for value in active),
-        "maintenance_active": any(HEAVY_IO_LOCK_KEY in value["keys"] for value in active),
+        "maintenance_active": any(HEAVY_IO_LOCK_KEY in value["keys"] or value.get("profile") == "maintenance" for value in active),
     }
 
 

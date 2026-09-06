@@ -49,10 +49,11 @@ def _sync_directory():
         os.close(fd)
 
 
-def create_marker(receipt_id: str):
-    from app.services.resource_pressure import RESOURCE_PROFILES
-    payload = {"owner": str(receipt_id), "workload": "search_index", "profile": "search_index",
-               "reserved_bytes": RESOURCE_PROFILES["search_index"].memory_reservation_bytes}
+def create_marker(receipt_id: str, workload: str = "search_index"):
+    from app.services.resource_pressure import RESOURCE_PROFILES, workload_profile_name
+    profile = workload_profile_name(workload)
+    payload = {"owner": str(receipt_id), "workload": workload, "profile": profile,
+               "reserved_bytes": RESOURCE_PROFILES[profile].memory_reservation_bytes}
     with _guard():
         existing = _read()
         if existing:
@@ -112,12 +113,29 @@ def record_task(receipt_id: str, task_uid: int | None):
         _sync_directory()
 
 
+_RESTORE_AND_FENCE_SCRIPT = """
+if ARGV[5] ~= "" then
+  redis.call("set", ARGV[6], ARGV[5])
+  local remote = cjson.decode(ARGV[5])
+  if remote["profile"] == "maintenance"
+    or KEYS[1] == "lock:resource-budget:background"
+    or KEYS[1] == "lock:heavy-io" then
+    return -4
+  end
+else
+  redis.call("del", ARGV[6])
+end
+"""
+
+
 def reserve_memory(redis_client, script, *args):
-    """Keep marker/cache reconciliation and the RAM grant in one ordering fence."""
+    """Restore durable remote accounting and grant RAM in one Redis execution.
+
+    Redis may restart immediately before EVAL. The marker payload travels in
+    that same atomic command, never in a preceding SET that restart can erase.
+    The filesystem guard orders this grant against marker transitions.
+    """
     with _guard():
         marker = _read()
-        if marker:
-            redis_client.set(REMOTE_RESERVATION_KEY, json.dumps(marker))
-        else:
-            redis_client.delete(REMOTE_RESERVATION_KEY)
-        return redis_client.eval(script, *args)
+        return redis_client.eval(_RESTORE_AND_FENCE_SCRIPT + script, *args,
+                                 json.dumps(marker) if marker else "", REMOTE_RESERVATION_KEY)

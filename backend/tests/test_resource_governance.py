@@ -23,6 +23,9 @@ class _FakeLeaseRedis:
         self.values[key] = value
         return True
 
+    def delete(self, key):
+        return int(self.values.pop(key, None) is not None)
+
     def eval(self, script, _keys, key, token, *args):
         if self.values.get(key) != token:
             return 0
@@ -42,9 +45,19 @@ class _ReservationRedis(_FakeLeaseRedis):
 
         keys = list(values[:key_count])
         args = list(values[key_count:])
-        if script == heavy_io._RESERVE_SCRIPT:
+        if script.endswith(heavy_io._RESERVE_SCRIPT):
             target = keys[0]
-            token, requested, capacity, _ttl = args
+            token, requested, capacity, _ttl = args[:4]
+            if len(args) > 4:
+                marker, marker_key = args[4:]
+                if marker:
+                    self.values[marker_key] = marker
+                    if json.loads(marker)["profile"] == "maintenance" or target in {
+                        heavy_io.RESOURCE_BACKGROUND_TOKEN_KEY, heavy_io.HEAVY_IO_LOCK_KEY,
+                    }:
+                        return -4
+                else:
+                    self.delete(marker_key)
             if target in self.values:
                 return 0
             reserved = 0
