@@ -7,11 +7,13 @@ internal network; all writable mounts live below a marked acceptance root.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 import subprocess
 import time
+from uuid import uuid4
 
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = PROJECT / ".superpowers" / "latency-acceptance"
@@ -19,6 +21,29 @@ IMAGE = "auto-gallery-backend:candidate-e7a11de3b705168ce6871c8c10fbba9045d5f71b
 NETWORK = "ag-latency-bench"
 LABEL = "codex.task=latency-acceptance"
 SERVICES = {name: f"ag-latency-bench-{name}" for name in ("postgres", "redis", "meili", "runner")}
+
+
+def harness_hashes():
+    return {"driver": hashlib.sha256((PROJECT / "backend/scripts/latency_acceptance.py").read_bytes()).hexdigest(),
+            "orchestrator": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+
+
+def validate_run(state):
+    if not state.get("run_id") or state.get("harness_hashes") != harness_hashes():
+        raise RuntimeError("Harness is unsealed or changed; preserve preliminary evidence and seal a fresh run")
+
+
+def validate_record(state, record, *, variant=None, repetition=None, works=None, assets=None):
+    validate_run(state)
+    expected = {"event": "trial", "run_id": state["run_id"],
+                "harness_sha256": state["harness_hashes"]["driver"],
+                "orchestrator_sha256": state["harness_hashes"]["orchestrator"]}
+    expected.update({key: value for key, value in {
+        "variant": variant, "repetition": repetition, "works": works, "assets": assets}.items() if value is not None})
+    expected["source_revision"] = state["revisions"].get(record.get("variant"))
+    for key, value in expected.items():
+        if record.get(key) != value or value is None:
+            raise RuntimeError(f"Measurement does not match sealed run: {key}")
 
 
 def run(args, *, log=None, check=True):
@@ -42,13 +67,15 @@ def execute(variant, command, *, database=None, log=None):
     env = {
         "PYTHONPATH": source(variant),
         "DATABASE_URL": f"postgresql+asyncpg://autogallery:latency-bench-db@latency-postgres:5432/{database or 'latency_' + variant}",
-        "REDIS_URL": f"redis://latency-redis:6379/{1 if variant == 'baseline' else 2}",
-        "MEILI_INDEX_PREFIX": f"latency_{variant}_",
+        "REDIS_URL": f"redis://latency-redis:6379/{state.get('redis_databases', {'baseline': 1, 'candidate': 2})[variant]}",
+        "MEILI_INDEX_PREFIX": state.get("index_prefixes", {}).get(variant, f"latency_{variant}_"),
         "DOWNLOAD_ROOT": f"/latency-data/{variant}/downloads",
         "LIBRARY_ROOT": f"/latency-data/{variant}/library",
         "APP_CONFIG_ROOT": f"/latency-data/{variant}/app-config",
         "LATENCY_BROWSE_URL": f"http://latency-api-{variant}:8000",
         "LATENCY_SOURCE_REVISION": state["revisions"][variant],
+        "LATENCY_ORCHESTRATOR_SHA256": harness_hashes()["orchestrator"],
+        "LATENCY_RUN_ID": state.get("run_id", "preliminary"),
     }
     args = ["docker", "exec", "-w", source(variant)]
     for key, value in env.items():
@@ -100,7 +127,8 @@ def setup(candidate):
                   "-e", "SECRET_KEY=latency-benchmark-isolated-secret-2026-only", "-e", "ADMIN_PASSWORD=latency-benchmark-only",
                   "-e", "GALLERYDL_CONFIG_ROOT=/latency-data/gallery-config", "-e", "RESOURCE_GOVERNANCE_MODE=enforce",
                   "-e", "RESOURCE_GOVERNANCE_MAX_SCALE=1.0", IMAGE, "sleep", "infinity"])
-    (ROOT / "state.json").write_text(json.dumps({"revisions": revisions, "image": IMAGE, "services": SERVICES, "network": NETWORK}, indent=2))
+    (ROOT / "state.json").write_text(json.dumps({"revisions": revisions, "image": IMAGE, "services": SERVICES, "network": NETWORK,
+                                               "run_id": str(uuid4()), "harness_hashes": harness_hashes()}, indent=2))
     for _ in range(30):
         probe = run(["docker", "exec", SERVICES["postgres"], "pg_isready", "-U", "autogallery", "-d", "latency_template"], check=False)
         if probe.returncode == 0:
@@ -116,6 +144,7 @@ def setup(candidate):
 
 
 def start_apis():
+    state = json.loads((ROOT / "state.json").read_text())
     for variant in ("baseline", "candidate"):
         name = f"ag-latency-bench-api-{variant}"
         args = ["docker", "run", "-d", "--network", NETWORK, "--label", LABEL, "--pids-limit", "128",
@@ -123,9 +152,9 @@ def start_apis():
                 "-v", f"{PROJECT}:/workspace:ro", "-v", f"{ROOT / 'data'}:/latency-data", "-w", source(variant)]
         env = {"PYTHONPATH": source(variant), "PYTHONDONTWRITEBYTECODE": "1",
                "DATABASE_URL": f"postgresql+asyncpg://autogallery:latency-bench-db@latency-postgres:5432/latency_{variant}",
-               "REDIS_URL": f"redis://latency-redis:6379/{1 if variant == 'baseline' else 2}",
+               "REDIS_URL": f"redis://latency-redis:6379/{state.get('redis_databases', {'baseline': 1, 'candidate': 2})[variant]}",
                "MEILI_URL": "http://latency-meili:7700", "MEILI_MASTER_KEY": "latency-bench-search-key",
-               "MEILI_INDEX_PREFIX": f"latency_{variant}_", "SECRET_KEY": "latency-benchmark-isolated-secret-2026-only",
+               "MEILI_INDEX_PREFIX": state.get("index_prefixes", {}).get(variant, f"latency_{variant}_"), "SECRET_KEY": "latency-benchmark-isolated-secret-2026-only",
                "ADMIN_PASSWORD": "latency-benchmark-only", "DOWNLOAD_ROOT": f"/latency-data/{variant}/downloads",
                "LIBRARY_ROOT": f"/latency-data/{variant}/library", "APP_CONFIG_ROOT": f"/latency-data/{variant}/app-config"}
         for key, value in env.items():
@@ -133,9 +162,60 @@ def start_apis():
         run(args + [IMAGE, "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--lifespan", "off", "--no-access-log"])
 
 
+def seal(candidate):
+    """Preserve preliminary fixtures, then clone a matched final comparison."""
+    state = json.loads((ROOT / "state.json").read_text())
+    if state["network"] != NETWORK or state["services"] != SERVICES or not (ROOT / "data/.latency-acceptance").is_file():
+        raise RuntimeError("Acceptance isolation guard failed")
+    if run(["git", "-C", str(PROJECT), "status", "--porcelain", "--untracked-files=no"]).stdout.strip():
+        raise RuntimeError("Commit reviewed code before sealing the comparison")
+    processes = run(["docker", "top", SERVICES["runner"], "-eo", "args"]).stdout.splitlines()[1:]
+    if processes != ["sleep infinity"]:
+        raise RuntimeError(f"Acceptance runner must be idle before sealing: {processes}")
+    names = [*SERVICES.values(), *(f"ag-latency-bench-api-{v}" for v in ("baseline", "candidate"))]
+    for name in names:
+        detail = json.loads(run(["docker", "inspect", name]).stdout)[0]
+        if detail["Config"]["Labels"].get("codex.task") != "latency-acceptance":
+            raise RuntimeError(f"Refusing unmarked container {name}")
+    next_db = max(state.get("redis_databases", {"baseline": 1, "candidate": 2}).values()) + 1
+    if next_db + 1 >= 16:
+        raise RuntimeError("No unused isolated Redis namespace remains")
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    archive = ROOT / f"preliminary-{stamp}"
+    archive.mkdir()
+    (archive / "state.json").write_text(json.dumps(state, indent=2))
+    for variant in ("baseline", "candidate"):
+        name = f"ag-latency-bench-api-{variant}"
+        run(["docker", "stop", "--time", "10", name])
+        run(["docker", "rm", name])
+        run(["docker", "exec", SERVICES["postgres"], "psql", "-U", "autogallery", "-d", "latency_template", "-v", "ON_ERROR_STOP=1", "-c",
+             f"ALTER DATABASE latency_{variant} RENAME TO latency_{variant}_{stamp.lower()}"])
+        (ROOT / "data" / variant).rename(archive / f"data-{variant}")
+        for folder in ("downloads", "library", "app-config"):
+            (ROOT / "data" / variant / folder).mkdir(parents=True, exist_ok=True)
+    (ROOT / "reports").rename(archive / "reports")
+    (ROOT / "reports").mkdir()
+    (ROOT / "source-candidate").rename(archive / "source-candidate")
+    if (ROOT / "candidate.tar").exists():
+        (ROOT / "candidate.tar").rename(archive / "candidate.tar")
+    state["revisions"]["candidate"] = snapshot(candidate, "candidate")
+    state.update(run_id=str(uuid4()), harness_hashes=harness_hashes(),
+                 redis_databases={"baseline": next_db, "candidate": next_db + 1},
+                 index_prefixes={v: f"latency_{stamp.lower()}_{v}_" for v in ("baseline", "candidate")},
+                 preliminary_archive=str(archive))
+    (ROOT / "state.json").write_text(json.dumps(state, indent=2))
+    for variant in ("baseline", "candidate"):
+        run(["docker", "exec", SERVICES["postgres"], "createdb", "-U", "autogallery", "-T", "latency_template", f"latency_{variant}"])
+    execute("candidate", ["alembic", "upgrade", "head"], log=ROOT / "reports/migration-candidate.log")
+    start_apis()
+    print(json.dumps({"event": "sealed", "run_id": state["run_id"], "revisions": state["revisions"], "archive": str(archive)}), flush=True)
+
+
 def trials(repetitions, smoke, identity_base):
     if not (ROOT / "state.json").is_file():
         raise RuntimeError("Run setup first")
+    state = json.loads((ROOT / "state.json").read_text())
+    validate_run(state)
     shapes = [(9, 27)] if smoke else [(9, 27), (18, 38), (4, 277)]
     valid_pairs = {shape: 0 for shape in shapes}
     for repetition in range(max(1, repetitions * 3 + 1)):
@@ -150,7 +230,9 @@ def trials(repetitions, smoke, identity_base):
                 output = ROOT / "reports" / f"{label}.log"
                 result_path = ROOT / "reports" / f"{label}.json"
                 if result_path.exists():
-                    pair.append(json.loads(result_path.read_text()))
+                    record = json.loads(result_path.read_text())
+                    validate_record(state, record, variant=variant, repetition=repetition, works=works, assets=assets)
+                    pair.append(record)
                     continue
                 command = ["python", "/workspace/backend/scripts/latency_acceptance.py", "trial", "--variant", variant,
                            "--works", str(works), "--assets", str(assets), "--identity", str(identity), "--repetition", str(repetition), "--browse"]
@@ -159,6 +241,7 @@ def trials(repetitions, smoke, identity_base):
                 if len(records) != 1:
                     raise RuntimeError(f"Expected one completed trial in {output}")
                 record = records[0]
+                validate_record(state, record, variant=variant, repetition=repetition, works=works, assets=assets)
                 result_path.write_text(json.dumps(record, indent=2))
                 pair.append(record)
                 print(json.dumps({key: record[key] for key in ("variant", "repetition", "works", "assets", "creation_seconds", "promotion_seconds", "import_seconds")}), flush=True)
@@ -174,10 +257,12 @@ def trials(repetitions, smoke, identity_base):
 
 def summarize():
     state = json.loads((ROOT / "state.json").read_text())
+    validate_run(state)
     rows = []
     for path in (ROOT / "reports").glob("*-*-*-*.json"):
         row = json.loads(path.read_text())
         if row.get("event") == "trial" and row.get("repetition", 0) > 0:
+            validate_record(state, row)
             rows.append(row)
 
     def p95(values):
@@ -218,7 +303,7 @@ def summarize():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("setup", "run", "summarize"))
+    parser.add_argument("command", choices=("setup", "seal", "run", "summarize"))
     parser.add_argument("--candidate", default="HEAD")
     parser.add_argument("--repetitions", type=int, default=20)
     parser.add_argument("--smoke", action="store_true")
@@ -228,6 +313,8 @@ def main():
         parser.error("repetitions must be nonnegative")
     if args.command == "setup":
         setup(args.candidate)
+    elif args.command == "seal":
+        seal(args.candidate)
     elif args.command == "run":
         trials(args.repetitions, args.smoke, args.identity_base)
     else:

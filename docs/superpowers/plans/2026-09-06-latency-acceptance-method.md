@@ -31,6 +31,9 @@ the 4/277 case has 554 files for promotion and registration. JPEG inputs are
 deterministic textured 1300x1900 images, freshly written before application
 reads. Host and PostgreSQL caches are allowed to behave naturally; the results
 must not be described as a forced cold-cache benchmark.
+All pages within a trial share the same deterministic image content; this
+exercises import/page bookkeeping and image decoding, not media-diversity or
+deduplication throughput.
 
 The driver executes the real DownloadStage promotion, provider grouping,
 ArtifactLedger transaction, durable _enqueue_import publication, and ordinary
@@ -43,14 +46,21 @@ recovery contracts have separate integration checks.
 During imports the real authenticated /api/v1/works route is called at a
 bounded rate in a separate API container (0.5 CPU / 512 MiB), including
 permission, query, response serialization and internal HTTP work. This avoids
-sharing the importer's Python event loop with API requests. The original
+sharing the importer's Python event loop with API requests. A separate probe
+process also keeps client requests and pressure sampling off that event loop;
+it shares the bounded worker CPU allocation, so measured HTTP time can still
+include client scheduling under CPU contention. The original
 deployed API also had no explicit CPU/memory cap. Its first request is warmed
 outside the timed import and recorded separately. Startup background loops
 are disabled in this query fixture. The measurement excludes external
 reverse-proxy/network/browser rendering latency. HTTP
 errors invalidate a trial. Every trial verifies terminal completion and exact
 work/asset counts. Timed phases include CPU, process I/O, SQL and commits, with
-one-second resource-controller samples. Critical/paused intervals must be
+an independent flat SQL/commit observer. Every imported media file is checked
+against the fixture SHA-256 after timing. Import timing stops before joining
+the observers. The ordinary resource sampler runs at its configured 5-second
+cadence from before promotion through the end of import; original sample
+timestamps and phase boundaries are retained. Critical/paused intervals must be
 reported separately, not used as normal-resource SLO observations.
 
 A separate `pending` driver holds controlled HTTP task status in processing
@@ -60,8 +70,18 @@ imports finish during the pending interval, poll calls return promptly, and
 the exact outbox version is eventually acknowledged. This is a controlled
 remote-duration test, not a claim that Meili consumed 120 seconds of real CPU;
 real Meili delivery/rebuild and backlog draining are separate checks.
+This case requires a fresh candidate database clone with no existing pending
+outbox rows. It asserts the selected receipt contains the intended row/version
+and every local delivery call returns within 20 seconds.
 
 Each measurement is retained as JSON plus full logs, with immutable source
 revisions in state.json. Final release evidence must name the tested final
 revision, migration results, full regression result, candidate image/source
 digests, rollback path, and the separately timed production observation.
+The manifest pins the driver hash, orchestration hash, and a unique run ID.
+Resumed measurements and summary inputs must all match that seal. After
+preliminary smoke testing, `seal --candidate <commit>` archives preliminary
+reports, data, candidate source, and database names, then creates fresh matched
+database clones, data roots, Redis namespaces, and search index prefixes.
+No final repetition can be combined with earlier smoke data or another
+harness version.
