@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 
 
 OWNER_REVISION = "0d7e8f9a1b2c"
-CURRENT_HEAD_REVISION = "d0f2a4c6e8b1"
+CURRENT_HEAD_REVISION = "f9e1a3b5c7d9"
 
 
 def test_download_and_task_owners_are_durable_indexed_audit_identifiers():

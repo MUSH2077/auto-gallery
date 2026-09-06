@@ -1305,6 +1305,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
     vault = CredentialVault(base64.urlsafe_b64encode(b"w" * 32).decode())
     redis_payloads: list[str] = []
     materialized_paths: list[str] = []
+    process_handoffs: list[tuple[str, int]] = []
 
     class FakeProcess:
         pid = 987654
@@ -1337,8 +1338,21 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
     class FakeControl:
         command = None
 
-        def __init__(self, *_args, **_kwargs):
-            pass
+        def __init__(self, *_args, proc_pid=None, pid=None):
+            self.proc_pid = proc_pid
+            self.pid = pid
+
+        def detach_process(self, expected_pid):
+            if self.proc_pid != expected_pid:
+                return False
+            self.proc_pid = None
+            process_handoffs.append(("detach", expected_pid))
+            return True
+
+        def transfer_to_pid(self, pid):
+            self.pid = pid
+            process_handoffs.append(("heartbeat", pid))
+            return True
 
         def start(self):
             pass
@@ -1452,6 +1466,7 @@ async def test_private_auth_canary_is_redacted_and_temp_config_is_removed_after_
 
         await raw_runner(str(job_id))
 
+        assert process_handoffs == [("detach", FakeProcess.pid), ("heartbeat", os.getpid())]
         assert materialized_paths
         assert all(not os.path.exists(path) for path in materialized_paths)
         async with async_session() as db:

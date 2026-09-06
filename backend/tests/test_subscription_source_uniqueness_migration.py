@@ -15,7 +15,7 @@ import pytest
 
 PREDECESSOR_REVISION = "0d7e8f9a1b2c"
 ALIGNMENT_REVISION = "a6c8e0f2b4d7"
-CURRENT_HEAD_REVISION = "d0f2a4c6e8b1"
+CURRENT_HEAD_REVISION = "f9e1a3b5c7d9"
 OLD_CONSTRAINT = "uq_subscription_sources_sub_source"
 NEW_CONSTRAINT = "uq_subscription_sources_sub_url"
 OWNERSHIP_CONSTRAINT = "uq_subscription_sources_id_subscription"

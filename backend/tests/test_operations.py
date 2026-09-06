@@ -612,7 +612,7 @@ async def test_rebuild_retry_carries_forward_last_fenced_postgresql_checkpoint()
 
 
 def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
-    from app.services import danbooru_import
+    from app.services import creator_aliases, danbooru_import
     from app.services.creator import CreatorService
 
     class Result:
@@ -651,6 +651,11 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     async def fake_creator_projection(_service, _creator_id):
         return None
 
+    async def fake_alias_backfill(_db, _creator_ids, *, request_projection):
+        # Alias persistence has dedicated DB tests; this test keeps its small
+        # database fake focused on import creation and cache invalidation.
+        return None
+
     monkeypatch.setattr(
         danbooru_import.danbooru_svc,
         "search_and_extract",
@@ -668,6 +673,7 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     monkeypatch.setattr(danbooru_import, "find_existing_creator", fake_find_existing_creator)
     monkeypatch.setattr(danbooru_import, "get_subscription_defaults", fake_subscription_defaults)
     monkeypatch.setattr(CreatorService, "_request_creator_projection", fake_creator_projection)
+    monkeypatch.setattr(creator_aliases, "backfill_creator_alias_batch", fake_alias_backfill)
     monkeypatch.setattr(
         danbooru_import,
         "invalidate_creator_subscription_caches",

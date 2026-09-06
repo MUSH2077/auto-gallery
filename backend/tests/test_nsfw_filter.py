@@ -204,7 +204,11 @@ async def test_search_service_adds_nsfw_filter_when_force_sfw(monkeypatch):
     monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
-    await svc.search("cat", kind="works", force_sfw=True)
+    # Exercise parsed Meili filter composition without unrelated SQL alias
+    # resolution or backend routing, which have their own integration tests.
+    await svc._search_meili(
+        search_module.parse_search_query("cat", "works"), ["works"], {}, 0, 20, True,
+    )
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
@@ -220,7 +224,9 @@ async def test_search_service_omits_nsfw_filter_by_default(monkeypatch):
     monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
-    await svc.search("cat", kind="works")
+    await svc._search_meili(
+        search_module.parse_search_query("cat", "works"), ["works"], {}, 0, 20, False,
+    )
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
