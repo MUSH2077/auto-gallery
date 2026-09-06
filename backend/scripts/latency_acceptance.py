@@ -17,10 +17,31 @@ import random
 import time
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import async_session, engine
+
+
+class QueryCount:
+    """Flat observer independent of either revision's nested metric behavior."""
+    def __enter__(self):
+        self.sql = self.commits = 0
+        event.listen(engine.sync_engine, "before_cursor_execute", self.statement)
+        event.listen(Session, "after_commit", self.commit)
+        return self
+
+    def statement(self, *_args, **_kwargs):
+        self.sql += 1
+
+    def commit(self, session):
+        if not session.in_nested_transaction():
+            self.commits += 1
+
+    def __exit__(self, *_args):
+        event.remove(engine.sync_engine, "before_cursor_execute", self.statement)
+        event.remove(Session, "after_commit", self.commit)
 
 
 def guard():
@@ -171,6 +192,8 @@ async def trial(args):
     identity = args.identity
     source_url = f"https://www.pixiv.net/users/{identity}"
     async with async_session() as db:
+        if (await db.execute(select(WorkSource.id).where(WorkSource.source == "pixiv", WorkSource.source_creator_id == str(identity)).limit(1))).first():
+            raise RuntimeError("This provider identity was already imported; use a fresh trial identity")
         creator = Creator(name=str(identity))
         db.add(creator)
         await db.flush()
@@ -189,7 +212,7 @@ async def trial(args):
     entries, image_sha, image_bytes = media_fixture(stage, args.works, args.assets, identity)
     provider = registry.get("pixiv")
     started = time.perf_counter()
-    with measure_stage("acceptance_promotion_registration", files=len(entries)) as promotion_metric:
+    with QueryCount() as promotion_queries, measure_stage("acceptance_promotion_registration", files=len(entries)) as promotion_metric:
         promotion = stage.promote(provider=provider)
         paths = set(promotion.paths)
         groups, invalid = group_metadata_by_work(provider, sorted(p for p in paths if p.suffix == ".json"))
@@ -204,6 +227,7 @@ async def trial(args):
             await db.commit()
         stage.mark_registered()
     promotion_seconds = time.perf_counter() - started
+    promotion_metric.update(observed_sql_count=promotion_queries.sql, observed_durable_commits=promotion_queries.commits)
     started = time.perf_counter()
     import_id = await _enqueue_import(str(job_id), new_json_paths={str(p) for p in paths if p.suffix == ".json"})
     creation_seconds = time.perf_counter() - started
@@ -226,7 +250,7 @@ async def trial(args):
     monitoring = asyncio.create_task(monitor_pressure(stop, pressure))
     started = time.perf_counter()
     try:
-        with measure_stage("acceptance_import", works=args.works, assets=args.assets) as import_metric:
+        with QueryCount() as import_queries, measure_stage("acceptance_import", works=args.works, assets=args.assets) as import_metric:
             await run_import_job(str(import_id))
     finally:
         stop.set()
@@ -234,6 +258,7 @@ async def trial(args):
         if browsing is not None:
             await browsing
     import_seconds = time.perf_counter() - started
+    import_metric.update(observed_sql_count=import_queries.sql, observed_durable_commits=import_queries.commits)
     async with async_session() as db:
         imported = await db.get(ImportJob, UUID(str(import_id)))
         ids = list((await db.execute(select(WorkSource.id).where(WorkSource.source == "pixiv", WorkSource.source_creator_id == str(identity)))).scalars())
@@ -243,8 +268,11 @@ async def trial(args):
         asset_paths = list((await db.execute(select(Asset.file_path).join(AssetSource, AssetSource.asset_id == Asset.id)
                                             .where(AssetSource.work_source_id.in_(ids)))).scalars())
         result = {"event": "trial", "variant": args.variant, "repetition": args.repetition,
+                  "source_revision": os.environ.get("LATENCY_SOURCE_REVISION"),
+                  "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   "category": "new", "read_category": "freshly_written_media_natural_db_cache", "warmup": args.repetition == 0,
                   "works": len(ids), "assets": asset_count, "files": len(entries), "image_bytes": image_bytes,
+                  "new_works": len(ids), "updated_works": 0, "skipped_works": 0,
                   "image_sha256": image_sha, "creation_seconds": creation_seconds, "promotion_seconds": promotion_seconds,
                   "import_seconds": import_seconds, "browse": samples, "browse_warmup": browse_warmup,
                   "job_id": str(job_id), "import_id": str(import_id),

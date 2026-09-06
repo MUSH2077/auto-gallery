@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import subprocess
 import time
@@ -37,6 +38,7 @@ def source(variant):
 
 
 def execute(variant, command, *, database=None, log=None):
+    state = json.loads((ROOT / "state.json").read_text())
     env = {
         "PYTHONPATH": source(variant),
         "DATABASE_URL": f"postgresql+asyncpg://autogallery:latency-bench-db@latency-postgres:5432/{database or 'latency_' + variant}",
@@ -46,6 +48,7 @@ def execute(variant, command, *, database=None, log=None):
         "LIBRARY_ROOT": f"/latency-data/{variant}/library",
         "APP_CONFIG_ROOT": f"/latency-data/{variant}/app-config",
         "LATENCY_BROWSE_URL": f"http://latency-api-{variant}:8000",
+        "LATENCY_SOURCE_REVISION": state["revisions"][variant],
     }
     args = ["docker", "exec", "-w", source(variant)]
     for key, value in env.items():
@@ -134,15 +137,20 @@ def trials(repetitions, smoke, identity_base):
     if not (ROOT / "state.json").is_file():
         raise RuntimeError("Run setup first")
     shapes = [(9, 27)] if smoke else [(9, 27), (18, 38), (4, 277)]
-    for repetition in range(repetitions + 1):
+    valid_pairs = {shape: 0 for shape in shapes}
+    for repetition in range(max(1, repetitions * 3 + 1)):
         for shape, (works, assets) in enumerate(shapes):
+            if repetition > 0 and valid_pairs[(works, assets)] >= repetitions:
+                continue
             order = ("baseline", "candidate") if repetition % 2 == 0 else ("candidate", "baseline")
+            pair = []
             for variant in order:
                 identity = identity_base + repetition * 100 + shape
                 label = f"{variant}-{works}-{assets}-{repetition}"
                 output = ROOT / "reports" / f"{label}.log"
                 result_path = ROOT / "reports" / f"{label}.json"
                 if result_path.exists():
+                    pair.append(json.loads(result_path.read_text()))
                     continue
                 command = ["python", "/workspace/backend/scripts/latency_acceptance.py", "trial", "--variant", variant,
                            "--works", str(works), "--assets", str(assets), "--identity", str(identity), "--repetition", str(repetition), "--browse"]
@@ -152,21 +160,78 @@ def trials(repetitions, smoke, identity_base):
                     raise RuntimeError(f"Expected one completed trial in {output}")
                 record = records[0]
                 result_path.write_text(json.dumps(record, indent=2))
+                pair.append(record)
                 print(json.dumps({key: record[key] for key in ("variant", "repetition", "works", "assets", "creation_seconds", "promotion_seconds", "import_seconds")}), flush=True)
+            if repetition > 0 and all(row["normal_resource"] for row in pair):
+                if len({row["harness_sha256"] for row in pair}) != 1:
+                    raise RuntimeError("Harness changed within a comparison pair")
+                valid_pairs[(works, assets)] += 1
+        if repetition == 0 and repetitions == 0 or all(count >= repetitions for count in valid_pairs.values()):
+            break
+    if any(count < repetitions for count in valid_pairs.values()):
+        raise RuntimeError(f"Insufficient valid normal-resource pairs: {valid_pairs}")
+
+
+def summarize():
+    state = json.loads((ROOT / "state.json").read_text())
+    rows = []
+    for path in (ROOT / "reports").glob("*-*-*-*.json"):
+        row = json.loads(path.read_text())
+        if row.get("event") == "trial" and row.get("repetition", 0) > 0:
+            rows.append(row)
+
+    def p95(values):
+        return sorted(values)[math.ceil(len(values) * .95) - 1] if values else None
+
+    report = {"method": "nearest-rank p95, first 20 matched noncritical pairs, warmup excluded", "revisions": state["revisions"], "scenarios": []}
+    for works, assets, target in ((9, 27, 30), (18, 38, 60), (4, 277, 90)):
+        paired = []
+        by_rep = {}
+        for row in rows:
+            if (row["works"], row["assets"]) == (works, assets):
+                by_rep.setdefault(row["repetition"], {})[row["variant"]] = row
+        for repetition, variants in sorted(by_rep.items()):
+            if set(variants) != {"baseline", "candidate"}:
+                continue
+            pair = list(variants.values())
+            if not all(row["normal_resource"] and row["source_revision"] == state["revisions"][row["variant"]] for row in pair):
+                continue
+            if len({(row["harness_sha256"], row["image_sha256"], row["category"], row["read_category"]) for row in pair}) != 1:
+                raise RuntimeError(f"Non-equivalent fixtures in repetition {repetition}")
+            paired.append(variants)
+            if len(paired) == 20:
+                break
+        scenario = {"works": works, "assets": assets, "valid_pairs": len(paired), "target_import_seconds": target}
+        for variant in ("baseline", "candidate"):
+            selected = [pair[variant] for pair in paired]
+            scenario[variant] = {key + "_p95": p95([row[key] for row in selected]) for key in ("creation_seconds", "promotion_seconds", "import_seconds")}
+            scenario[variant]["browse_seconds_p95"] = p95([sample["seconds"] for row in selected for sample in row["browse"]])
+            scenario[variant]["browse_samples"] = sum(len(row["browse"]) for row in selected)
+        candidate, baseline = scenario["candidate"], scenario["baseline"]
+        scenario["timing_targets_passed"] = len(paired) == 20 and candidate["creation_seconds_p95"] <= 1 and candidate["import_seconds_p95"] <= target and (
+            assets != 277 or candidate["promotion_seconds_p95"] <= 30) and candidate["browse_seconds_p95"] <= 1.2 * baseline["browse_seconds_p95"]
+        report["scenarios"].append(scenario)
+    report["timing_targets_passed"] = all(row["timing_targets_passed"] for row in report["scenarios"])
+    (ROOT / "reports" / "comparison.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("setup", "run"))
+    parser.add_argument("command", choices=("setup", "run", "summarize"))
     parser.add_argument("--candidate", default="HEAD")
     parser.add_argument("--repetitions", type=int, default=20)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--identity-base", type=int, default=9200000)
     args = parser.parse_args()
+    if args.repetitions < 0:
+        parser.error("repetitions must be nonnegative")
     if args.command == "setup":
         setup(args.candidate)
-    else:
+    elif args.command == "run":
         trials(args.repetitions, args.smoke, args.identity_base)
+    else:
+        summarize()
 
 
 if __name__ == "__main__":
