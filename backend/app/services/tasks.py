@@ -926,6 +926,7 @@ async def update_task_resource_state(
     reason: str | None,
     *,
     publisher_attempt: str | None = None,
+    execution_token: str | UUID | None = None,
 ) -> None:
     """Bridge a resource-profile owner to its user-facing TaskRun.
 
@@ -937,7 +938,7 @@ async def update_task_resource_state(
     from app.database import async_session
 
     async with async_session() as db:
-        owner_id = await _resolve_resource_owner(db, owner)
+        owner_id = await _resolve_resource_owner(db, owner, execution_token=execution_token)
         if owner_id is None:
             await db.rollback()
             return
@@ -991,6 +992,11 @@ async def update_task_resource_state(
                 ):
                     await db.rollback()
                     return
+        if task is not None and task.subject_type == "import_job" and execution_token is None and ":" not in str(owner):
+            # Neither a domain UUID nor a TaskRun UUID proves execution
+            # ownership. Control-plane transitions use TaskService directly.
+            await db.rollback()
+            return
         if task is None or (
             task.resource_state == state and task.resource_reason == reason
         ):

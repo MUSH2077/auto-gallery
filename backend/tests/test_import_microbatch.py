@@ -81,16 +81,6 @@ def test_prepared_work_slice_uses_current_budget_without_reordering():
     assert selected + deferred == batch
 
 
-def test_import_resource_slice_cools_down_after_releasing_profile_lock():
-    source = inspect.getsource(import_runner_module._import_resource_slice)
-
-    assert source.index("await stack.aclose()") < source.index(
-        "await sleep_for_profile_slice_cooldown("
-    )
-    assert "yield limits" in source
-    assert "if not limits.allowed" in source
-
-
 def test_import_claim_consumes_adaptive_work_units():
     source = inspect.getsource(run_import_job)
 

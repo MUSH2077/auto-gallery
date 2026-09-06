@@ -612,9 +612,11 @@ async def test_non_success_child_cannot_project_over_active_shared_parent(child_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_command", [None, "pause", "cancel"])
 async def test_empty_parse_cannot_fail_parent_while_sibling_is_running(
     tmp_path,
     monkeypatch,
+    stop_command,
 ):
     """The real empty-parse exit must use shared-parent coordination."""
     from app.config import settings
@@ -631,7 +633,7 @@ async def test_empty_parse_cannot_fail_parent_while_sibling_is_running(
     monkeypatch.setattr(settings, "download_root", str(download_root))
 
     class NoopControl:
-        command = None
+        command = stop_command
         reason = None
 
         def __init__(self, *_args, **_kwargs):
@@ -649,7 +651,8 @@ async def test_empty_parse_cannot_fail_parent_while_sibling_is_running(
 
     monkeypatch.setattr(import_runner, "ControlListener", NoopControl)
     monkeypatch.setattr(import_runner, "HeartbeatPublisher", NoopControl)
-    monkeypatch.setattr(import_runner, "_import_resource_slice", unthrottled)
+    if stop_command is None:
+        monkeypatch.setattr(import_runner, "_import_resource_slice", unthrottled)
 
     try:
         async with async_session() as db:
@@ -680,8 +683,12 @@ async def test_empty_parse_cannot_fail_parent_while_sibling_is_running(
         async with async_session() as db:
             child = await db.get(ImportJob, child_id)
             parent = await db.get(DownloadJob, parent_id)
-            assert child.status == "failed"
+            assert child.status == {None: "failed", "pause": "paused", "cancel": "cancelled"}[stop_command]
             assert parent.status == "importing"
+            assert child.execution_token is None
+            if stop_command:
+                assert not child.import_retry_count
+                assert "execution_token" in child.progress_data
     finally:
         async with async_session() as db:
             await _clear(db)

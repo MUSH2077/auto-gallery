@@ -45,3 +45,38 @@ def test_measure_stage_logs_error(monkeypatch):
             raise RuntimeError("boom")
 
     assert records[0]["outcome"] == "error"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_durable_commit_counter_excludes_savepoint_release():
+    from sqlalchemy import text
+    from app.database import async_session, engine
+
+    try:
+        with stage_metrics.measure_stage("commit_boundary") as payload:
+            async with async_session() as db:
+                async with db.begin_nested():
+                    await db.execute(text("SELECT 1"))
+                await db.commit()
+        assert payload["commit_count"] == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_parent_stage_accounts_for_nested_database_work():
+    from sqlalchemy import text
+    from app.database import async_session, engine
+
+    try:
+        with stage_metrics.measure_stage("download") as parent:
+            with stage_metrics.measure_stage("registration") as child:
+                async with async_session() as db:
+                    await db.execute(text("SELECT 1"))
+                    await db.commit()
+        assert child["sql_count"] == parent["sql_count"] == 1
+        assert child["commit_count"] == parent["commit_count"] == 1
+    finally:
+        await engine.dispose()

@@ -884,8 +884,12 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
         def stop(self):
             pass
 
+        def detach_process(self, _expected_pid):
+            return True
+
     class FakeHeartbeat(FakeControlListener):
-        pass
+        def transfer_to_pid(self, _pid):
+            return True
 
     initial_publications: list[set[str]] = []
     recovery_publications: list[set[str]] = []

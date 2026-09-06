@@ -14,8 +14,7 @@ from rq.worker import WorkerStatus
 from app.config import settings
 from app.services.heavy_io import (
     HEAVY_IO_LOCK_KEY,
-    RESOURCE_DISK_TOKEN_KEY,
-    RESOURCE_NETWORK_TOKEN_KEY,
+    RESOURCE_RESERVATION_KEYS,
     RenewableRedisLease,
     local_lock_for_workload,
     mark_worker_flock_inherited,
@@ -1021,10 +1020,7 @@ class ResourceAwareWorker(Worker):
                     owner=owner,
                     reservation_key=(
                         budget_token
-                        if budget_token in {
-                            RESOURCE_NETWORK_TOKEN_KEY,
-                            RESOURCE_DISK_TOKEN_KEY,
-                        }
+                        if budget_token in RESOURCE_RESERVATION_KEYS
                         else None
                     ),
                     reservation_bytes=reservation_bytes,
@@ -1096,10 +1092,10 @@ class ResourceAwareWorker(Worker):
             finally:
                 mark_worker_flock_inherited(False)
         finally:
-            if lease is not None:
-                asyncio.run(lease.release())
             if local_lock is not None:
                 local_lock.release()
+            if lease is not None:
+                asyncio.run(lease.release())
             try:
                 job.refresh()
             except Exception:

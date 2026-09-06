@@ -1,8 +1,9 @@
 from app.services.image_utils import can_generate_thumbnail, get_mime_type, can_compute_phash, IMAGE_EXTS
-from app.services.media_assets import browser_video_mime_type, render_video_derivatives
+from app.services.media_assets import browser_video_mime_type
 import asyncio
 from collections import deque
 from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import logging
@@ -51,14 +52,12 @@ from app.services.heavy_io import (
     HeavyIOUnavailable,
     heavy_io_slot,
     set_resource_state,
-    wait_for_resource_capacity,
 )
 from app.services.media_derivatives import MEDIA_ALGORITHM_VERSION
 from app.services.media_derivatives import request_media_derivatives
 from app.services.import_projection import request_import_projection
 from app.services.resource_pressure import (
     current_profile_slice_limits,
-    sleep_for_profile_slice_cooldown,
 )
 from app.services.search_projection_outbox import (
     DEFAULT_CREATORS_INDEX_UID,
@@ -69,7 +68,10 @@ from app.services.search_projection_outbox import (
     mark_works_generation_pending,
     request_search_projection,
 )
-from app.services.stage_metrics import measure_async_stage
+from app.services.stage_metrics import (
+    import_execution_metrics, measure_async_stage, measure_import_phase,
+    record_import_deferred, timed_import_phase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +298,7 @@ async def _existing_work_source_ids(source: str, source_work_ids: list[str]) -> 
     return existing
 
 
+@timed_import_phase("metadata_prepare")
 async def _prepare_import_metadata(provider, download_job, groups: dict) -> tuple[dict, dict]:
     """Parse once, then bulk-upsert shared creators and tags.
 
@@ -505,7 +508,7 @@ async def _prepare_import_metadata(provider, download_job, groups: dict) -> tupl
                     )
                 ).scalars()
             )
-        await db.commit()
+        await _commit_import(db)
 
     for item in prepared.values():
         creator = creator_rows[item["creator_key"]]
@@ -538,6 +541,35 @@ def _take_prepared_work_slice(
     return prepared_batch[:bounded_units], prepared_batch[bounded_units:]
 
 
+class _ImportControlRequested(BaseException):
+    """Stop at a safe boundary without classifying control as a failed work."""
+
+    def __init__(self, command: str, reason: str | None = None):
+        super().__init__(command)
+        self.command = command
+        self.reason = reason
+
+
+_import_control: ContextVar[ControlListener | None] = ContextVar("import_control", default=None)
+
+
+def _check_import_control(control: ControlListener | None) -> None:
+    if control is not None and control.command in {"pause", "cancel"}:
+        raise _ImportControlRequested(control.command, control.reason)
+
+
+async def _set_import_resource_state(owner: str, state: str, reason=None, **kwargs):
+    job_id, separator, execution_token = owner.partition(":")
+    if separator:
+        kwargs["execution_token"] = execution_token
+    await set_resource_state(job_id, state, reason, **kwargs)
+
+
+async def _commit_import(db: AsyncSession) -> None:
+    with measure_import_phase("db_commit"):
+        await db.commit()
+
+
 @asynccontextmanager
 async def _import_resource_slice(
     workload: str,
@@ -545,78 +577,70 @@ async def _import_resource_slice(
     *,
     source_identity: str | None = None,
     wait_for_capacity: bool = True,
+    control: ControlListener | None = None,
 ):
-    """Yield current limits under one lease, then cool down lock-free."""
+    """Yield a bounded ingest slice without duty-cycle delay on its critical path."""
 
-    attempt = 0
+    from app.services.heavy_io import _wait_for_resource_event
+
+    control = control or _import_control.get()
+    task_id, separator, execution_token = owner.partition(":")
     stack: AsyncExitStack | None = None
-    pressure_snapshot: dict[str, Any] = {}
     limits = None
-    while stack is None:
-        limits, pressure_snapshot = await current_profile_slice_limits(workload)
-        if not limits.allowed:
-            if not wait_for_capacity:
-                yield None
-                return
-            # This event-driven wait owns neither a DB session nor a flock.  A
-            # fresh snapshot is resolved on the next loop so recovery cannot
-            # accidentally reuse the critical slice's zero-unit budget.
-            await wait_for_resource_capacity(workload=workload, owner=owner)
-            continue
-        candidate = AsyncExitStack()
-        try:
-            await candidate.enter_async_context(
-                heavy_io_slot(
-                    workload,
-                    owner,
-                    source_identity=source_identity,
+    with measure_import_phase("admission_wait"):
+        while stack is None:
+            _check_import_control(control)
+            limits, _snapshot = await current_profile_slice_limits(workload)
+            if not limits.allowed:
+                if not wait_for_capacity:
+                    break
+                await _set_import_resource_state(owner, "waiting", "resource_pressure", workload=workload)
+                # Return here after every event/poll to observe pause/cancel,
+                # even if hard pressure never recovers. No SQL/permit is held.
+                await _wait_for_resource_event(workload, 2.0, task_id=task_id)
+                continue
+            candidate = AsyncExitStack()
+            try:
+                await candidate.enter_async_context(
+                    heavy_io_slot(
+                        workload,
+                        task_id,
+                        source_identity=source_identity,
+                        **({"execution_token": execution_token} if separator else {}),
+                        **({"lane": "ingest"} if workload != "import_db" else {}),
+                    )
                 )
-            )
-        except HeavyIOUnavailable as error:
-            await candidate.aclose()
-            await set_resource_state(
-                owner,
-                "waiting",
-                error.reason,
-                workload=workload,
-            )
-            if not wait_for_capacity:
-                yield None
-                return
-            await asyncio.sleep(min(30.0, 2.0 ** min(attempt + 1, 5)))
-            attempt += 1
-        else:
-            stack = candidate
-    assert stack is not None and limits is not None
+            except HeavyIOUnavailable as error:
+                await candidate.aclose()
+                await _set_import_resource_state(owner, "waiting", error.reason, workload=workload)
+                if not wait_for_capacity:
+                    break
+                await _wait_for_resource_event(workload, 2.0, task_id=task_id)
+            else:
+                stack = candidate
+    if stack is None:
+        _check_import_control(control)
+        yield None
+        return
+    assert limits is not None
     slice_started = monotonic()
     try:
+        _check_import_control(control)
         yield limits
     finally:
         elapsed_seconds = monotonic() - slice_started
         await stack.aclose()
-        await set_resource_state(
+        await _set_import_resource_state(
             owner,
             "yielded",
             "slice_complete",
             workload=workload,
         )
-        # Batch shrinking alone does not constrain sustained backlog.  This
-        # enforce-only duty-cycle delay runs after every transaction and both
-        # Redis/POSIX leases have been released; shadow mode returns zero.
-        await sleep_for_profile_slice_cooldown(
-            pressure_snapshot,
-            elapsed_seconds=elapsed_seconds,
-            max_seconds=300.0,
-            workload=workload,
-        )
+        logger.debug("Ingest slice completed workload=%s active_seconds=%.6f", workload, elapsed_seconds)
 
 
-def _prepared_media_workload(prepared_work: dict[str, Any]) -> str:
-    """Choose the profile for only the first-card synchronous derivative."""
-
-    first_file = prepared_work.get("first_file")
-    if first_file is not None and Path(first_file).suffix.lower() in VIDEO_EXTS:
-        return "video_derive"
+def _prepared_media_workload(_prepared_work: dict[str, Any]) -> str:
+    """Only image previews run inline; every video derivative is deferred."""
     return "image_derive"
 
 
@@ -661,7 +685,7 @@ async def _artifact_batch_lease_guard(
                 expected_lease_token=execution_token,
                 lease_seconds=IMPORT_ARTIFACT_LEASE_SECONDS,
             )
-            await lease_db.commit()
+            await _commit_import(lease_db)
         lease.retain(owned)
 
     try:
@@ -708,6 +732,7 @@ async def _artifact_batch_lease_guard(
         await renewal_task
 
 
+@timed_import_phase("media_prepare")
 async def _prepare_work_media(
     provider: Any,
     prepared_work: dict[str, Any],
@@ -743,48 +768,26 @@ async def _prepare_work_media(
     if derive_primary and can_generate_thumbnail(primary.suffix):
         from app.services.thumbnail import inspect_and_generate_thumbnail
 
-        thumb, width, height = await asyncio.to_thread(
-            inspect_and_generate_thumbnail,
-            str(primary),
-            lib_dir,
-            f"{primary.stem}.thumbnail",
-        )
-        primary_values.update(width=width, height=height)
-        if thumb:
-            primary_values["thumb_sm_path"] = str(
-                Path(thumb).relative_to(settings.library_root)
+        try:
+            thumb, width, height = await asyncio.to_thread(
+                inspect_and_generate_thumbnail,
+                str(primary),
+                lib_dir,
+                f"{primary.stem}.thumbnail",
             )
-    elif derive_primary and primary.suffix.lower() in VIDEO_EXTS:
-        derivatives = await asyncio.to_thread(
-            render_video_derivatives,
-            primary,
-            lib_dir,
-            primary.stem,
-        )
-        if derivatives.inspection:
-            primary_values.update(
-                width=derivatives.inspection.width,
-                height=derivatives.inspection.height,
-                duration=derivatives.inspection.duration,
-                mime_type=browser_video_mime_type(
-                    primary.name,
-                    get_mime_type(primary.suffix),
-                ),
-            )
-        if derivatives.thumbnail_path:
-            primary_values["thumb_sm_path"] = str(
-                derivatives.thumbnail_path.relative_to(settings.library_root)
-            )
-        if derivatives.poster_path:
-            primary_values["thumb_lg_path"] = str(
-                derivatives.poster_path.relative_to(settings.library_root)
-            )
-        if derivatives.error:
-            logger.warning(
-                "Primary video derivatives incomplete for %s: %s",
-                primary,
-                derivatives.error,
-            )
+            primary_values.update(width=width, height=height)
+            if thumb:
+                primary_values["thumb_sm_path"] = str(
+                    Path(thumb).relative_to(settings.library_root)
+                )
+        except Exception:
+            # The outbox retries derivatives; readable media may still be
+            # imported when an optional first-card preview cannot be rendered.
+            primary_values.clear()
+            logger.warning("Primary image preview deferred for %s", primary, exc_info=True)
+    # Video inspection, posters and transcoding are already requested in the
+    # durable media outbox below. Rendering them here can block a tiny import
+    # for minutes and cannot be interrupted safely by cancelling to_thread.
 
     return {
         "source_work_id": source_work_id,
@@ -830,6 +833,25 @@ def _asset_derivative_request(
         "source_size": stat.st_size,
         "source_mtime_ns": stat.st_mtime_ns,
     }
+
+
+async def _update_existing_with_resources(provider, download_job, prepared, owner):
+    """Apply upstream revisions under the same admission rules as new works."""
+    result = {"updated": 0, "unchanged": 0, "assets": 0, "multi_page": 0, "failures": {}}
+    items = list(prepared.items())
+    offset = 0
+    while offset < len(items):
+        async with _import_resource_slice("import_db", owner) as limits:
+            size = max(1, min(IMPORT_WORK_BATCH_SIZE, int(limits.work_units)))
+            batch = await _update_existing_work_groups(
+                provider, download_job, dict(items[offset:offset + size]),
+            )
+        for key in ("updated", "unchanged", "assets", "multi_page"):
+            result[key] += batch[key]
+        result["failures"].update(batch["failures"])
+        record_import_deferred(media_derivatives=batch["assets"], import_projection=batch["updated"])
+        offset += size
+    return result
 
 
 async def _update_existing_work_groups(
@@ -1200,7 +1222,7 @@ async def _update_existing_work_groups(
                         source=provider.source_name,
                         preserve_active_leases=True,
                     )
-            await db.commit()
+            await _commit_import(db)
 
     return result
 
@@ -1750,7 +1772,7 @@ async def _claim_import_execution(
             import_job,
             status="running",
         )
-        await db.commit()
+        await _commit_import(db)
         return import_job, execution_token
 
 
@@ -1775,7 +1797,7 @@ async def _release_import_execution(
             )
             .values(execution_token=None)
         )
-        await db.commit()
+        await _commit_import(db)
         return released
 
 
@@ -1783,14 +1805,17 @@ async def _owned_import_job(
     db: AsyncSession,
     job_uuid: UUID,
     execution_token: UUID,
+    *,
+    lock: bool = False,
 ) -> ImportJob | None:
+    query = select(ImportJob).where(
+        ImportJob.id == job_uuid,
+        ImportJob.execution_token == execution_token,
+    )
+    if lock:
+        query = query.with_for_update(of=ImportJob)
     return (
-        await db.execute(
-            select(ImportJob).where(
-                ImportJob.id == job_uuid,
-                ImportJob.execution_token == execution_token,
-            )
-        )
+        await db.execute(query)
     ).scalar_one_or_none()
 
 
@@ -1806,6 +1831,16 @@ async def run_import_job(import_job_id: str):
     import_job, execution_token = claimed_execution
     execution_owner = f"{import_job_id}:{execution_token}"
 
+    created_at = import_job.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    metrics_context = import_execution_metrics(
+        job_uuid, execution_token,
+        queue_wait_seconds=(datetime.now(timezone.utc) - created_at).total_seconds(),
+    )
+    stats = {"works": 0, "assets": 0, "multi_page": 0, "skipped": 0, "existing": 0}
+    total_groups = 0
+
     # ── Start control listener + heartbeat ──
     listener: ControlListener | None = ControlListener(import_job_id)
     heartbeat: HeartbeatPublisher | None = HeartbeatPublisher(
@@ -1814,6 +1849,8 @@ async def run_import_job(import_job_id: str):
         pid=os.getpid(),
     )
 
+    metrics_context.__enter__()
+    control_token = _import_control.set(listener)
     try:
         listener.start()
         heartbeat.start()
@@ -1835,7 +1872,7 @@ async def run_import_job(import_job_id: str):
                     "Import worker started",
                     import_job_id=import_job_id,
                 )
-                await db.commit()
+                await _commit_import(db)
         provider = registry.get(dj.source)
 
         # PostgreSQL is the durable source of truth. The Redis/disk list remains
@@ -1875,18 +1912,16 @@ async def run_import_job(import_job_id: str):
         # Grouping parses provider JSON and can retain raw metadata.  Perform
         # it only after hard admission; critical mode must not materialize an
         # entire download while waiting for the first database slice.
-        _parse_started = monotonic()
         async with _import_resource_slice(
             "import_db",
             execution_owner,
         ):
-            groups, invalid_metadata = group_metadata_by_work(
-                provider,
-                all_json_files,
-            )
+            with measure_import_phase("parse"):
+                _parse_started = monotonic()
+                groups, invalid_metadata = group_metadata_by_work(provider, all_json_files)
+                _parse_ms = int((monotonic() - _parse_started) * 1000)
         for metadata_path in invalid_metadata:
             logger.warning("Failed to extract a work ID from JSON %s", metadata_path)
-        _parse_ms = int((monotonic() - _parse_started) * 1000)
 
         if not groups:
             _empty_msg = "Could not extract work IDs from any JSON"
@@ -1901,7 +1936,7 @@ async def run_import_job(import_job_id: str):
                         status="failed",
                         error=_empty_msg,
                     )
-                    await db.commit()
+                    await _commit_import(db)
             return
 
         async with async_session() as db:
@@ -1915,7 +1950,7 @@ async def run_import_job(import_job_id: str):
                 current=0,
                 total=len(groups),
             )
-            await db.commit()
+            await _commit_import(db)
 
         total_groups = len(groups)
         existing_ids = await _existing_work_source_ids(
@@ -1969,10 +2004,8 @@ async def run_import_job(import_job_id: str):
                 parse_failures.update(failures)
                 existing_prepare_offset += allowed
 
-        existing_result = await _update_existing_work_groups(
-            provider,
-            dj,
-            existing_prepared,
+        existing_result = await _update_existing_with_resources(
+            provider, dj, existing_prepared, execution_owner,
         )
         parse_failures.update(existing_result["failures"])
         new_group_items = list(new_groups.items())
@@ -2018,7 +2051,7 @@ async def run_import_job(import_job_id: str):
                         "failed",
                         message,
                     )
-                await ledger_db.commit()
+                await _commit_import(ledger_db)
 
         stats = {
             "works": int(existing_result["updated"]),
@@ -2045,7 +2078,7 @@ async def run_import_job(import_job_id: str):
                 if listener.should_stop():
                     metric["works_committed"] = 0
                     metric["assets"] = 0
-                    await set_resource_state(
+                    await _set_import_resource_state(
                         execution_owner,
                         "yielded",
                         "control_signal",
@@ -2112,7 +2145,7 @@ async def run_import_job(import_job_id: str):
                                 ),
                                 lease_seconds=IMPORT_ARTIFACT_LEASE_SECONDS,
                             )
-                            await claim_db.commit()
+                            await _commit_import(claim_db)
                     metric["durable_commits"] += 1
 
                     claimed_ids = list(claim.claimed)
@@ -2149,7 +2182,7 @@ async def run_import_job(import_job_id: str):
                                 )
                             contended_round += 1
                             delay = min(30.0, 2.0 ** min(contended_round, 5))
-                            await set_resource_state(
+                            await _set_import_resource_state(
                                 execution_owner,
                                 "waiting",
                                 "artifact_lease_contended",
@@ -2351,7 +2384,12 @@ async def run_import_job(import_job_id: str):
                                     )
                                     # One durable transaction owns all
                                     # successful domain and outbox rows.
-                                    await batch_db.commit()
+                                    await _commit_import(batch_db)
+                                    record_import_deferred(
+                                        media_derivatives=sum(len(work["derivative_requests"]) for work in staged_works),
+                                        import_projection=len(staged_works),
+                                        search_projection=search_entity_count,
+                                    )
                                     metric["durable_commits"] += 1
                                 else:
                                     await batch_db.rollback()
@@ -2501,64 +2539,18 @@ async def run_import_job(import_job_id: str):
                                 total=total_groups,
                                 assets=stats["assets"],
                             )
-                            await checkpoint_db.commit()
+                            await _commit_import(checkpoint_db)
                     metric["durable_commits"] += 1
                 finally:
                     # Give the adaptive controller an explicit checkpoint
                     # between slices; no DB transaction or flock survives it.
-                    await set_resource_state(
+                    await _set_import_resource_state(
                         execution_owner,
                         "yielded",
                         "slice_complete",
                         workload="import_db",
                     )
-        # Determine final status based on control signal
-        if listener.command == "pause":
-            async with async_session() as db:
-                ij = await _owned_import_job(db, job_uuid, execution_token)
-                if ij:
-                    ij.status = "paused"
-                    if listener.reason:
-                        ij.user_note = listener.reason
-                    apply_import_progress(
-                        ij,
-                        "paused",
-                        f"Paused after {stats['works']} works",
-                        current=stats["works"],
-                        total=total_groups,
-                        assets=stats["assets"],
-                    )
-                    await project_import_pipeline_state(
-                        db,
-                        ij,
-                        status="paused",
-                    )
-                    await db.commit()
-            logger.info("Import %s paused after %d works", import_job_id, stats["works"])
-            return
-        elif listener.command == "cancel":
-            async with async_session() as db:
-                ij = await _owned_import_job(db, job_uuid, execution_token)
-                if ij:
-                    ij.status = "cancelled"
-                    if listener.reason:
-                        ij.user_note = listener.reason
-                    apply_import_progress(
-                        ij,
-                        "cancelled",
-                        f"Cancelled after {stats['works']} works",
-                        current=stats["works"],
-                        total=total_groups,
-                        assets=stats["assets"],
-                    )
-                    await project_import_pipeline_state(
-                        db,
-                        ij,
-                        status="cancelled",
-                    )
-                    await db.commit()
-            logger.info("Import %s cancelled after %d works", import_job_id, stats["works"])
-            return
+        _check_import_control(listener)
 
         # ── Classify outcome (pure, unit-tested) ──
         # Note: total_groups is always >= 1 here — the empty case returned early
@@ -2640,7 +2632,7 @@ async def run_import_job(import_job_id: str):
                 append_manifest_event(dj, "stage_timing", stage="parse", ms=_parse_ms)
                 append_manifest_event(dj, "stage_timing", stage="process", ms=_process_ms)
                 if not completion.should_finalize:
-                    await db.commit()
+                    await _commit_import(db)
                     logger.info(
                         "Import batch %s finished; shared parent %s still has active batches",
                         import_job_id,
@@ -2678,6 +2670,30 @@ async def run_import_job(import_job_id: str):
                 )
         logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])
+
+    except _ImportControlRequested as control:
+        status = "paused" if control.command == "pause" else "cancelled"
+        async with async_session() as db:
+            # Match execution claim / parent projection lock order. Holding
+            # these short locks prevents a replacement execution between the
+            # ownership check and the durable control transition.
+            await db.execute(
+                select(DownloadJob.id)
+                .where(DownloadJob.id == import_job.download_job_id)
+                .with_for_update(of=DownloadJob)
+            )
+            ij = await _owned_import_job(db, job_uuid, execution_token, lock=True)
+            if ij is not None:
+                ij.status = status
+                if control.reason:
+                    ij.user_note = control.reason
+                apply_import_progress(
+                    ij, status, f"{status.capitalize()} after {stats['works']} works",
+                    current=stats["works"], total=total_groups, assets=stats["assets"],
+                )
+                await project_import_pipeline_state(db, ij, status=status)
+                await _commit_import(db)
+        logger.info("Import %s %s at a safe checkpoint", import_job_id, status)
 
     except Exception as e:
         import traceback
@@ -2718,7 +2734,7 @@ async def run_import_job(import_job_id: str):
                     # The retry intent and deterministic RQ id are committed
                     # before Redis publication.  Capacity/disconnect failures
                     # therefore remain visible to import recovery as enqueued.
-                    await db.commit()
+                    await _commit_import(db)
                     publication = await publish_prepared_import(
                         db,
                         ij.id,
@@ -2749,7 +2765,7 @@ async def run_import_job(import_job_id: str):
                         status="failed",
                         error=f"Exhausted {max_retries} retries\n{error_text}",
                     )
-                    await db.commit()
+                    await _commit_import(db)
             else:
                 logger.warning(
                     "Import execution %s lost ownership; suppressing stale retry",
@@ -2757,6 +2773,8 @@ async def run_import_job(import_job_id: str):
                 )
 
     finally:
+        _import_control.reset(control_token)
+        metrics_context.__exit__(None, None, None)
         # Every exit path (including early parse/download failures and retry
         # publication errors) tears down control threads and CAS-releases only
         # the leases owned by this execution token.

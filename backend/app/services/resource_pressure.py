@@ -1549,7 +1549,9 @@ class ResourcePressureStateMachine:
             if profile.name == "download_network"
             else "maintenance"
             if profile.name == "maintenance"
-            else "disk"
+            else "ingest"
+            if profile.name == "import_db"
+            else "background"
         )
         reservation_capacity = (
             max(
@@ -1864,7 +1866,7 @@ class ResourcePressureStateMachine:
                     for name, value in profile_budgets.items()
                 },
                 "reservation": {
-                    "mode": "single_disk_token_v1",
+                    "mode": "dual_disk_lanes_v2",
                     "hard_memory_floor_bytes": self.thresholds.pause_available_bytes,
                     "capacity_bytes": (
                         max(
@@ -2719,7 +2721,7 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
         active_leases = collect_active_resource_leases(redis_client=redis_client)
     except Exception as exc:
         active_leases = {
-            "mode": "single_disk_token_v1",
+            "mode": "dual_disk_lanes_v2",
             "active": [],
             "active_count": None,
             "reserved_bytes": None,
@@ -2741,12 +2743,14 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
     previous_status, snapshot = _monitor.sample_with_previous_status()
     reservation = snapshot.setdefault("budget", {}).setdefault("reservation", {})
     reservation.update(
-        mode=active_leases.get("mode", "single_disk_token_v1"),
+        mode=active_leases.get("mode", "dual_disk_lanes_v2"),
         active_leases=active_leases.get("active") or [],
         active_count=active_leases.get("active_count"),
         reserved_bytes=active_leases.get("reserved_bytes"),
         network_active=active_leases.get("network_active"),
         disk_active=active_leases.get("disk_active"),
+        ingest_active=active_leases.get("ingest_active"),
+        background_active=active_leases.get("background_active"),
         maintenance_active=active_leases.get("maintenance_active"),
     )
     if active_leases.get("error"):
@@ -3050,7 +3054,7 @@ def collect_queue_worker_health(
             workers["resource_leases"] = collect_active_resource_leases(client)
         except Exception as exc:
             workers["resource_leases"] = {
-                "mode": "single_disk_token_v1",
+                "mode": "dual_disk_lanes_v2",
                 "active": [],
                 "active_count": None,
                 "reserved_bytes": None,

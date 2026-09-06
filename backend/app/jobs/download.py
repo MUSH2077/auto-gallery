@@ -55,7 +55,7 @@ from app.services.download_staging import (
 )
 from app.services.sync_outcome import build_sync_outcome, had_sync_baseline
 from app.services.heavy_io import heavy_io_async_job
-from app.services.stage_metrics import measured_async_job
+from app.services.stage_metrics import measure_async_stage, measure_stage, measured_async_job
 from app.services.search_projection_outbox import request_search_projection
 
 logger = logging.getLogger(__name__)
@@ -1304,23 +1304,11 @@ async def run_download_job(job_id: str):
             # The child is conclusively reaped. Fence its pid out of process
             # control before output draining or any other finalization can
             # yield, then refresh the same task heartbeat with the worker pid.
-            detach_process = getattr(control_listener, "detach_process", None)
-            if detach_process is None:
-                # Compatibility for alternate/no-op listener implementations:
-                # stop the child-bound listener before worker-only finalization.
-                control_listener.stop()
-            elif not detach_process(proc.pid):
+            if not control_listener.detach_process(proc.pid):
                 raise RuntimeError(
                     "gallery-dl control target changed before finalization"
                 )
-            transfer_heartbeat = getattr(heartbeat, "transfer_to_pid", None)
-            if transfer_heartbeat is None:
-                # Older compatible publishers cannot mutate their pid safely.
-                # Replace one only after the child-bound publisher has stopped.
-                heartbeat.stop()
-                heartbeat = HeartbeatPublisher(job_id, "download", pid=os.getpid())
-                heartbeat.start()
-            elif transfer_heartbeat(os.getpid()) is False:
+            if heartbeat.transfer_to_pid(os.getpid()) is False:
                 raise RuntimeError(
                     "download heartbeat ownership was lost during finalization"
                 )
@@ -1430,7 +1418,8 @@ async def run_download_job(job_id: str):
                 raise RuntimeError(
                     "refusing staging promotion while gallery-dl is still running"
                 )
-            promotion = download_stage.promote(provider=provider)
+            with measure_stage("download_promotion", job_id=job_id):
+                promotion = download_stage.promote(provider=provider)
             metadata_updates = promotion.metadata_updates
             delta_paths = set(promotion.paths)
             metadata_paths = sorted(
@@ -1462,10 +1451,11 @@ async def run_download_job(job_id: str):
 
         if metadata_paths:
             discovery_provider = _provider_registry.get(job.source)
-            groups, invalid_metadata = group_metadata_by_work(
-                discovery_provider,
-                metadata_paths,
-            )
+            with measure_stage("download_metadata_parse", job_id=job_id):
+                groups, invalid_metadata = group_metadata_by_work(
+                    discovery_provider,
+                    metadata_paths,
+                )
             if invalid_metadata:
                 for invalid_path in invalid_metadata:
                     logger.error("Could not extract work identity from %s", invalid_path)
@@ -1534,7 +1524,7 @@ async def run_download_job(job_id: str):
 
         # Only ledger registration and cursor mutation occur in this bounded
         # transaction.  A failed/paused/partial path never advances the cursor.
-        async with async_session() as _ledger_db:
+        async with measure_async_stage("download_registration", job_id=job_id), async_session() as _ledger_db:
             _registered = await ArtifactLedger(_ledger_db).upsert_many(rows)
             _ledger_job = None
             if metadata_updates:
