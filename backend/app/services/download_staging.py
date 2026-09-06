@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import fcntl
+import functools
 import os
 import stat
 import uuid
@@ -22,6 +24,7 @@ from typing import Any
 MANIFEST_NAME = ".auto-gallery-stage.json"
 MANIFEST_VERSION = 1
 RETAINED_PROMOTION_DIR = ".auto-gallery-promote-retained"
+PROMOTION_LOCK_NAME = ".auto-gallery-promotion.lock"
 MAX_SAFE_METADATA_BYTES = 8 * 1024 * 1024
 _INCOMPLETE_SUFFIXES = (
     ".part",
@@ -31,6 +34,22 @@ _INCOMPLETE_SUFFIXES = (
     ".ytdl",
     ".download",
 )
+
+
+def _serialize_canonical_writes(method):
+    @functools.wraps(method)
+    def guarded(stage, *args, **kwargs):
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(stage.download_root / PROMOTION_LOCK_NAME, flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            # Another process may have completed this same stage while this
+            # object was waiting. Only the persisted plan is authoritative.
+            stage._load_or_initialize()
+            return method(stage, *args, **kwargs)
+        finally:
+            os.close(fd)
+    return guarded
 
 
 class DownloadStageError(RuntimeError):
@@ -204,6 +223,7 @@ class DownloadStage:
         self._manifest["invalid_metadata"] = sorted(set(relative_paths))
         self._write_manifest()
 
+    @_serialize_canonical_writes
     def promote(self, *, provider: Any | None = None) -> StagePromotion:
         """Promote completed files using two durable whole-batch checkpoints."""
 
@@ -253,8 +273,13 @@ class DownloadStage:
                         conflict_details.append(_conflict_detail(relative, staged, target))
                         continue
                     if _files_equal(staged, target):
-                        entry["action"] = "accept_existing"
-                        entry["target_identity"] = _file_identity(target)
+                        target_identity = _file_identity(target)
+                        entry["action"] = (
+                            "recovered_link"
+                            if _same_inode(planned[relative], target_identity)
+                            else "accept_existing"
+                        )
+                        entry["target_identity"] = target_identity
                     else:
                         update = _safe_metadata_update(
                             relative,
@@ -347,6 +372,26 @@ class DownloadStage:
         metadata_updates = dict(self._manifest.get("metadata_updates") or {})
         affected_directories: set[Path] = set()
         canonical_paths: list[Path] = []
+
+        # Replacements consume the original staged name. Make every retained
+        # recovery name durable as one batch BEFORE any such consumption.
+        recovery_directories: set[Path] = set()
+        for relative, entry in entries.items():
+            if not isinstance(entry, dict) or entry.get("relative_path") != relative:
+                raise DownloadStageManifestError("invalid promotion batch entry")
+            if entry.get("action") not in {"replace_metadata", "recovered_metadata"}:
+                continue
+            staged = self.root / Path(PurePosixPath(relative))
+            retained = self._retained_path(relative, entry)
+            source = staged if staged.exists() or staged.is_symlink() else retained
+            if source.exists() or source.is_symlink():
+                self._validate_regular_file(source, label="metadata recovery")
+                if _sha256(source) != entry.get("replacement_sha256"):
+                    self._runtime_conflict(relative, source, self._canonical_target(relative, create_parent=False))
+                self._ensure_retained_copy(source, retained, recovery_directories)
+                self._add_directory_barriers(retained.parent, boundary=self.root, affected_directories=recovery_directories)
+        for directory in sorted(recovery_directories, key=lambda path: str(path)):
+            _fsync_directory(directory)
 
         for relative in sorted(entries):
             entry = entries[relative]
@@ -514,6 +559,7 @@ class DownloadStage:
         if target.exists() or target.is_symlink():
             if target.is_symlink() or not target.is_file():
                 self._runtime_conflict(relative, source, target)
+            target_identity = _file_identity(target)
             target_sha = _sha256(target)
             if target_sha == replacement_sha:
                 return
@@ -541,6 +587,11 @@ class DownloadStage:
                     if staged.is_symlink() or not staged.is_file() or _sha256(staged) != replacement_sha:
                         self._runtime_conflict(relative, staged, target)
                 affected_directories.add(staged.parent)
+            # All application promotion/conflict writers share the outer
+            # mutex. Recheck after parsing and recovery setup as well, so a
+            # target changed at that boundary cannot be silently overwritten.
+            if target.is_symlink() or not target.is_file() or not _same_inode(target_identity, _file_identity(target)):
+                self._runtime_conflict(relative, source, target)
             os.replace(staged, target)
             affected_directories.update({staged.parent, target.parent})
             return
@@ -601,6 +652,9 @@ class DownloadStage:
             ):
                 staged = self.root / Path(PurePosixPath(relative))
                 self._runtime_conflict(relative, staged, target)
+        # A previous fsync can fail after the manifest rename. Re-establish
+        # that final checkpoint's directory durability before source cleanup.
+        _fsync_directory(self.root)
         return entries
 
     def _new_paths_after_promoted_batch(
@@ -721,11 +775,13 @@ class DownloadStage:
             raise DownloadStageError("promotion directory escapes managed root") from exc
         current = directory
         while True:
-            affected_directories.add(current)
+            if current.exists():
+                affected_directories.add(current)
             if current == boundary:
                 return
             current = current.parent
 
+    @_serialize_canonical_writes
     def resolve_conflicts(
         self,
         decisions: dict[str, str],
@@ -1040,14 +1096,7 @@ class DownloadStage:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp_path, self.manifest_path)
-            try:
-                directory_fd = os.open(self.root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            except OSError:
-                pass
+            _fsync_directory(self.root)
         finally:
             try:
                 temp_path.unlink(missing_ok=True)
@@ -1263,19 +1312,13 @@ def _conflict_detail(relative: str, staged: Path, target: Path) -> dict[str, Any
 
 
 def _fsync_directory(path: Path) -> None:
-    """Best-effort durability barrier for a directory entry."""
+    """Require a durable directory barrier before consuming recovery names."""
 
+    directory_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        directory_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except OSError:
-        # Some NAS filesystems do not support fsync on directories.  The hard
-        # link/no-overwrite invariants still hold; only the power-loss window
-        # cannot be tightened on those mounts.
-        pass
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def _now_iso() -> str:

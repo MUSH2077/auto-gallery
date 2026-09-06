@@ -465,8 +465,12 @@ def test_safe_metadata_replace_recovers_after_manifest_update_gap(tmp_path, monk
     staged.parent.mkdir(parents=True)
     staged.write_text(json.dumps(_pixiv_metadata(page_count=2)), encoding="utf-8")
 
-    def crash_after_replace(_path):
-        raise RuntimeError("simulated crash after metadata replace")
+    original_sync = download_staging._fsync_directory
+
+    def crash_after_replace(path):
+        if not staged.exists():
+            raise RuntimeError("simulated crash after metadata replace")
+        original_sync(path)
 
     monkeypatch.setattr(download_staging, "_fsync_directory", crash_after_replace)
     with pytest.raises(RuntimeError, match="simulated crash"):
@@ -720,7 +724,7 @@ def test_cleanup_interruption_replays_from_durable_promoted_checkpoint(
     assert all(not path.exists() for path in staged_paths)
 
 
-def test_old_v1_partially_promoted_manifest_is_recoverable(tmp_path):
+def test_old_v1_partially_promoted_manifest_is_recoverable(tmp_path, monkeypatch):
     download_root = tmp_path / "downloads"
     download_root.mkdir()
     stage = DownloadStage.open(download_root, "job-old-v1", "x")
@@ -745,10 +749,20 @@ def test_old_v1_partially_promoted_manifest_is_recoverable(tmp_path):
     }
     stage.manifest_path.write_text(json.dumps(old_manifest), encoding="utf-8")
 
+    synchronized = set()
+    original_sync = download_staging._fsync_directory
+
+    def sync(directory):
+        original_sync(directory)
+        synchronized.add(directory)
+
+    monkeypatch.setattr(download_staging, "_fsync_directory", sync)
+
     recovered = DownloadStage.open(download_root, stage.job_id, "x")
     assert recovered.promote().paths == (target,)
     assert target.read_bytes() == b"legacy"
     assert not staged.exists()
+    assert target.parent in synchronized
 
 
 @pytest.mark.parametrize("file_count", [10, 100, 1000])
