@@ -93,9 +93,12 @@ __all__ = [
     "MediaDerivativeOutbox",
     "SearchProjectionOutbox",
     "SearchDeliveryReceipt",
+    "SearchRebuild",
+    "SearchRebuildReplay",
     "RepositorySyncReceipt",
     "SearchIndexState",
     "MaintenanceAuditEvent",
 ]
 
 from app.models.search_delivery_receipt import SearchDeliveryReceipt
+from app.models.search_rebuild import SearchRebuild, SearchRebuildReplay

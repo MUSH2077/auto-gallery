@@ -66,6 +66,8 @@ def create_marker(receipt_id: str):
             os.fsync(stream.fileno())
         os.replace(temp, _path())
         _sync_directory()
+        from app.services.heavy_io import _get_lease_redis
+        _get_lease_redis().set(REMOTE_RESERVATION_KEY, json.dumps(payload))
 
 
 def clear_marker(receipt_id: str):
@@ -108,3 +110,14 @@ def record_task(receipt_id: str, task_uid: int | None):
             os.fsync(stream.fileno())
         os.replace(temp, _path())
         _sync_directory()
+
+
+def reserve_memory(redis_client, script, *args):
+    """Keep marker/cache reconciliation and the RAM grant in one ordering fence."""
+    with _guard():
+        marker = _read()
+        if marker:
+            redis_client.set(REMOTE_RESERVATION_KEY, json.dumps(marker))
+        else:
+            redis_client.delete(REMOTE_RESERVATION_KEY)
+        return redis_client.eval(script, *args)

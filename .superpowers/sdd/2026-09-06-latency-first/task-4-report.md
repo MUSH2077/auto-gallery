@@ -52,3 +52,42 @@ Real Meili initially failed because the isolated server OOM-exited under its ini
 ## Files
 
 Receipt model/registration and additive migration; `search_delivery.py`; `remote_search_flight.py`; ordinary search RQ/service routing; heavy resource and worker integration; outbox coordinator/health and main existence-probe call; focused delivery, resource compatibility, and successor tests.
+
+## Task 4B — durable rebuild continuations and review corrections
+
+The 4A rebuild limitation above is superseded. Rebuild now persists an active singleton workflow with settings, bounded UUID keyset build, bounded mutation replay, live-index creation, one multi-index swap, version-CAS acknowledgment, and old-index cleanup phases. Every remote command uses the ordinary receipt/marker engine. Its frozen continuation advances only in the terminal-success transaction. Replay versions are accumulated in a separate table with bulk upserts and acknowledged in chunks of 500 only after confirmed swap success; newer versions remain pending. Ordinary writes wait behind the active rebuild across successor processes. An accepted swap recovered from its fsynced identity is polled rather than submitted twice.
+
+The old synchronous rebuild stack and its worker cooldown sleeps were removed. `SearchService.reindex` and `refresh_works` return `pending` with a build identity; callers inspect persisted status. Registered admin operations persist a delayed fenced handoff and return the RQ slot. The existing due-dispatch reconciler publishes that handoff when due: calling `publish_admin_operation` immediately would discard its delay. The search outbox supplies regular remote polls. Legacy task owners are completed by the final durable phase. Owner cancellation stops new commands after any already-accepted task has been settled. Oversize documents and replay-limit errors fail the build durably; old-index cleanup errors retain a warning while preserving a successful swap.
+
+The three Important 4A review findings are fixed:
+
+1. Marker creation installs the nonexpiring Redis reservation under the marker guard. Ingest admission holds that same guard through reservation restoration and its memory-grant Lua, closing the paused-before-submission interleaving.
+2. Durable `write_available_at` gates new writes independently of remote polls. Even a 45-second profile cooldown leaves polls within 2–15 seconds; successful settings tasks release remote accounting before waiting to submit documents.
+3. Terminal remote failure computes backoff from the CAS-matched outbox's accumulated attempts, preserving 5/10/20-second progression across separate receipts. Pending polls remain non-failures.
+
+Both parent worker pressure gates now exempt only the lightweight search coordinator. The child still admits new work under the resource profile; pending-task polling can release remote accounting while the host is under pressure.
+
+Additional self-review fixed initial rebuild receipt leases (same 30 seconds as ordinary delivery), restored remaining SQL timeouts after the ensure-live HTTP transaction boundary, and refreshed an ORM server timestamp asynchronously before finalizing legacy owners.
+
+### 4B RED/GREEN and integration evidence
+
+All pytest still uses the isolated serialized wrapper. Behavioral RED cases included missing rebuild API / missing admin handoff; replay acknowledgment occurring before swap; missing bulk replay persistence; memory admission succeeding in the marker-transition race; a 45-second first remote poll; retry backoff resetting to 5 seconds; parent hard-pressure gating a coordinator; and absent initial lease / zero SQL statement timeout after rollback. The final combined run also exposed an expired timestamp causing `MissingGreenlet` on legacy-owner completion; the focused fix passed.
+
+Focused GREEN runs before final consolidation: 180 resource/search tests passed in 86.10s; 27 existing search tests passed in 37.16s, including real asynchronous all-index rebuild and audit; 3 final lease/SQL-budget/legacy-owner regressions passed in 2.44s. Ruff passed for every touched Python path. The real PostgreSQL/Meili cases include ordinary upsert/deletion, a real staging rebuild and swap, all-five-index continuation, replay races, crash after accepted swap, admin pending/ambiguous handoffs, migration downgrade refusal, and restart recovery. The controlled 120-second pending case continues proving ingest-lane SQL progress; root owns the complete small-import acceptance run during remote pending in Task 5.
+
+### 4B migration and recovery notes
+
+Apply additive `f9e1a3b5c7d9` after `f8d0e2a4b6c8`: new build/replay tables and nullable receipt continuation/cooldown columns. Downgrade refuses active rebuilds or receipts. Fresh builds advance search generations so a caught-up checkpoint verifies the new live index. Downgrade/upgrade roundtrips were exercised in isolation.
+
+Before candidate cutover, drain old synchronous writers and their outstanding Meili tasks. New durable receipts cannot infer pre-migration remote tasks. Retain the shared persistent lock directory and its marker alongside SQL recovery evidence. Unknown POST outcomes still require deliberate attachment of an operator-verified task UID; this is the approved fail-closed limitation, not permission to replay or expire accounting. Storage fsync completion may cooperatively outlast the local scheduling deadline. No deployment or full backend regression claim is made here; full-suite and workload acceptance remain Task 5.
+
+Final consolidated command:
+
+```
+.superpowers/run-tests -q tests/test_search_rebuild_delivery.py tests/test_search_delivery.py tests/test_search.py tests/test_resource_pressure.py tests/test_resource_aware_worker.py tests/test_search_algorithms.py tests/test_outbox_successor_contract.py --disable-warnings --maxfail=1
+210 passed in 146.00s (0:02:25)
+```
+
+One additional writer-contention regression then demonstrated that a busy local writer could bypass the registered admin handoff (`KeyError: _admin_handoff`). The admin handler now persists the same delayed handoff for this transient condition; it does not terminally fail a queued rebuild because a poll owns the writer lock.
+
+Post-contention-fix verification: `.superpowers/run-tests -q tests/test_search_rebuild_delivery.py --disable-warnings --maxfail=1` — **16 passed in 50.16s**. Ruff on the last changed handler/test and `git diff --check` passed. Status: **Complete with concerns** (approved unresolved-POST ambiguity; full-import/120-second pending acceptance and full backend regression remain root-owned Task 5).

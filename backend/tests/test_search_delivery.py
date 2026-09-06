@@ -27,11 +27,17 @@ async def delivery(monkeypatch, tmp_path):
     monkeypatch.setattr(heavy_io, "_local_lock_path", lambda: tmp_path / "heavy-io.lock")
     async with async_session() as db:
         await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS phase varchar(24) DEFAULT 'settings'"))
-        await db.execute(text("TRUNCATE search_delivery_receipts, search_projection_outbox, search_index_states"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS write_available_at timestamptz"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS rebuild_id uuid"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS continuation jsonb"))
+        await db.execute(text("TRUNCATE search_rebuild_replay, search_rebuilds, search_delivery_receipts, search_projection_outbox, search_index_states"))
         await db.commit()
     yield delivery
     async with async_session() as db:
-        await db.execute(text("TRUNCATE search_delivery_receipts, search_projection_outbox, search_index_states"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS write_available_at timestamptz"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS rebuild_id uuid"))
+        await db.execute(text("ALTER TABLE search_delivery_receipts ADD COLUMN IF NOT EXISTS continuation jsonb"))
+        await db.execute(text("TRUNCATE search_rebuild_replay, search_rebuilds, search_delivery_receipts, search_projection_outbox, search_index_states"))
         await db.commit()
 
 
@@ -366,16 +372,16 @@ async def test_checkpoint_exact_counts_wait_until_caught_up(delivery):
 
 
 @pytest.mark.asyncio
-async def test_rebuild_rejects_active_ordinary_receipt(delivery):
+async def test_rebuild_queues_behind_active_ordinary_receipt(delivery):
     from app.services.search import SearchService, WORKS_INDEX
     await enqueue_delete()
     remote = Remote()
     async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
         await delivery.run_delivery_slice(client=client)
     async with async_session() as db:
-        with pytest.raises(RuntimeError, match="remote search"):
-            import asyncio
-            await asyncio.wait_for(SearchService(db)._rebuild_selected_indexes((WORKS_INDEX,)), timeout=1)
+        queued = await SearchService(db)._rebuild_selected_indexes((WORKS_INDEX,))
+        assert queued["status"] == "pending"
+    assert len(remote.writes) == 1
 
 
 def test_poll_coordinator_does_not_wait_on_parent_heavy_admission(monkeypatch):
@@ -488,3 +494,95 @@ async def test_additive_migration_roundtrip_refuses_active_remote_identity(monke
             assert sync_connection.execute(text("SELECT count(*) FROM search_delivery_receipts")).scalar_one() == 0
         await connection.run_sync(verify)
         await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+
+
+@pytest.mark.asyncio
+async def test_marker_transfer_cannot_race_memory_admission(delivery):
+    import asyncio
+    import threading
+    from app.services.heavy_io import RenewableRedisLease, RESOURCE_DISK_TOKEN_KEY, RESOURCE_BACKGROUND_TOKEN_KEY
+    from app.services.redis_client import get_redis
+    redis = get_redis()
+    redis.flushdb()
+    redis.set(RESOURCE_BACKGROUND_TOKEN_KEY, json.dumps({"reserved_bytes": 192 * 1024 * 1024}))
+    in_eval, resume_eval, transferred = threading.Event(), threading.Event(), threading.Event()
+    class PausedRedis:
+        def __getattr__(self, name):
+            return getattr(redis, name)
+        def eval(self, script, *args):
+            in_eval.set()
+            resume_eval.wait(2)
+            return redis.eval(script, *args)
+    lease = RenewableRedisLease([RESOURCE_DISK_TOKEN_KEY], workload="import_db", owner="import", redis_client=PausedRedis(),
+                                reservation_key=RESOURCE_DISK_TOKEN_KEY, reservation_bytes=128 * 1024 * 1024,
+                                reservation_capacity_bytes=300 * 1024 * 1024)
+    admission = asyncio.create_task(lease.try_acquire())
+    await asyncio.to_thread(in_eval.wait, 1)
+    def transfer():
+        delivery.remote_flight.create_marker(str(uuid4()))
+        redis.delete(RESOURCE_BACKGROUND_TOKEN_KEY)
+        transferred.set()
+    transfer_task = asyncio.create_task(asyncio.to_thread(transfer))
+    try:
+        await asyncio.to_thread(transferred.wait, .1)
+        resume_eval.set()
+        assert not await admission
+    finally:
+        resume_eval.set()
+        await transfer_task
+        await lease.release()
+        redis.flushdb()
+
+
+@pytest.mark.asyncio
+async def test_submission_cooldown_never_delays_remote_poll(delivery, monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from app.services import heavy_io
+    @asynccontextmanager
+    async def throttled(*args, **kwargs):
+        yield SimpleNamespace(work_units=500)
+        kwargs["cooldown_result"]["seconds"] = 45
+    monkeypatch.setattr(heavy_io, "adaptive_resource_slice", throttled)
+    await enqueue_delete()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(Remote())) as client:
+        outcome = await delivery.run_delivery_slice(client=client)
+    assert outcome["successor_delay_seconds"] == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_remote_failures_back_off_accumulated_attempts(delivery):
+    await enqueue_delete()
+    remote = Remote()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        for attempt, expected_delay in [(1, 5), (2, 10), (3, 20)]:
+            remote.status = "processing"
+            await delivery.run_delivery_slice(client=client)
+            await ready_receipt()
+            remote.status = "failed"
+            await delivery.run_delivery_slice(client=client)
+            async with async_session() as db:
+                row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+                assert row.attempts == attempt
+                assert (row.available_at - row.updated_at).total_seconds() == expected_delay
+                row.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                await db.commit()
+
+
+def test_poll_coordinator_can_be_dequeued_under_pressure(monkeypatch):
+    from types import SimpleNamespace
+    from rq import Worker
+    from app.services.resource_aware_worker import ResourceAwareWorker
+    from tests.test_resource_aware_worker import _bare_worker
+    worker = _bare_worker()
+    job = SimpleNamespace(id="poll", func_name="app.jobs.search_projection.run_search_projection_outbox", args=(), kwargs={}, meta={})
+    queue = SimpleNamespace(name="operations", key="rq:queue:operations", get_jobs=lambda **kwargs: [job])
+    worker.queues = [queue]
+    worker.heartbeat = lambda: None
+    worker._heavy_queues_have_jobs = lambda: True
+    monkeypatch.setattr(ResourceAwareWorker, "should_run_maintenance_tasks", False)
+    monkeypatch.setattr(Worker, "dequeue_job_and_maintain_ttl", lambda *args, **kwargs: (job, queue))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("remote poll must be dequeued so it can release accounting")
+    worker._wait_until_pressure_allows_dequeue = forbidden
+    assert worker._dequeue_heavy_job(None, None, 1) == (job, queue)

@@ -47,12 +47,16 @@ def remaining(deadline):
     return value
 
 
+async def set_sql_budget(db, deadline):
+    budget = max(1, int(remaining(deadline) * 1000))
+    await db.execute(text("SELECT set_config('statement_timeout', :value, true)"), {"value": str(budget)})
+    await db.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": str(min(1000, budget))})
+
+
 @asynccontextmanager
 async def session(deadline):
     async with async_session() as db:
-        budget = max(1, int(remaining(deadline) * 1000))
-        await db.execute(text("SELECT set_config('statement_timeout', :value, true)"), {"value": str(budget)})
-        await db.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": str(min(1000, budget))})
+        await set_sql_budget(db, deadline)
         yield db
 
 
@@ -156,11 +160,14 @@ async def _prepare(limit, deadline):
 async def _finalize(receipt, token, deadline, *, error=None):
     async with session(deadline) as db:
         row = (await db.execute(select(Receipt).where(Receipt.id == receipt.id, Receipt.lease_token == token).with_for_update())).scalar_one()
-        condition = or_(*(and_(Outbox.id == UUID(identity), Outbox.version == version) for identity, version in row.versions))
-        if row.versions:
+        condition = or_(False, *(and_(Outbox.id == UUID(identity), Outbox.version == version) for identity, version in row.versions))
+        if row.rebuild_id:
+            from app.services.search_rebuild import complete_receipt
+            await complete_receipt(db, row, error=error)
+        elif row.versions:
             if error:
                 await db.execute(update(Outbox).where(condition).values(attempts=Outbox.attempts + 1,
-                    available_at=now() + timedelta(seconds=min(900, 5 * 2 ** min(row.poll_count, 7))), lease_until=None, last_error=error[:4000]))
+                    available_at=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, func.least(900, 5 * func.power(2, func.least(Outbox.attempts, 7)))), lease_until=None, last_error=error[:4000]))
             else:
                 await db.execute(update(Outbox).where(condition).values(completed_at=func.now(), lease_until=None, last_error=None))
         row.payload = []
@@ -185,6 +192,9 @@ async def _advance(receipt, token, client, deadline):
                         last_error="Submission outcome unknown; reconcile remote task identity before continuing")
             return result("ambiguous")
     if receipt.state == "prepared":
+        if receipt.write_available_at and receipt.write_available_at > now():
+            await _save(receipt, token, deadline, lease_until=None)
+            return result("deferred", delay=(receipt.write_available_at - now()).total_seconds())
         settings_payload = None
         if receipt.phase == "settings":
             from app.services.search import INDEX_SETTINGS
@@ -211,6 +221,14 @@ async def _advance(receipt, token, client, deadline):
             path += "/delete-batch"
         else:
             path += "?primaryKey=id"
+        if receipt.action == "settings":
+            method, path = "PATCH", f"/indexes/{receipt.index_uid}/settings"
+        elif receipt.action == "create":
+            method, path = "POST", "/indexes"
+        elif receipt.action == "swap":
+            method, path = "POST", "/swap-indexes"
+        elif receipt.action == "drop":
+            method, path = "DELETE", f"/indexes/{receipt.index_uid}"
         if settings_payload is not None:
             path = f"/indexes/{receipt.index_uid}/settings"
             method = "PATCH"
@@ -237,6 +255,7 @@ async def _advance(receipt, token, client, deadline):
         if receipt.phase == "settings":
             await _save(receipt, token, deadline, state="prepared", phase="documents", task_uid=None,
                         available_at=now(), lease_until=None, poll_count=0)
+            await durable(remote_flight.clear_marker, str(receipt.id))
             return result("pending", delay=2)
         return await _finalize(receipt, token, deadline)
     if task["status"] in ("failed", "canceled"):
@@ -279,19 +298,48 @@ async def _run_locked(limit, client, deadline):
 async def _admitted(limit, client, deadline, receipt=None, token=None):
     from app.services.heavy_io import adaptive_resource_slice
 
+    async with session(deadline) as db:
+        write_after = (await db.execute(select(func.max(Receipt.write_available_at)))).scalar_one_or_none()
+    if write_after and write_after > now():
+        if receipt:
+            await _save(receipt, token, deadline, lease_until=None)
+        return result("deferred", delay=(write_after - now()).total_seconds())
+    from app.services import search_rebuild
+    workload = "maintenance" if receipt and receipt.action == "swap" else await search_rebuild.active_workload(deadline)
     cooldown = {}
-    async with adaptive_resource_slice("search_index", "search-delivery", max_work_units=limit,
+    async with adaptive_resource_slice(workload, "search-delivery", max_work_units=limit,
                                       max_slice_seconds=remaining(deadline), cooldown_result=cooldown,
                                       wait_for_capacity=False) as limits:
         if limits is None:
             if receipt:
                 await _save(receipt, token, deadline, lease_until=None)
             return result("deferred", delay=2)
-        receipt = receipt or await _prepare(min(limit, limits.work_units), deadline)
+        local_result = None
         if receipt is None:
-            return await _checkpoint(client, deadline)
-        outcome = await _advance(receipt, token or receipt.lease_token, client, deadline)
-    outcome["successor_delay_seconds"] = max(outcome["successor_delay_seconds"], cooldown.get("seconds", 0))
+            try:
+                next_item = await search_rebuild.prepare_next(min(limit, limits.work_units), deadline, client)
+            except (ValueError, RuntimeError) as exc:
+                await search_rebuild.fail_active(exc, deadline)
+                next_item = result("error")
+            if isinstance(next_item, dict):
+                local_result = next_item
+            else:
+                receipt = next_item or await _prepare(min(limit, limits.work_units), deadline)
+        if local_result is not None:
+            outcome = local_result
+        elif receipt is None:
+            outcome = await _checkpoint(client, deadline)
+        else:
+            outcome = await _advance(receipt, token or receipt.lease_token, client, deadline)
+    if cooldown.get("seconds", 0) > 0:
+        if receipt:
+            async with session(deadline) as db:
+                await db.execute(update(Receipt).where(Receipt.id == receipt.id).values(
+                    write_available_at=now() + timedelta(seconds=cooldown["seconds"]),
+                ))
+                await db.commit()
+        else:
+            outcome["successor_delay_seconds"] = max(outcome["successor_delay_seconds"], cooldown["seconds"])
     return outcome
 
 
@@ -372,8 +420,11 @@ async def reconcile_task(receipt_id: UUID, task_uid: int, *, client=None):
                 raise ValueError("Receipt does not need task reconciliation")
             if receipt.lease_until and receipt.lease_until > now():
                 raise ValueError("Receipt execution lease has not expired")
-            expected = "settingsUpdate" if receipt.phase == "settings" else "documentDeletion" if receipt.action == "delete" else "documentAdditionOrUpdate"
-            if task.get("indexUid") != receipt.index_uid or task.get("type") != expected:
+            expected = "settingsUpdate" if receipt.phase == "settings" or receipt.action == "settings" else {
+                "delete": "documentDeletion", "upsert": "documentAdditionOrUpdate", "create": "indexCreation",
+                "drop": "indexDeletion", "swap": "indexSwap",
+            }[receipt.action]
+            if (receipt.action != "swap" and task.get("indexUid") != receipt.index_uid) or task.get("type") != expected:
                 raise ValueError("Task index/type does not match receipt")
             await durable(remote_flight.record_task, str(receipt.id), int(task_uid))
             receipt.state = "pending"

@@ -88,21 +88,6 @@ def test_work_list_media_hydration_is_one_bounded_aggregate_query():
     assert "MATERIALIZED" in source
 
 
-def test_full_reindex_coordinator_does_not_hold_one_global_operation_lock():
-    from app.jobs.admin_operations import run_search_reindex_operation
-    from app.services.resource_aware_worker import ResourceAwareWorker
-    from app.services.search import SearchService
-
-    entrypoint_source = inspect.getsource(run_search_reindex_operation)
-    replay_source = inspect.getsource(
-        SearchService._replay_work_events_to_staging
-    )
-    classifier_source = inspect.getsource(ResourceAwareWorker._internal_slice_workload)
-    assert "run_heavy_io_operation" not in entrypoint_source
-    assert "_run_profiled_search_slice" in replay_source
-    assert "run_search_reindex_operation" in classifier_source
-
-
 def test_projection_audit_checks_every_work_hash_in_bounded_batches():
     from app.services.search import SearchService
 

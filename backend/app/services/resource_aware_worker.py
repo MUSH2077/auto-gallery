@@ -838,15 +838,16 @@ class ResourceAwareWorker(Worker):
                 peeked_job, peeked_queue = self._peek_heterogeneous_head()
                 if peeked_job is not None and peeked_queue is not None:
                     peeked_workload = self._job_workload(peeked_job, peeked_queue)
-                    self._wait_until_pressure_allows_dequeue(
-                        interval,
-                        workload=peeked_workload,
-                        job=peeked_job,
-                        owner=self._job_owner(peeked_job),
-                        hard_only=self._job_uses_nonblocking_child_admission(
-                            peeked_job
-                        ),
-                    )
+                    if self._internal_slice_workload(peeked_job) != "search_index":
+                        self._wait_until_pressure_allows_dequeue(
+                            interval,
+                            workload=peeked_workload,
+                            job=peeked_job,
+                            owner=self._job_owner(peeked_job),
+                            hard_only=self._job_uses_nonblocking_child_admission(
+                                peeked_job
+                            ),
+                        )
                 else:
                     # A transient fetch failure must not bypass the hard gate.
                     self._wait_until_pressure_allows_dequeue(
@@ -940,7 +941,7 @@ class ResourceAwareWorker(Worker):
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
-        if "run_search_projection_outbox" in str(getattr(job, "func_name", "")):
+        if self._internal_slice_workload(job) == "search_index":
             # A remote poll releases an already reserved workload even under
             # pressure. The child applies heavy admission only for new writes.
             self._active_profile_snapshot = {}

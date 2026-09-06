@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from tests.test_search_delivery import delivery  # noqa: F401
 
 
 class TestSearchService:
@@ -350,7 +351,7 @@ class TestSearchService:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_reindex_removes_orphans_and_projection_audit_is_clean():
+async def test_reindex_removes_orphans_and_projection_audit_is_clean(delivery):
     from app.database import async_session
     from app.services.search import (
         WORKS_INDEX,
@@ -378,7 +379,19 @@ async def test_reindex_removes_orphans_and_projection_audit_is_clean():
         assert orphan_id in before["indexes"]["works"]["stale_ids"]
 
         rebuilt = await service.reindex()
-        assert rebuilt["status"] == "ok"
+        assert rebuilt["status"] == "pending"
+        from app.services.search_delivery import run_delivery_slice
+        from app.services.search_rebuild import rebuild_status
+        from tests.test_search_delivery import ready_receipt
+        import asyncio
+        for _ in range(300):
+            await run_delivery_slice()
+            await ready_receipt()
+            completed = await rebuild_status(rebuilt["build_id"])
+            if completed["status"] != "pending":
+                break
+            await asyncio.sleep(.05)
+        assert completed["status"] == "ok", completed
 
         after = await service.audit_projection()
         assert after["status"] == "ok"

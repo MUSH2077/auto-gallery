@@ -744,7 +744,7 @@ class RenewableRedisLease:
         acquired: list[str] = []
         self.denial_reason = None
         try:
-            from app.services.remote_search_flight import reconcile_reservation
+            from app.services.remote_search_flight import reconcile_reservation, reserve_memory
 
             marker = await asyncio.to_thread(reconcile_reservation, self.redis)
             if marker and (HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
@@ -761,7 +761,8 @@ class RenewableRedisLease:
                         )
                     )
                     result = await asyncio.to_thread(
-                        self.redis.eval,
+                        reserve_memory,
+                        self.redis,
                         _RESERVE_SCRIPT,
                         len(reserve_keys),
                         *reserve_keys,

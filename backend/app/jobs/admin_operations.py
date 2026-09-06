@@ -1484,64 +1484,53 @@ async def _run_creator_alias_backfill_operation(
 
 
 async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
-    from uuid import UUID
     from app.services.search import SearchService
+    from app.services.search_delivery import run_delivery_slice
+    from app.services.search_rebuild import rebuild_status
+    from app.services.operations import prepare_admin_operation_handoff
     from app.services.tasks import TaskService
 
-    if current_admin_operation_attempt() is None:
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="running",
-                    progress={"phase": "running", "label": "Rebuilding search index..."},
-                )
-                await task_db.commit()
-    set_operation_status(job_id, "running", "admin-search-reindex",
-        progress={"phase": "running", "label": "Rebuilding search index..."},
-        meta={"entity": "search-reindex", **options})
-    try:
+    async with async_session() as db:
+        result = await SearchService(db).reindex(resource_owner=job_id)
+    delivery = current_admin_operation_attempt()
+    step = {"successor_delay_seconds": 2}
+    if result["status"] == "busy":
+        result = {**result, "phase": "waiting", "batches": 0}
+    elif result["status"] == "pending":
+        step = await run_delivery_slice()
+        result = await rebuild_status(result["build_id"])
+        if step.get("status") == "ambiguous":
+            step["successor_delay_seconds"] = 15
+            result["message"] = "Search rebuild waiting for remote task reconciliation"
+    if result["status"] in ("pending", "busy") and delivery is not None:
         async with async_session() as db:
-            result = await SearchService(db).reindex(resource_owner=job_id)
-        label = result.get("message") or "Search reindex complete"
-        operation_status = (
-            "complete" if result.get("status") == "ok" else "failed"
-        )
-        if current_admin_operation_attempt() is None:
-            async with async_session() as task_db:
-                svc = TaskService(task_db)
-                task = await svc.get(UUID(job_id))
-                if task:
-                    await svc.update_task(
-                        task,
-                        status=operation_status,
-                        progress={"phase": operation_status, "label": label},
-                        result=result,
-                    )
-                    await task_db.commit()
-        set_operation_status(job_id, operation_status, "admin-search-reindex",
-            progress={"phase": operation_status, "label": label},
-            result=result, meta={"entity": "search-reindex", **options})
-        return result
-    except Exception as exc:
-        logger.exception("Search reindex failed: job_id=%s", job_id)
-        if current_admin_operation_attempt() is None:
-            async with async_session() as task_db:
-                svc = TaskService(task_db)
-                task = await svc.get(UUID(job_id))
-                if task:
-                    await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                    await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-search-reindex",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "search-reindex", **options})
-        raise
-    finally:
-        release_legacy_operation_lock(
-            "library:search-reindex:active",
-            job_id,
-        )
+            handoff = await prepare_admin_operation_handoff(
+                db, job_id, delivery[1],
+                options={**options, **({"_search_build_id": result["build_id"]} if result.get("build_id") else {})},
+                delay_seconds=max(2, step.get("successor_delay_seconds", 2)),
+                progress={"phase": result["phase"], "label": result["message"], "batches": result["batches"]},
+            )
+            if handoff is None:
+                raise RuntimeError("Search rebuild administrator attempt is no longer current")
+            await db.commit()
+        # The due-dispatch coordinator respects next_retry_at. Calling
+        # publish_admin_operation here would enqueue immediately and erase
+        # the durable delay; the search outbox drives remote polling.
+        return {**result, "_admin_handoff": True}
+    status = "complete" if result["status"] == "ok" else "failed" if result["status"] == "error" else "running"
+    if delivery is None:
+        async with async_session() as db:
+            service = TaskService(db)
+            task = await service.get(UUID(job_id))
+            if task:
+                await service.update_task(task, status=status,
+                    progress={"phase": result.get("phase", status), "label": result.get("message", "Search rebuild")}, result=result)
+                await db.commit()
+        set_operation_status(job_id, status, "admin-search-reindex", result=result,
+                             progress={"phase": result.get("phase", status)}, meta={"entity": "search-reindex", **options})
+    if status in ("complete", "failed"):
+        release_legacy_operation_lock("library:search-reindex:active", job_id)
+    return result
 
 
 def run_curation_backfill_operation(job_id: str, options: dict | None = None) -> dict:
