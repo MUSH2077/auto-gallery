@@ -33,6 +33,7 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
+from app.models.task_run import TaskRun
 from app.providers import registry
 from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
@@ -44,7 +45,7 @@ from app.services.import_lifecycle import (
 )
 from app.models.task_state import transition_import_job
 from app.services.settings import get_download_defaults
-from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
+from app.services.import_dispatch import IMPORT_DISPATCH_META_KEY, prepare_import_dispatch, publish_prepared_import
 from app.services.sync_outcome import build_sync_outcome
 from app.services.work_import import WorkImportService
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
@@ -568,6 +569,16 @@ async def _set_import_resource_state(owner: str, state: str, reason=None, **kwar
 async def _commit_import(db: AsyncSession) -> None:
     with measure_import_phase("db_commit"):
         await db.commit()
+
+
+async def _wait_for_import_artifacts(owner: str) -> None:
+    from app.services.heavy_io import _wait_for_resource_event
+
+    control = _import_control.get()
+    _check_import_control(control)
+    with measure_import_phase("artifact_wait"):
+        await _wait_for_resource_event("import_db", 2.0, task_id=owner.partition(":")[0])
+    _check_import_control(control)
 
 
 @asynccontextmanager
@@ -1725,9 +1736,31 @@ def _safe_work_error(error: BaseException) -> str:
     return (text or type(error).__name__)[:1000]
 
 
+def _import_queue_wait_seconds(job: ImportJob, dispatch: dict, now: datetime) -> float | None:
+    """Measure this delivery's eligible wait, excluding a previous execution."""
+    def utc(value):
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        if not isinstance(value, datetime):
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+    prepared = utc(dispatch.get("prepared_at"))
+    retry = bool(job.execution_attempt)
+    if retry and (prepared is None or dispatch.get("claimed_at")):
+        return None
+    boundary = utc(dispatch.get("available_at")) or prepared
+    if boundary is None and not retry:
+        boundary = utc(job.created_at)
+    return max(0.0, (now - boundary).total_seconds()) if boundary is not None else None
+
+
 async def _claim_import_execution(
     job_uuid: UUID,
-) -> tuple[ImportJob, UUID] | None:
+) -> tuple[ImportJob, UUID, float | None] | None:
     """Atomically claim one runnable ImportJob row for this process."""
 
     execution_token = uuid4()
@@ -1757,6 +1790,24 @@ async def _claim_import_execution(
         import_job = result.scalar_one_or_none()
         if import_job is None:
             return None
+        task = (await db.execute(
+            select(TaskRun).where(
+                TaskRun.subject_type == "import_job", TaskRun.subject_id == job_uuid,
+            ).with_for_update(of=TaskRun)
+        )).scalar_one_or_none()
+        task_meta = dict(task.meta or {}) if task is not None else {}
+        dispatch = (task_meta or {}).get(IMPORT_DISPATCH_META_KEY, {})
+        dispatch = dict(dispatch) if isinstance(dispatch, dict) else {}
+        claimed_at = datetime.now(timezone.utc)
+        queue_wait_seconds = _import_queue_wait_seconds(
+            import_job, dispatch, claimed_at,
+        )
+        if task is not None and dispatch:
+            # A Redis-only redelivery can reuse this transport attempt. Do not
+            # count its previous runtime as queue latency. A newly prepared
+            # durable dispatch replaces this map and establishes a new boundary.
+            task_meta[IMPORT_DISPATCH_META_KEY] = {**dispatch, "claimed_at": claimed_at.isoformat()}
+            task.meta = task_meta
         transition_import_job(import_job, "running")
         import_job.execution_token = execution_token
         import_job.execution_attempt = (import_job.execution_attempt or 0) + 1
@@ -1773,7 +1824,7 @@ async def _claim_import_execution(
             status="running",
         )
         await _commit_import(db)
-        return import_job, execution_token
+        return import_job, execution_token, queue_wait_seconds
 
 
 async def _release_import_execution(
@@ -1828,15 +1879,12 @@ async def run_import_job(import_job_id: str):
             import_job_id,
         )
         return
-    import_job, execution_token = claimed_execution
+    import_job, execution_token, queue_wait_seconds = claimed_execution
     execution_owner = f"{import_job_id}:{execution_token}"
 
-    created_at = import_job.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
     metrics_context = import_execution_metrics(
         job_uuid, execution_token,
-        queue_wait_seconds=(datetime.now(timezone.utc) - created_at).total_seconds(),
+        queue_wait_seconds=queue_wait_seconds,
     )
     stats = {"works": 0, "assets": 0, "multi_page": 0, "skipped": 0, "existing": 0}
     total_groups = 0
@@ -2065,7 +2113,6 @@ async def run_import_job(import_job_id: str):
         accounted_existing = set(existing_prepared) - set(
             existing_result["failures"]
         )
-        contended_round = 0
         while pending_batches:
             prepared_batch = pending_batches.popleft()
             batch_ids = [source_work_id for source_work_id, _ in prepared_batch]
@@ -2180,8 +2227,6 @@ async def run_import_job(import_job_id: str):
                                 raise RuntimeError(
                                     "import execution ownership lost while waiting for artifacts"
                                 )
-                            contended_round += 1
-                            delay = min(30.0, 2.0 ** min(contended_round, 5))
                             await _set_import_resource_state(
                                 execution_owner,
                                 "waiting",
@@ -2190,9 +2235,8 @@ async def run_import_job(import_job_id: str):
                             )
                             # No SQL transaction, resource lease, or flock is
                             # retained while another execution owns the work.
-                            await asyncio.sleep(delay)
+                            await _wait_for_import_artifacts(execution_owner)
                         continue
-                    contended_round = 0
 
                     batch_results: dict[str, tuple[str, str | None]] = {}
                     media_ready: list[dict[str, Any]] = []

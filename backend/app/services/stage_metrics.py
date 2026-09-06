@@ -47,7 +47,8 @@ _import_metrics: contextvars.ContextVar[_ImportMetrics | None] = contextvars.Con
 def import_execution_metrics(job_id, execution_token, *, queue_wait_seconds=0.0):
     """Keep attempt timings separate, including when an older attempt exits late."""
     metrics = _ImportMetrics(str(job_id), str(execution_token))
-    metrics.seconds["queue_wait"] = max(0.0, queue_wait_seconds)
+    if queue_wait_seconds is not None:
+        metrics.seconds["queue_wait"] = max(0.0, queue_wait_seconds)
     token = _import_metrics.set(metrics)
     try:
         yield metrics

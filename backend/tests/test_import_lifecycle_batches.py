@@ -15,6 +15,44 @@ from sqlalchemy import func, select, text
 _PUBLISHER_ATTEMPT_META_KEY = "_bounded_import_publisher_attempt"
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_claim_times_current_durable_dispatch_only():
+    from app.database import async_session, engine
+    from app.jobs.import_runner import _claim_import_execution
+    from app.models.import_job import ImportJob
+    from app.models.task_run import TaskRun
+    from app.services.import_dispatch import IMPORT_DISPATCH_META_KEY, prepare_import_dispatch
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            child = ImportJob(download_job_id=parent.id, status="enqueued", execution_attempt=1,
+                              created_at=datetime.now(timezone.utc) - timedelta(hours=2))
+            db.add(child)
+            await db.flush()
+            prepared = await prepare_import_dispatch(db, child, delay_seconds=30, action="retry")
+            meta = dict(prepared.task.meta)
+            boundary = datetime.now(timezone.utc)
+            meta[IMPORT_DISPATCH_META_KEY] = {**meta[IMPORT_DISPATCH_META_KEY],
+                "prepared_at": (boundary - timedelta(seconds=40)).isoformat(),
+                "available_at": (boundary - timedelta(seconds=10)).isoformat()}
+            prepared.task.meta = meta
+            await db.commit()
+            child_id, task_id = child.id, prepared.task.id
+        claimed = await _claim_import_execution(child_id)
+        assert claimed is not None
+        assert 10 <= claimed[2] < 15
+        async with async_session() as db:
+            task = await db.get(TaskRun, task_id)
+            assert task.meta[IMPORT_DISPATCH_META_KEY]["claimed_at"]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
 def _publisher_heartbeat_key(task_id, attempt):
     return f"task:{task_id}:publisher:{attempt}:heartbeat_ts"
 
