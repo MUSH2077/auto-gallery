@@ -977,6 +977,7 @@ async def run_download_job(job_id: str):
     proc = None
     control_listener = None
     heartbeat = None
+    finalization_supervision = False
     download_stage: DownloadStage | None = None
 
     try:
@@ -1300,6 +1301,30 @@ async def run_download_job(job_id: str):
                 # The gallery-dl leader exited but left a helper behind.
                 _stop_gallerydl_process(proc)
 
+            # The child is conclusively reaped. Fence its pid out of process
+            # control before output draining or any other finalization can
+            # yield, then refresh the same task heartbeat with the worker pid.
+            detach_process = getattr(control_listener, "detach_process", None)
+            if detach_process is None:
+                # Compatibility for alternate/no-op listener implementations:
+                # stop the child-bound listener before worker-only finalization.
+                control_listener.stop()
+            elif not detach_process(proc.pid):
+                raise RuntimeError(
+                    "gallery-dl control target changed before finalization"
+                )
+            transfer_heartbeat = getattr(heartbeat, "transfer_to_pid", None)
+            if transfer_heartbeat is None:
+                # Older compatible publishers cannot mutate their pid safely.
+                # Replace one only after the child-bound publisher has stopped.
+                heartbeat.stop()
+                heartbeat = HeartbeatPublisher(job_id, "download", pid=os.getpid())
+                heartbeat.start()
+            elif transfer_heartbeat(os.getpid()) is False:
+                raise RuntimeError(
+                    "download heartbeat ownership was lost during finalization"
+                )
+
             stderr_thread.join(timeout=5)
             stdout_thread.join(timeout=5)
             if stderr_thread.is_alive() or stdout_thread.is_alive():
@@ -1355,12 +1380,13 @@ async def run_download_job(job_id: str):
             stdout_thread.join(timeout=5)
             raise
 
-        # Freeze control state and stop publishing a heartbeat for a process
-        # that has already been reaped.  Post-download promotion/parsing may be
-        # slow on NAS storage, but it must not leave a listener armed with a
-        # stale pid during that interval.
-        control_listener.stop()
-        heartbeat.stop()
+        if control_listener.command in ("pause", "cancel"):
+            logger.info(
+                "Download job %s stopped at post-download checkpoint (%s)",
+                job_id,
+                control_listener.command,
+            )
+            return
 
         # ── Record gallery-dl result in one short transaction ──
         async with async_session() as _manifest_db:
@@ -1466,6 +1492,7 @@ async def run_download_job(job_id: str):
                     if row and row["file_path"] not in seen:
                         seen.add(row["file_path"])
                         rows.append(row)
+
                 for asset_path in media_files_for_group(
                     items,
                     source_work_id,
@@ -1486,6 +1513,13 @@ async def run_download_job(job_id: str):
                         seen.add(row["file_path"])
                         rows.append(row)
 
+        if control_listener.command in ("pause", "cancel"):
+            logger.info(
+                "Download job %s stopped at metadata checkpoint (%s)",
+                job_id,
+                control_listener.command,
+            )
+            return
         completed_full_chunk = (
             result is not None
             and result.returncode == 0
@@ -1558,6 +1592,15 @@ async def run_download_job(job_id: str):
             # commit makes a crash at either side safely retryable.
             download_stage.mark_registered()
         logger.info("Registered %d artifacts for job %s", _registered, job_id)
+
+        if control_listener.command in ("pause", "cancel"):
+            logger.info(
+                "Download job %s stopped at ledger checkpoint (%s)",
+                job_id,
+                control_listener.command,
+            )
+            return
+        finalization_supervision = True
 
     except Exception as e:
         error_text = _private_safe_error(str(e), personal_download_config)[:10000]
@@ -1740,11 +1783,14 @@ async def run_download_job(job_id: str):
         # before any control/process cleanup can itself fail.
         _cleanup_temp_config(job_config_path)
         _cleanup_temp_config(ai_config_path)
-        # ── Stop control listener + heartbeat ──
-        if heartbeat:
-            heartbeat.stop()
-        if control_listener:
-            control_listener.stop()
+        # Keep task supervision through the post-download handoff after the
+        # child pid has been detached. Error paths that never transferred stop
+        # here as before.
+        if not finalization_supervision:
+            if heartbeat:
+                heartbeat.stop()
+            if control_listener:
+                control_listener.stop()
         if proc is not None and (
             proc.poll() is None or _process_group_exists(proc.pid)
         ):
@@ -1758,286 +1804,306 @@ async def run_download_job(job_id: str):
                 kill_timeout=10.0,
             )
 
-    # ── Cleanup temp configs ──
-    _cleanup_temp_config(ai_config_path)
-    _cleanup_temp_config(job_config_path)
+    try:
+        # ── Cleanup temp configs ──
+        _cleanup_temp_config(ai_config_path)
+        _cleanup_temp_config(job_config_path)
 
-    # ── Handle subprocess result ──
+        # ── Handle subprocess result ──
 
-    detected_auth_issue = None
-    if result is not None:
-        combined_output = (result.stderr or "") + (result.stdout or "")
-        for pattern, label in AUTH_ERROR_PATTERNS:
-            if re.search(pattern, combined_output):
-                detected_auth_issue = label
-                break
-        if detected_auth_issue and result.returncode == 0:
-            result = subprocess.CompletedProcess(
-                result.args,
-                1,
-                stdout=result.stdout,
-                stderr=result.stderr,
-            )
-
-    async with async_session() as db2:
-        repo2 = DownloadJobRepository(db2)
-        j = await repo2.get(job_uuid)
-        if not j:
-            return
-
-        ctrl_cmd = control_listener.command if control_listener else None
-
-        if ctrl_cmd == "pause":
-            # TaskEngine already set status to "paused" — don't touch status here.
-            # Don't increment retry_count — this was a user action, not a failure.
-            logger.info("Download job %s paused by user signal", job_id)
-
-        elif ctrl_cmd == "cancel":
-            # TaskEngine already set status to "cancelled" — terminal, no retry.
-            logger.info("Download job %s cancelled by user signal", job_id)
-
-        elif result is not None:
-            # Normal completion (success or non-zero exit)
-            if detected_auth_issue:
-                j.retry_count = max_retries
-                await repo2.update_status(
-                    j,
-                    "failed",
-                    f"Download authentication failed: {detected_auth_issue}",
+        detected_auth_issue = None
+        if result is not None:
+            combined_output = (result.stderr or "") + (result.stdout or "")
+            for pattern, label in AUTH_ERROR_PATTERNS:
+                if re.search(pattern, combined_output):
+                    detected_auth_issue = label
+                    break
+            if detected_auth_issue and result.returncode == 0:
+                result = subprocess.CompletedProcess(
+                    result.args,
+                    1,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
                 )
-                apply_download_progress(
-                    j,
-                    "failed",
-                    "Download authentication requires attention",
-                )
-            elif result.returncode == 0:
-                await repo2.update_status(j, "downloaded")
-                apply_download_progress(
-                    j,
-                    "downloaded",
-                    "Download complete; waiting for metadata scan",
-                )
+
+        async with async_session() as db2:
+            repo2 = DownloadJobRepository(db2)
+            j = await repo2.get(job_uuid)
+            if not j:
+                return
+
+            ctrl_cmd = control_listener.command if control_listener else None
+
+            if ctrl_cmd == "pause":
+                # TaskEngine already set status to "paused" — don't touch status here.
+                # Don't increment retry_count — this was a user action, not a failure.
+                logger.info("Download job %s paused by user signal", job_id)
+
+            elif ctrl_cmd == "cancel":
+                # TaskEngine already set status to "cancelled" — terminal, no retry.
+                logger.info("Download job %s cancelled by user signal", job_id)
+
+            elif result is not None:
+                # Normal completion (success or non-zero exit)
+                if detected_auth_issue:
+                    j.retry_count = max_retries
+                    await repo2.update_status(
+                        j,
+                        "failed",
+                        f"Download authentication failed: {detected_auth_issue}",
+                    )
+                    apply_download_progress(
+                        j,
+                        "failed",
+                        "Download authentication requires attention",
+                    )
+                elif result.returncode == 0:
+                    await repo2.update_status(j, "downloaded")
+                    apply_download_progress(
+                        j,
+                        "downloaded",
+                        "Download complete; waiting for metadata scan",
+                    )
+                else:
+                    j.retry_count += 1
+                    if j.retry_count < max_retries:
+                        j.last_heartbeat_at = None  # reset heartbeat for fresh retry
+                        err_msg = result.stderr[:5000] if result.stderr else None
+                        transition_download_job(j, "failed", err_msg)
+                        transition_download_job(j, "enqueued")
+                        append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
+                        apply_download_progress(
+                            j,
+                            "enqueued",
+                            "Retry queued after gallery-dl returned an error",
+                        )
+                    else:
+                        await repo2.update_status(j, "failed", result.stderr[:5000] if result.stderr else None)
+                        apply_download_progress(
+                            j,
+                            "failed",
+                            "Download failed after gallery-dl error",
+                        )
+
+                if detected_auth_issue and j.subscription_source_id:
+                    from app.services.subscription_enqueue import mark_source_auth_failure
+
+                    await mark_source_auth_failure(db2, j, detected_auth_issue)
+                    logger.warning(
+                        "Private download authentication failed for job %s (%s)",
+                        job_id,
+                        detected_auth_issue,
+                    )
+
             else:
+                # Timeout or stall — use distinguished error message
                 j.retry_count += 1
+                if stalled:
+                    timeout_msg = f"stalled: no progress for {effective_stall_timeout}s (elapsed {stall_elapsed}s)"
+                else:
+                    timeout_msg = f"timeout after {effective_dl_timeout}s"
                 if j.retry_count < max_retries:
                     j.last_heartbeat_at = None  # reset heartbeat for fresh retry
-                    err_msg = result.stderr[:5000] if result.stderr else None
-                    transition_download_job(j, "failed", err_msg)
+                    transition_download_job(j, "failed", timeout_msg)
                     transition_download_job(j, "enqueued")
                     append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
                     apply_download_progress(
                         j,
                         "enqueued",
-                        "Retry queued after gallery-dl returned an error",
+                        f"Retry queued after timeout ({dl_timeout}s)",
                     )
                 else:
-                    await repo2.update_status(j, "failed", result.stderr[:5000] if result.stderr else None)
+                    await repo2.update_status(j, "failed", timeout_msg)
                     apply_download_progress(
                         j,
                         "failed",
-                        "Download failed after gallery-dl error",
+                        f"Download failed after timeout ({dl_timeout}s)",
                     )
 
-            if detected_auth_issue and j.subscription_source_id:
-                from app.services.subscription_enqueue import mark_source_auth_failure
-
-                await mark_source_auth_failure(db2, j, detected_auth_issue)
-                logger.warning(
-                    "Private download authentication failed for job %s (%s)",
-                    job_id,
-                    detected_auth_issue,
-                )
-
-        else:
-            # Timeout or stall — use distinguished error message
-            j.retry_count += 1
-            if stalled:
-                timeout_msg = f"stalled: no progress for {effective_stall_timeout}s (elapsed {stall_elapsed}s)"
-            else:
-                timeout_msg = f"timeout after {effective_dl_timeout}s"
-            if j.retry_count < max_retries:
-                j.last_heartbeat_at = None  # reset heartbeat for fresh retry
-                transition_download_job(j, "failed", timeout_msg)
-                transition_download_job(j, "enqueued")
-                append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
-                apply_download_progress(
-                    j,
-                    "enqueued",
-                    f"Retry queued after timeout ({dl_timeout}s)",
-                )
-            else:
-                await repo2.update_status(j, "failed", timeout_msg)
-                apply_download_progress(
-                    j,
-                    "failed",
-                    f"Download failed after timeout ({dl_timeout}s)",
-                )
-
-        await request_search_projection(
-            db2,
-            repository_ids=[j.subscription_source_id] if j.subscription_source_id else (),
-            subscription_ids=[j.subscription_id] if j.subscription_id else (),
-        )
-        await db2.commit()
-
-    # ── Enqueue import on success, auto-retry on failure, partial recovery on timeout ──
-
-    if result is not None and result.returncode == 0:
-        # Full success — but only enqueue import if there are new metadata JSONs.
-        # gallery-dl exits 0 even when all files were skipped (already in archive),
-        # or when the source has no content at all.
-        reconciliation = None
-        pending_work_count = 0
-        async with async_session() as _manifest_db:
-            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
-            if _manifest_job:
-                with stage_timer(_manifest_job, "scan"):
-                    metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-                (
-                    pending_work_count,
-                    new_json_paths,
-                    reconciliation,
-                ) = await _successful_repository_import_plan(
-                    _manifest_db,
-                    _manifest_job,
-                    metadata_count=metadata_count,
-                    metadata_paths=new_json_paths,
-                )
-                if reconciliation is not None:
-                    update_manifest(
-                        _manifest_job,
-                        repository_artifact_reconciliation=reconciliation.outcome_detail,
-                    )
-                update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
-                append_manifest_event(
-                    _manifest_job,
-                    "artifacts_counted",
-                    metadata_json_count=metadata_count,
-                    image_count=image_count,
-                    reconciliation=(
-                        reconciliation.outcome_detail if reconciliation else None
-                    ),
-                )
-                apply_download_progress(
-                    _manifest_job,
-                    "post_download",
-                    None,
-                    current=pending_work_count,
-                    total=pending_work_count or None,
-                    percent=90,
-                    assets=image_count,
-                )
-                await _manifest_db.commit()
-            else:
-                metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-                pending_work_count = metadata_count
-        if pending_work_count > 0:
-            async with async_session() as _progress_db:
-                _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
-                if _progress_job:
-                    apply_download_progress(
-                        _progress_job,
-                        "enqueuing_import",
-                        f"Found {pending_work_count} works; queuing import",
-                        current=0,
-                        total=pending_work_count,
-                        assets=image_count,
-                    )
-                    await _progress_db.commit()
-            await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
-        else:
-            # No new metadata JSONs — distinguish "already imported" from "nothing to download"
-            # Check stderr for warnings that explain the zero-download result
-            stderr_text = result.stderr or ""
-            stdout_text = result.stdout or ""
-            combined = stderr_text + stdout_text
-            auth_warning = None
-            for pattern, label in AUTH_WARNING_PATTERNS:
-                if re.search(pattern, combined):
-                    auth_warning = label
-                    break
-
-            # Determine status via pure helper (manual empty -> failed; subscription
-            # re-sync with no new content -> complete; see download_outcome.py).
-            async with async_session() as _sub_db:
-                _sub_job = await DownloadJobRepository(_sub_db).get(job_uuid)
-                is_subscription = bool(_sub_job and _sub_job.subscription_source_id)
-            decision = classify_no_metadata_outcome(
-                image_count=image_count,
-                auth_warning=auth_warning,
-                is_subscription=is_subscription,
-                had_sync_baseline=had_sync_baseline(_sub_job) if _sub_job else False,
+            await request_search_projection(
+                db2,
+                repository_ids=[j.subscription_source_id] if j.subscription_source_id else (),
+                subscription_ids=[j.subscription_id] if j.subscription_id else (),
             )
-            error = decision.error
-            if decision.status == "failed" and auth_warning:
-                error = f"{error}\n{stderr_text[:2000]}"
+            await db2.commit()
 
-            async with async_session() as db3:
-                repo3 = DownloadJobRepository(db3)
-                j3 = await repo3.get(job_uuid)
-                if j3:
-                    outcome = (
-                        build_sync_outcome(
-                            decision.outcome_code,
-                            metadata_count=metadata_count,
-                            media_count=image_count,
-                            recovery_detail=(
-                                reconciliation.outcome_detail
-                                if reconciliation is not None
-                                else None
-                            ),
-                        )
-                        if decision.outcome_code
-                        else None
+        # ── Enqueue import on success, auto-retry on failure, partial recovery on timeout ──
+
+        if result is not None and result.returncode == 0:
+            # Full success — but only enqueue import if there are new metadata JSONs.
+            # gallery-dl exits 0 even when all files were skipped (already in archive),
+            # or when the source has no content at all.
+            reconciliation = None
+            pending_work_count = 0
+            async with async_session() as _manifest_db:
+                _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+                if _manifest_job:
+                    with stage_timer(_manifest_job, "scan"):
+                        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
+                    (
+                        pending_work_count,
+                        new_json_paths,
+                        reconciliation,
+                    ) = await _successful_repository_import_plan(
+                        _manifest_db,
+                        _manifest_job,
+                        metadata_count=metadata_count,
+                        metadata_paths=new_json_paths,
                     )
-                    await finalize_download_job(
-                        db3,
-                        j3,
-                        status=decision.status,
-                        outcome=outcome,
-                        error=error,
-                        message=error,
+                    if reconciliation is not None:
+                        update_manifest(
+                            _manifest_job,
+                            repository_artifact_reconciliation=reconciliation.outcome_detail,
+                        )
+                    update_manifest(_manifest_job, metadata_json_count=metadata_count, image_count=image_count)
+                    append_manifest_event(
+                        _manifest_job,
+                        "artifacts_counted",
+                        metadata_json_count=metadata_count,
+                        image_count=image_count,
+                        reconciliation=(
+                            reconciliation.outcome_detail if reconciliation else None
+                        ),
+                    )
+                    apply_download_progress(
+                        _manifest_job,
+                        "post_download",
+                        None,
+                        current=pending_work_count,
+                        total=pending_work_count or None,
+                        percent=90,
                         assets=image_count,
                     )
-
-    elif result is not None and result.returncode != 0:
-        # Non-zero exit — maybe partial files were downloaded
-        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-        if metadata_count > 0:
-            logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
-            await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
-
-    else:
-        # Timeout or interrupted (pause/cancel) — attempt partial import recovery
-        ctrl_cmd = control_listener.command if control_listener else None
-        reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
-        metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-        if metadata_count > 0:
-            logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)
-            await _enqueue_import(str(job_uuid),
-                                 f"partial import after {reason} (found {metadata_count} metadata files)",
-                                 new_json_paths=new_json_paths)
-
-    # ── Enqueue retry for transient failures ──
-    # Only auto-retry on actual failures (non-zero exit, timeout), NOT on pause/cancel.
-
-    ctrl_cmd = control_listener.command if control_listener else None
-    if j and j.retry_count < max_retries and ctrl_cmd is None:
-        # Only auto-retry non-zero exits and timeouts
-        needs_retry = (result is None) or (result.returncode != 0)
-        if needs_retry:
-            retry_delay = backoff_base * (2 ** (j.retry_count - 1))
-            try:
-                await _enqueue_download_retry(
-                    job_uuid,
-                    delay_seconds=retry_delay,
-                    action="auto_retry",
+                    await _manifest_db.commit()
+                else:
+                    metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
+                    pending_work_count = metadata_count
+            if control_listener.command in ("pause", "cancel"):
+                logger.info(
+                    "Download job %s stopped at import-plan checkpoint (%s)",
+                    job_id,
+                    control_listener.command,
                 )
-                logger.info("Enqueued retry %d/%d for job %s in %ds",
-                           j.retry_count, max_retries, job_id,
-                           retry_delay)
-            except Exception:
-                logger.error("Failed to enqueue retry for download job %s", job_id, exc_info=True)
-                # publish_prepared_download already compensates DownloadJob
-                # and TaskRun in one database transaction.
-                raise
+                return
+            if pending_work_count > 0:
+                async with async_session() as _progress_db:
+                    _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+                    if _progress_job:
+                        apply_download_progress(
+                            _progress_job,
+                            "enqueuing_import",
+                            f"Found {pending_work_count} works; queuing import",
+                            current=0,
+                            total=pending_work_count,
+                            assets=image_count,
+                        )
+                        await _progress_db.commit()
+                if control_listener.command in ("pause", "cancel"):
+                    logger.info(
+                        "Download job %s stopped before import handoff (%s)",
+                        job_id,
+                        control_listener.command,
+                    )
+                    return
+                await _enqueue_import(str(job_uuid), new_json_paths=new_json_paths)
+            else:
+                # No new metadata JSONs — distinguish "already imported" from "nothing to download"
+                # Check stderr for warnings that explain the zero-download result
+                stderr_text = result.stderr or ""
+                stdout_text = result.stdout or ""
+                combined = stderr_text + stdout_text
+                auth_warning = None
+                for pattern, label in AUTH_WARNING_PATTERNS:
+                    if re.search(pattern, combined):
+                        auth_warning = label
+                        break
+
+                # Determine status via pure helper (manual empty -> failed; subscription
+                # re-sync with no new content -> complete; see download_outcome.py).
+                async with async_session() as _sub_db:
+                    _sub_job = await DownloadJobRepository(_sub_db).get(job_uuid)
+                    is_subscription = bool(_sub_job and _sub_job.subscription_source_id)
+                decision = classify_no_metadata_outcome(
+                    image_count=image_count,
+                    auth_warning=auth_warning,
+                    is_subscription=is_subscription,
+                    had_sync_baseline=had_sync_baseline(_sub_job) if _sub_job else False,
+                )
+                error = decision.error
+                if decision.status == "failed" and auth_warning:
+                    error = f"{error}\n{stderr_text[:2000]}"
+
+                async with async_session() as db3:
+                    repo3 = DownloadJobRepository(db3)
+                    j3 = await repo3.get(job_uuid)
+                    if j3:
+                        outcome = (
+                            build_sync_outcome(
+                                decision.outcome_code,
+                                metadata_count=metadata_count,
+                                media_count=image_count,
+                                recovery_detail=(
+                                    reconciliation.outcome_detail
+                                    if reconciliation is not None
+                                    else None
+                                ),
+                            )
+                            if decision.outcome_code
+                            else None
+                        )
+                        await finalize_download_job(
+                            db3,
+                            j3,
+                            status=decision.status,
+                            outcome=outcome,
+                            error=error,
+                            message=error,
+                            assets=image_count,
+                        )
+
+        elif result is not None and result.returncode != 0:
+            # Non-zero exit — maybe partial files were downloaded
+            metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
+            if metadata_count > 0:
+                logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
+                await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
+
+        else:
+            # Timeout or interrupted (pause/cancel) — attempt partial import recovery
+            ctrl_cmd = control_listener.command if control_listener else None
+            reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
+            metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
+            if metadata_count > 0:
+                logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)
+                await _enqueue_import(str(job_uuid),
+                                     f"partial import after {reason} (found {metadata_count} metadata files)",
+                                     new_json_paths=new_json_paths)
+
+        # ── Enqueue retry for transient failures ──
+        # Only auto-retry on actual failures (non-zero exit, timeout), NOT on pause/cancel.
+
+        ctrl_cmd = control_listener.command if control_listener else None
+        if j and j.retry_count < max_retries and ctrl_cmd is None:
+            # Only auto-retry non-zero exits and timeouts
+            needs_retry = (result is None) or (result.returncode != 0)
+            if needs_retry:
+                retry_delay = backoff_base * (2 ** (j.retry_count - 1))
+                try:
+                    await _enqueue_download_retry(
+                        job_uuid,
+                        delay_seconds=retry_delay,
+                        action="auto_retry",
+                    )
+                    logger.info("Enqueued retry %d/%d for job %s in %ds",
+                               j.retry_count, max_retries, job_id,
+                               retry_delay)
+                except Exception:
+                    logger.error("Failed to enqueue retry for download job %s", job_id, exc_info=True)
+                    # publish_prepared_download already compensates DownloadJob
+                    # and TaskRun in one database transaction.
+                    raise
+    finally:
+        if heartbeat:
+            heartbeat.stop()
+        if control_listener:
+            control_listener.stop()

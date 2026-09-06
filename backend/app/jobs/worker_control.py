@@ -34,9 +34,10 @@ def signal_process_group(proc_pid: int, sig: int) -> bool:
     try:
         pgid = os.getpgid(proc_pid)
     except ProcessLookupError:
-        # ``start_new_session=True`` makes pid == pgid.  The leader can have
-        # exited while a helper remains in that group, so retain this fallback.
-        pgid = proc_pid
+        # Once the leader is gone, its numeric pid may already belong to an
+        # unrelated process.  Subprocess owners that must clean up surviving
+        # helpers retain the original pgid and handle that explicitly.
+        return False
     except OSError:
         return False
     try:
@@ -78,6 +79,7 @@ class ControlListener:
     def __init__(self, job_id: str, *, proc_pid: int | None = None):
         self.job_id = job_id
         self.proc_pid = proc_pid
+        self._process_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._command: str | None = None
         self._reason: str | None = None
@@ -103,6 +105,20 @@ class ControlListener:
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def detach_process(self, expected_pid: int) -> bool:
+        """Stop signalling one completed child, fenced by its known pid.
+
+        Waiting for an in-flight signal while holding this lock establishes the
+        handoff boundary: after this method returns successfully no listener
+        callback can still read or signal the detached pid.
+        """
+
+        with self._process_lock:
+            if self.proc_pid != expected_pid:
+                return False
+            self.proc_pid = None
+            return True
 
     # ── internal ──────────────────────────────
 
@@ -153,21 +169,23 @@ class ControlListener:
                 pass
 
     def _handle_pause(self) -> None:
-        if self.proc_pid is not None:
-            self._kill_process_group(signal.SIGTERM)
+        self._kill_process_group(signal.SIGTERM)
 
     def _handle_cancel(self) -> None:
-        if self.proc_pid is not None:
-            self._kill_process_group(signal.SIGTERM)
+        self._kill_process_group(signal.SIGTERM)
 
     def _kill_process_group(self, sig: int) -> None:
-        if signal_process_group(self.proc_pid, sig):
-            logger.info(
-                "Sent signal %d to process group for pid %d (job %s)",
-                sig,
-                self.proc_pid,
-                self.job_id,
-            )
+        with self._process_lock:
+            proc_pid = self.proc_pid
+            if proc_pid is None:
+                return
+            if signal_process_group(proc_pid, sig):
+                logger.info(
+                    "Sent signal %d to process group for pid %d (job %s)",
+                    sig,
+                    proc_pid,
+                    self.job_id,
+                )
 
 
 # ──────────────────────────────────────────────
@@ -201,12 +219,23 @@ class HeartbeatPublisher:
         self.heartbeat_callback = heartbeat_callback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._publish_lock = threading.Lock()
 
     def start(self) -> None:
+        if not self._publish_once():
+            self._stop_event.set()
+            return
         self._thread = threading.Thread(
             target=self._run, daemon=True, name=f"hb-{self.job_id[:8]}"
         )
         self._thread.start()
+
+    def transfer_to_pid(self, pid: int) -> bool:
+        """Move liveness reporting to ``pid`` and publish the handoff now."""
+
+        with self._publish_lock:
+            self.pid = pid
+            return self._publish_once_locked()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -221,15 +250,7 @@ class HeartbeatPublisher:
     def _run(self) -> None:
         while not self._stop_event.wait(HEARTBEAT_INTERVAL):
             try:
-                published = (
-                    self.heartbeat_callback()
-                    if self.heartbeat_callback is not None
-                    else TaskEventPublisher.publish_heartbeat(
-                        self.job_id,
-                        self.task_type,
-                        pid=self.pid,
-                    )
-                )
+                published = self._publish_once()
                 if published is False:
                     self._stop_event.set()
                     return
@@ -238,6 +259,28 @@ class HeartbeatPublisher:
                 if self.heartbeat_callback is not None:
                     self._stop_event.set()
                     return
+
+    def _publish_once(self) -> bool:
+        with self._publish_lock:
+            return self._publish_once_locked()
+
+    def _publish_once_locked(self) -> bool:
+        try:
+            return (
+                self.heartbeat_callback()
+                if self.heartbeat_callback is not None
+                else TaskEventPublisher.publish_heartbeat(
+                    self.job_id,
+                    self.task_type,
+                    pid=self.pid,
+                )
+            )
+        except Exception:
+            logger.debug("Heartbeat failed for job %s", self.job_id, exc_info=True)
+            # Ordinary task heartbeats retry after transient Redis failures.
+            # A fenced callback returning/raising cannot prove ownership and
+            # must stop instead.
+            return self.heartbeat_callback is None
 
 
 # ──────────────────────────────────────────────

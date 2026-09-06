@@ -873,6 +873,53 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
     }
 
 
+async def _resolve_resource_owner(
+    db: AsyncSession,
+    owner: str,
+    *,
+    execution_token: str | UUID | None = None,
+) -> UUID | None:
+    """Resolve a resource owner while fencing import execution attempts.
+
+    The current importer carries its execution token in the compatibility
+    ``<import UUID>:<execution UUID>`` owner string.  Keeping parsing and the
+    locked ownership check here gives the resource callback one boundary that
+    can also accept a separately transported token later.
+    """
+
+    owner_text = str(owner)
+    token_text = str(execution_token) if execution_token is not None else None
+    if token_text is None:
+        parts = owner_text.split(":")
+        if len(parts) == 2:
+            owner_text, token_text = parts
+        elif len(parts) != 1:
+            return None
+    elif ":" in owner_text:
+        return None
+
+    try:
+        owner_id = UUID(owner_text)
+        token_id = UUID(token_text) if token_text is not None else None
+    except (TypeError, ValueError):
+        return None
+
+    if token_id is None:
+        return owner_id
+
+    owned_import_id = (
+        await db.execute(
+            select(ImportJob.id)
+            .where(
+                ImportJob.id == owner_id,
+                ImportJob.execution_token == token_id,
+            )
+            .with_for_update(of=ImportJob)
+        )
+    ).scalar_one_or_none()
+    return owned_import_id
+
+
 async def update_task_resource_state(
     owner: str,
     state: str,
@@ -887,13 +934,13 @@ async def update_task_resource_state(
     no-change transition performs no write/event, keeping idle control-plane
     write volume low.
     """
-    try:
-        owner_id = UUID(str(owner))
-    except (TypeError, ValueError):
-        return
     from app.database import async_session
 
     async with async_session() as db:
+        owner_id = await _resolve_resource_owner(db, owner)
+        if owner_id is None:
+            await db.rollback()
+            return
         if publisher_attempt is not None:
             task = (
                 await db.execute(
@@ -932,6 +979,7 @@ async def update_task_resource_state(
                     )
                     .order_by((TaskRun.id == owner_id).desc())
                     .limit(1)
+                    .with_for_update(of=TaskRun)
                 )
             ).scalar_one_or_none()
             if task is not None:
