@@ -92,7 +92,10 @@ __all__ = [
     "ImportCurationOutbox",
     "MediaDerivativeOutbox",
     "SearchProjectionOutbox",
+    "SearchDeliveryReceipt",
     "RepositorySyncReceipt",
     "SearchIndexState",
     "MaintenanceAuditEvent",
 ]
+
+from app.models.search_delivery_receipt import SearchDeliveryReceipt

@@ -74,14 +74,10 @@ from app.services.cache import (
 )
 from app.services.search_projection_outbox import (
     ProjectionEvent,
-    claim_projection_events,
-    complete_projection_events,
     complete_projection_versions,
     enqueue_projection_events,
     prune_completed_projection_events,
-    release_projection_events,
     replay_projection_events,
-    retry_projection_events,
 )
 from app.services.search_language import (
     HAS_TARGETS,
@@ -4129,202 +4125,10 @@ class SearchService:
         return indexed
 
     async def drain_search_projection_outbox(self, *, limit: int = 500) -> dict[str, int | str]:
-        """Deliver one coalesced outbox batch with one writer globally active."""
+        """Run one durable submission or one-shot poll and release the worker."""
+        from app.services.search_delivery import run_delivery_slice
 
-        lease = await asyncio.to_thread(
-            cache_try_lock,
-            INDEX_WRITE_LOCK,
-            INDEX_WRITE_LOCK_TTL_SECONDS,
-        )
-        if lease is None:
-            return {"status": "busy", "claimed": 0, "upserted": 0, "deleted": 0}
-
-        claimed: list[ProjectionEvent] = []
-        deferred: list[ProjectionEvent] = []
-        try:
-            claimed = await claim_projection_events(
-                limit=max(1, min(int(limit), WORK_DOCUMENT_BATCH_SIZE)),
-                lease_seconds=INDEX_WRITE_LOCK_TTL_SECONDS,
-            )
-            if not claimed:
-                return {"status": "idle", "claimed": 0, "upserted": 0, "deleted": 0}
-
-            supported_indexes = {
-                WORKS_INDEX,
-                CREATORS_INDEX,
-                TAGS_INDEX,
-                REPOSITORIES_INDEX,
-                SUBSCRIPTIONS_INDEX,
-            }
-            unsupported = [
-                event for event in claimed if event.index_uid not in supported_indexes
-            ]
-            if unsupported:
-                raise ValueError(
-                    "Unsupported search outbox indexes: "
-                    + ", ".join(sorted({event.index_uid for event in unsupported}))
-                )
-
-            events_by_index: dict[str, list[ProjectionEvent]] = defaultdict(list)
-            for event in claimed:
-                events_by_index[event.index_uid].append(event)
-            documents_by_index: dict[str, list[dict[str, Any]]] = {}
-            delete_ids_by_index: dict[str, list[str]] = {}
-            builder_names = {
-                CREATORS_INDEX: "_build_creator_documents",
-                TAGS_INDEX: "_build_tag_documents",
-                REPOSITORIES_INDEX: "_build_repository_documents",
-                SUBSCRIPTIONS_INDEX: "_build_subscription_documents",
-            }
-            # Assemble authoritative documents in a short independent read
-            # transaction and close it before any network wait.
-            async with async_session() as projection_db:
-                projection_service = SearchService(projection_db)
-                for index_uid, events in events_by_index.items():
-                    upsert_events = [event for event in events if event.action == "upsert"]
-                    upsert_ids = [UUID(event.entity_id) for event in upsert_events]
-                    if index_uid == WORKS_INDEX:
-                        documents = await projection_service._build_work_documents(upsert_ids)
-                    else:
-                        documents = await getattr(
-                            projection_service,
-                            builder_names[index_uid],
-                        )(upsert_ids)
-                    documents_by_index[index_uid] = documents
-                    document_ids = {str(document["id"]) for document in documents}
-                    # A row deleted after an upsert was queued must remove the
-                    # projection instead of being acknowledged as a no-op.
-                    delete_ids_by_index[index_uid] = [
-                        event.entity_id
-                        for event in events
-                        if event.action == "delete"
-                        or (
-                            event.action == "upsert"
-                            and event.entity_id not in document_ids
-                        )
-                    ]
-
-            selected, deferred = _select_projection_event_slice(
-                claimed,
-                documents_by_index,
-            )
-            claimed = selected
-            if deferred:
-                await release_projection_events(deferred)
-
-            selected_by_index: dict[str, list[ProjectionEvent]] = defaultdict(list)
-            for event in claimed:
-                selected_by_index[event.index_uid].append(event)
-            for index_uid, index_documents in tuple(documents_by_index.items()):
-                selected_upserts = {
-                    event.entity_id
-                    for event in selected_by_index.get(index_uid, ())
-                    if event.action == "upsert"
-                }
-                documents_by_index[index_uid] = [
-                    document
-                    for document in index_documents
-                    if str(document["id"]) in selected_upserts
-                ]
-                selected_ids = {
-                    event.entity_id
-                    for event in selected_by_index.get(index_uid, ())
-                }
-                delete_ids_by_index[index_uid] = [
-                    identity
-                    for identity in delete_ids_by_index[index_uid]
-                    if identity in selected_ids
-                ]
-            events_by_index = selected_by_index
-
-            renewed = await asyncio.to_thread(
-                cache_refresh_lock,
-                INDEX_WRITE_LOCK,
-                lease,
-                INDEX_WRITE_LOCK_TTL_SECONDS,
-            )
-            if not renewed:
-                raise RuntimeError("Lost search index writer lease before delivery")
-
-            def _deliver() -> None:
-                client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
-                slice_deadline = (
-                    monotonic_time.monotonic()
-                    + (MEILI_INCREMENTAL_SLICE_TIMEOUT_MS / 1000)
-                )
-
-                def _remaining_task_timeout() -> int:
-                    remaining_ms = int(
-                        (slice_deadline - monotonic_time.monotonic()) * 1000
-                    )
-                    if remaining_ms <= 0:
-                        raise TimeoutError("Incremental search slice timed out")
-                    return max(
-                        1,
-                        min(MEILI_INCREMENTAL_TASK_TIMEOUT_MS, remaining_ms),
-                    )
-
-                for index_uid in INDEX_SETTINGS:
-                    if index_uid not in events_by_index:
-                        continue
-                    _ensure_indexes(
-                        client,
-                        {index_uid: INDEX_SETTINGS[index_uid]},
-                        task_timeout_in_ms=_remaining_task_timeout(),
-                    )
-                    _write_document_batch(
-                        client,
-                        index_uid,
-                        documents_by_index[index_uid],
-                        timeout_in_ms=_remaining_task_timeout(),
-                    )
-                    _delete_document_batch(
-                        client,
-                        index_uid,
-                        delete_ids_by_index[index_uid],
-                        timeout_in_ms=_remaining_task_timeout(),
-                    )
-
-            await asyncio.to_thread(_deliver)
-            await complete_projection_events(claimed)
-            await _refresh_search_index_checkpoints(events_by_index.keys())
-            slice_exhausted = bool(deferred) or len(claimed) >= max(
-                1,
-                min(int(limit), WORK_DOCUMENT_BATCH_SIZE),
-            )
-            return {
-                "status": "partial" if deferred else "ok",
-                "claimed": len(claimed),
-                "upserted": sum(len(value) for value in documents_by_index.values()),
-                "deleted": sum(
-                    len(set(value)) for value in delete_ids_by_index.values()
-                ),
-                "deferred": len(deferred),
-                "slice_exhausted": slice_exhausted,
-                "more_likely": slice_exhausted,
-            }
-        except Exception as exc:
-            if claimed:
-                _forget_ensured_settings(event.index_uid for event in claimed)
-                await retry_projection_events(claimed, str(exc))
-            if deferred:
-                try:
-                    await release_projection_events(deferred)
-                except Exception:
-                    logger.debug(
-                        "Unable to release deferred search projection claims",
-                        exc_info=True,
-                    )
-            logger.warning("Search projection outbox drain failed", exc_info=True)
-            return {
-                "status": "error",
-                "claimed": len(claimed),
-                "upserted": 0,
-                "deleted": 0,
-                "deferred": len(deferred),
-            }
-        finally:
-            await asyncio.to_thread(cache_release_lock, INDEX_WRITE_LOCK, lease)
+        return await run_delivery_slice(limit=limit)
 
     async def _search_reference_db(
         self,
@@ -6162,6 +5966,29 @@ class SearchService:
             raise
 
     async def _rebuild_selected_indexes(
+        self, live_indexes: tuple[str, ...], *,
+        batch_size: int = WORK_DOCUMENT_BATCH_SIZE, resource_owner: str | None = None,
+    ) -> dict[str, Any]:
+        from app.services.heavy_io import LocalHeavyIOLock, _local_lock_path
+        from app.services.remote_search_flight import read_marker
+        from app.models.search_delivery_receipt import SearchDeliveryReceipt
+        writer = LocalHeavyIOLock(_local_lock_path().with_name("search-writer.lock"))
+        if not writer.try_acquire():
+            raise RuntimeError("Another remote search writer is active")
+        try:
+            async with async_session() as gate_db:
+                active = (await gate_db.execute(select(exists().where(
+                    SearchDeliveryReceipt.state.not_in(("complete", "failed"))
+                )))).scalar_one()
+            if active or read_marker() is not None:
+                raise RuntimeError("An unresolved remote search delivery prevents rebuild")
+            return await self._rebuild_selected_indexes_legacy(
+                live_indexes, batch_size=batch_size, resource_owner=resource_owner,
+            )
+        finally:
+            writer.release()
+
+    async def _rebuild_selected_indexes_legacy(
         self,
         live_indexes: tuple[str, ...],
         *,

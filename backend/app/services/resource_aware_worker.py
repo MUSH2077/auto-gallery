@@ -940,6 +940,11 @@ class ResourceAwareWorker(Worker):
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
+        if "run_search_projection_outbox" in str(getattr(job, "func_name", "")):
+            # A remote poll releases an already reserved workload even under
+            # pressure. The child applies heavy admission only for new writes.
+            self._active_profile_snapshot = {}
+            return None, None, owner
         attempt = 0
         while True:
             snapshot = self._wait_until_pressure_allows_dequeue(

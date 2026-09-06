@@ -38,6 +38,7 @@ RESOURCE_RESERVATION_KEYS = (
     RESOURCE_NETWORK_TOKEN_KEY,
     RESOURCE_DISK_TOKEN_KEY,
     RESOURCE_BACKGROUND_TOKEN_KEY,
+    "lock:resource-budget:remote-search",
 )
 RESOURCE_ADMISSION_MODE = "dual_disk_lanes_v2"
 DEFAULT_LEASE_SECONDS = 300
@@ -326,7 +327,7 @@ def local_lock_for_workload(
     profile = workload_profile_name(workload)
     group = workload_conflict_group(workload)
     if group == "maintenance":
-        return LocalResourceLocks([LocalHeavyIOLock()])
+        return LocalResourceLocks([LocalHeavyIOLock()], remote_exclusive=True)
     if profile == "light":
         return None
 
@@ -351,7 +352,7 @@ def local_lock_for_workload(
         locks.append(
             LocalHeavyIOLock(_local_lock_path().with_name(f"source-{digest}.lock"))
         )
-    return LocalResourceLocks(locks)
+    return LocalResourceLocks(locks, remote_exclusive=token == RESOURCE_BACKGROUND_TOKEN_KEY)
 
 
 def local_source_lock(source_identity: str) -> "LocalResourceLocks":
@@ -423,8 +424,9 @@ class LocalHeavyIOLock:
 class LocalResourceLocks:
     """Fixed-order maintenance barrier plus one profile/source mutex."""
 
-    def __init__(self, locks: list[LocalHeavyIOLock]) -> None:
+    def __init__(self, locks: list[LocalHeavyIOLock], *, remote_exclusive: bool = False) -> None:
         self.locks = locks
+        self.remote_exclusive = remote_exclusive
 
     @property
     def path(self) -> Path:
@@ -439,6 +441,13 @@ class LocalResourceLocks:
                         held.release()
                     return False
                 acquired.append(lock)
+            if self.remote_exclusive:
+                from app.services.remote_search_flight import read_marker
+
+                if read_marker() is not None:
+                    for held in reversed(acquired):
+                        held.release()
+                    return False
             return True
         except BaseException:
             for held in reversed(acquired):
@@ -735,6 +744,12 @@ class RenewableRedisLease:
         acquired: list[str] = []
         self.denial_reason = None
         try:
+            from app.services.remote_search_flight import reconcile_reservation
+
+            marker = await asyncio.to_thread(reconcile_reservation, self.redis)
+            if marker and (HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
+                self.denial_reason = "remote_search_in_flight"
+                return False
             for key in self.keys:
                 if key == self.reservation_key:
                     reserve_keys = list(

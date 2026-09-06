@@ -179,13 +179,15 @@ async def test_media_empty_slice_does_not_create_successor_hint(monkeypatch):
     assert result["more_likely"] is False
 
 
-def test_search_job_wakes_successor_when_bounded_slice_is_exhausted():
-    import inspect
-
+def test_search_job_preserves_delayed_poll_successor(monkeypatch):
     from app.jobs import search_projection
-    from app.services.search import SearchService
+    from app.services import search_delivery
 
-    job_source = inspect.getsource(search_projection.run_search_projection_outbox)
-    drain_source = inspect.getsource(SearchService.drain_search_projection_outbox)
-    assert "clear_and_wake_outbox_successor" in job_source
-    assert '\"more_likely\": slice_exhausted' in drain_source
+    async def pending(**kwargs):
+        return {"status": "pending", "more_likely": True, "successor_delay_seconds": 15}
+
+    monkeypatch.setattr(search_delivery, "run_delivery_slice", pending)
+    monkeypatch.setattr(search_projection, "clear_and_wake_outbox_successor", lambda *_args: None)
+    result = search_projection.run_search_projection_outbox()
+    assert result["more_likely"] is True
+    assert result["successor_delay_seconds"] == 15

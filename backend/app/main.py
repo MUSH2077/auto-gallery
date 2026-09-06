@@ -330,7 +330,7 @@ async def lifespan(app: FastAPI):
                 )
 
                 async with async_session() as db:
-                    counts = await outbox_counts(db)
+                    counts = await outbox_counts(db, ready_only=True)
                 if any(counts.values()):
                     result = wake_pending_outboxes(counts)
                     logger.info("Pipeline outbox coordinator", counts=counts, **result)

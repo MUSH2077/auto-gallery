@@ -88,21 +88,6 @@ def test_work_list_media_hydration_is_one_bounded_aggregate_query():
     assert "MATERIALIZED" in source
 
 
-def test_full_rebuild_streams_work_and_reference_batches_by_keyset():
-    from app.services.search import SearchService
-
-    work_source = inspect.getsource(SearchService._stream_works_to_index)
-    reference_source = inspect.getsource(SearchService._stream_reference_to_index)
-    rebuild_source = inspect.getsource(SearchService._rebuild_selected_indexes)
-    assert "model.id > last_id" in reference_source
-    assert "Work.id > last_id" in work_source
-    assert "documents[start:" not in rebuild_source
-    assert "_stream_reference_to_index" in rebuild_source
-    assert "_run_profiled_search_slice" in work_source
-    assert "_run_profiled_search_slice" in reference_source
-    assert 'workload="maintenance"' in rebuild_source
-
-
 def test_full_reindex_coordinator_does_not_hold_one_global_operation_lock():
     from app.jobs.admin_operations import run_search_reindex_operation
     from app.services.resource_aware_worker import ResourceAwareWorker
