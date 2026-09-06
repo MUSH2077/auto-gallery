@@ -1114,14 +1114,41 @@ class CurationService:
         self,
         *,
         resource_owner: str | None = None,
+        continuation: dict | None = None,
     ) -> dict:
+        """Commit a bounded baseline slice and return its scheduling delay."""
         from app.services.heavy_io import adaptive_resource_slice
+
+        state = dict(continuation or {})
+        cooldown: dict[str, float] = {}
+        await self.db.commit()
+        async with adaptive_resource_slice(
+            "import_db", resource_owner or "curation-baseline-backfill",
+            lane="background", max_work_units=self.COMMIT_WORK_LIMIT,
+            max_slice_seconds=20.0, wait_for_capacity=False, cooldown_result=cooldown,
+        ) as limits:
+            if limits is None:
+                return {"status": "pending", "continuation": state,
+                        "successor_delay_seconds": 2.0}
+            result = await self._run_backfill_slice(state, max(1, int(limits.work_units)))
+            await self.db.commit()
+        if result["status"] == "pending":
+            result["successor_delay_seconds"] = max(2.0, cooldown.get("seconds", 0.0))
+        return result
+
+    async def _run_backfill_slice(self, continuation: dict, work_units: int) -> dict:
+        from contextlib import aclosing
 
         created = {"creators": 0, "repositories": 0, "work_groups": 0}
         skipped = {"creators": 0, "repositories": 0, "work_groups": 0}
 
-        creator_rows = await self.db.execute(select(Creator).order_by(Creator.created_at))
-        for creator in creator_rows.scalars().all():
+        phase = continuation.get("phase", "creators")
+        creator_rows = await self.db.execute(
+            select(Creator).where(~select(CurationCommit.id).where(
+                CurationCommit.dedupe_key == func.concat("creator:", Creator.id, ":added")
+            ).exists()).order_by(Creator.id).limit(work_units)
+        ) if phase == "creators" else None
+        for creator in creator_rows.scalars().all() if creator_rows is not None else []:
             dedupe_key = f"creator:{creator.id}:added"
             if await self._commit_exists(dedupe_key):
                 skipped["creators"] += 1
@@ -1145,11 +1172,19 @@ class CurationService:
             )
             commit.stats = {"creator_count": 1}
             created["creators"] += 1
-            if (created["creators"] + skipped["creators"]) % 25 == 0:
-                await self.db.commit()
+            await self.db.commit()
+        if created["creators"]:
+            return {"status": "pending", "created": created, "skipped": skipped,
+                    "continuation": continuation}
+        if phase == "creators":
+            phase = continuation["phase"] = "repositories"
 
-        repo_rows = await self.db.execute(select(SubscriptionSource).order_by(SubscriptionSource.created_at))
-        for repo in repo_rows.scalars().all():
+        repo_rows = await self.db.execute(
+            select(SubscriptionSource).where(~select(CurationCommit.id).where(
+                CurationCommit.dedupe_key == func.concat("repository:", SubscriptionSource.id, ":added")
+            ).exists()).order_by(SubscriptionSource.id).limit(work_units)
+        ) if phase == "repositories" else None
+        for repo in repo_rows.scalars().all() if repo_rows is not None else []:
             dedupe_key = f"repository:{repo.id}:added"
             if await self._commit_exists(dedupe_key):
                 skipped["repositories"] += 1
@@ -1180,34 +1215,36 @@ class CurationService:
             )
             commit.stats = {"repository_count": 1}
             created["repositories"] += 1
-            if (created["repositories"] + skipped["repositories"]) % 25 == 0:
-                await self.db.commit()
+            await self.db.commit()
+        if created["repositories"]:
+            return {"status": "pending", "created": created, "skipped": skipped,
+                    "continuation": continuation}
+        continuation["phase"] = "works"
 
-        legacy_complete_groups: set[str] = set()
-        async for group in self._iter_baseline_work_groups():
-            dedupe_key = group["dedupe_key"]
-            base_dedupe_key = group["base_dedupe_key"]
-            if base_dedupe_key in legacy_complete_groups:
-                skipped["work_groups"] += 1
-                continue
-            existing_commit = await self._commit_for_key(dedupe_key)
-            if existing_commit is not None:
-                if (
-                    group["chunk_index"] == 0
-                    and not (existing_commit.extra_metadata or {}).get(
-                        "baseline_chunked"
-                    )
-                ):
-                    legacy_complete_groups.add(base_dedupe_key)
-                skipped["work_groups"] += 1
-                continue
-            works = group["works"]
-            async with adaptive_resource_slice(
-                "import_db",
-                resource_owner or "curation-baseline-backfill",
-                max_work_units=len(works),
-                max_slice_seconds=20.0,
-            ):
+        async with aclosing(self._iter_baseline_work_groups(
+            continuation.get("work_cursor")
+        )) as groups:
+            async for group in groups:
+                continuation["work_cursor"] = group["cursor"]
+                dedupe_key = group["dedupe_key"]
+                base_dedupe_key = group["base_dedupe_key"]
+                if base_dedupe_key == continuation.get("legacy_complete_group"):
+                    skipped["work_groups"] += 1
+                    return {"status": "pending", "created": created, "skipped": skipped,
+                            "continuation": continuation}
+                existing_commit = await self._commit_for_key(dedupe_key)
+                if existing_commit is not None:
+                    if (
+                        group["chunk_index"] == 0
+                        and not (existing_commit.extra_metadata or {}).get(
+                            "baseline_chunked"
+                        )
+                    ):
+                        continuation["legacy_complete_group"] = base_dedupe_key
+                    skipped["work_groups"] += 1
+                    return {"status": "pending", "created": created, "skipped": skipped,
+                            "continuation": continuation}
+                works = group["works"]
                 commit = await self._create_commit(
                     message=f"Baseline: add {len(works)} works on {group['day']}",
                     trigger="baseline_backfill",
@@ -1262,6 +1299,9 @@ class CurationService:
                 commit.stats = {"work_count": len(works), "baseline": True}
                 created["work_groups"] += 1
                 await self.db.commit()
+
+                return {"status": "pending", "created": created, "skipped": skipped,
+                        "continuation": continuation}
 
         await self.db.commit()
         return {"status": "ok", "created": created, "skipped": skipped, "expected": (await self.backfill_status())["expected"]}
@@ -1355,7 +1395,7 @@ class CurationService:
                 })
         return sorted(groups.values(), key=lambda g: (g["occurred_at"], g["dedupe_key"]))
 
-    async def _iter_baseline_work_groups(self):
+    async def _iter_baseline_work_groups(self, cursor: dict | None = None):
         """Stream deterministic repository/day chunks of at most 25 works."""
 
         from app.database import async_session
@@ -1396,9 +1436,16 @@ class CurationService:
             .execution_options(yield_per=100)
         )
 
-        current_base: str | None = None
+        if cursor:
+            from sqlalchemy import tuple_
+            stmt = stmt.where(tuple_(
+                WorkSource.source, func.coalesce(WorkSource.source_creator_id, ""),
+                day_expr, Work.id,
+            ) > tuple_(cursor["source"], cursor["source_creator_id"],
+                       date.fromisoformat(cursor["day"]), UUID(cursor["work_id"])))
+        current_base = cursor["base_dedupe_key"] if cursor else None
         current: dict | None = None
-        chunk_index = 0
+        chunk_index = int(cursor["chunk_index"]) + 1 if cursor else 0
 
         async def emit_current():
             nonlocal current
@@ -1474,6 +1521,14 @@ class CurationService:
                         "source_creator_id": work_source.source_creator_id,
                     }
                 )
+                current["cursor"] = {
+                    "source": work_source.source,
+                    "source_creator_id": work_source.source_creator_id or "",
+                    "day": day,
+                    "work_id": str(work.id),
+                    "base_dedupe_key": base_key,
+                    "chunk_index": chunk_index,
+                }
                 if len(current["works"]) >= self.COMMIT_WORK_LIMIT:
                     payload = await emit_current()
                     if payload is not None:

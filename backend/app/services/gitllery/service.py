@@ -57,6 +57,8 @@ class GitlleryService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.last_projection_high_water: tuple[datetime, UUID] | None = None
+        self.continuation: dict | None = None
+        self.successor_delay_seconds = 2.0
 
     async def _changes_for_commit(self, commit_id: UUID) -> list[CurationChange]:
         rows = await self.db.execute(
@@ -361,14 +363,16 @@ class GitlleryService:
 
     _BULK_BATCH = 25
 
-    async def _commit_batches(self, high_water: tuple[datetime, UUID]):
+    async def _commit_batches(
+        self, high_water: tuple[datetime, UUID], after: tuple[datetime, UUID] | None = None,
+    ):
         """Yield ordered commits in keyset-paged batches of _BULK_BATCH.
 
         Bulk walks (reconcile/backfill jobs) must never materialize the whole
         commit history as ORM objects — on a large library that is hundreds of
         MB and the reason these walks now run in a queue worker, not backend.
         """
-        last: tuple | None = None
+        last = after
         while True:
             stmt = (
                 select(CurationCommit)
@@ -397,183 +401,84 @@ class GitlleryService:
         repository_id: str | None = None,
         *,
         resource_owner: str | None = None,
+        continuation: dict | None = None,
     ) -> dict[str, int]:
-        """Project not-yet-projected commits in governed, bounded batches.
+        """Project one ordered slice, exposing its durable successor cursor.
 
-        The v2 root manifest is the durable per-repository watermark.  Older
-        code rebuilt a set by walking HEAD to the root for every repository,
-        making each reconcile O(history) before it could do useful work.  A
-        single ordered pass now skips through the manifest watermark and then
-        appends only its tail.  Each 25-commit batch releases PostgreSQL before
-        filesystem work and releases the resource permit before AIMD cooldown.
+        Admin dispatch persists ``continuation`` only after this prefix and its
+        outbox acknowledgments commit. A crash before handoff replays at most
+        this slice; repository append checks make that replay idempotent.
         """
+        from contextlib import aclosing
         from app.services.heavy_io import adaptive_resource_slice
 
-        # A curation intent can affect several repositories. A scoped writer
-        # cannot safely acknowledge that global intent, so promote explicit
-        # scoped reconciliation to one ordered library pass.
-        requested_repository_id = repository_id
-        repository_id = None
-        high_water_row = (
-            await self.db.execute(
+        state = dict(continuation or {})
+        self.continuation = None
+        if state.get("high_water"):
+            raw = state["high_water"]
+            high_water = (datetime.fromisoformat(raw[0]), UUID(raw[1]))
+        else:
+            row = (await self.db.execute(
                 select(CurationCommit.created_at, CurationCommit.id)
-                .order_by(
-                    CurationCommit.created_at.desc(),
-                    CurationCommit.id.desc(),
-                )
+                .order_by(CurationCommit.created_at.desc(), CurationCommit.id.desc())
                 .limit(1)
-            )
-        ).first()
-        if high_water_row is None:
-            self.last_projection_high_water = None
-            await self.db.commit()
-            return {}
-        high_water = (high_water_row[0], high_water_row[1])
+            )).first()
+            if row is None:
+                self.last_projection_high_water = None
+                await self.db.commit()
+                return {}
+            high_water = (row[0], row[1])
+            state["high_water"] = [high_water[0].isoformat(), str(high_water[1])]
         self.last_projection_high_water = high_water
-        await self.db.commit()
-        resolver = RepoResolver(self.db)
+        after = state.get("after")
+        after = (datetime.fromisoformat(after[0]), UUID(after[1])) if after else None
         counts: dict[str, int] = {}
-        # repo_id -> (repo, descriptor, durable last commit id, watermark seen)
-        repo_cache: dict[
-            str,
-            tuple[GitlleryRepo, RepoDescriptor, str | None, bool],
-        ] = {}
-        owner = resource_owner or (
-            f"gitllery-sync:{requested_repository_id or 'all'}"
-        )
-        async for batch in self._commit_batches(high_water):
-            changes_by_commit = await self._changes_for_commits([c.id for c in batch])
-            outbox_rows = await self.db.execute(
-                select(
-                    GitlleryProjectionOutbox.commit_id,
-                    GitlleryProjectionOutbox.state,
-                ).where(
-                    GitlleryProjectionOutbox.commit_id.in_([c.id for c in batch])
-                )
-            )
-            outbox_states = {
-                commit_id: state
-                for commit_id, state in outbox_rows.all()
-            }
-            incomplete_intents = {
-                commit_id
-                for commit_id, state in outbox_states.items()
-                if state != "complete"
-            }
-            work_ids = sorted({ch.subject_id for chs in changes_by_commit.values()
-                               for ch in chs if ch.subject_type == "work"})
-            await resolver.preload_work_sources(work_ids=work_ids)
-            prepared: list[tuple[CurationCommit, dict]] = []
-            for commit in batch:
-                prepared.append(
-                    (
-                        commit,
-                        await resolver.slice_changes(
-                            changes_by_commit.get(commit.id, [])
-                        ),
-                    )
-                )
-            # ORM objects use expire_on_commit=False. Close the implicit read
-            # transaction before waiting for or holding any filesystem permit.
+        resolver = RepoResolver(self.db)
+        async with aclosing(self._commit_batches(high_water, after)) as batches:
+            batch = await anext(batches, [])
+        if not batch:
             await self.db.commit()
-
-            # The iterator itself is capped at 25. In constrained mode consume
-            # only the granted prefix, release/cool down, then reacquire before
-            # advancing the database keyset.
-            offset = 0
-            while offset < len(prepared):
-                async with adaptive_resource_slice(
-                    "git_projection",
-                    owner,
-                    max_work_units=len(prepared) - offset,
-                    max_slice_seconds=20.0,
-                ) as limits:
-                    granted = max(1, min(int(limits.work_units), len(prepared) - offset))
-                    selected = prepared[offset : offset + granted]
-                    for commit, sliced in selected:
-                        force_replay = commit.id in incomplete_intents
-                        for rid, (desc, repo_changes) in sliced.items():
-                            if rid not in repo_cache:
-                                repo = self._repo_for(desc)
-                                self._ensure_init(repo, desc)
-                                manifest = repo.projection_manifest_for_update()
-                                watermark = manifest.get("last_db_commit_id")
-                                repo_cache[rid] = (
-                                    repo,
-                                    desc,
-                                    str(watermark) if watermark else None,
-                                    watermark is None,
-                                )
-                            (
-                                repo,
-                                desc_cached,
-                                watermark,
-                                watermark_seen,
-                            ) = repo_cache[rid]
-                            commit_id = str(commit.id)
-                            if not watermark_seen:
-                                at_watermark = commit_id == watermark
-                                watermark_seen = at_watermark
-                                repo_cache[rid] = (
-                                    repo,
-                                    desc_cached,
-                                    watermark,
-                                    watermark_seen,
-                                )
-                                if force_replay and not at_watermark:
-                                    already_present = await asyncio.to_thread(
-                                        repo.has_projected_db_commit_id,
-                                        commit_id,
-                                    )
-                                    if already_present:
-                                        continue
-                                    raise RuntimeError(
-                                        "Gitllery pre-watermark projection gap "
-                                        f"for repository {rid}; run a staged "
-                                        "repository rebuild instead of replaying "
-                                        "historical state onto the live HEAD"
-                                    )
-                                continue
-                            async with redis_lock(
-                                f"gitllery:{rid}",
-                                ttl_seconds=300,
-                            ) as acquired:
-                                if not acquired:
-                                    raise RuntimeError(
-                                        f"gitllery repository {rid} is busy"
-                                    )
-                                new_hash = self._apply_commit_to_repo(
-                                    repo,
-                                    desc_cached,
-                                    commit,
-                                    repo_changes,
-                                    ordered_outbox=True,
-                                )
-                            if new_hash is not None:
-                                counts[rid] = counts.get(rid, 0) + 1
-                        if commit.id in incomplete_intents:
-                            # Commit-by-commit fencing closes the disk/DB crash
-                            # window: before the next commit can move HEAD, this
-                            # one is either durable in both places or remains
-                            # the idempotent current HEAD on retry.
-                            await self._complete_bulk_outbox([commit.id])
-                    offset += len(selected)
-            resolver.clear_batch_cache()
-        unresolved = [
-            rid
-            for rid, (
-                _repo,
-                _desc,
-                watermark,
-                seen,
-            ) in repo_cache.items()
-            if watermark is not None and not seen
-        ]
-        if unresolved:
-            raise RuntimeError(
-                "Gitllery projection watermark is missing from PostgreSQL: "
-                + ", ".join(sorted(unresolved)[:10])
-            )
+            return counts
+        changes = await self._changes_for_commits([c.id for c in batch])
+        await resolver.preload_work_sources(work_ids=sorted({
+            ch.subject_id for group in changes.values() for ch in group
+            if ch.subject_type == "work"
+        }))
+        prepared = [(commit, await resolver.slice_changes(changes.get(commit.id, [])))
+                    for commit in batch]
+        await self.db.commit()
+        cooldown: dict[str, float] = {}
+        self.continuation = state
+        async with adaptive_resource_slice(
+            "git_projection", resource_owner or f"gitllery-sync:{repository_id or 'all'}",
+            max_work_units=len(prepared), max_slice_seconds=20.0,
+            wait_for_capacity=False, cooldown_result=cooldown,
+        ) as limits:
+            if limits is None:
+                return counts
+            selected = prepared[:max(1, min(int(limits.work_units), len(prepared)))]
+            for commit, sliced in selected:
+                for rid, (desc, repo_changes) in sliced.items():
+                    async with redis_lock(f"gitllery:{rid}", ttl_seconds=300) as acquired:
+                        if not acquired:
+                            raise RuntimeError(f"gitllery repository {rid} is busy")
+                        repo = self._repo_for(desc)
+                        self._ensure_init(repo, desc)
+                        # A successor can start beyond a repository watermark;
+                        # compare durable keys instead of searching from root.
+                        already_present = await self._assert_append_order(repo, commit)
+                        await self.db.commit()
+                        if already_present:
+                            continue
+                        new_hash = self._apply_commit_to_repo(
+                            repo, desc, commit, repo_changes, ordered_outbox=True,
+                        )
+                        if new_hash is not None:
+                            counts[rid] = counts.get(rid, 0) + 1
+                # Fence each disk prefix before another commit can move HEAD.
+                await self._complete_bulk_outbox([commit.id])
+                state["after"] = [commit.created_at.isoformat(), str(commit.id)]
+        self.successor_delay_seconds = max(2.0, cooldown.get("seconds", 0.0))
         if counts:
             _invalidate_status_cache()
         return counts
@@ -603,32 +508,37 @@ class GitlleryService:
         self,
         *,
         resource_owner: str | None = None,
+        continuation: dict | None = None,
     ) -> dict[str, int]:
-        # Ensure every source-creator repo exists, then project all commits.
+        """Initialize a bounded repository prefix, then continue history."""
         from app.services.heavy_io import adaptive_resource_slice
 
-        resolver = RepoResolver(self.db)
-        descriptors = await resolver.all_repositories()
+        state = dict(continuation or {})
+        if state.get("phase") == "project":
+            return await self.project_pending(resource_owner=resource_owner, continuation=state)
+        descriptors = sorted(await RepoResolver(self.db).all_repositories(), key=lambda d: d.key())
         await self.db.commit()
-        owner = resource_owner or "gitllery-backfill"
-        for start in range(0, len(descriptors), self._BULK_BATCH):
-            batch = descriptors[start : start + self._BULK_BATCH]
-            offset = 0
-            while offset < len(batch):
-                async with adaptive_resource_slice(
-                    "git_projection",
-                    owner,
-                    max_work_units=len(batch) - offset,
-                    max_slice_seconds=20.0,
-                ) as limits:
-                    granted = max(
-                        1,
-                        min(int(limits.work_units), len(batch) - offset),
-                    )
-                    for desc in batch[offset : offset + granted]:
-                        self._ensure_init(self._repo_for(desc), desc)
-                    offset += granted
-        return await self.project_pending(resource_owner=owner)
+        descriptors = [d for d in descriptors if d.key() > state.get("repository_after", "")]
+        self.continuation = state
+        if not descriptors:
+            state["phase"] = "project"
+            return {}
+        cooldown: dict[str, float] = {}
+        async with adaptive_resource_slice(
+            "git_projection", resource_owner or "gitllery-backfill",
+            max_work_units=min(len(descriptors), self._BULK_BATCH), max_slice_seconds=20.0,
+            wait_for_capacity=False, cooldown_result=cooldown,
+        ) as limits:
+            if limits is None:
+                return {}
+            for desc in descriptors[:max(1, int(limits.work_units))]:
+                async with redis_lock(f"gitllery:{desc.key()}", ttl_seconds=300) as acquired:
+                    if not acquired:
+                        raise RuntimeError(f"gitllery repository {desc.key()} is busy")
+                    self._ensure_init(self._repo_for(desc), desc)
+                state["repository_after"] = desc.key()
+        self.successor_delay_seconds = max(2.0, cooldown.get("seconds", 0.0))
+        return {}
 
     async def migrate_repository_v2(self, repository_id: str) -> dict:
         """Explicit maintenance migration; never called by project_commit."""
@@ -1057,9 +967,13 @@ class GitlleryService:
             "projection_mode": settings.gitllery_projection_mode,
         }
 
-    async def reconcile(self, repository_id: str | None = None) -> dict:
-        projected = await self.project_pending(repository_id)
-        return {"projected": projected, "status": await self.status(repository_id)}
+    async def reconcile(
+        self, repository_id: str | None = None, *, continuation: dict | None = None,
+    ) -> dict:
+        projected = await self.project_pending(repository_id, continuation=continuation)
+        return {"projected": projected, "status": await self.status(repository_id),
+                "continuation": self.continuation,
+                "successor_delay_seconds": self.successor_delay_seconds}
 
     async def rebuild_db_from_disk(self, repository_id: str | None = None, dry_run: bool = False) -> dict:
         from app.services.gitllery.rebuild import GitlleryRebuilder

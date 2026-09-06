@@ -1343,6 +1343,30 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
         )
 
 
+async def _handoff_background_admin_operation(
+    job_id: str, options: dict, result: dict, *, continuation: dict,
+    delay_seconds: float, totals: dict,
+) -> dict:
+    """Commit the successor; the due dispatcher publishes after its cooldown."""
+    from app.services.operations import prepare_admin_operation_handoff
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None:
+        raise RuntimeError("Background continuation requires a registered administrator dispatch")
+    async with async_session() as db:
+        handoff = await prepare_admin_operation_handoff(
+            db, job_id, delivery[1],
+            options={**options, "_background_continuation": continuation,
+                     "_background_totals": totals},
+            delay_seconds=max(2.0, delay_seconds),
+            progress={"phase": "enqueued", "label": "Next background slice queued", **totals},
+        )
+        if handoff is None:
+            raise RuntimeError("Background administrator attempt is no longer current")
+        await db.commit()
+    return {**result, "status": "pending", "_admin_handoff": True}
+
+
 async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
     from app.services.gitllery import GitlleryService
@@ -1378,36 +1402,52 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     try:
         ordering_lock = gitllery_projection_lock()
         if not ordering_lock.try_acquire():
-            raise RuntimeError("Another Gitllery projection coordinator is active")
+            return await _handoff_background_admin_operation(
+                job_id, options, {}, continuation=options.get("_background_continuation") or {},
+                delay_seconds=2.0, totals=options.get("_background_totals") or {},
+            )
         try:
             async with async_session() as db:
                 svc = GitlleryService(db)
                 if mode == "backfill":
-                    projected = await svc.backfill(resource_owner=job_id)
+                    projected = await svc.backfill(
+                        resource_owner=job_id,
+                        continuation=options.get("_background_continuation"),
+                    )
                 else:
                     projected = await svc.project_pending(
                         repository_id,
                         resource_owner=job_id,
+                        continuation=options.get("_background_continuation"),
                     )
                 # Scoped requests are promoted by project_pending() to one
                 # globally ordered pass, because a commit outbox row can span
                 # multiple repositories. Re-establish the library checkpoint
                 # after either entry point.
-                checkpoint_set = await rebuild_checkpoint(
-                    db,
-                    svc.last_projection_high_water,
-                )
+                continuation = svc.continuation
+                delay_seconds = svc.successor_delay_seconds
+                checkpoint_set = False
+                if continuation is None:
+                    checkpoint_set = await rebuild_checkpoint(db, svc.last_projection_high_water)
         finally:
             ordering_lock.release()
 
+        totals = dict(options.get("_background_totals") or {})
+        for rid, count in projected.items():
+            totals[rid] = totals.get(rid, 0) + count
         result = {
             "mode": mode,
             "repository_id": repository_id,
             "projection_scope": "library",
-            "projected_repos": len(projected),
-            "projected_commits": sum(projected.values()),
+            "projected_repos": len(totals),
+            "projected_commits": sum(totals.values()),
             "checkpoint_rebuilt": checkpoint_set,
         }
+        if continuation is not None:
+            return await _handoff_background_admin_operation(
+                job_id, options, result, continuation=continuation,
+                delay_seconds=delay_seconds, totals=totals,
+            )
         label = f"Projected {result['projected_commits']} commits across {result['projected_repos']} repos"
         if not registered:
             async with async_session() as task_db:
@@ -1568,6 +1608,21 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
         async with async_session() as db:
             result = await CurationService(db).run_backfill(
                 resource_owner=job_id,
+                **({"continuation": options["_background_continuation"]}
+                   if "_background_continuation" in options else {}),
+            )
+        totals = options.get("_background_totals") or {}
+        for field in ("created", "skipped"):
+            if field in result or field in totals:
+                previous = totals.get(field) or {}
+                current = result.get(field) or {}
+                result[field] = {key: previous.get(key, 0) + current.get(key, 0)
+                                 for key in previous.keys() | current.keys()}
+        if result.get("status") == "pending":
+            return await _handoff_background_admin_operation(
+                job_id, options, result, continuation=result["continuation"],
+                delay_seconds=result["successor_delay_seconds"],
+                totals={field: result.get(field, {}) for field in ("created", "skipped")},
             )
         created = result.get("created", {})
         label = (f"Baseline: {created.get('creators', 0)} creators, "

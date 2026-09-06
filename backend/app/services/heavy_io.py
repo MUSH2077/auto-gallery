@@ -1197,19 +1197,14 @@ async def adaptive_resource_slice(
     cooldown_result: dict[str, float] | None = None,
     lane: str | None = None,
 ):
-    """Acquire one self-renewing profile slice and cool down lock-free.
+    """Acquire one bounded slice; the caller must schedule the returned delay."""
 
-    Coordinator RQ jobs are deliberately classified as ``light`` in the
-    parent worker.  This child-side context therefore owns the renewable Redis
-    reservation as well as the POSIX profile lock for exactly one bounded
-    action.  Resource waits happen before either is held; enforce-mode duty
-    cycle sleep happens after both are released.
-    """
+    if cooldown_result is None:
+        raise ValueError("adaptive_resource_slice requires a cooldown_result continuation owner")
 
     from app.services.resource_pressure import (
         current_profile_slice_limits,
         profile_slice_cooldown_seconds,
-        sleep_for_profile_slice_cooldown,
     )
 
     attempt = 0
@@ -1270,22 +1265,13 @@ async def adaptive_resource_slice(
             "slice_complete",
             workload=workload,
         )
-        if cooldown_result is not None:
-            cooldown_result["seconds"] = profile_slice_cooldown_seconds(
-                snapshot,
-                elapsed_seconds=elapsed,
-                # At 10% a 20-second slice needs 180 seconds idle.  Capping at
-                # 30 would silently turn the promised 10% budget into 40%.
-                max_seconds=300.0,
-                workload=workload,
-            )
-        else:
-            await sleep_for_profile_slice_cooldown(
-                snapshot,
-                elapsed_seconds=elapsed,
-                max_seconds=300.0,
-                workload=workload,
-            )
+        cooldown_result["seconds"] = profile_slice_cooldown_seconds(
+            snapshot,
+            elapsed_seconds=elapsed,
+            # Preserve the 10% duty cycle outside workers and transactions.
+            max_seconds=300.0,
+            workload=workload,
+        )
 
 
 @asynccontextmanager
