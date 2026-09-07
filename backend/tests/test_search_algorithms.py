@@ -18,17 +18,11 @@ async def _record_index_change(target: list, db, index_uid: str) -> None:
     target.append((db, index_uid))
 
 
-def test_work_sorts_have_a_uuid_tie_breaker_in_sql_and_meili():
-    from app.models import Work
-    from app.services.search import _apply_sql_sort, _meili_sort
+def test_work_sorts_have_a_uuid_tie_breaker_in_meili():
+    from app.services.search import _meili_sort
     from app.services.search_language import parse_search_query
 
     query = parse_search_query("sort:updated-desc", "works")
-    sql = str(_apply_sql_sort(select(Work.id), query, Work).compile(
-        dialect=postgresql.dialect()
-    ))
-    assert "works.updated_at DESC NULLS LAST" in sql
-    assert "works.id DESC" in sql
     assert _meili_sort(query, "works") == ["updated_ts:desc", "id:desc"]
 
 

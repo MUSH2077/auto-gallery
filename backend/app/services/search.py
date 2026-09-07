@@ -1216,9 +1216,10 @@ def _apply_sql_sort(stmt, query: SearchQuery, model, *, reverse: bool = False):
         direction_asc = not direction_asc
     ordered = column.asc() if direction_asc else column.desc()
     # A deterministic UUID tie-breaker keeps offset pages stable when titles or
-    # timestamps collide.  Explicit NULL placement also prevents the SQL and
-    # indexed paths from changing page boundaries between directions.
-    ordered = ordered.nulls_first() if reverse else ordered.nulls_last()
+    # timestamps collide. Nullable fields need explicit NULL placement for
+    # cursor boundaries; nonnullable fields retain the existing index order.
+    if column.nullable:
+        ordered = ordered.nulls_first() if reverse else ordered.nulls_last()
     identity_order = model.id.asc() if direction_asc else model.id.desc()
     return stmt.order_by(ordered, identity_order)
 
