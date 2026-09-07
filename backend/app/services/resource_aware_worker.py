@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import redis
 from rq import Worker
+from rq.exceptions import StopRequested
 from rq.worker import WorkerStatus
 
 from app.config import settings
@@ -598,6 +599,13 @@ class ResourceAwareWorker(Worker):
             except Exception:
                 self.log.debug("Unable to close resource control subscriber", exc_info=True)
 
+    def _raise_if_shutdown_requested(self) -> None:
+        if getattr(self, "_stop_requested", False) or getattr(
+            self, "_shutdown_requested_date", None
+        ) is not None:
+            self._close_control_pubsub()
+            raise StopRequested()
+
     def _wait_for_control_event(self, seconds: float, workload: str) -> None:
         """Block on a control/work event, with timeout as the recovery fallback."""
 
@@ -610,14 +618,31 @@ class ResourceAwareWorker(Worker):
                     f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}",
                 )
                 self._resource_control_pubsub = pubsub
-            pubsub.get_message(timeout=max(0.05, seconds))
-            return
+            # An accepted job marks the worker busy, so RQ's warm signal sets
+            # a flag instead of raising. Observe it without resampling pressure.
+            deadline = time.monotonic() + max(0.05, seconds)
+            while True:
+                self._raise_if_shutdown_requested()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                if pubsub.get_message(timeout=min(1.0, remaining)) is not None:
+                    return
+        except StopRequested:
+            self._close_control_pubsub()
+            raise
         except (AttributeError, *REDIS_CONNECTION_ERRORS):
             self._close_control_pubsub()
         except Exception:
             self._close_control_pubsub()
             self.log.debug("Resource control event wait failed", exc_info=True)
-        time.sleep(max(0.05, seconds))
+        if getattr(self, "_resource_admission_active", False):
+            deadline = time.monotonic() + max(0.05, seconds)
+            while time.monotonic() < deadline:
+                self._raise_if_shutdown_requested()
+                time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        else:
+            time.sleep(max(0.05, seconds))
 
     def _wait_until_pressure_allows_dequeue(
         self,
@@ -636,6 +661,7 @@ class ResourceAwareWorker(Worker):
         last_bookkeeping = 0.0
         last_job_reason: str | None = None
         while True:
+            self._raise_if_shutdown_requested()
             snapshot_readable = True
             try:
                 snapshot = get_resource_pressure_snapshot_sync(redis_client=self.connection)
@@ -722,10 +748,13 @@ class ResourceAwareWorker(Worker):
             now = time.monotonic()
             if now - last_bookkeeping >= WORKER_STATE_HEARTBEAT_SECONDS or last_bookkeeping == 0:
                 try:
-                    self.set_state(WorkerStatus.IDLE)
+                    admitting = getattr(self, "_resource_admission_active", False)
+                    self.set_state(WorkerStatus.BUSY if admitting else WorkerStatus.IDLE)
                     self.procline(f"Waiting: {workload} resource budget")
                     self.heartbeat()
-                    if self.should_run_maintenance_tasks:
+                    # RQ intermediate cleanup cannot distinguish our live
+                    # admission waiter from a worker that died after dequeue.
+                    if not admitting and self.should_run_maintenance_tasks:
                         self.run_maintenance_tasks()
                     last_bookkeeping = now
                 except REDIS_CONNECTION_ERRORS as exc:
@@ -786,6 +815,7 @@ class ResourceAwareWorker(Worker):
         wait_attempt = 0
         workload = self._workload_profile()
         while True:
+            self._raise_if_shutdown_requested()
             if workload != "light":
                 self._wait_until_pressure_allows_dequeue(interval, workload=workload)
 
@@ -955,6 +985,7 @@ class ResourceAwareWorker(Worker):
                 owner=owner,
                 hard_only=self._job_uses_nonblocking_child_admission(job),
             )
+            self._raise_if_shutdown_requested()
             nonblocking_child = self._job_uses_nonblocking_child_admission(job)
             if (
                 workload_profile_name(workload) != "maintenance"
@@ -1083,8 +1114,35 @@ class ResourceAwareWorker(Worker):
         workload = self._job_workload(job, queue)
         publisher_attempt = self._job_publisher_attempt(job)
         internally_sliced = self._internal_slice_workload(job) is not None
-        self._bound_job_slice(job, workload)
-        local_lock, lease, owner = self._profile_admission(job, workload)
+        # RQ has popped this still-QUEUED job but not prepared an execution.
+        # Make signals cooperative while acquiring leases. At a wait boundary
+        # a stop returns ownership atomically, without reviving cancelled jobs.
+        self._resource_admission_active = True
+        try:
+            self.set_state(WorkerStatus.BUSY)
+            self._raise_if_shutdown_requested()
+            self._bound_job_slice(job, workload)
+            local_lock, lease, owner = self._profile_admission(job, workload)
+        except StopRequested:
+            self.connection.eval(
+                """
+                redis.call('LREM', KEYS[2], 0, ARGV[1])
+                redis.call('DEL', KEYS[5])
+                if redis.call('HGET', KEYS[1], 'status') ~= 'queued' then
+                    return 0
+                end
+                redis.call('LREM', KEYS[3], 0, ARGV[1])
+                redis.call('LPUSH', KEYS[3], ARGV[1])
+                redis.call('SADD', KEYS[4], KEYS[3])
+                return 1
+                """,
+                5, job.key, queue.intermediate_queue.key,
+                queue.key, queue.redis_queues_keys,
+                queue.intermediate_queue.get_first_seen_key(job.id), job.id,
+            )
+            raise
+        finally:
+            self._resource_admission_active = False
         profile_snapshot = getattr(self, "_active_profile_snapshot", {})
         slice_started = time.monotonic()
         inherited_profile = workload_profile_name(workload)

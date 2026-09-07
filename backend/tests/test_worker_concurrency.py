@@ -1,4 +1,8 @@
 import inspect
+import json
+import signal
+
+import pytest
 
 import worker_entrypoint
 
@@ -73,3 +77,60 @@ def test_restart_backoff_and_circuit_breaker():
     assert circuit.record_exit(40) == RESTART_CIRCUIT_SECONDS
     assert circuit.is_open(41) is True
     assert circuit.is_open(40 + RESTART_CIRCUIT_SECONDS) is False
+
+
+@pytest.mark.parametrize("unresponsive", [False, True, "delayed_reap"])
+def test_supervisor_reports_actual_child_exit_and_forced_termination(monkeypatch, capsys, unresponsive):
+    """A successful supervisor exit must not disguise a child killed at 55s."""
+    handlers = {}
+    clock = [0.0]
+    signalled = [False]
+
+    class Process:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            if not unresponsive:
+                self.returncode = 0
+
+        kills = 0
+
+        def kill(self):
+            self.kills += 1
+            if unresponsive != "delayed_reap" or self.kills > 1:
+                self.returncode = -signal.SIGKILL
+
+        def wait(self, timeout):
+            if self.returncode is None:
+                raise worker_entrypoint.subprocess.TimeoutExpired("owned-worker", timeout)
+            return self.returncode
+
+    def sleep(seconds):
+        if not signalled[0]:
+            signalled[0] = True
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+        else:
+            clock[0] += seconds
+
+    monkeypatch.setattr(worker_entrypoint.sys, "argv", ["worker_entrypoint.py", "shutdown-test", "1"])
+    monkeypatch.delenv("WORKER_EXTRA_QUEUES", raising=False)
+    monkeypatch.setattr(worker_entrypoint, "_register_resource_state_bridge", lambda: None)
+    monkeypatch.setattr(worker_entrypoint, "_sweep_personal_auth_startup", lambda _: 0)
+    monkeypatch.setattr(worker_entrypoint, "_publish_supervisor_status", lambda *_: None)
+    monkeypatch.setattr(worker_entrypoint.subprocess, "Popen", lambda _: Process())
+    monkeypatch.setattr(worker_entrypoint.signal, "signal", lambda key, callback: handlers.update({key:callback}))
+    monkeypatch.setattr(worker_entrypoint.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(worker_entrypoint.time, "sleep", sleep)
+    worker_entrypoint.main()
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    stopped = [event for event in events if event.get("event") == "worker_stopped"]
+    assert stopped == [{"event":"worker_stopped", "pid":4242,
+                        "queues":["shutdown-test"],
+                        "return_code":-signal.SIGKILL if unresponsive else 0, "forced":bool(unresponsive)}]
+    assert [event for event in events if event.get("event") == "worker_started"] == [
+        {"event":"worker_started", "pid":4242, "queues":["shutdown-test"]}
+    ]

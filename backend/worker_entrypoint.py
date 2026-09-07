@@ -322,6 +322,7 @@ def main():
 
     processes: list[ManagedProcess] = []
     pending_restarts: list[PendingRestart] = []
+    forced_pids: set[int] = set()
     restart_circuit = RestartCircuit()
     running = True
     last_exit: dict | None = None
@@ -339,6 +340,15 @@ def main():
         dict.fromkeys(name for spec, _scheduler in worker_specs for name in spec)
     )
 
+    def record_exit(managed: ManagedProcess, return_code: int) -> None:
+        print(json.dumps({
+            "event": "worker_stopped",
+            "pid": managed.process.pid,
+            "queues": list(managed.queues),
+            "return_code": return_code,
+            "forced": managed.process.pid in forced_pids,
+        }), flush=True)
+
     def spawn(worker_queues: tuple[str, ...], *, scheduler: bool) -> ManagedProcess:
         command = _worker_command(list(worker_queues), with_scheduler=scheduler)
         process = subprocess.Popen(command)
@@ -348,6 +358,10 @@ def main():
             with_scheduler=scheduler,
         )
         processes.append(managed)
+        print(json.dumps({
+            "event": "worker_started", "pid": process.pid,
+            "queues": list(worker_queues),
+        }), flush=True)
         scheduler_note = " with scheduler" if scheduler else ""
         print(
             f"Started worker {len(processes)}/{expected_worker_count} "
@@ -380,6 +394,7 @@ def main():
             time.sleep(0.25)
         for managed in processes:
             if managed.process.poll() is None:
+                forced_pids.add(managed.process.pid)
                 managed.process.kill()
 
     signal.signal(signal.SIGTERM, shutdown)
@@ -419,6 +434,7 @@ def main():
             if return_code is None:
                 continue
             processes.remove(managed)
+            record_exit(managed, return_code)
             last_exit = {
                 "pid": process.pid,
                 "return_code": return_code,
@@ -492,9 +508,13 @@ def main():
 
     for managed in processes:
         try:
-            managed.process.wait(timeout=10)
+            return_code = managed.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
+            forced_pids.add(managed.process.pid)
             managed.process.kill()
+            # Do not claim success before the killed child has been reaped.
+            return_code = managed.process.wait(timeout=10)
+        record_exit(managed, return_code)
     print("All workers stopped.", flush=True)
 
 
