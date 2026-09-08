@@ -1,4 +1,4 @@
-import { request, ApiError, clearAuthOn401 } from "./client";
+import { request, requestBlob, ApiError, clearAuthOn401 } from "./client";
 import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
@@ -54,15 +54,16 @@ export const api = {
   refreshWorkbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench?refresh=true"),
 
   schedulerDecisions: () => request<T.SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
-  schedulerDecisionsView: (view: "attention" | "all", offset = 0, limit = 100) =>
+  schedulerDecisionsView: (view: "attention" | "all", offset = 0, limit = 100, filters?: { q?: string; state?: "all" | "due" | "manual" | "disabled" }) =>
     request<T.SchedulerDecisionsResponse>(
-      `/api/v1/system/scheduler-decisions?view=${view}&offset=${offset}&limit=${limit}`,
+      `/api/v1/system/scheduler-decisions?${new URLSearchParams({ view, offset: String(offset), limit: String(limit), ...(filters?.q ? { q: filters.q } : {}), ...(filters?.state && filters.state !== "all" ? { state: filters.state } : {}) })}`,
     ),
-  schedulerDecisionsForSubscriptions: (ids: string[]) => {
+  schedulerDecisionsForSubscriptions: (ids: string[], offset = 0, limit = 100) => {
     const params = new URLSearchParams({
       view: "all",
       subscription_ids: ids.join(","),
-      limit: "500",
+      offset: String(offset),
+      limit: String(Math.min(limit, 500)),
     });
     return request<T.SchedulerDecisionsResponse>(`/api/v1/system/scheduler-decisions?${params.toString()}`);
   },
@@ -127,6 +128,7 @@ export const api = {
     }),
   resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
   acknowledgeTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}/acknowledge`, { method: "POST" }),
+  deleteTask: (id: string) => request<{ status: string }>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
   compactTasks: (dryRun = true, limit = 1000) =>
     request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number }>(
       "/api/v1/tasks/compact",
@@ -323,7 +325,7 @@ export const api = {
     }),
 
   batchDownloadJobsByFilter: (filters: Record<string, string>, action: string, note?: string) =>
-    request<{ total_matched: number; succeeded: number; failed: number }>(`/api/v1/download-jobs/batch-by-filter`, {
+    request<T.TaskBulkResult>(`/api/v1/download-jobs/batch-by-filter`, {
       method: "POST",
       body: JSON.stringify({ filters, action, note }),
     }),
@@ -340,17 +342,23 @@ export const api = {
   retryDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/retry`, { method: "POST" }),
 
+  repeatDownloadJob: (id: string, requestId: string) =>
+    request<T.RepeatSyncAccepted>(`/api/v1/download-jobs/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
+
+  repeatTask: (id: string, requestId: string) =>
+    request<T.RepeatSyncAccepted>(`/api/v1/tasks/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
+
   getDownloadJobImports: (jobId: string) =>
     request<any[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   clearDownloadJobs: (statuses: string[]) =>
-    request<{ status: string; deleted: number }>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
+    request<T.TaskBulkClearResult>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
 
   killStuckJobs: () =>
     request<{ status: string; killed: number }>(`/api/v1/download-jobs/kill-stuck`, { method: "POST" }),
 
   retryAllFailedJobs: () =>
-    request<{ status: string; succeeded: number; failed: number }>(`/api/v1/download-jobs/retry-all`, { method: "POST" }),
+    request<T.TaskBulkStatusResult>(`/api/v1/download-jobs/retry-all`, { method: "POST" }),
 
   pauseDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/pause`, { method: "POST" }),
@@ -359,7 +367,7 @@ export const api = {
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/resume`, { method: "POST" }),
 
   batchDownloadJobs: (ids: string[], action: string) =>
-    request<{ succeeded: number; failed: number; errors?: { id: string; error: string }[] }>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
+    request<T.TaskBulkResult>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
 
   listDownloadJobImports: (jobId: string) =>
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
@@ -472,6 +480,13 @@ export const api = {
   listAllTags: (sortBy = "usage_count", sortOrder = "desc") =>
     request<T.Tag[]>(`/api/v1/tags?include_all=true&sort_by=${sortBy}&sort_order=${sortOrder}`),
 
+  listTagsPage: (params: { offset?: number; limit?: number; q?: string; category?: string; sort_by?: "name" | "usage_count"; sort_order?: "asc" | "desc" } = {}) => {
+    const query = new URLSearchParams({ offset: String(params.offset || 0), limit: String(Math.min(params.limit || 100, 200)), sort_by: params.sort_by || "usage_count", sort_order: params.sort_order || "desc" });
+    if (params.q) query.set("q", params.q);
+    if (params.category) query.set("category", params.category);
+    return request<T.TagPage>(`/api/v1/tags/page?${query}`);
+  },
+
   createTag: (data: { normalized_name: string; category?: string }) =>
     request<T.Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
 
@@ -561,7 +576,7 @@ export const api = {
     }),
 
   batchImportJobsByFilter: (filters: Record<string, string | string[]>, action: string, note?: string) =>
-    request<{ total_matched: number; succeeded: number; failed: number; errors?: { id: string; error: string }[] }>(
+    request<T.TaskBulkResult>(
       `/api/v1/import-jobs/batch-by-filter`,
       {
         method: "POST",
@@ -628,7 +643,7 @@ export const api = {
 
   getSystemInfo: () => request<T.SystemInfoResponse>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
-  cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
+  cleanupMetadataJSONs: () => request<T.AdminOperationAccepted>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
@@ -944,9 +959,12 @@ export const api = {
   deleteBackup: (filename: string) =>
     request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
 
-  downloadBackup: (filename?: string) => {
+  downloadBackup: async (filename?: string) => {
     const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
-    return `/api/v1/admin/backup/download${params}`;
+    const response = await requestBlob(`/api/v1/admin/backup/download${params}`);
+    const encoded = response.contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const quoted = response.contentDisposition?.match(/filename="?([^";]+)"?/i)?.[1];
+    return { blob: response.blob, filename: encoded ? decodeURIComponent(encoded) : quoted || filename || "auto-gallery-backup.tar.gz" };
   },
 };
 

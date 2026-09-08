@@ -2487,6 +2487,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/download-jobs/{job_id}/repeat-sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repeat Download Sync
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_download_jobs_job_id_repeat_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/download-jobs/{job_id}/resume": {
         parameters: {
             query?: never;
@@ -3765,10 +3785,7 @@ export interface paths {
         };
         /**
          * Scheduler Decisions
-         * @description Explain current scheduler decisions at subscription-source granularity.
-         *
-         *     This endpoint is deliberately read-only: it does not enqueue jobs or mutate
-         *     last_attempted_at/last_synced_at.
+         * @description Read-only, complete filtered plans and global suppression summary.
          */
         get: operations["get_api_v1_system_scheduler_decisions"];
         put?: never;
@@ -3858,6 +3875,26 @@ export interface paths {
          *     are moved to the target, and the source tag is deleted.
          */
         post: operations["post_api_v1_tags_merge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tags/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tag Page
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_tags_page"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4026,7 +4063,11 @@ export interface paths {
         get: operations["get_api_v1_tasks_task_id"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Task History
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        delete: operations["delete_api_v1_tasks_task_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4166,6 +4207,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_tasks_task_id_pause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/repeat-sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repeat Task Sync
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_tasks_task_id_repeat_sync"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4700,6 +4761,30 @@ export interface components {
             status: "enqueued" | "running" | "recovering" | "paused";
             /** Task Id */
             task_id: string;
+        };
+        /** AdminOperationPage */
+        AdminOperationPage: {
+            /** Operations */
+            operations: components["schemas"]["AdminOperationRead"][];
+        };
+        /** AdminOperationRead */
+        AdminOperationRead: {
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
+            /** Job Id */
+            job_id?: string | null;
+            /** Operation Type */
+            operation_type?: string | null;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** AdminOperationSnapshot */
         AdminOperationSnapshot: {
@@ -5870,6 +5955,8 @@ export interface components {
         };
         /** DownloadJobRead */
         DownloadJobRead: {
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
             /** Conflict Details */
             readonly conflict_details: {
                 [key: string]: unknown;
@@ -5883,6 +5970,10 @@ export interface components {
             creator_id?: string | null;
             /** Creator Name */
             creator_name?: string | null;
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
             /** Download Dir */
             download_dir?: string | null;
             /** Error Log */
@@ -5920,7 +6011,10 @@ export interface components {
             readonly reason_code: string | null;
             /** Retry Count */
             retry_count: number;
-            /** Retryable */
+            /**
+             * Retryable
+             * @description Compatibility field; available_actions is the authoritative policy.
+             */
             readonly retryable: boolean;
             /** Source */
             source: string;
@@ -6280,13 +6374,30 @@ export interface components {
             /** Source */
             source?: string | null;
         };
+        /** ImportJobPage */
+        ImportJobPage: {
+            /** Items */
+            items: components["schemas"]["ImportJobRead"][];
+            /** Total */
+            total: number;
+        };
         /** ImportJobRead */
         ImportJobRead: {
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /** Creator Id */
+            creator_id?: string | null;
+            /** Creator Name */
+            creator_name?: string | null;
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
             /**
              * Download Job Id
              * Format: uuid
@@ -6330,8 +6441,16 @@ export interface components {
             progress_works_done?: number | null;
             /** Progress Works Total */
             progress_works_total?: number | null;
+            /** Source */
+            source?: string | null;
+            /** Source Url */
+            source_url?: string | null;
             /** Status */
             status: string;
+            /** Subscription Id */
+            subscription_id?: string | null;
+            /** Subscription Name */
+            subscription_name?: string | null;
             /**
              * Updated At
              * Format: date-time
@@ -6486,6 +6605,34 @@ export interface components {
             overflow: "last_day";
             /** Times */
             times: string[];
+        };
+        /** OperationsOverview */
+        OperationsOverview: {
+            /** Items */
+            items: (components["schemas"]["TaskAttentionItem"] | components["schemas"]["RepositoryAttentionItem"])[];
+            summary: components["schemas"]["OperationsSummary"];
+            /** Total */
+            total: number;
+            /**
+             * View
+             * @enum {string}
+             */
+            view: "attention" | "active" | "resolved";
+        };
+        /** OperationsSummary */
+        OperationsSummary: {
+            /** Active */
+            active: number;
+            /** Attention */
+            attention: number;
+            /** Critical */
+            critical: number;
+            /** Resolved */
+            resolved: number;
+            /** Resource Limited */
+            resource_limited: number;
+            /** Warning */
+            warning: number;
         };
         /** PinterestSourceConfig */
         PinterestSourceConfig: {
@@ -7057,6 +7204,87 @@ export interface components {
             /** Total Views */
             total_views: number;
         };
+        /** RepeatSyncAccepted */
+        RepeatSyncAccepted: {
+            /**
+             * Action
+             * @default repeat_sync
+             * @constant
+             */
+            action: "repeat_sync";
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Previous Job Id
+             * Format: uuid
+             */
+            previous_job_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Status
+             * @default enqueued
+             * @constant
+             */
+            status: "enqueued";
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+        };
+        /** RepeatSyncRequest */
+        RepeatSyncRequest: {
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
+        /** RepositoryAttentionItem */
+        RepositoryAttentionItem: {
+            /** Available Actions */
+            available_actions: ("open_repository" | "copy_diagnostics")[];
+            /** Id */
+            id: string;
+            /** Occurred At */
+            occurred_at: string;
+            /** Reason Code */
+            reason_code: string | null;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+            /** Source */
+            source: string | null;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string | null;
+            /** Task */
+            task: null;
+            /** Task Id */
+            task_id: null;
+            /** Title */
+            title: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "repository";
+        };
         /** RepositoryCapabilities */
         RepositoryCapabilities: {
             /** Can Download */
@@ -7584,6 +7812,121 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "queued" | "waiting" | "downloading" | "importing" | "succeeded" | "skipped" | "failed" | "cancelled";
+        };
+        /** SchedulerDecisionItem */
+        SchedulerDecisionItem: {
+            /** Auth Healthy */
+            auth_healthy: boolean;
+            /** Can Download */
+            can_download: boolean;
+            /**
+             * Creator Id
+             * Format: uuid
+             */
+            creator_id: string;
+            /** Creator Name */
+            creator_name: string | null;
+            /** Decision */
+            decision: string;
+            /** Due */
+            due: boolean;
+            /** Effective Mode */
+            effective_mode: string;
+            /** Is Attention */
+            is_attention: boolean;
+            /** Is Overdue */
+            is_overdue: boolean;
+            /** Last Attempted At */
+            last_attempted_at: string | null;
+            /** Last Synced At */
+            last_synced_at: string | null;
+            /** Next Due At */
+            next_due_at: string | null;
+            /** Reason */
+            reason: string;
+            /** Schedule Rule */
+            schedule_rule: {
+                [key: string]: unknown;
+            } | null;
+            /** Scheduled Times */
+            scheduled_times: string;
+            /** Source */
+            source: string;
+            /** Source Creator Id */
+            source_creator_id: string | null;
+            /** Source Display Name */
+            source_display_name: string;
+            /** Source Enabled */
+            source_enabled: boolean;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /** Source Url */
+            source_url: string | null;
+            /** Subscription Active */
+            subscription_active: boolean;
+            /**
+             * Subscription Id
+             * Format: uuid
+             */
+            subscription_id: string;
+            /** Subscription Name */
+            subscription_name: string | null;
+            /** Subscription Sync Enabled */
+            subscription_sync_enabled: boolean;
+            /** Suppression Reason */
+            suppression_reason: string | null;
+            /** Sync Interval Hours */
+            sync_interval_hours: number | null;
+            /** Timezone */
+            timezone: string;
+            /** Url Valid */
+            url_valid: boolean;
+            /** Window End */
+            window_end: string | null;
+            /** Window Start */
+            window_start: string | null;
+        };
+        /** SchedulerDecisionPage */
+        SchedulerDecisionPage: {
+            /** Items */
+            items: components["schemas"]["SchedulerDecisionItem"][];
+            /** Limit */
+            limit: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Offset */
+            offset: number;
+            /** Scheduler Enabled */
+            scheduler_enabled: boolean;
+            summary: components["schemas"]["SchedulerDecisionSummary"];
+            /** Suppressed Count */
+            suppressed_count: number;
+            /** Timezone */
+            timezone: string;
+            /** Total */
+            total: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * View
+             * @enum {string}
+             */
+            view: "all" | "attention";
+        };
+        /** SchedulerDecisionSummary */
+        SchedulerDecisionSummary: {
+            /** Blocked Count */
+            blocked_count: number;
+            /** Oldest Overdue At */
+            oldest_overdue_at: string | null;
+            /** Overdue Count */
+            overdue_count: number;
         };
         /** SchedulerSyncAcceptance */
         SchedulerSyncAcceptance: {
@@ -8307,6 +8650,19 @@ export interface components {
              */
             usage_count: number;
         };
+        /** TagPage */
+        TagPage: {
+            /** Items */
+            items: components["schemas"]["TagRead"][];
+            /** Limit */
+            limit: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
         /** TagRead */
         TagRead: {
             /** Category */
@@ -8347,6 +8703,282 @@ export interface components {
             category?: string | null;
             /** Normalized Name */
             normalized_name?: string | null;
+        };
+        /** TaskActionRefusal */
+        TaskActionRefusal: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge";
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
+            /**
+             * Code
+             * @constant
+             */
+            code: "invalid_task_action";
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
+            /** Reason */
+            reason: string;
+            /** Status */
+            status?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TaskAttentionItem */
+        TaskAttentionItem: {
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
+            /** Id */
+            id: string;
+            /** Navigation Actions */
+            navigation_actions: ("open_repository" | "copy_diagnostics")[];
+            /** Occurred At */
+            occurred_at: string;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Repository Id */
+            repository_id: string | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+            /** Source */
+            source: string | null;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string | null;
+            task: components["schemas"]["TaskRead"];
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Title */
+            title: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "task";
+        };
+        /** TaskBulkClearResult */
+        TaskBulkClearResult: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "retry" | "pause" | "resume" | "cancel" | "delete";
+            /** Deleted */
+            deleted: number;
+            /** Errors */
+            errors: components["schemas"]["TaskBulkError"][];
+            /** Failed */
+            failed: number;
+            /** Filters */
+            filters: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @constant
+             */
+            status: "ok";
+            /** Succeeded */
+            succeeded: number;
+            /**
+             * Task Type
+             * @enum {string}
+             */
+            task_type: "download" | "import";
+            /** Total Matched */
+            total_matched: number;
+        };
+        /** TaskBulkError */
+        TaskBulkError: {
+            /** Error */
+            error: components["schemas"]["TaskActionRefusal"] | string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /** TaskBulkResult */
+        TaskBulkResult: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "retry" | "pause" | "resume" | "cancel" | "delete";
+            /** Errors */
+            errors: components["schemas"]["TaskBulkError"][];
+            /** Failed */
+            failed: number;
+            /** Filters */
+            filters: {
+                [key: string]: unknown;
+            };
+            /** Succeeded */
+            succeeded: number;
+            /**
+             * Task Type
+             * @enum {string}
+             */
+            task_type: "download" | "import";
+            /** Total Matched */
+            total_matched: number;
+        };
+        /** TaskBulkStatusResult */
+        TaskBulkStatusResult: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "retry" | "pause" | "resume" | "cancel" | "delete";
+            /** Errors */
+            errors: components["schemas"]["TaskBulkError"][];
+            /** Failed */
+            failed: number;
+            /** Filters */
+            filters: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @constant
+             */
+            status: "ok";
+            /** Succeeded */
+            succeeded: number;
+            /**
+             * Task Type
+             * @enum {string}
+             */
+            task_type: "download" | "import";
+            /** Total Matched */
+            total_matched: number;
+        };
+        /** TaskPage */
+        TaskPage: {
+            /** Items */
+            items: components["schemas"]["TaskRead"][];
+            /** Total */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TaskRead */
+        TaskRead: {
+            /** Acknowledged At */
+            acknowledged_at?: string | null;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /** Attention State */
+            attention_state?: string | null;
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
+            /** Compactable At */
+            compactable_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
+            /** Enqueued At */
+            enqueued_at?: string | null;
+            /** Error Log */
+            error_log?: string | null;
+            /** Events */
+            events?: {
+                [key: string]: unknown;
+            }[];
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+            /** Operation Type */
+            operation_type?: string | null;
+            /** Parent Task Id */
+            parent_task_id?: string | null;
+            /**
+             * Priority
+             * @default 10
+             */
+            priority: number;
+            /** Progress Current */
+            progress_current?: number | null;
+            /** Progress Data */
+            progress_data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Progress Stage */
+            progress_stage?: string | null;
+            /** Progress Total */
+            progress_total?: number | null;
+            /** Queue Name */
+            queue_name?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Resource Reason */
+            resource_reason?: string | null;
+            /** Resource State */
+            resource_state?: string | null;
+            /** Result Data */
+            result_data?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rq Job Id */
+            rq_job_id?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
+            /** Subject Id */
+            subject_id?: string | null;
+            /** Subject Type */
+            subject_type?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Triggering Remote Account Id */
+            triggering_remote_account_id?: string | null;
+            /** Triggering User Subscription Id */
+            triggering_user_subscription_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -8732,6 +9364,39 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** WorkbenchRecent */
+        WorkbenchRecent: {
+            /** Download Jobs */
+            download_jobs: components["schemas"]["WorkbenchRecentJob"][];
+            /** Import Jobs */
+            import_jobs: components["schemas"]["WorkbenchRecentJob"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** WorkbenchRecentJob */
+        WorkbenchRecentJob: {
+            /** Available Actions */
+            available_actions?: ("retry" | "repeat_sync" | "pause" | "resume" | "cancel" | "delete" | "acknowledge")[];
+            /** Disabled Reasons */
+            disabled_reasons?: {
+                [key: string]: string;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** WorkbenchSummary */
+        WorkbenchSummary: {
+            recent: components["schemas"]["WorkbenchRecent"];
+        } & {
+            [key: string]: unknown;
         };
         /** XDownloadAuthUpdate */
         XDownloadAuthUpdate: {
@@ -10949,7 +11614,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -11049,7 +11714,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14443,7 +15108,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14494,7 +15159,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14656,7 +15321,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14709,7 +15374,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14762,7 +15427,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskBulkClearResult"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -14856,7 +15521,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskBulkStatusResult"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -15298,6 +15963,59 @@ export interface operations {
             };
         };
     };
+    post_api_v1_download_jobs_job_id_repeat_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepeatSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepeatSyncAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_download_jobs_job_id_resume: {
         parameters: {
             query?: never;
@@ -15418,7 +16136,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["ImportJobPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -15471,7 +16189,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -15567,7 +16285,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["ImportJobRead"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -15875,7 +16593,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -18879,6 +19597,8 @@ export interface operations {
                 subscription_ids?: string | null;
                 offset?: number;
                 limit?: number;
+                q?: string | null;
+                state?: "all" | "due" | "manual" | "disabled";
             };
             header?: never;
             path?: never;
@@ -18892,7 +19612,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["SchedulerDecisionPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -18988,7 +19708,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["WorkbenchSummary"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -19146,6 +19866,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_tags_page: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                q?: string | null;
+                category?: string | null;
+                sort_by?: "name" | "usage_count";
+                sort_order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -19408,7 +20182,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["TaskPage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -19458,7 +20232,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -19644,6 +20418,55 @@ export interface operations {
         };
     };
     get_api_v1_tasks_task_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_api_v1_tasks_task_id: {
         parameters: {
             query?: never;
             header?: never;
@@ -20024,6 +20847,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_tasks_task_id_repeat_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepeatSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepeatSyncAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

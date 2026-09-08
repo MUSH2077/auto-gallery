@@ -1,0 +1,20 @@
+import { expect, test, type Route } from "@playwright/test";
+test.describe.configure({ timeout: 60_000 });
+const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+const base = { username: "admin", display_name: "Admin", is_admin: true, is_active: true, permissions: ["system"], modules: {}, preferences: {}, nsfw_visible: true, upload_used_bytes: 0, upload_quota_bytes: null, must_change_password: false };
+test("self delete is unavailable and rejected clipboard retains generated password", async ({ context, page }) => {
+  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+  await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("clipboard denied"); } } }); });
+  let deletes = 0;
+  await context.route("**/api/v1/**", async route => { const req=route.request(); const path=new URL(req.url()).pathname; if(path==="/api/v1/auth/me") return json(route,{...base,id:7}); if(path==="/api/v1/users/7") { if(req.method()==="DELETE") deletes++; return json(route,{...base,id:7,created_at:"2026-09-08T00:00:00Z"}); } if(path==="/api/v1/users/7/reset-password") return json(route,{password:"Exact-Generated-Secret"}); if(path==="/api/v1/system/workbench") return json(route,{queue:{active_download_count:0,active_import_count:0,failed_download_count:0,failed_import_count:0,stale_count:0},scheduler:{},storage:{},attention:{},recent:{download_jobs:[],import_jobs:[],works:[],successful_syncs:[]}}); return json(route,{}); });
+  await page.goto("/admin/settings/users/7");
+  await expect(page.getByText("The signed-in user cannot be deleted")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete User" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Reset Password" }).click();
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page.getByText("Exact-Generated-Secret")).toBeVisible();
+  await page.getByRole("button", { name: "Copy" }).click();
+  await expect(page.getByRole("alert").filter({hasText:"clipboard denied"})).toBeVisible();
+  await expect(page.getByText("Exact-Generated-Secret")).toBeVisible();
+  expect(deletes).toBe(0);
+});

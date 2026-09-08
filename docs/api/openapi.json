@@ -117,6 +117,103 @@
         "title": "AdminOperationCurrent",
         "type": "object"
       },
+      "AdminOperationPage": {
+        "properties": {
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOperationRead"
+            },
+            "title": "Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "title": "AdminOperationPage",
+        "type": "object"
+      },
+      "AdminOperationRead": {
+        "additionalProperties": true,
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "operation_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Type"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AdminOperationRead",
+        "type": "object"
+      },
       "AdminOperationSnapshot": {
         "properties": {
           "completed_at": {
@@ -3223,6 +3320,22 @@
       },
       "DownloadJobRead": {
         "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
           "conflict_details": {
             "items": {
               "additionalProperties": true,
@@ -3259,6 +3372,24 @@
               }
             ],
             "title": "Creator Name"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
           },
           "download_dir": {
             "anyOf": [
@@ -3400,6 +3531,7 @@
             "type": "integer"
           },
           "retryable": {
+            "description": "Compatibility field; available_actions is the authoritative policy.",
             "readOnly": true,
             "title": "Retryable",
             "type": "boolean"
@@ -4285,12 +4417,90 @@
         "title": "ImportFromDiskRequest",
         "type": "object"
       },
+      "ImportJobPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ImportJobRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "ImportJobPage",
+        "type": "object"
+      },
       "ImportJobRead": {
         "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "creator_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator Id"
+          },
+          "creator_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator Name"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
           },
           "download_job_id": {
             "format": "uuid",
@@ -4407,9 +4617,54 @@
             ],
             "title": "Progress Works Total"
           },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          },
+          "subscription_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Name"
           },
           "updated_at": {
             "format": "date-time",
@@ -4914,6 +5169,93 @@
           "month_days"
         ],
         "title": "MonthlyScheduleRule",
+        "type": "object"
+      },
+      "OperationsOverview": {
+        "properties": {
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "repository": "#/components/schemas/RepositoryAttentionItem",
+                  "task": "#/components/schemas/TaskAttentionItem"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TaskAttentionItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RepositoryAttentionItem"
+                }
+              ]
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/OperationsSummary"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "view": {
+            "enum": [
+              "attention",
+              "active",
+              "resolved"
+            ],
+            "title": "View",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "total",
+          "summary",
+          "items"
+        ],
+        "title": "OperationsOverview",
+        "type": "object"
+      },
+      "OperationsSummary": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "integer"
+          },
+          "attention": {
+            "title": "Attention",
+            "type": "integer"
+          },
+          "critical": {
+            "title": "Critical",
+            "type": "integer"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "integer"
+          },
+          "resource_limited": {
+            "title": "Resource Limited",
+            "type": "integer"
+          },
+          "warning": {
+            "title": "Warning",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attention",
+          "critical",
+          "warning",
+          "resolved",
+          "active",
+          "resource_limited"
+        ],
+        "title": "OperationsSummary",
         "type": "object"
       },
       "PinterestSourceConfig": {
@@ -6639,6 +6981,171 @@
         "title": "RemoteWorkStateRead",
         "type": "object"
       },
+      "RepeatSyncAccepted": {
+        "properties": {
+          "action": {
+            "const": "repeat_sync",
+            "default": "repeat_sync",
+            "title": "Action",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "previous_job_id": {
+            "format": "uuid",
+            "title": "Previous Job Id",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "enqueued",
+            "default": "enqueued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "format": "uuid",
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "previous_job_id",
+          "request_id"
+        ],
+        "title": "RepeatSyncAccepted",
+        "type": "object"
+      },
+      "RepeatSyncRequest": {
+        "properties": {
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "RepeatSyncRequest",
+        "type": "object"
+      },
+      "RepositoryAttentionItem": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "open_repository",
+                "copy_diagnostics"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "title": "Repository Id",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "task": {
+            "title": "Task",
+            "type": "null"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "null"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "const": "repository",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "status",
+          "reason_code",
+          "title",
+          "summary",
+          "repository_id",
+          "task_id",
+          "occurred_at",
+          "source",
+          "type",
+          "available_actions",
+          "task"
+        ],
+        "title": "RepositoryAttentionItem",
+        "type": "object"
+      },
       "RepositoryCapabilities": {
         "properties": {
           "can_download": {
@@ -8352,6 +8859,370 @@
           "outcome"
         ],
         "title": "SchedulerBatchItemRead",
+        "type": "object"
+      },
+      "SchedulerDecisionItem": {
+        "properties": {
+          "auth_healthy": {
+            "title": "Auth Healthy",
+            "type": "boolean"
+          },
+          "can_download": {
+            "title": "Can Download",
+            "type": "boolean"
+          },
+          "creator_id": {
+            "format": "uuid",
+            "title": "Creator Id",
+            "type": "string"
+          },
+          "creator_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator Name"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "due": {
+            "title": "Due",
+            "type": "boolean"
+          },
+          "effective_mode": {
+            "title": "Effective Mode",
+            "type": "string"
+          },
+          "is_attention": {
+            "title": "Is Attention",
+            "type": "boolean"
+          },
+          "is_overdue": {
+            "title": "Is Overdue",
+            "type": "boolean"
+          },
+          "last_attempted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempted At"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "schedule_rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Rule"
+          },
+          "scheduled_times": {
+            "title": "Scheduled Times",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_creator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Creator Id"
+          },
+          "source_display_name": {
+            "title": "Source Display Name",
+            "type": "string"
+          },
+          "source_enabled": {
+            "title": "Source Enabled",
+            "type": "boolean"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "subscription_active": {
+            "title": "Subscription Active",
+            "type": "boolean"
+          },
+          "subscription_id": {
+            "format": "uuid",
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "subscription_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Name"
+          },
+          "subscription_sync_enabled": {
+            "title": "Subscription Sync Enabled",
+            "type": "boolean"
+          },
+          "suppression_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppression Reason"
+          },
+          "sync_interval_hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sync Interval Hours"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "url_valid": {
+            "title": "Url Valid",
+            "type": "boolean"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "subscription_name",
+          "subscription_active",
+          "subscription_sync_enabled",
+          "creator_id",
+          "creator_name",
+          "source_id",
+          "source",
+          "source_display_name",
+          "source_url",
+          "source_creator_id",
+          "source_enabled",
+          "effective_mode",
+          "timezone",
+          "scheduled_times",
+          "schedule_rule",
+          "sync_interval_hours",
+          "last_synced_at",
+          "last_attempted_at",
+          "due",
+          "decision",
+          "reason",
+          "suppression_reason",
+          "next_due_at",
+          "window_start",
+          "window_end",
+          "auth_healthy",
+          "url_valid",
+          "can_download",
+          "is_overdue",
+          "is_attention"
+        ],
+        "title": "SchedulerDecisionItem",
+        "type": "object"
+      },
+      "SchedulerDecisionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SchedulerDecisionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "scheduler_enabled": {
+            "title": "Scheduler Enabled",
+            "type": "boolean"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SchedulerDecisionSummary"
+          },
+          "suppressed_count": {
+            "title": "Suppressed Count",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "view": {
+            "enum": [
+              "all",
+              "attention"
+            ],
+            "title": "View",
+            "type": "string"
+          }
+        },
+        "required": [
+          "updated_at",
+          "scheduler_enabled",
+          "suppressed_count",
+          "timezone",
+          "view",
+          "total",
+          "items",
+          "offset",
+          "limit",
+          "next_offset",
+          "summary"
+        ],
+        "title": "SchedulerDecisionPage",
+        "type": "object"
+      },
+      "SchedulerDecisionSummary": {
+        "properties": {
+          "blocked_count": {
+            "title": "Blocked Count",
+            "type": "integer"
+          },
+          "oldest_overdue_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Overdue At"
+          },
+          "overdue_count": {
+            "title": "Overdue Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "blocked_count",
+          "overdue_count",
+          "oldest_overdue_at"
+        ],
+        "title": "SchedulerDecisionSummary",
         "type": "object"
       },
       "SchedulerSyncAcceptance": {
@@ -10381,6 +11252,49 @@
         "title": "TagDetail",
         "type": "object"
       },
+      "TagPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TagRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "next_offset"
+        ],
+        "title": "TagPage",
+        "type": "object"
+      },
       "TagRead": {
         "properties": {
           "category": {
@@ -10474,6 +11388,897 @@
           }
         },
         "title": "TagUpdate",
+        "type": "object"
+      },
+      "TaskActionRefusal": {
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "enum": [
+              "retry",
+              "repeat_sync",
+              "pause",
+              "resume",
+              "cancel",
+              "delete",
+              "acknowledge"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "code": {
+            "const": "invalid_task_action",
+            "title": "Code",
+            "type": "string"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "code",
+          "action",
+          "reason"
+        ],
+        "title": "TaskActionRefusal",
+        "type": "object"
+      },
+      "TaskAttentionItem": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "navigation_actions": {
+            "items": {
+              "enum": [
+                "open_repository",
+                "copy_diagnostics"
+              ],
+              "type": "string"
+            },
+            "title": "Navigation Actions",
+            "type": "array"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "task": {
+            "$ref": "#/components/schemas/TaskRead"
+          },
+          "task_id": {
+            "format": "uuid",
+            "title": "Task Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "const": "task",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "status",
+          "reason_code",
+          "title",
+          "summary",
+          "repository_id",
+          "task_id",
+          "occurred_at",
+          "source",
+          "type",
+          "navigation_actions",
+          "task"
+        ],
+        "title": "TaskAttentionItem",
+        "type": "object"
+      },
+      "TaskBulkClearResult": {
+        "properties": {
+          "action": {
+            "enum": [
+              "retry",
+              "pause",
+              "resume",
+              "cancel",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/TaskBulkError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "task_type": {
+            "enum": [
+              "download",
+              "import"
+            ],
+            "title": "Task Type",
+            "type": "string"
+          },
+          "total_matched": {
+            "title": "Total Matched",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "task_type",
+          "filters",
+          "total_matched",
+          "succeeded",
+          "failed",
+          "errors",
+          "status",
+          "deleted"
+        ],
+        "title": "TaskBulkClearResult",
+        "type": "object"
+      },
+      "TaskBulkError": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskActionRefusal"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "error"
+        ],
+        "title": "TaskBulkError",
+        "type": "object"
+      },
+      "TaskBulkResult": {
+        "properties": {
+          "action": {
+            "enum": [
+              "retry",
+              "pause",
+              "resume",
+              "cancel",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/TaskBulkError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "task_type": {
+            "enum": [
+              "download",
+              "import"
+            ],
+            "title": "Task Type",
+            "type": "string"
+          },
+          "total_matched": {
+            "title": "Total Matched",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "task_type",
+          "filters",
+          "total_matched",
+          "succeeded",
+          "failed",
+          "errors"
+        ],
+        "title": "TaskBulkResult",
+        "type": "object"
+      },
+      "TaskBulkStatusResult": {
+        "properties": {
+          "action": {
+            "enum": [
+              "retry",
+              "pause",
+              "resume",
+              "cancel",
+              "delete"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/TaskBulkError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "task_type": {
+            "enum": [
+              "download",
+              "import"
+            ],
+            "title": "Task Type",
+            "type": "string"
+          },
+          "total_matched": {
+            "title": "Total Matched",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "task_type",
+          "filters",
+          "total_matched",
+          "succeeded",
+          "failed",
+          "errors",
+          "status"
+        ],
+        "title": "TaskBulkStatusResult",
+        "type": "object"
+      },
+      "TaskPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "TaskPage",
+        "type": "object"
+      },
+      "TaskRead": {
+        "additionalProperties": true,
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "attention_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention State"
+          },
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "compactable_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compactable At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
+          },
+          "enqueued_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enqueued At"
+          },
+          "error_log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Log"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
+          "operation_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Type"
+          },
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Task Id"
+          },
+          "priority": {
+            "default": 10,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "progress_current": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Current"
+          },
+          "progress_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Data"
+          },
+          "progress_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Stage"
+          },
+          "progress_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Total"
+          },
+          "queue_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Name"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resource_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Reason"
+          },
+          "resource_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource State"
+          },
+          "result_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Data"
+          },
+          "rq_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rq Job Id"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "subject_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Type"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "triggering_remote_account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggering Remote Account Id"
+          },
+          "triggering_user_subscription_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggering User Subscription Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status"
+        ],
+        "title": "TaskRead",
         "type": "object"
       },
       "TokenResponse": {
@@ -11682,6 +13487,98 @@
           "updated_at"
         ],
         "title": "WorkRead",
+        "type": "object"
+      },
+      "WorkbenchRecent": {
+        "additionalProperties": true,
+        "properties": {
+          "download_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/WorkbenchRecentJob"
+            },
+            "title": "Download Jobs",
+            "type": "array"
+          },
+          "import_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/WorkbenchRecentJob"
+            },
+            "title": "Import Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "download_jobs",
+          "import_jobs"
+        ],
+        "title": "WorkbenchRecent",
+        "type": "object"
+      },
+      "WorkbenchRecentJob": {
+        "additionalProperties": true,
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ],
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "disabled_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "retry",
+                "repeat_sync",
+                "pause",
+                "resume",
+                "cancel",
+                "delete",
+                "acknowledge"
+              ]
+            },
+            "title": "Disabled Reasons",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "WorkbenchRecentJob",
+        "type": "object"
+      },
+      "WorkbenchSummary": {
+        "additionalProperties": true,
+        "properties": {
+          "recent": {
+            "$ref": "#/components/schemas/WorkbenchRecent"
+          }
+        },
+        "required": [
+          "recent"
+        ],
+        "title": "WorkbenchSummary",
         "type": "object"
       },
       "XDownloadAuthUpdate": {
@@ -15239,7 +17136,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationPage"
                 }
               }
             },
@@ -15292,8 +17189,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/operations/clear": {
@@ -15392,7 +17288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationRead"
                 }
               }
             },
@@ -15445,8 +17341,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/operations/{task_id}/retry": {
@@ -20890,7 +22785,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskPage"
                 }
               }
             },
@@ -20943,8 +22838,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "subscriptions"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       },
       "post": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
@@ -20964,7 +22858,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskRead"
                 }
               }
             },
@@ -21017,8 +22911,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "subscriptions"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/download-jobs": {
@@ -21321,7 +23214,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskBulkResult"
                 }
               }
             },
@@ -21374,8 +23267,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/download-jobs/batch-by-filter": {
@@ -21399,7 +23291,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskBulkResult"
                 }
               }
             },
@@ -21452,8 +23344,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/download-jobs/clear": {
@@ -21477,7 +23368,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskBulkClearResult"
                 }
               }
             },
@@ -21530,8 +23421,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/download-jobs/kill-stuck": {
@@ -21610,7 +23500,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskBulkStatusResult"
                 }
               }
             },
@@ -21663,8 +23553,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/download-jobs/{job_id}": {
@@ -22339,6 +24228,93 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/download-jobs/{job_id}/repeat-sync": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_download_jobs_job_id_repeat_sync",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepeatSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepeatSyncAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Repeat Download Sync",
+        "tags": [
+          "download-jobs"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "tasks"
+        ]
+      }
+    },
     "/api/v1/download-jobs/{job_id}/resume": {
       "post": {
         "description": "Resume a paused download job by re-enqueuing it.",
@@ -22589,7 +24565,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ImportJobPage"
                 }
               }
             },
@@ -22642,8 +24618,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/import-jobs/batch-by-filter": {
@@ -22667,7 +24642,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskBulkResult"
                 }
               }
             },
@@ -22720,8 +24695,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/import-jobs/scan": {
@@ -22888,7 +24862,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ImportJobRead"
                 }
               }
             },
@@ -22941,8 +24915,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/import-jobs/{job_id}/cancel": {
@@ -23332,7 +25305,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/OperationsOverview"
                 }
               }
             },
@@ -23385,8 +25358,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/reference/danbooru/artist/batch-import": {
@@ -28136,7 +30108,7 @@
     },
     "/api/v1/system/scheduler-decisions": {
       "get": {
-        "description": "Explain current scheduler decisions at subscription-source granularity.\n\nThis endpoint is deliberately read-only: it does not enqueue jobs or mutate\nlast_attempted_at/last_synced_at.",
+        "description": "Read-only, complete filtered plans and global suppression summary.",
         "operationId": "get_api_v1_system_scheduler_decisions",
         "parameters": [
           {
@@ -28175,6 +30147,7 @@
             "required": false,
             "schema": {
               "default": 0,
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }
@@ -28185,8 +30158,43 @@
             "required": false,
             "schema": {
               "default": 100,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "due",
+                "manual",
+                "disabled"
+              ],
+              "title": "State",
+              "type": "string"
             }
           }
         ],
@@ -28195,7 +30203,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SchedulerDecisionPage"
                 }
               }
             },
@@ -28248,8 +30256,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/system/storage": {
@@ -28339,7 +30346,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/WorkbenchSummary"
                 }
               }
             },
@@ -28392,8 +30399,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/tags": {
@@ -28666,6 +30672,157 @@
           "curation"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tags/page": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tags_page",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "usage_count",
+              "enum": [
+                "name",
+                "usage_count"
+              ],
+              "title": "Sort By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Order",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Tag Page",
+        "tags": [
+          "tags"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "library"
+        ]
       }
     },
     "/api/v1/tags/{tag_id}": {
@@ -29131,7 +31288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/TaskPage"
                 }
               }
             },
@@ -29185,8 +31342,7 @@
         "x-required-permissions": [
           "system",
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/tasks/anomalies": {
@@ -29220,7 +31376,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/OperationsOverview"
                 }
               }
             },
@@ -29274,8 +31430,7 @@
         "x-required-permissions": [
           "system",
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/tasks/compact": {
@@ -29510,9 +31665,9 @@
       }
     },
     "/api/v1/tasks/{task_id}": {
-      "get": {
+      "delete": {
         "description": "See the request, response, permission, and risk metadata for this operation.",
-        "operationId": "get_api_v1_tasks_task_id",
+        "operationId": "delete_api_v1_tasks_task_id",
         "parameters": [
           {
             "in": "path",
@@ -29572,6 +31727,83 @@
             "HTTPBearer": []
           }
         ],
+        "summary": "Delete Task History",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "anyOf",
+        "x-required-permissions": [
+          "system",
+          "tasks"
+        ],
+        "x-response-schema-status": "generic"
+      },
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_tasks_task_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Task",
         "tags": [
           "tasks"
@@ -29584,8 +31816,7 @@
         "x-required-permissions": [
           "system",
           "tasks"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/tasks/{task_id}/acknowledge": {
@@ -30218,6 +32449,94 @@
           "tasks"
         ],
         "x-response-schema-status": "generic"
+      }
+    },
+    "/api/v1/tasks/{task_id}/repeat-sync": {
+      "post": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "post_api_v1_tasks_task_id_repeat_sync",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepeatSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepeatSyncAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Repeat Task Sync",
+        "tags": [
+          "tasks"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "anyOf",
+        "x-required-permissions": [
+          "system",
+          "tasks"
+        ]
       }
     },
     "/api/v1/tasks/{task_id}/resume": {

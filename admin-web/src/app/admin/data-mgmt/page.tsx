@@ -106,7 +106,12 @@ export default function DataManagementPage() {
   // ── Mutations ──
   const cleanupJSON = useMutation({
     mutationFn: () => api.cleanupMetadataJSONs(),
-    onSuccess: (d: any) => setResult({ ok: true, msg: t("datamgmt.cleanup_json_done").replace("{count}", String(d.removed)) }),
+    onSuccess: (accepted) => {
+      setResult({ ok: true, msg: t("datamgmt.cleanup_json_accepted") });
+      toast.success({ title: t("datamgmt.cleanup_json"), message: t("datamgmt.cleanup_json_accepted"), action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${accepted.task_id}`) } });
+      notify.startOperationJob(accepted.job_id, accepted.operation_type, t("datamgmt.cleanup_json"));
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
 

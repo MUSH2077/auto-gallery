@@ -45,26 +45,52 @@ export default function MappingPage() {
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
   const [showAdd, setShowAdd] = useState(false);
   const [dialog, setDialog] = useState<{ action: "verify" | "unverify"; linkId: string } | null>(null);
+  const [setupFailure, setSetupFailure] = useState<{ link: CreatorLinkType; subscriptionId?: string; stage: "subscription" | "source"; message: string } | null>(null);
+
+  const setupRepository = async (link: CreatorLinkType, subscriptionId?: string) => {
+    let subId = subscriptionId;
+    if (!subId) {
+      try {
+        const subs = await api.listSubscriptions();
+        let sub = subs.find((item) => item.creator_id === id);
+        if (!sub) sub = await api.createSubscription({ creator_id: id, name: undefined });
+        subId = sub.id;
+      } catch (error) {
+        return { link, stage: "subscription" as const, message: (error as Error).message };
+      }
+    }
+    try {
+      await api.createSubscriptionSource(subId, { source: link.link_type, source_url: link.url, is_enabled: true });
+      return null;
+    } catch (error) {
+      return { link, subscriptionId: subId, stage: "source" as const, message: (error as Error).message };
+    }
+  };
 
   const verifyLink = useMutation({
     mutationFn: async (linkId: string) => {
       await api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 });
-      // If it's a downloadable source, auto-create subscription source
       const link = links.data?.find((l: CreatorLinkType) => l.id === linkId);
+      await links.refetch();
       if (link && ["pixiv", "iwara"].includes(link.link_type)) {
-        const subs = await api.listSubscriptions();
-        let sub = subs.find((s) => s.creator_id === id);
-        if (!sub) {
-          sub = await api.createSubscription({ creator_id: id, name: undefined });
-        }
-        try {
-          await api.createSubscriptionSource(sub.id, { source: link.link_type, source_url: link.url, is_enabled: true });
-        } catch {
-          // Source may already exist — ignore
-        }
+        return setupRepository(link);
       }
+      return null;
     },
-    onSuccess: () => { links.refetch(); qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all }); setDialog(null); },
+    onSuccess: (failure) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.creators.links(id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+      setSetupFailure(failure);
+      setDialog(null);
+    },
+  });
+
+  const retrySetup = useMutation({
+    mutationFn: () => setupFailure ? setupRepository(setupFailure.link, setupFailure.subscriptionId) : Promise.resolve(null),
+    onSuccess: (failure) => {
+      setSetupFailure(failure);
+      void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    },
   });
 
   const unverifyLink = useMutation({
@@ -89,6 +115,15 @@ export default function MappingPage() {
       <div className="mb-6 rounded-md border border-accent-subtle bg-accent-subtle p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
         {t("mapping.info_banner")}
       </div>
+
+      {setupFailure && (
+        <div role="alert" className="mb-6 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
+          <p>{t("mapping.partial_setup", { url: setupFailure.link.url, stage: t(`mapping.stage_${setupFailure.stage}`) })}: {setupFailure.message}</p>
+          <button className="btn-ghost mt-2" disabled={retrySetup.isPending} onClick={() => retrySetup.mutate()}>
+            {retrySetup.isPending ? t("common.processing") : t("mapping.retry_setup")}
+          </button>
+        </div>
+      )}
 
       <section className="mb-8">
         <h2 className="font-semibold mb-3">{t("mapping.verified_links").replace("{count}", String(verified.length))}</h2>

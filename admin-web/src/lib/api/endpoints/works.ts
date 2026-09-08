@@ -25,6 +25,9 @@ export interface MediaDerivativeProgress {
 }
 
 export const worksApi = {
+  resolveManualUploadWork: (sourceWorkId: string) => request<{ items: Work[]; total: number }>(
+    `/api/v1/works?q=${encodeURIComponent(`pid:manual/${sourceWorkId}`)}&offset=0&limit=2`,
+  ),
   deleteWork: (id: string) =>
     request<void>(`/api/v1/works/${id}`, { method: "DELETE" }),
 

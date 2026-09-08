@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } from "@/lib/api/types";
 import { useT } from "@/lib/i18n";
@@ -266,17 +266,29 @@ export default function BackupPage() {
     }
   };
 
-  const handleDelete = async (filename: string) => {
-    try { await api.deleteBackup(filename); qc.invalidateQueries({ queryKey: ["backups"] }); }
-    catch (e) { toast.error({ message: (e as Error).message }); }
-    setDeleteTarget(null);
-  };
+  const deleteBackup = useMutation({
+    mutationFn: (filename: string) => api.deleteBackup(filename),
+    onSuccess: () => {
+      setDeleteTarget(null);
+      void qc.invalidateQueries({ queryKey: queryKeys.backups.list });
+    },
+  });
+
+  const downloadBackup = useMutation({
+    mutationFn: (filename: string) => api.downloadBackup(filename),
+    onSuccess: ({ blob, filename }) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    onError: (error: Error) => toast.error({ message: error.message }),
+  });
 
   const doDownload = (filename: string) => {
-    const a = document.createElement("a");
-    a.href = api.downloadBackup(filename);
-    a.download = filename;
-    a.click();
+    if (!downloadBackup.isPending) downloadBackup.mutate(filename);
   };
 
   return (
@@ -380,7 +392,7 @@ export default function BackupPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 ml-3 shrink-0">
-                  <button onClick={() => doDownload(b.filename)} className="btn-ghost px-2.5 py-1 text-xs">{t("backup.download")}</button>
+                  <button onClick={() => doDownload(b.filename)} disabled={downloadBackup.isPending} className="btn-ghost px-2.5 py-1 text-xs">{t("backup.download")}</button>
                   <RowActionMenu
                     label={t("common.more_actions")}
                     items={[{
@@ -429,9 +441,10 @@ export default function BackupPage() {
       {deleteTarget && (
         <ConfirmDialog open title={t("backup.delete_confirm")}
           message={`${t("backup.delete_confirm")}\n\n${deleteTarget}`}
-          onConfirm={() => handleDelete(deleteTarget)}
+          onConfirm={() => deleteBackup.mutate(deleteTarget)}
           onCancel={() => setDeleteTarget(null)}
-          isPending={false} />
+          isPending={deleteBackup.isPending}
+          error={(deleteBackup.error as Error)?.message} />
       )}
     </PageShell>
   );

@@ -425,6 +425,7 @@ test("does not retain a failed credential submission function in MutationCache",
   await page.getByLabel("Pixiv refresh token").fill(credentialCanary);
   await page.getByRole("button", { name: "Connect account" }).click();
   await expect(page.getByText("Could not connect the account. Check the credentials and try again.")).toBeVisible();
+  await expect(page.getByLabel("Pixiv refresh token")).toHaveValue(credentialCanary);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   expect(await privateMutationOptions(page)).not.toEqual(expect.arrayContaining([
@@ -432,6 +433,9 @@ test("does not retain a failed credential submission function in MutationCache",
   ]));
   expect(await mutationCacheText(page)).not.toContain(credentialCanary);
   await expect(page.getByText(credentialCanary)).toHaveCount(0);
+  await page.getByRole("button", { name: "Connect Pixiv" }).click();
+  await expect(page.getByLabel("Pixiv refresh token")).toHaveValue("");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 });
 
 test("cancels a pending credential submission without retaining its function in MutationCache", async ({ context, page }) => {

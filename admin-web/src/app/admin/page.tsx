@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ErrorState, PageShell, useToast } from "@/components";
+import { ConfirmDialog, ErrorState, PageShell, useToast } from "@/components";
 import {
   ActivityPanel,
   AttentionBanner,
@@ -14,6 +14,9 @@ import {
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
+import { secureRandomUuid } from "@/lib/random";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 function DashboardSkeleton() {
   return (
@@ -32,6 +35,8 @@ export default function Dashboard() {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const [repeatActivity, setRepeatActivity] = useState<DashboardActivity | null>(null);
   const { has } = usePermissions();
   const canRetry = has("tasks");
 
@@ -87,13 +92,47 @@ export default function Dashboard() {
     onSuccess: async (result) => {
       const data = await api.refreshWorkbench();
       queryClient.setQueryData(queryKeys.workbench, data);
-      toast.success(t("dashboard.retry_all_started", { count: result.succeeded }));
+      if (result.failed > 0) {
+        toast.warning({ message: t("jobs.batch_result", { succeeded: result.succeeded, failed: result.failed }) });
+      } else {
+        toast.success(t("dashboard.retry_all_started", { count: result.succeeded }));
+      }
     },
     onError: (error: Error) => {
       toast.error({
         title: t("dashboard.retry_failed"),
         message: error.message,
       });
+    },
+  });
+
+  const repeatOne = useMutation({
+    mutationFn: async (activity: DashboardActivity) => {
+      if (activity.kind !== "download") throw new Error(t("jobs.repeat_identity_invalid"));
+      const key = `auto-gallery-repeat-sync:${activity.id}`;
+      let requestId = localStorage.getItem(key);
+      if (!requestId) {
+        requestId = secureRandomUuid();
+        localStorage.setItem(key, requestId);
+      }
+      const accepted = await api.repeatDownloadJob(activity.id, requestId);
+      if (
+        accepted.previous_job_id !== activity.id
+        || accepted.request_id !== requestId
+        || accepted.action !== "repeat_sync"
+        || accepted.status !== "enqueued"
+        || !accepted.task_id
+        || !accepted.job_id
+      ) {
+        throw new Error(t("jobs.repeat_identity_invalid"));
+      }
+      localStorage.removeItem(key);
+      return accepted;
+    },
+    onSuccess: (accepted) => {
+      setRepeatActivity(null);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workbench });
+      router.push(`/admin/jobs?tab=downloads&job=${encodeURIComponent(accepted.job_id)}`);
     },
   });
 
@@ -129,6 +168,7 @@ export default function Dashboard() {
               canRetry={canRetry}
               retryingKey={retryOne.variables?.key}
               onRetry={(activity) => retryOne.mutate(activity)}
+              onRepeat={setRepeatActivity}
             />
           </div>
 
@@ -146,6 +186,22 @@ export default function Dashboard() {
               ? t("dashboard.refreshing")
               : t("dashboard.updated", { time: workbench.data.updated_at })}
           </p>
+          {repeatActivity && (
+            <ConfirmDialog
+              open
+              title={t("jobs.repeat_sync_title")}
+              message={t("jobs.repeat_sync_confirm")}
+              onConfirm={() => repeatOne.mutate(repeatActivity)}
+              onCancel={() => {
+                if (!repeatOne.isPending) {
+                  repeatOne.reset();
+                  setRepeatActivity(null);
+                }
+              }}
+              isPending={repeatOne.isPending}
+              error={(repeatOne.error as Error | null)?.message}
+            />
+          )}
         </div>
       )}
     </PageShell>

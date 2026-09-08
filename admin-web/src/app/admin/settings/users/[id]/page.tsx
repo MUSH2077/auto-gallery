@@ -9,6 +9,7 @@ import { useT } from "@/lib/i18n";
 import { formatBytes } from "@/lib/format";
 import { userModuleLabel } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { writeClipboardText } from "@/lib/clipboard";
 
 function initials(name: string) {
   return name.trim().slice(0, 2).toUpperCase();
@@ -41,6 +42,8 @@ export default function UserDetailPage() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetResult, setResetResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyPending, setCopyPending] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user.data) return;
@@ -214,7 +217,8 @@ export default function UserDetailPage() {
         <SectionPanel title={t("user_detail.actions_section")}>
           <div className="flex flex-wrap gap-3">
             <button onClick={() => setConfirmReset(true)} className="btn-ghost">{t("user_detail.reset_password")}</button>
-            <button onClick={() => setConfirmDelete(true)} className="btn-danger">{t("user_detail.delete_user")}</button>
+            {!me.isLoading && me.data?.id !== id && <button onClick={() => setConfirmDelete(true)} className="btn-danger">{t("user_detail.delete_user")}</button>}
+            {!me.isLoading && me.data?.id === id && <span className="text-sm text-muted">{t("user_detail.self_delete_disabled")}</span>}
           </div>
         </SectionPanel>
       </div>
@@ -231,11 +235,19 @@ export default function UserDetailPage() {
           <div className="flex items-center gap-2 rounded-md border border-border bg-subtle p-3 dark:border-border dark:bg-subtle">
             <code className="flex-1 select-all break-all font-mono text-sm">{resetResult}</code>
             <button
-              onClick={() => { if (resetResult) { navigator.clipboard?.writeText(resetResult); setCopied(true); } }}
+              disabled={copyPending}
+              onClick={async () => {
+                if (!resetResult || copyPending) return;
+                setCopyPending(true); setCopyError(null); setCopied(false);
+                try { await writeClipboardText(resetResult); setCopied(true); }
+                catch (error) { setCopyError((error as Error).message); }
+                finally { setCopyPending(false); }
+              }}
               className="btn-ghost shrink-0">
               {copied ? t("user_detail.copied") : t("user_detail.copy")}
             </button>
           </div>
+          {copyError && <p role="alert" className="text-sm text-danger">{t("common.copy_failed")}: {copyError}</p>}
           <div className="flex justify-end pt-2">
             <button onClick={() => { setResetResult(null); setCopied(false); }} className="btn-primary">{t("common.close")}</button>
           </div>

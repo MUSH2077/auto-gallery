@@ -86,7 +86,6 @@ function CredentialsDialog({
   const submitCredential = async () => {
     if (connectPending) return;
     let rawCredential = credential;
-    setCredential("");
     setFeedback(null);
     setConnectPending(true);
     const authMethod: RemoteAuthMethod = source === "pixiv"
@@ -114,6 +113,7 @@ function CredentialsDialog({
       if (pendingConnectCancel.current !== cancel) return;
       pendingConnectCancel.current = null;
       setConnectPending(false);
+      setCredential("");
       toast.success(t("discovery.account_connected"));
       onClose();
     } catch (error) {

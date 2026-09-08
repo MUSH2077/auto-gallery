@@ -1,31 +1,51 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { PageHeader, PageShell, EmptyState, ErrorState, Modal, PermissionGuard, TagBubbleChart } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, Modal, Pagination, PermissionGuard, SmartSearchInput, TagBubbleChart } from "@/components";
 import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
+const PAGE_SIZE = 100;
 
 export default function TagsPage() {
   const t = useT();
   const qc = useQueryClient();
   const { has } = usePermissions();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const canCurate = has("curation");
   const [showCreate, setShowCreate] = useState(false);
   const [formName, setFormName] = useState("");
   const [formCat, setFormCat] = useState("general");
+  const q = searchParams.get("q") || "";
+  const category = searchParams.get("category") || "";
+  const sortBy = searchParams.get("sort_by") === "name" ? "name" : "usage_count";
+  const sortOrder = searchParams.get("sort_order") === "asc" ? "asc" : "desc";
+  const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1);
+  const updateParams = (values: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(values)) value ? next.set(key, value) : next.delete(key);
+    router.replace(`${pathname}?${next}`);
+  };
 
   const tags = useQuery({
-    queryKey: [...queryKeys.tags.all, "all"],
-    queryFn: () => api.listAllTags(),
+    queryKey: [...queryKeys.tags.all, "page", page, q, category, sortBy, sortOrder],
+    queryFn: () => api.listTagsPage({ offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE, q, category: category || undefined, sort_by: sortBy, sort_order: sortOrder }),
+    placeholderData: (previous) => previous,
   });
+
+  useEffect(() => {
+    if (tags.data && page > Math.max(1, Math.ceil(tags.data.total / PAGE_SIZE))) updateParams({ page: null });
+  }, [page, tags.data?.total]); // URL is the source of truth for the bounded page.
 
   const create = useMutation({
     mutationFn: () => api.createTag({ normalized_name: formName.trim().toLowerCase(), category: formCat || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); },
+    onSuccess: (created) => { void qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); updateParams({ q: created.normalized_name, page: null }); },
   });
 
   return (
@@ -40,6 +60,16 @@ export default function TagsPage() {
         ) : undefined}
       />
 
+      <div className="mb-4 grid gap-2 sm:grid-cols-3">
+        <SmartSearchInput value={q} onChange={(value) => updateParams({ q: value, page: null })} placeholder={t("common.search")} />
+        <select aria-label={t("tags.category_label")} className="select" value={category} onChange={(event) => updateParams({ category: event.target.value, page: null })}>
+          <option value="">{t("common.all")}</option>{CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <select aria-label={t("common.sort")} className="select" value={`${sortBy}:${sortOrder}`} onChange={(event) => { const [nextSort, nextOrder] = event.target.value.split(":"); updateParams({ sort_by: nextSort, sort_order: nextOrder, page: null }); }}>
+          <option value="usage_count:desc">{t("tags.sort_usage")}</option><option value="name:asc">{t("tags.sort_name")}</option>
+        </select>
+      </div>
+
       <div data-page-primary-content>
       {tags.isLoading && (
         <div className="flex min-h-80 flex-wrap items-center justify-center gap-3">
@@ -51,14 +81,15 @@ export default function TagsPage() {
         </div>
       )}
       {tags.error && <ErrorState message={(tags.error as Error).message} onRetry={() => tags.refetch()} />}
-      {tags.data && !tags.data.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
+      {tags.data && !tags.data.items.length && <EmptyState title={t("tags.no_tags")} description={t("tags.no_tags_desc")} />}
 
-      {tags.data && tags.data.length > 0 && (
+      {tags.data && tags.data.items.length > 0 && (
         <div className="card p-3 sm:p-5">
-          <TagBubbleChart tags={tags.data} ariaLabel={t("tags.title")} />
+          <TagBubbleChart tags={tags.data.items} ariaLabel={t("tags.title")} />
           <p className="mt-5 text-center text-xs text-muted">
-            {t("tags.total").replace("{count}", String(tags.data.length))}
+            {t("tags.loaded_range", { start: tags.data.offset + 1, end: tags.data.offset + tags.data.items.length, total: tags.data.total })}
           </p>
+          <Pagination page={page} pageSize={PAGE_SIZE} total={tags.data.total} onPageChange={(next) => updateParams({ page: next === 1 ? null : String(next) })} />
         </div>
       )}
 

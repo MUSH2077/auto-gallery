@@ -10,6 +10,7 @@ type FixtureOptions = {
   taskReadError?: { status?: number; network?: boolean; count?: number };
   itemReadError?: { status?: number; network?: boolean; count?: number };
   itemPage?: (offset: number, limit: number, read: number) => { total: number; items: Array<Record<string, unknown>> };
+  decisionsPage?: (url: URL) => Record<string, unknown>;
 };
 
 const systemUser = {
@@ -100,8 +101,8 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
       default_queue: 0, scheduled_queue: 0, failed_jobs: 0, scheduler_enabled: true,
       scheduler_loop: { status: "scheduled", active: { queued: 0, scheduled: 0, started: 0 } },
     });
-    if (path === "/api/v1/system/scheduler-decisions") return json(route, {
-      updated_at: "2026-09-08T00:00:00Z", scheduler_enabled: true, timezone: "Asia/Shanghai", total: 0, items: [],
+    if (path === "/api/v1/system/scheduler-decisions") return json(route, options.decisionsPage?.(url) || {
+      updated_at: "2026-09-08T00:00:00Z", scheduler_enabled: true, timezone: "Asia/Shanghai", view: url.searchParams.get("view") || "all", total: 0, offset: Number(url.searchParams.get("offset") || 0), limit: Number(url.searchParams.get("limit") || 25), next_offset: null, summary: { blocked_count: 0, overdue_count: 0, oldest_overdue_at: null }, suppressed_count: 0, items: [],
     });
     if (path === "/api/v1/admin/scheduler/sync-now" && request.method() === "POST") {
       postAttempts += 1;
@@ -441,4 +442,35 @@ test("tasks-only users cannot enter or start the global scheduler", async ({ con
   await page.goto("/admin/scheduler");
   await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
+});
+
+test("scheduler plans page beyond 500 with bounded requests and global summary", async ({ context, page }) => {
+  const reads: Array<{ view: string; offset: number; limit: number; q: string }> = [];
+  const all = Array.from({ length: 809 }, (_, index) => ({
+    subscription_id: `sub-${index}`, subscription_name: `Subscription ${index}`,
+    subscription_active: true, subscription_sync_enabled: true,
+    creator_id: `creator-${index}`, creator_name: `Creator ${index}`,
+    source_id: `source-${index}`, source: "pixiv", source_display_name: "Pixiv",
+    source_url: `https://pixiv.net/users/${index}`, source_creator_id: String(index), source_enabled: true,
+    effective_mode: "interval", timezone: "Asia/Shanghai", scheduled_times: null, schedule_rule: null,
+    sync_interval_hours: 24, last_synced_at: null, last_attempted_at: null,
+    due: index % 2 === 0, decision: "eligible", reason: "due", suppression_reason: null,
+    next_due_at: "2026-09-07T00:00:00Z", window_start: null, window_end: null,
+    auth_healthy: true, url_valid: true, can_download: true, is_overdue: index < 99, is_attention: index < 123,
+  }));
+  await installSchedulerFixtures(context, { decisionsPage: (url) => {
+    const view = url.searchParams.get("view") || "all";
+    const q = url.searchParams.get("q") || "";
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number(url.searchParams.get("limit") || 25);
+    reads.push({ view, q, offset, limit });
+    const scoped = all.filter((row) => view !== "attention" || row.is_attention).filter((row) => !q || row.creator_name.includes(q));
+    return { updated_at: "2026-09-08T00:00:00Z", scheduler_enabled: true, timezone: "Asia/Shanghai", view, total: scoped.length, offset, limit, next_offset: offset + limit < scoped.length ? offset + limit : null, summary: { blocked_count: 24, overdue_count: 99, oldest_overdue_at: "2026-09-01T00:00:00Z" }, suppressed_count: 7, items: scoped.slice(offset, offset + limit) };
+  }});
+  await page.goto("/admin/scheduler?page=21");
+  await page.locator("details").filter({ hasText: "Normal source plans" }).locator("summary").click({ force: true });
+  await expect(page.getByText("Creator 500", { exact: true })).toBeVisible();
+  expect(reads.every((read) => read.limit <= 500)).toBe(true);
+  await expect(page.getByText("99", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("24", { exact: true }).first()).toBeVisible();
 });

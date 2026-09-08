@@ -7,6 +7,7 @@ import { ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components
 import { useToast } from "@/components/Toast";
 import { api, queryKeys, type GitllerySettings } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { writeClipboardText } from "@/lib/clipboard";
 
 type CapabilityName = keyof GitllerySettings["capabilities"];
 
@@ -45,7 +46,7 @@ export default function GitllerySettingsPage() {
 
   const copyCommand = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command);
+      await writeClipboardText(command);
       toast.success({ message: t("common.copied") });
     } catch {
       toast.error({ message: t("gitllery_settings.copy_failed") });

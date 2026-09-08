@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiError, request } from "../src/lib/api/client.ts";
+import { ApiError, request, requestBlob } from "../src/lib/api/client.ts";
 
 function installBrowserToken(token = "jwt-fixture") {
   const removed = [];
@@ -130,4 +130,49 @@ test("request distinguishes network failures and preserves 204 responses", async
 
   globalThis.fetch = async () => new Response(null, { status: 204 });
   assert.equal(await request("/api/v1/no-content", { method: "DELETE" }), undefined);
+});
+
+test("requestBlob shares auth/header/error handling and preserves response metadata", async () => {
+  installBrowserToken();
+  let received;
+  globalThis.fetch = async (_url, init) => {
+    received = new Headers(init.headers);
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": "attachment; filename*=UTF-8''backup%20safe.zip",
+      },
+    });
+  };
+  const result = await requestBlob("/api/v1/admin/backup/download?filename=backup.zip", {
+    headers: { "X-Trace": "binary" },
+  });
+  assert.equal(received.get("authorization"), "Bearer jwt-fixture");
+  assert.equal(received.get("x-trace"), "binary");
+  assert.equal(received.has("content-type"), false);
+  assert.equal(result.contentDisposition, "attachment; filename*=UTF-8''backup%20safe.zip");
+  assert.equal(result.contentType, "application/zip");
+  assert.deepEqual([...new Uint8Array(await result.blob.arrayBuffer())], [1, 2, 3]);
+
+  const browser = installBrowserToken();
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: { code: "token_expired", message: "Expired" } }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
+  await assert.rejects(requestBlob("/api/v1/admin/backup/download"), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.code, "token_expired");
+    assert.equal(error.message, "Expired");
+    return true;
+  });
+  assert.deepEqual(browser.redirects, ["/admin/login"]);
+
+  installBrowserToken();
+  globalThis.fetch = async () => new Response("proxy unavailable", { status: 503 });
+  await assert.rejects(requestBlob("/api/v1/admin/backup/download"), (error) => {
+    assert.equal(error.kind, "http");
+    assert.equal(error.detail, "proxy unavailable");
+    return true;
+  });
 });

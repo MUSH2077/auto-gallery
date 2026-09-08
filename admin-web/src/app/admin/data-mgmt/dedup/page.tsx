@@ -17,6 +17,7 @@ import {
 } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { secureRandomUuid } from "@/lib/random";
 
 const PAGE_SIZE = 25;
 const DEDUP_STATUSES = ["pending", "merged", "separate", "deferred"] as const;
@@ -209,6 +210,7 @@ export default function DedupPage() {
   const [confirm, setConfirm] = useState<{
     item: AssetDedupCase;
     representativeId: string;
+    requestId: string;
   } | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
 
@@ -251,16 +253,18 @@ export default function DedupPage() {
       item,
       action,
       representativeId,
+      requestId,
     }: {
       item: AssetDedupCase;
       action: "merge" | "separate" | "defer";
       representativeId?: string;
+      requestId: string;
     }) =>
       api.decideAssetDedupCase(item.id, {
         expected_revision: item.revision,
         action,
         representative_asset_id: representativeId,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: requestId,
       }),
     onSuccess: () => {
       setConfirm(null);
@@ -395,6 +399,7 @@ export default function DedupPage() {
                       setConfirm({
                         item,
                         representativeId: item.left.id,
+                        requestId: secureRandomUuid(),
                       })
                     }
                   />
@@ -409,6 +414,7 @@ export default function DedupPage() {
                       setConfirm({
                         item,
                         representativeId: item.right.id,
+                        requestId: secureRandomUuid(),
                       })
                     }
                   />
@@ -422,7 +428,7 @@ export default function DedupPage() {
                         className="btn-ghost min-h-11"
                         disabled={decide.isPending}
                         onClick={() =>
-                          decide.mutate({ item, action: "defer" })
+                          decide.mutate({ item, action: "defer", requestId: secureRandomUuid() })
                         }
                       >
                         {t("asset_dedup.defer")}
@@ -433,7 +439,7 @@ export default function DedupPage() {
                       className="btn-ghost min-h-11 text-danger"
                       disabled={decide.isPending}
                       onClick={() =>
-                        decide.mutate({ item, action: "separate" })
+                        decide.mutate({ item, action: "separate", requestId: secureRandomUuid() })
                       }
                     >
                       {t("asset_dedup.separate")}
@@ -483,6 +489,7 @@ export default function DedupPage() {
               item: confirm.item,
               action: "merge",
               representativeId: confirm.representativeId,
+              requestId: confirm.requestId,
             });
           }}
         />

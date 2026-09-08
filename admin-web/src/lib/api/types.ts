@@ -230,6 +230,8 @@ export interface TaskRun {
   last_heartbeat_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  available_actions?: components["schemas"]["TaskRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["TaskRead"]["disabled_reasons"];
   events?: {
     id: number;
     event_type: string;
@@ -406,35 +408,8 @@ export interface ClearImpactPreview {
   deletes_media_files: boolean;
 }
 
-export interface OperationAttentionItem {
-  id: string;
-  type: string;
-  severity: "critical" | "warning" | string;
-  status: string;
-  reason_code?: string | null;
-  title: string;
-  summary?: string | null;
-  repository_id?: string | null;
-  task_id?: string | null;
-  occurred_at: string;
-  source?: string | null;
-  available_actions: string[];
-  task?: TaskRun | null;
-}
-
-export interface OperationsOverviewResponse {
-  view: OperationsView;
-  total: number;
-  summary: {
-    attention: number;
-    critical: number;
-    warning: number;
-    resolved: number;
-    active: number;
-    resource_limited: number;
-  };
-  items: OperationAttentionItem[];
-}
+export type OperationAttentionItem = components["schemas"]["TaskAttentionItem"] | components["schemas"]["RepositoryAttentionItem"];
+export type OperationsOverviewResponse = components["schemas"]["OperationsOverview"];
 
 export interface ProviderInfo {
   source_name: string;
@@ -1017,6 +992,8 @@ export interface ImportJob {
   subscription_name?: string | null;
   creator_id?: string | null;
   creator_name?: string | null;
+  available_actions?: components["schemas"]["ImportJobRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["ImportJobRead"]["disabled_reasons"];
 }
 
 export interface RepositoryGraphEdge {
@@ -1117,6 +1094,8 @@ export interface WorkbenchSummary {
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
+      available_actions?: components["schemas"]["WorkbenchRecentJob"]["available_actions"];
+      disabled_reasons?: components["schemas"]["WorkbenchRecentJob"]["disabled_reasons"];
     }[];
     import_jobs: {
       id: string;
@@ -1135,6 +1114,8 @@ export interface WorkbenchSummary {
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
+      available_actions?: components["schemas"]["WorkbenchRecentJob"]["available_actions"];
+      disabled_reasons?: components["schemas"]["WorkbenchRecentJob"]["disabled_reasons"];
     }[];
     works: {
       id: string;
@@ -1191,49 +1172,14 @@ export interface SchedulerLoopState {
   active?: { queued: number; scheduled: number; started: number };
 }
 
-export interface SchedulerDecisionItem {
-  subscription_id: string;
-  subscription_name?: string | null;
-  subscription_active: boolean;
-  subscription_sync_enabled: boolean;
-  creator_id: string;
-  creator_name: string;
-  source_id: string;
-  source: string;
-  source_display_name?: string | null;
-  source_url?: string | null;
-  source_creator_id?: string | null;
-  source_enabled: boolean;
-  effective_mode: string;
-  timezone: string;
-  scheduled_times?: string | null;
-  schedule_rule?: CalendarScheduleRule | null;
-  sync_interval_hours: number;
-  last_synced_at?: string | null;
-  last_attempted_at?: string | null;
-  due: boolean;
-  decision: string;
-  reason: string;
-  suppression_reason?: string | null;
-  next_due_at?: string | null;
-  window_start?: string | null;
-  window_end?: string | null;
-  auth_healthy: boolean;
-  url_valid: boolean;
-  can_download: boolean;
-  is_overdue?: boolean;
-  is_attention?: boolean;
-}
+export type SchedulerDecisionItem = components["schemas"]["SchedulerDecisionItem"];
 
-export interface SchedulerDecisionsResponse {
-  updated_at: string;
-  scheduler_enabled: boolean;
-  suppressed_count?: number;
-  timezone: string;
-  view?: "attention" | "all";
-  total?: number;
-  items: SchedulerDecisionItem[];
-}
+export type SchedulerDecisionsResponse = components["schemas"]["SchedulerDecisionPage"];
+export type TagPage = components["schemas"]["TagPage"];
+export type RepeatSyncAccepted = components["schemas"]["RepeatSyncAccepted"];
+export type TaskBulkResult = components["schemas"]["TaskBulkResult"];
+export type TaskBulkStatusResult = components["schemas"]["TaskBulkStatusResult"];
+export type TaskBulkClearResult = components["schemas"]["TaskBulkClearResult"];
 
 export type SchedulerSyncMode = components["schemas"]["SchedulerSyncNowRequest"]["mode"];
 export type SchedulerSyncAcceptance = components["schemas"]["SchedulerSyncAcceptance"];
@@ -1303,6 +1249,8 @@ export interface DownloadJob {
     canonical_sha256?: string;
   }>;
   retryable?: boolean;
+  available_actions?: components["schemas"]["DownloadJobRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["DownloadJobRead"]["disabled_reasons"];
 }
 
 export interface JobProgress {

@@ -25,6 +25,7 @@ import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { hasTaskAction } from "@/lib/task-actions";
 
 type DashboardActivity = {
   key: string;
@@ -40,6 +41,7 @@ type DashboardActivity = {
   progressLabel?: string | null;
   outcome?: SyncOutcome | null;
   retryable: boolean;
+  repeatable: boolean;
 };
 
 type StatusTone = "ok" | "info" | "danger" | "warning" | "muted";
@@ -313,7 +315,8 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       progress: progress.percent,
       progressLabel: progress.label,
       outcome: job.outcome,
-      retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
+      retryable: hasTaskAction(job, "retry"),
+      repeatable: hasTaskAction(job, "repeat_sync"),
     };
   });
   const imports = data.recent.import_jobs.filter((job) => {
@@ -333,7 +336,8 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
-      retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
+      retryable: hasTaskAction(job, "retry"),
+      repeatable: false,
     };
   });
   return [...downloads, ...imports]
@@ -350,11 +354,13 @@ function ActivityRow({
   canRetry,
   retrying,
   onRetry,
+  onRepeat,
 }: {
   activity: DashboardActivity;
   canRetry: boolean;
   retrying: boolean;
   onRetry: (activity: DashboardActivity) => void;
+  onRepeat: (activity: DashboardActivity) => void;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -397,6 +403,16 @@ function ActivityRow({
             {retrying ? t("dashboard.retrying") : t("common.retry")}
           </button>
         )}
+        {activity.repeatable && canRetry && (
+          <button
+            type="button"
+            className="btn-ghost min-h-11 px-2 text-xs sm:px-3"
+            disabled={retrying}
+            onClick={() => onRepeat(activity)}
+          >
+            {t("jobs.repeat_sync")}
+          </button>
+        )}
         <Link
           href={activity.href}
           className="btn-icon hidden min-h-11 min-w-11 border border-border sm:inline-flex"
@@ -414,11 +430,13 @@ export function ActivityPanel({
   canRetry,
   retryingKey,
   onRetry,
+  onRepeat,
 }: {
   data: WorkbenchSummary;
   canRetry: boolean;
   retryingKey?: string | null;
   onRetry: (activity: DashboardActivity) => void;
+  onRepeat: (activity: DashboardActivity) => void;
 }) {
   const t = useT();
   const activities = useMemo(() => buildActivities(data, t), [data, t]);
@@ -461,6 +479,7 @@ export function ActivityPanel({
                         canRetry={canRetry}
                         retrying={retryingKey === activity.key}
                         onRetry={onRetry}
+                        onRepeat={onRepeat}
                       />
                     </div>
                   );

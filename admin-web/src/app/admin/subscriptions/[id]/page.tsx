@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CalendarScheduleRule, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
 import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
@@ -86,9 +86,11 @@ export default function SubscriptionDetailPage() {
     refetchInterval: 15000,
   });
   const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
-  const decisions = useQuery({
+  const decisions = useInfiniteQuery({
     queryKey: [...queryKeys.schedulerDecisions, "subscription", id],
-    queryFn: () => api.schedulerDecisionsForSubscriptions([id]),
+    queryFn: ({ pageParam }) => api.schedulerDecisionsForSubscriptions([id], pageParam, 100),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_offset ?? undefined,
     refetchInterval: 15000,
   });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
@@ -187,8 +189,8 @@ export default function SubscriptionDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const decisionBySource = useMemo(
-    () => new Map((decisions.data?.items || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
-    [decisions.data?.items, id],
+    () => new Map((decisions.data?.pages.flatMap((page) => page.items) || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
+    [decisions.data?.pages, id],
   );
   const detailStats = useMemo(() => {
     const sourceRows = sources.data || [];
@@ -327,6 +329,12 @@ export default function SubscriptionDetailPage() {
               <EmptyState title={t("subscription_detail.no_sources")} description={t("subscription_detail.no_sources_desc")} />
             )}
             {startSync.error && <p className="text-red-600 text-sm mt-2">{(startSync.error as Error).message}</p>}
+            {decisions.isLoading && <p role="status" className="mt-2 text-xs text-muted">{t("subscriptions.decisions_loading")}</p>}
+            {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
+            {decisions.data && <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted">
+              <span>{t("subscriptions.decisions_loaded", { loaded: decisionBySource.size, total: decisions.data.pages[0]?.total || 0 })}</span>
+              {decisions.hasNextPage && <button className="btn-ghost" disabled={decisions.isFetchingNextPage} onClick={() => void decisions.fetchNextPage()}>{decisions.isFetchingNextPage ? t("common.loading") : t("common.load_more")}</button>}
+            </div>}
           </div>
         </div>
 

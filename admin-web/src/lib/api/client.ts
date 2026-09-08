@@ -62,9 +62,9 @@ async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message, detail, kind, body || undefined);
 }
 
-export async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function fetchApiResponse(path: string, options: RequestInit | undefined, jsonContentType: boolean): Promise<Response> {
   const headers = new Headers(options?.headers);
-  if (!headers.has("Content-Type") && !(options?.body instanceof FormData)) {
+  if (jsonContentType && !headers.has("Content-Type") && !(options?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   // Attach JWT token if present in localStorage
@@ -90,7 +90,6 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
         : "Network error";
     throw new ApiError(0, message, error, "network");
   }
-  if (res.status === 204) return undefined as T;
   if (!res.ok) {
     const error = await apiErrorFromResponse(res);
     // Global protected-route 401 handler: preserve the server rejection while
@@ -98,5 +97,26 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     if (res.status === 401 && !path.startsWith("/api/v1/auth/")) clearAuthOn401();
     throw error;
   }
+  return res;
+}
+
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetchApiResponse(path, options, true);
+  if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+export interface BlobResponse {
+  blob: Blob;
+  contentDisposition: string | null;
+  contentType: string | null;
+}
+
+export async function requestBlob(path: string, options?: RequestInit): Promise<BlobResponse> {
+  const res = await fetchApiResponse(path, options, false);
+  return {
+    blob: await res.blob(),
+    contentDisposition: res.headers.get("Content-Disposition"),
+    contentType: res.headers.get("Content-Type"),
+  };
 }

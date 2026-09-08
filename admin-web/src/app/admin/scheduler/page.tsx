@@ -426,6 +426,8 @@ function SchedulerContent() {
   const stateFilter = searchParams.get("state") || "all";
   const parsedPage = Number.parseInt(searchParams.get("page") || "1", 10);
   const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const parsedAttentionPage = Number.parseInt(searchParams.get("attention_page") || "1", 10);
+  const attentionPage = Number.isFinite(parsedAttentionPage) && parsedAttentionPage > 0 ? parsedAttentionPage : 1;
 
   const updateParams = (updates: Record<string, string | null>) => {
     const next = new URLSearchParams(searchParams.toString());
@@ -442,13 +444,13 @@ function SchedulerContent() {
     },
   });
   const attention = useQuery({
-    queryKey: [...queryKeys.schedulerDecisions, "attention"],
-    queryFn: () => api.schedulerDecisionsView("attention", 0, 500),
+    queryKey: [...queryKeys.schedulerDecisions, "attention", attentionPage, PLAN_PAGE_SIZE],
+    queryFn: () => api.schedulerDecisionsView("attention", (attentionPage - 1) * PLAN_PAGE_SIZE, PLAN_PAGE_SIZE),
     refetchInterval: 30_000,
   });
   const plans = useQuery({
-    queryKey: [...queryKeys.schedulerDecisions, "all"],
-    queryFn: () => api.schedulerDecisionsView("all", 0, 500),
+    queryKey: [...queryKeys.schedulerDecisions, "all", page, PLAN_PAGE_SIZE, search, stateFilter],
+    queryFn: () => api.schedulerDecisionsView("all", (page - 1) * PLAN_PAGE_SIZE, PLAN_PAGE_SIZE, { q: search, state: stateFilter as "all" | "due" | "manual" | "disabled" }),
     enabled: plansOpen,
     staleTime: 30_000,
   });
@@ -624,31 +626,19 @@ function SchedulerContent() {
 
   const loop = queue.data?.scheduler_loop;
   const attentionItems = attention.data?.items || [];
-  const blockedCount = attentionItems.filter((item) => !item.is_overdue).length;
-  const overdueCount = attentionItems.filter((item) => item.is_overdue).length;
-  const oldestOverdueAt = attentionItems
-    .filter((item) => item.is_overdue && item.next_due_at)
-    .map((item) => item.next_due_at as string)
-    .sort()[0] || null;
+  const blockedCount = attention.data?.summary.blocked_count || 0;
+  const overdueCount = attention.data?.summary.overdue_count || 0;
+  const oldestOverdueAt = attention.data?.summary.oldest_overdue_at || null;
   const visibleAttention = attentionItems;
-
-  const filteredPlans = useMemo(() => {
-    const normalized = search.trim().toLowerCase();
-    return (plans.data?.items || []).filter((item) => {
-      const matchesSearch = !normalized || [
-        item.creator_name,
-        item.subscription_name,
-        item.source,
-        item.source_url,
-      ].some((value) => (value || "").toLowerCase().includes(normalized));
-      const matchesState = stateFilter === "all"
-        || (stateFilter === "due" && item.due)
-        || (stateFilter === "manual" && item.reason === "manual_mode")
-        || (stateFilter === "disabled" && ["source_disabled", "subscription_sync_disabled", "subscription_inactive"].includes(item.reason));
-      return matchesSearch && matchesState;
-    });
-  }, [plans.data?.items, search, stateFilter]);
-  const planPage = filteredPlans.slice((page - 1) * PLAN_PAGE_SIZE, page * PLAN_PAGE_SIZE);
+  const planPage = plans.data?.items || [];
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil((plans.data?.total || 0) / PLAN_PAGE_SIZE));
+    if (page > totalPages) updateParams({ page: totalPages === 1 ? null : String(totalPages) });
+  }, [page, plans.data?.total]);
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil((attention.data?.total || 0) / PLAN_PAGE_SIZE));
+    if (attentionPage > totalPages) updateParams({ attention_page: totalPages === 1 ? null : String(totalPages) });
+  }, [attentionPage, attention.data?.total]);
   const batchActive = !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data);
 
   return (
@@ -739,6 +729,7 @@ function SchedulerContent() {
             </div>
           )}
           {visibleAttention.map((item) => <AttentionRow key={item.source_id} item={item} />)}
+          {attention.data && <Pagination page={attentionPage} pageSize={PLAN_PAGE_SIZE} total={attention.data.total} onPageChange={(next) => updateParams({ attention_page: next === 1 ? null : String(next) })} />}
         </section>
 
         <details className="mb-8 rounded-md border border-border bg-surface" onToggle={(event) => setPlansOpen(event.currentTarget.open)}>
@@ -760,7 +751,7 @@ function SchedulerContent() {
             {plans.error && <div className="p-3"><ErrorState message={(plans.error as Error).message} onRetry={() => plans.refetch()} /></div>}
             {!plans.isLoading && !plans.error && planPage.length === 0 && <div className="p-3"><EmptyState title={t("scheduler.no_sources")} description={t("scheduler.no_sources_desc")} /></div>}
             {planPage.map((item) => <PlanRow key={item.source_id} item={item} />)}
-            <Pagination page={page} pageSize={PLAN_PAGE_SIZE} total={filteredPlans.length} onPageChange={(next) => updateParams({ page: next === 1 ? null : String(next) })} />
+            <Pagination page={page} pageSize={PLAN_PAGE_SIZE} total={plans.data?.total || 0} onPageChange={(next) => updateParams({ page: next === 1 ? null : String(next) })} />
           </div>
         </details>
     </PageShell>

@@ -9,19 +9,29 @@ import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
 import { Check, Copy } from "lucide-react";
+import { writeClipboardText } from "@/lib/clipboard";
 
 function CopyButton({ text }: { text: string }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
-    <button
+    <span className="inline-flex flex-col items-start gap-1"><button
       type="button"
-      onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+      disabled={pending}
+      onClick={async () => {
+        if (pending) return;
+        setPending(true); setError(null); setCopied(false);
+        try { await writeClipboardText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+        catch (cause) { setError((cause as Error).message); }
+        finally { setPending(false); }
+      }}
       className="inline-flex min-h-11 items-center gap-1.5 rounded border border-border px-3 py-1 text-xs transition-colors hover:bg-subtle dark:hover:bg-subtle"
     >
       {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
       {copied ? t("common.copied") : t("common.copy")}
-    </button>
+    </button>{error && <span role="alert" className="text-xs text-danger">{t("common.copy_failed")}: {error}</span>}</span>
   );
 }
 
