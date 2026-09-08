@@ -418,22 +418,32 @@ async def _run_batch_slice(task_id: str, options: dict):
         task = await fence_current_admin_operation_transaction(db, task_id=task_id)
         await TaskService(db).update_task(task, progress=progress, result=result)
         if pending:
-            next_due = (
+            checked_at = now()
+            next_due, due_count = (
                 await db.execute(
-                    select(func.min(SchedulerBatchItem.next_retry_at)).where(
+                    select(
+                        func.min(SchedulerBatchItem.next_retry_at),
+                        func.count().filter(or_(
+                            SchedulerBatchItem.next_retry_at.is_(None),
+                            SchedulerBatchItem.next_retry_at <= checked_at,
+                        )),
+                    ).where(
                         SchedulerBatchItem.batch_id == batch_id, SchedulerBatchItem.status.not_in(TERMINAL)
                     )
                 )
-            ).scalar_one()
-            fresh = result["pending_count"] > 0
-            delay = 1 if fresh else max(1, min(300, (next_due - now()).total_seconds())) if next_due else 30
+            ).one()
+            # Continue every kind of due work, including previously visited
+            # waiting/bound items. A status label alone says nothing about
+            # readiness; future-only work stays in the delayed durable outbox.
+            ready = due_count > 0
+            delay = 1 if ready else max(1, min(300, (next_due - checked_at).total_seconds())) if next_due else 30
             handoff = await prepare_admin_operation_handoff(db, task_id, delivery[1], options=options, delay_seconds=delay, progress=progress)
             if handoff is None:
                 raise AdminOperationAttemptRejected("Batch handoff is no longer current")
         else:
             batch.state = "failed" if result["failed_count"] else "complete"
         await db.commit()
-    return {**result, **({"_admin_handoff": True, "_admin_ready_successor": handoff.attempt if fresh else None} if pending else {})}
+    return {**result, **({"_admin_handoff": True, "_admin_ready_successor": handoff.attempt if ready else None} if pending else {})}
 
 
 async def cancel_batch(db, task_id, *, operator, note=None):

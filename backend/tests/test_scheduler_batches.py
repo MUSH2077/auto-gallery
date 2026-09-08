@@ -1166,3 +1166,79 @@ async def test_legacy_unbound_item_rechecks_completion_after_preparation(db, mon
     assert item.owns_download is False
     jobs = (await db.execute(select(DownloadJob))).scalars().all()
     assert {j.id for j in jobs} == (set() if compacted else {later_id})
+
+
+@pytest.mark.parametrize("retry_time", ["overdue", "unset"])
+async def test_due_bound_receipts_publish_successor_with_no_unvisited_items(db, retry_time):
+    import time
+    from app.jobs.admin_operations import _run_registered_admin_operation
+    from app.models import RepositorySyncReceipt, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services.scheduler_batches import initialize_batch
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    await seed(db, number=31)
+    accepted = await admit(db)
+    task_id = UUID(accepted["task_id"])
+    await initialize_batch(db, task_id)
+    items = (await db.execute(select(SchedulerBatchItem))).scalars().all()
+    for item in items:
+        item.status = "waiting"
+        item.attempts = 2
+        item.next_retry_at = datetime.now(timezone.utc) - timedelta(minutes=1) if retry_time == "overdue" else None
+        item.download_job_id = uuid4()
+        db.add(RepositorySyncReceipt(repository_id=item.source_id, source_download_job_id=item.download_job_id,
+                                     source="pixiv", status="complete", finished_at=datetime.now(timezone.utc)))
+    await db.commit()
+    started = time.monotonic()
+    first = await _run_registered_admin_operation(str(task_id), 1)
+    first_elapsed = time.monotonic() - started
+    assert first["pending_count"] == 0
+    assert first["succeeded_count"] == 25
+    assert first["waiting_count"] == 6
+    successor_id = operations.deterministic_admin_rq_job_id(str(task_id), 2)
+    assert get_redis().exists(f"rq:job:{successor_id}"), "Due receipt reconciliation must publish without a coordinator tick"
+    await db.rollback()
+    parent = await db.get(TaskRun, task_id, populate_existing=True)
+    assert parent.meta[operations.ADMIN_DISPATCH_META_KEY]["publication_state"] == "published"
+    await db.rollback()
+    second = await _run_registered_admin_operation(str(task_id), 2)
+    assert second["succeeded_count"] == 31
+    assert second["status"] == "complete"
+    await db.rollback()
+    items = (await db.execute(select(SchedulerBatchItem))).scalars().all()
+    assert all(item.attempts == 3 for item in items)
+    assert (await db.get(TaskRun, task_id, populate_existing=True)).result_data["succeeded_count"] == 31
+    print(f"{retry_time}: first slice {first_elapsed:.3f}s; two registered slices {time.monotonic() - started:.3f}s; no coordinator invoked")
+
+
+@pytest.mark.parametrize("item_status", ["waiting", "pending"])
+async def test_future_only_items_leave_delayed_successor_unpublished(db, item_status):
+    from app.jobs.admin_operations import _run_registered_admin_operation
+    from app.models import TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services.scheduler_batches import initialize_batch
+    from app.services import operations
+    from app.services.redis_client import get_redis
+
+    await seed(db, number=3)
+    accepted = await admit(db)
+    task_id = UUID(accepted["task_id"])
+    await initialize_batch(db, task_id)
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=120)
+    items = (await db.execute(select(SchedulerBatchItem))).scalars().all()
+    for item in items:
+        item.status, item.next_retry_at, item.attempts = item_status, retry_at, 2
+    await db.commit()
+    result = await _run_registered_admin_operation(str(task_id), 1)
+    assert result["_admin_handoff"] is True
+    successor_id = operations.deterministic_admin_rq_job_id(str(task_id), 2)
+    assert not get_redis().exists(f"rq:job:{successor_id}"), "Future-only items must not cause immediate worker churn"
+    await db.rollback()
+    parent = await db.get(TaskRun, task_id, populate_existing=True)
+    dispatch = parent.meta[operations.ADMIN_DISPATCH_META_KEY]
+    assert dispatch["publication_state"] == "pending"
+    assert abs((datetime.fromisoformat(dispatch["next_retry_at"]) - retry_at).total_seconds()) < 2
+    items = (await db.execute(select(SchedulerBatchItem))).scalars().all()
+    assert all(item.attempts == 2 and item.next_retry_at == retry_at for item in items)
