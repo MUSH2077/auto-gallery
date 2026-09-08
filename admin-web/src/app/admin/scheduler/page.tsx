@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   EmptyState,
   ErrorState,
@@ -28,7 +28,7 @@ import {
   type SchedulerSyncMode,
   type TaskRun,
 } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
@@ -39,6 +39,7 @@ import {
 } from "@/lib/i18n-format";
 
 const PLAN_PAGE_SIZE = 25;
+const BATCH_ITEM_PAGE_SIZE = 50;
 const BATCH_STORAGE_PREFIX = "auto-gallery-scheduler-batch-v1";
 
 interface StoredBatchIntent {
@@ -86,20 +87,84 @@ function schedulerCount(result: SchedulerBatchResult, key: keyof SchedulerBatchR
   return typeof value === "number" ? value : 0;
 }
 
+const BATCH_REASON_KEYS: Record<string, string> = {
+  auth_unhealthy: "scheduler.reason.auth_unhealthy",
+  no_eligible_member_source: "scheduler.batch_reason.no_eligible_member_source",
+  provider_not_downloadable: "scheduler.reason.provider_not_downloadable",
+  scheduler_disabled: "scheduler.reason.scheduler_disabled",
+  source_disabled: "scheduler.reason.source_disabled",
+  source_not_found: "scheduler.batch_reason.source_not_found",
+  source_url_empty: "scheduler.batch_reason.source_url_empty",
+  subscription_inactive: "scheduler.reason.subscription_inactive",
+  subscription_not_found: "scheduler.batch_reason.subscription_not_found",
+  subscription_sync_disabled: "scheduler.reason.subscription_sync_disabled",
+  unknown_provider: "scheduler.reason.unknown_provider",
+  url_invalid: "scheduler.reason.url_invalid",
+};
+
+function schedulerBatchReasonLabel(t: TFunction, reason: string) {
+  const key = BATCH_REASON_KEYS[reason];
+  return key ? t(key) : t("scheduler.batch_reason.other", { reason });
+}
+
+function schedulerBatchProgressLabel(t: TFunction, task: TaskRun | undefined, result: SchedulerBatchResult) {
+  if (!task) return t("scheduler.batch_accepted");
+  if (task.status === "cancelled" && result.cleanup_pending !== false) return t("scheduler.batch_progress.cancelling");
+  if (task.status === "cancelled") return t("scheduler.batch_progress.cancelled");
+  if (task.status === "failed" || task.status === "stale" || result.status === "partial_error") return t("scheduler.batch_progress.failed");
+  if (result.status === "noop") return t("scheduler.batch_progress.noop");
+  if (task.status === "complete" || result.status === "complete") return t("scheduler.batch_progress.complete");
+  if (schedulerCount(result, "importing_count") > 0) return t("scheduler.batch_progress.importing");
+  if (schedulerCount(result, "downloading_count") > 0) return t("scheduler.batch_progress.downloading");
+  if (result.waiting_reason === "infrastructure_unavailable") return t("scheduler.batch_progress.recovery");
+  if (schedulerCount(result, "waiting_count") > 0) return t("scheduler.batch_progress.waiting");
+  if (schedulerCount(result, "queued_count") > 0 || task.status === "enqueued") return t("scheduler.batch_progress.queued");
+  if (schedulerCount(result, "pending_count") > 0) return t("scheduler.batch_progress.pending");
+  return t("scheduler.batch_progress.running");
+}
+
+function isIrrecoverableTrackingError(error: Error | null | undefined) {
+  return error instanceof ApiError && (error.status === 403 || error.status === 404);
+}
+
+function trackingErrorDetail(t: TFunction, error: Error) {
+  if (error instanceof ApiError && error.kind === "network") return t("scheduler.batch_tracking_network");
+  if (error instanceof ApiError) return t("scheduler.batch_tracking_http", { status: error.status });
+  return t("scheduler.batch_tracking_unknown");
+}
+
 function SchedulerBatchStatus({
   intent,
   task,
   items,
+  itemsTotal,
   isLoading,
+  taskError,
+  itemError,
   onCancel,
+  onRetryTask,
+  onRetryItems,
+  onClearReference,
+  onLoadMoreItems,
   cancelling,
+  loadingMoreItems,
+  hasMoreItems,
 }: {
   intent: StoredBatchIntent;
   task?: TaskRun;
   items: SchedulerBatchItem[];
+  itemsTotal: number;
   isLoading: boolean;
+  taskError?: Error | null;
+  itemError?: Error | null;
   onCancel: () => void;
+  onRetryTask: () => void;
+  onRetryItems: () => void;
+  onClearReference: () => void;
+  onLoadMoreItems: () => void;
   cancelling: boolean;
+  loadingMoreItems: boolean;
+  hasMoreItems: boolean;
 }) {
   const t = useT();
   const result = schedulerBatchResult(task);
@@ -107,11 +172,10 @@ function SchedulerBatchStatus({
   const total = task?.progress_total ?? schedulerCount(result, "candidate_count");
   const active = !schedulerBatchSettled(task);
   const cleanupPending = task?.status === "cancelled" && result.cleanup_pending !== false;
-  const progressLabel = typeof task?.progress_data?.label === "string"
-    ? task.progress_data.label
-    : schedulerBatchSettled(task)
-      ? t("scheduler.batch_terminal")
-      : t("scheduler.batch_accepted");
+  const progressLabel = schedulerBatchProgressLabel(t, task, result);
+  const diagnosticLabel = typeof task?.progress_data?.label === "string" ? task.progress_data.label : undefined;
+  const taskReferenceIrrecoverable = isIrrecoverableTrackingError(taskError);
+  const itemReferenceIrrecoverable = isIrrecoverableTrackingError(itemError);
   const counts: Array<[keyof SchedulerBatchResult, string]> = [
     ["pending_count", "pending"],
     ["queued_count", "queued"],
@@ -131,7 +195,7 @@ function SchedulerBatchStatus({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-semibold">{t("scheduler.batch_current")}</h2>
-            {task ? <StatusBadge status={cleanupPending ? "running" : task.status} /> : <StatusBadge status="enqueued" />}
+            {taskError ? <StatusBadge status="failed" /> : task ? <StatusBadge status={cleanupPending ? "running" : task.status} /> : <StatusBadge status="enqueued" />}
           </div>
           <p className="mt-1 text-xs text-muted">
             {t(`scheduler.batch_mode.${intent.mode}`)} · <span className="font-mono">{intent.taskId?.slice(0, 8) || intent.requestId.slice(0, 8)}</span>
@@ -158,11 +222,24 @@ function SchedulerBatchStatus({
         </p>
       )}
 
+      {taskError && (
+        <div className="border-t border-danger/30 bg-danger-subtle px-3 py-3 text-sm text-danger" role="alert">
+          <p className="font-medium">
+            {taskReferenceIrrecoverable ? t("scheduler.batch_tracking_irrecoverable") : t("scheduler.batch_task_error")}
+          </p>
+          <p className="mt-1 text-xs" title={taskError.message}>{trackingErrorDetail(t, taskError)}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!taskReferenceIrrecoverable && <button type="button" className="btn-danger min-h-11 text-xs" onClick={onRetryTask}>{t("scheduler.batch_retry_task")}</button>}
+            {taskReferenceIrrecoverable && <button type="button" className="btn-danger min-h-11 text-xs" onClick={onClearReference}>{t("scheduler.batch_clear_reference")}</button>}
+          </div>
+        </div>
+      )}
+
       <div className="border-t border-border p-3">
-        {isLoading && !task ? <div className="h-16 animate-pulse rounded bg-subtle" /> : (
+        {isLoading && !task && !taskError ? <div className="h-16 animate-pulse rounded bg-subtle" /> : !task && taskError ? null : (
           <>
             <div className="flex items-center justify-between gap-3 text-xs">
-              <span className="font-medium">{progressLabel}</span>
+              <span className="font-medium" title={diagnosticLabel}>{progressLabel}</span>
               <span className="text-muted">{current} / {total || "—"}</span>
             </div>
             <progress className="mt-2 h-2 w-full accent-accent" max={Math.max(total, 1)} value={Math.min(current, Math.max(total, 1))} aria-label={t("jobs.progress")} />
@@ -174,6 +251,28 @@ function SchedulerBatchStatus({
               })}
               {!total && <span className="text-xs text-muted">{t("scheduler.batch_waiting_snapshot")}</span>}
             </div>
+            {Object.entries(result.skipped_reasons || {}).length > 0 && (
+              <div className="mt-3 border-t border-border pt-3 text-xs">
+                <p className="font-medium">{t("scheduler.batch_skipped_reasons")}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {Object.entries(result.skipped_reasons || {}).map(([reason, count]) => (
+                    <span key={reason} className="badge">{schedulerBatchReasonLabel(t, reason)}: {count}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {itemError && (
+              <div className="mt-3 rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger" role="alert">
+                <p className="font-medium">
+                  {itemReferenceIrrecoverable ? t("scheduler.batch_tracking_irrecoverable") : t("scheduler.batch_items_error")}
+                </p>
+                <p className="mt-1 text-xs" title={itemError.message}>{trackingErrorDetail(t, itemError)}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {!itemReferenceIrrecoverable && <button type="button" className="btn-danger min-h-11 text-xs" onClick={onRetryItems}>{t("scheduler.batch_retry_items")}</button>}
+                  {itemReferenceIrrecoverable && <button type="button" className="btn-danger min-h-11 text-xs" onClick={onClearReference}>{t("scheduler.batch_clear_reference")}</button>}
+                </div>
+              </div>
+            )}
             {notableItems.length > 0 && (
               <div className="mt-3 space-y-1 border-t border-border pt-3">
                 {notableItems.map((item) => (
@@ -181,9 +280,21 @@ function SchedulerBatchStatus({
                     <SourceBadge source={item.source || "unknown"} />
                     <span className="font-mono text-muted">{item.source_id.slice(0, 8)}</span>
                     <StatusBadge status={item.status} />
-                    <span className={item.status === "failed" ? "text-danger" : "text-muted"}>{item.error || item.reason_code || "—"}</span>
+                    <span className={item.status === "failed" ? "text-danger" : "text-muted"}>
+                      {item.error || (item.reason_code ? schedulerBatchReasonLabel(t, item.reason_code) : "—")}
+                    </span>
                   </div>
                 ))}
+              </div>
+            )}
+            {itemsTotal > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted">
+                <span>{t("scheduler.batch_items_loaded", { loaded: items.length, total: itemsTotal })}</span>
+                {hasMoreItems && (
+                  <button type="button" className="btn-ghost min-h-11 text-xs" onClick={onLoadMoreItems} disabled={loadingMoreItems}>
+                    {loadingMoreItems ? t("common.loading") : t("scheduler.batch_load_more")}
+                  </button>
+                )}
               </div>
             )}
             {schedulerBatchSettled(task) && (
@@ -322,17 +433,29 @@ function SchedulerContent() {
     queryKey: queryKeys.tasks.detail(batchIntent?.taskId || ""),
     queryFn: () => api.getTask(batchIntent?.taskId || ""),
     enabled: !!batchIntent?.taskId,
+    retry: false,
     refetchInterval: (query) => schedulerBatchSettled(query.state.data) ? false : POLL_ACTIVE_MS,
     refetchIntervalInBackground: true,
   });
 
-  const batchItems = useQuery({
+  const batchItems = useInfiniteQuery({
     queryKey: ["scheduler-batch-items", batchIntent?.taskId || ""],
-    queryFn: () => api.getSchedulerBatchItems(batchIntent?.taskId || "", 0, 50),
-    enabled: !!batchIntent?.taskId,
+    queryFn: ({ pageParam }) => api.getSchedulerBatchItems(batchIntent?.taskId || "", pageParam, BATCH_ITEM_PAGE_SIZE),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, _pages, lastPageParam) => {
+      const nextOffset = lastPageParam + lastPage.items.length;
+      return lastPage.items.length > 0 && nextOffset < lastPage.total ? nextOffset : undefined;
+    },
+    enabled: !!batchIntent?.taskId && !batchTask.error,
+    retry: false,
     refetchInterval: () => schedulerBatchSettled(batchTask.data) ? false : POLL_ACTIVE_MS,
     refetchIntervalInBackground: true,
   });
+  const batchItemList = useMemo(
+    () => batchItems.data?.pages.flatMap((page) => page.items) || [],
+    [batchItems.data?.pages],
+  );
+  const batchItemTotal = batchItems.data?.pages[0]?.total || 0;
 
   useJobWebSocket({
     enabled: !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data),
@@ -423,6 +546,17 @@ function SchedulerContent() {
     submitBatch.mutate(intent);
   };
 
+  const clearBatchReference = () => {
+    const taskId = batchIntent?.taskId;
+    persistBatchIntent(null);
+    finalToastRef.current = null;
+    restoredPendingRef.current = false;
+    if (taskId) {
+      queryClient.removeQueries({ queryKey: queryKeys.tasks.detail(taskId) });
+      queryClient.removeQueries({ queryKey: ["scheduler-batch-items", taskId] });
+    }
+  };
+
   useEffect(() => {
     const task = batchTask.data;
     if (!batchIntent?.taskId || batchIntent.finalNotified || !schedulerBatchSettled(task)) return;
@@ -483,10 +617,19 @@ function SchedulerContent() {
           <SchedulerBatchStatus
             intent={batchIntent}
             task={batchTask.data}
-            items={batchItems.data?.items || []}
+            items={batchItemList}
+            itemsTotal={batchItemTotal}
             isLoading={batchTask.isLoading}
+            taskError={batchTask.error}
+            itemError={batchItems.error}
             onCancel={() => cancelBatch.mutate()}
+            onRetryTask={() => { void batchTask.refetch(); }}
+            onRetryItems={() => { void batchItems.refetch(); }}
+            onClearReference={clearBatchReference}
+            onLoadMoreItems={() => { void batchItems.fetchNextPage(); }}
             cancelling={cancelBatch.isPending}
+            loadingMoreItems={batchItems.isFetchingNextPage}
+            hasMoreItems={batchItems.hasNextPage}
           />
         )}
 

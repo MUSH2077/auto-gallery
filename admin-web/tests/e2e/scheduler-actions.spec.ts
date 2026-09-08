@@ -4,7 +4,11 @@ test.describe.configure({ timeout: 60_000 });
 
 type FixtureOptions = {
   post?: "accepted" | "conflict" | "network-once";
+  language?: "en" | "zh";
   taskStates?: Array<Record<string, unknown>>;
+  taskReadError?: { status?: number; network?: boolean; count?: number };
+  itemReadError?: { status?: number; network?: boolean; count?: number };
+  itemPage?: (offset: number, limit: number) => { total: number; items: Array<Record<string, unknown>> };
 };
 
 const systemUser = {
@@ -30,6 +34,8 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
   const posts: Array<Record<string, unknown>> = [];
   let postAttempts = 0;
   let taskReads = 0;
+  let taskSuccessReads = 0;
+  let itemReads = 0;
   let wsTicketReads = 0;
   const taskStates = options.taskStates || [{
     id: "task-accepted",
@@ -70,11 +76,11 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
     domain: "127.0.0.1",
     path: "/",
   }]);
-  await context.addInitScript(() => {
+  await context.addInitScript((language) => {
     localStorage.setItem("ag_token", "scheduler-fixture-token");
-    localStorage.setItem("auto-gallery-lang", "en");
+    localStorage.setItem("auto-gallery-lang", language);
     localStorage.setItem("auto-gallery-theme", "dark");
-  });
+  }, options.language || "en");
   await context.route("https://fonts.loli.net/**", (route) => route.fulfill({
     status: 200,
     contentType: "text/css",
@@ -109,17 +115,34 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
       }, 202);
     }
     if (/^\/api\/v1\/tasks\/[^/]+$/.test(path)) {
-      const state = taskStates[Math.min(taskReads, taskStates.length - 1)];
       taskReads += 1;
+      if (options.taskReadError && taskReads <= (options.taskReadError.count ?? Number.POSITIVE_INFINITY)) {
+        if (options.taskReadError.network) return route.abort("connectionreset");
+        const status = options.taskReadError.status || 503;
+        return json(route, { detail: `Task fixture ${status}` }, status);
+      }
+      const state = taskStates[Math.min(taskSuccessReads, taskStates.length - 1)];
+      taskSuccessReads += 1;
       return json(route, { ...state, id: path.split("/").at(-1) });
     }
-    if (/^\/api\/v1\/admin\/scheduler\/batches\/[^/]+\/items$/.test(path)) return json(route, {
-      total: 2,
-      items: [
-        { id: "item-1", source_id: "source-1", source: "pixiv", status: "succeeded", attempts: 1, next_retry_at: null, download_job_id: "download-1", reason_code: null, error: null, outcome: { import_status: "complete" } },
-        { id: "item-2", source_id: "source-2", source: "x", status: "failed", attempts: 2, next_retry_at: null, download_job_id: "download-2", reason_code: "import_failed", error: "Main import failed", outcome: { import_status: "failed" } },
-      ],
-    });
+    if (/^\/api\/v1\/admin\/scheduler\/batches\/[^/]+\/items$/.test(path)) {
+      itemReads += 1;
+      if (options.itemReadError && itemReads <= (options.itemReadError.count ?? Number.POSITIVE_INFINITY)) {
+        if (options.itemReadError.network) return route.abort("connectionreset");
+        const status = options.itemReadError.status || 503;
+        return json(route, { detail: `Item fixture ${status}` }, status);
+      }
+      const offset = Number(url.searchParams.get("offset") || 0);
+      const limit = Number(url.searchParams.get("limit") || 50);
+      if (options.itemPage) return json(route, options.itemPage(offset, limit));
+      return json(route, {
+        total: 2,
+        items: [
+          { id: "item-1", source_id: "source-1", source: "pixiv", status: "succeeded", attempts: 1, next_retry_at: null, download_job_id: "download-1", reason_code: null, error: null, outcome: { import_status: "complete" } },
+          { id: "item-2", source_id: "source-2", source: "x", status: "failed", attempts: 2, next_retry_at: null, download_job_id: "download-2", reason_code: "import_failed", error: "Main import failed", outcome: { import_status: "failed" } },
+        ],
+      });
+    }
     if (/^\/api\/v1\/tasks\/[^/]+\/cancel$/.test(path)) return json(route, {
       task_id: path.split("/").at(-2), status: "cancelled", cleanup_pending: true, cleanup_task_id: "cleanup-task",
     });
@@ -148,6 +171,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
     posts,
     postAttempts: () => postAttempts,
     taskReads: () => taskReads,
+    itemReads: () => itemReads,
     wsTicketReads: () => wsTicketReads,
   };
 }
@@ -173,9 +197,10 @@ test("scheduler accepts a stable intent and restores durable partial progress af
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Current sync batch" })).toBeVisible();
-  await expect(page.getByText("Downloads and main imports reached a terminal outcome")).toBeVisible();
+  await expect(page.getByText("Batch finished with failed sources")).toBeVisible();
   await expect(page.getByText("2 succeeded", { exact: true })).toBeVisible();
   await expect(page.getByText("1 skipped", { exact: true })).toBeVisible();
+  await expect(page.getByText("Auth unhealthy: 1", { exact: true })).toBeVisible();
   await expect(page.getByText("1 failed", { exact: true })).toBeVisible();
   await expect(page.getByText("Main import failed")).toBeVisible();
   await expect(page.getByText("All sources synced successfully")).toHaveCount(0);
@@ -189,6 +214,91 @@ test("scheduler accepts a stable intent and restores durable partial progress af
   });
   expect(unexpectedConsoleErrors).toEqual([]);
 });
+
+test("scheduler renders backend lifecycle phases in Chinese", async ({ context, page }) => {
+  await installSchedulerFixtures(context, {
+    language: "zh",
+    taskStates: [{
+      id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
+      progress_stage: "waiting", progress_current: 0, progress_total: 3,
+      progress_data: { phase: "waiting", label: "Waiting for infrastructure recovery", current: 0, total: 3 },
+      result_data: { status: "pending", mode: "due_scan", candidate_count: 3, waiting_count: 3, waiting_reason: "infrastructure_unavailable" },
+    }],
+  });
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "运行调度扫描" }).click();
+  await expect(page.getByText("等待基础设施恢复", { exact: true })).toBeVisible();
+  await expect(page.getByText("Waiting for infrastructure recovery", { exact: true })).toHaveCount(0);
+});
+
+test("scheduler loads a notable outcome beyond the first bounded item page", async ({ context, page }) => {
+  const items = Array.from({ length: 51 }, (_, index) => ({
+    id: `item-${index + 1}`,
+    source_id: `source-${index + 1}`,
+    source: "pixiv",
+    status: index === 50 ? "failed" : "succeeded",
+    attempts: 1,
+    next_retry_at: null,
+    download_job_id: `download-${index + 1}`,
+    reason_code: index === 50 ? "child_failed" : null,
+    error: index === 50 ? "Failure after first page" : null,
+    outcome: { status: index === 50 ? "failed" : "complete" },
+  }));
+  const fixture = await installSchedulerFixtures(context, {
+    taskStates: [{
+      id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "failed",
+      progress_stage: "failed", progress_current: 51, progress_total: 51,
+      progress_data: { phase: "partial_error", label: "Some subscription sources failed", current: 51, total: 51 },
+      result_data: { status: "partial_error", mode: "manual_all_enabled", candidate_count: 51, succeeded_count: 50, failed_count: 1 },
+    }],
+    itemPage: (offset, limit) => ({ total: items.length, items: items.slice(offset, offset + limit) }),
+  });
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "Sync all enabled sources" }).click();
+  await expect(page.getByText("50 of 51 item details loaded", { exact: true })).toBeVisible();
+  await expect(page.getByText("Failure after first page")).toHaveCount(0);
+  await page.getByRole("button", { name: "Load more batch details" }).click();
+  await expect(page.getByText("Failure after first page")).toBeVisible();
+  expect(fixture.itemReads()).toBeGreaterThanOrEqual(2);
+});
+
+test("scheduler exposes and recovers from a transient task tracking error", async ({ context, page }) => {
+  const fixture = await installSchedulerFixtures(context, { taskReadError: { network: true, count: 1 } });
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "Run scheduler scan" }).click();
+  await expect(page.getByText("Batch status could not be refreshed.", { exact: true })).toBeVisible();
+  await expect(page.getByText("The network is unavailable. The saved batch reference was retained for a safe retry.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeDisabled();
+  await page.getByRole("button", { name: "Retry batch status" }).click();
+  await expect(page.getByText("Downloading 2", { exact: true })).toBeVisible();
+  expect(fixture.posts).toHaveLength(1);
+});
+
+test("scheduler exposes and recovers from an item-detail read error", async ({ context, page }) => {
+  const fixture = await installSchedulerFixtures(context, { itemReadError: { status: 503, count: 1 } });
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "Run scheduler scan" }).click();
+  await expect(page.getByText("Batch outcome details could not be loaded.", { exact: true })).toBeVisible();
+  await expect(page.getByText("The server rejected the tracking request (HTTP 503). The saved batch reference was retained.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Retry batch details" }).click();
+  await expect(page.getByText("Main import failed", { exact: true })).toBeVisible();
+  expect(fixture.itemReads()).toBeGreaterThanOrEqual(2);
+});
+
+for (const status of [403, 404]) {
+  test(`scheduler safely clears an irrecoverable ${status} stored task reference`, async ({ context, page }) => {
+    const fixture = await installSchedulerFixtures(context, { taskReadError: { status } });
+    await page.goto("/admin/scheduler");
+    await page.getByRole("button", { name: "Run scheduler scan" }).click();
+    await expect(page.getByText("This saved batch can no longer be accessed.", { exact: true })).toBeVisible();
+    const startButton = page.getByRole("button", { name: "Run scheduler scan" });
+    await expect(startButton).toBeDisabled();
+    await page.getByRole("button", { name: "Clear saved batch reference" }).click();
+    await expect(page.getByRole("heading", { name: "Current sync batch" })).toHaveCount(0);
+    await expect(startButton).toBeEnabled();
+    expect(fixture.posts).toHaveLength(1);
+  });
+}
 
 test("scheduler replays a lost response after refresh with the same intent", async ({ context, page }) => {
   const fixture = await installSchedulerFixtures(context, { post: "network-once" });

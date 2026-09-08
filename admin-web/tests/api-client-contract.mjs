@@ -4,13 +4,16 @@ import test from "node:test";
 import { ApiError, request } from "../src/lib/api/client.ts";
 
 function installBrowserToken(token = "jwt-fixture") {
-  globalThis.window = { location: { pathname: "/admin/settings/backup", replace() {} } };
+  const removed = [];
+  const redirects = [];
+  globalThis.window = { location: { pathname: "/admin/settings/backup", replace(path) { redirects.push(path); } } };
   globalThis.document = { cookie: "" };
   globalThis.localStorage = {
     getItem(key) { return key === "ag_token" ? token : null; },
-    removeItem() {},
+    removeItem(key) { removed.push(`local:${key}`); },
   };
-  globalThis.sessionStorage = { removeItem() {} };
+  globalThis.sessionStorage = { removeItem(key) { removed.push(`session:${key}`); } };
+  return { removed, redirects };
 }
 
 test("request merges JWT authorization with caller headers", async () => {
@@ -59,6 +62,60 @@ test("request keeps structured business rejection details", async () => {
       return true;
     },
   );
+});
+
+test("protected structured 401 clears auth and retains the rich rejection", async () => {
+  const browser = installBrowserToken();
+  const body = {
+    detail: {
+      code: "token_expired",
+      message: "The access token has expired",
+      reauthenticate: true,
+    },
+  };
+  let received;
+  globalThis.fetch = async (_url, init) => {
+    received = new Headers(init.headers);
+    return new Response(JSON.stringify(body), {
+      status: 401,
+      statusText: "Unauthorized",
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  await assert.rejects(request("/api/v1/tasks/task-1"), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.kind, "business");
+    assert.equal(error.status, 401);
+    assert.equal(error.message, "The access token has expired");
+    assert.equal(error.code, "token_expired");
+    assert.deepEqual(error.detail, body.detail);
+    assert.deepEqual(error.body, body);
+    return true;
+  });
+  assert.deepEqual(browser.removed, ["local:ag_token", "session:danbooru_batch_job"]);
+  assert.deepEqual(browser.redirects, ["/admin/login"]);
+  assert.equal(received.get("authorization"), "Bearer jwt-fixture");
+  assert.match(globalThis.document.cookie, /max-age=0/);
+});
+
+test("plain non-JSON rejection remains an HTTP error", async () => {
+  installBrowserToken();
+  globalThis.fetch = async () => new Response("gateway exploded", {
+    status: 502,
+    statusText: "Bad Gateway",
+    headers: { "Content-Type": "text/plain" },
+  });
+
+  await assert.rejects(request("/api/v1/system/health"), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.kind, "http");
+    assert.equal(error.status, 502);
+    assert.equal(error.message, "gateway exploded");
+    assert.equal(error.detail, "gateway exploded");
+    assert.equal(error.body, "gateway exploded");
+    return true;
+  });
 });
 
 test("request distinguishes network failures and preserves 204 responses", async () => {

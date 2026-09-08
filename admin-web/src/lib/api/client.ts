@@ -38,6 +38,30 @@ export function clearAuthOn401() {
   }
 }
 
+async function apiErrorFromResponse(res: Response): Promise<ApiError> {
+  const text = await res.text().catch(() => "");
+  let body: unknown = text;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // A plain response body remains useful error detail.
+    }
+  }
+  const detail = body && typeof body === "object" && "detail" in body
+    ? (body as { detail?: unknown }).detail
+    : body || undefined;
+  const message = typeof detail === "string"
+    ? detail
+    : detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string"
+      ? detail.message
+      : `${res.status} ${res.statusText}`;
+  const kind: ApiErrorKind = detail && typeof detail === "object" && !Array.isArray(detail)
+    ? "business"
+    : "http";
+  return new ApiError(res.status, message, detail, kind, body || undefined);
+}
+
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   if (!headers.has("Content-Type") && !(options?.body instanceof FormData)) {
@@ -66,25 +90,13 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
         : "Network error";
     throw new ApiError(0, message, error, "network");
   }
-  // Global 401 handler: clear auth state and redirect to login
-  // (skips auth endpoints to avoid redirect loops during login)
-  if (res.status === 401 && !path.startsWith("/api/v1/auth/")) {
-    clearAuthOn401();
-    throw new ApiError(401, "Session expired — redirecting to login");
-  }
   if (res.status === 204) return undefined as T;
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const detail = body.detail;
-    const message = typeof detail === "string"
-      ? detail
-      : detail && typeof detail === "object" && typeof detail.message === "string"
-        ? detail.message
-        : `${res.status} ${res.statusText}`;
-    const kind: ApiErrorKind = detail && typeof detail === "object" && !Array.isArray(detail)
-      ? "business"
-      : "http";
-    throw new ApiError(res.status, message, detail, kind, body);
+    const error = await apiErrorFromResponse(res);
+    // Global protected-route 401 handler: preserve the server rejection while
+    // clearing auth state and redirecting. Auth endpoints avoid redirect loops.
+    if (res.status === 401 && !path.startsWith("/api/v1/auth/")) clearAuthOn401();
+    throw error;
   }
   return res.json();
 }
