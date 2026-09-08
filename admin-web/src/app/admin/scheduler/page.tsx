@@ -83,11 +83,15 @@ function schedulerBatchResult(task?: TaskRun): SchedulerBatchResult {
   return (task?.result_data || {}) as SchedulerBatchResult;
 }
 
+function isSchedulerBatchMode(mode: unknown): mode is SchedulerSyncMode {
+  return typeof mode === "string" && BATCH_MODES.has(mode as SchedulerSyncMode);
+}
+
 function schedulerBatchMode(task?: TaskRun): SchedulerSyncMode | null {
-  const mode = schedulerBatchResult(task).mode;
-  return typeof mode === "string" && BATCH_MODES.has(mode as SchedulerSyncMode)
-    ? mode as SchedulerSyncMode
-    : null;
+  const resultMode = schedulerBatchResult(task).mode;
+  if (isSchedulerBatchMode(resultMode)) return resultMode;
+  const admittedMode = task?.meta?.mode;
+  return isSchedulerBatchMode(admittedMode) ? admittedMode : null;
 }
 
 function schedulerBatchSettled(task?: TaskRun) {

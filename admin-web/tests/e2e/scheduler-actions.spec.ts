@@ -323,9 +323,14 @@ test("scheduler resolves the active batch mode from its task after an actual 409
     post: "conflict",
     taskReadDelayMs: 8_000,
     taskStates: [{
-      id: "task-existing", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
-      progress_stage: "waiting", progress_current: 0, progress_total: 2,
-      result_data: { status: "pending", mode: "due_scan", candidate_count: 2, waiting_count: 2 },
+      id: "task-existing", kind: "admin", operation_type: "subscription-sync-batch", status: "enqueued",
+      progress_stage: "enqueued", progress_current: null, progress_total: null,
+      result_data: {},
+      meta: {
+        mode: "due_scan",
+        entity: "subscription-sync-batch",
+        admin_dispatch: { options: { mode: "due_scan" }, publication_state: "published" },
+      },
     }],
   });
   await page.goto("/admin/scheduler");
