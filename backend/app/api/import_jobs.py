@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
+from app.schemas.task_bulk import TaskBulkResult
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.models.subscription import Subscription
@@ -262,7 +263,7 @@ async def set_import_priority(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/batch-by-filter")
+@router.post("/batch-by-filter", response_model=TaskBulkResult, response_model_exclude_unset=True)
 async def batch_import_by_filter(
     data: dict,
     db: AsyncSession = Depends(get_db),

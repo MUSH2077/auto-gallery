@@ -221,8 +221,13 @@ async def enrich_actions(db, rows, *, user=None, user_id=None, domain_kind=None,
         if kind == "admin":
             from app.services.operations import admin_operation_required_permission
 
-            required = admin_operation_required_permission(row.operation_type)
-            permitted = trusted or privileged or required in permissions or (row.operation_type == "subscription-sync-batch" and "system" in permissions)
+            from app.services.tasks import is_global_subscription_batch
+
+            # Private member aggregates retain ordinary task permissions; their
+            # ownership was checked by the task surface before policy loading.
+            if row.operation_type != "subscription-sync-batch" or is_global_subscription_batch(row):
+                required = admin_operation_required_permission(row.operation_type)
+                permitted = trusted or privileged or required in permissions
         parent_id = subject.id if subject is not None and kind == "download" else getattr(subject, "download_job_id", None)
         caps = decide(
             kind,

@@ -6,6 +6,7 @@ from app.auth import RequirePermission
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.schemas.task_bulk import TaskBulkResult, TaskBulkStatusResult, TaskBulkClearResult
 from app.schemas.download_job import DownloadJobCreate, DownloadJobRead
 from app.schemas.import_job import ImportJobRead
 from app.services.download import DownloadService
@@ -166,7 +167,7 @@ async def resume_job(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/batch")
+@router.post("/batch", response_model=TaskBulkResult, response_model_exclude_unset=True)
 async def batch_jobs(
     data: dict,
     db: AsyncSession = Depends(get_db),
@@ -195,7 +196,7 @@ async def batch_jobs(
     return result
 
 
-@router.post("/clear")
+@router.post("/clear", response_model=TaskBulkClearResult, response_model_exclude_unset=True)
 async def clear_jobs(
     data: dict,
     db: AsyncSession = Depends(get_db),
@@ -222,7 +223,7 @@ async def kill_stuck(
     return {"status": "ok", "killed": count}
 
 
-@router.post("/retry-all")
+@router.post("/retry-all", response_model=TaskBulkStatusResult, response_model_exclude_unset=True)
 async def retry_all_failed(
     db: AsyncSession = Depends(get_db),
     user=RequirePermission("tasks"),
@@ -295,7 +296,7 @@ async def set_priority(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/batch-by-filter")
+@router.post("/batch-by-filter", response_model=TaskBulkResult, response_model_exclude_unset=True)
 async def batch_by_filter(
     data: dict,
     db: AsyncSession = Depends(get_db),

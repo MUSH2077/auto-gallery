@@ -29,6 +29,7 @@ from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.backpressure import DownloadAdmissionError
 from app.services.task_actions import enrich_actions, require_action
 from app.schemas.task_actions import RepeatSyncRequest, RepeatSyncAccepted, TaskRead, TaskPage
+from app.schemas.operation_attention import OperationsOverview
 from app.services.task_engine import TaskEngine, TaskEngineError
 from app.services.tasks import (
     TaskService,
@@ -164,7 +165,7 @@ async def list_tasks(
     return result
 
 
-@router.get("/anomalies")
+@router.get("/anomalies", response_model=OperationsOverview)
 async def list_task_anomalies(
     offset: int = 0,
     limit: int = 50,
@@ -221,16 +222,20 @@ async def _authorized_task(db, task_id, user):
     if (not getattr(user, "is_admin", False) and "tasks" not in (getattr(user, "permissions", None) or [])
             and not is_global_subscription_batch(task)):
         raise HTTPException(403, detail="Missing permission: tasks")
+    # Historical member aggregates share the registered global operation name.
+    # Their durable provenance, not that name, determines the permission boundary.
+    private_batch = (task.kind == "admin" and task.operation_type == "subscription-sync-batch"
+                     and not is_global_subscription_batch(task))
     if task.owner_user_id is not None:
         if user is None or not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(404, detail="Task not found")
     elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(403, detail="Missing permission: system")
-    elif task.kind != "admin" or not admin_operation_required_permission(task.operation_type):
+    elif private_batch or task.kind != "admin" or not admin_operation_required_permission(task.operation_type):
         if user is None or not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(404, detail="Task not found")
-    if task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    if task.kind == "admin" and not private_batch and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
     return task
 

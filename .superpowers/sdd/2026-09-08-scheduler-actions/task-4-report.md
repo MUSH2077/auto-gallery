@@ -105,3 +105,44 @@ No unresolved implementation blocker is known. Root's independent review and Tas
 - `backend/tests/test_task4_contracts.py`
 - `backend/tests/test_tasks.py`
 - `backend/tests/test_workbench_api.py`
+
+## Review fix round 1 (BASE a8e53901)
+
+The two Important findings in `task-4-review.md` and root's explicit Task5 bulk-schema follow-up are addressed in this scoped round. The Task5 handoff/preflight brief was read; no frontend or generated files are changed.
+
+- Private member `subscription-sync-batch` aggregates are classified by the existing durable global/private predicate before applying the registry's system permission. The generic endpoint still checks actor visibility, including private legacy scope without an explicit owner. The policy loader retains ordinary task permissions for a visible private aggregate. This restores owner detail and open/resolved acknowledgement without adding execution capabilities: private aggregate retry/cancel still refuse `batch_results_preserved`. Actual global batches retain system/admin access; ordinary registered operations retain their own module permissions.
+- `GET /api/v1/operations/overview` and `GET /api/v1/tasks/anomalies` share `OperationsOverview`. Its `items` schema discriminates on `type`, with `TaskAttentionItem` inheriting TaskCapabilities and nesting TaskRead; executable actions/reasons and separate navigation actions are explicit. `RepositoryAttentionItem` retains its existing navigation-only `available_actions`, null task/task_id, and absence of task capability/navigation fields. The runtime feed implementation is unchanged.
+- Root additionally authorized closing the existing per-item bulk OpenAPI gap. Download `/batch` and `/batch-by-filter` and import `/batch-by-filter` use `TaskBulkResult`; download `/retry-all` uses `TaskBulkStatusResult`, and `/clear` uses `TaskBulkClearResult`. The shared result declares action, task_type, filters, total_matched, succeeded, failed and `errors: TaskBulkError[]`. Each error has the actual UUID and `error: TaskActionRefusal | string`. The refusal exposes code/action/reason and optional status/capability snapshot; short final liveness/receipt refusals are preserved through `response_model_exclude_unset=True`, without inserting empty capability fields. Status/deleted extensions retain their existing meaning. No bulk selection, execution or transaction behavior changes.
+
+New regressions use real application HTTP routes and isolated PostgreSQL, with actual Redis publication/liveness where relevant. Private fixtures carry the exact producer provenance (owning membership, owner, subscription scope metadata, downloads queue). Mixed attention responses contain a real failed TaskRun and unhealthy actor source binding. Bulk tests exercise one committed success plus one structured refusal through each of the five routes, including real retry outbox publication; an additional real heartbeat case checks the shorter refusal shape, and a schema serialization check preserves ordinary string errors. OpenAPI assertions inspect the actual two discriminated variants on both feeds and typed result/error schemas on all five bulk routes. Existing relevant admin, orphan, attention and partial-commit regressions are selected separately from unchanged passing suites.
+
+Raw evidence remains external at `/volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/` (runner `/evidence/backend-task4/`). All commands below run from this worktree; pytest runs only in `ag-button-runner` / `agbutton_test` / Redis15.
+
+```sh
+docker exec ag-button-runner python -m pytest tests/test_task4_contracts.py -q -k 'private_member_batch or mixed_attention or bulk_partial_http' > /volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/review-round1-red.txt 2>&1
+```
+
+Initial RED: **8 failed, 25 deselected in 94.19s**, exit1. Five failures establish the absent real schemas (generic fallback has no typed properties). Two private cases initially used the wrong registered queue/scope, and retry-all initially used a non-persisted conflict attribute; these fixture defects were corrected before implementation. A shell invocation attempted the fixture amendment using unavailable host `python` (host requires `python3`) and started the same three-case selection before the amendment; the Docker client was interrupted, its `review-round1-red-fixtures-corrected.txt` is empty, and no pytest result is claimed for it. The runner had no remaining pytest process before the corrected invocation below.
+
+```sh
+docker exec ag-button-runner python -m pytest tests/test_task4_contracts.py -q -k 'private_member_batch or (bulk_partial_http and download-retry-all)' > /volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/review-round1-red-corrected.txt 2>&1
+```
+
+Corrected RED before application edits: **3 failed, 30 deselected in 35.02s**, exit1. Both private-owner cases return no acknowledgement capability instead of `['acknowledge']`; retry-all actually publishes its eligible child and retains the conflict refusal, then fails the missing typed-schema assertion.
+
+```sh
+docker exec ag-button-runner python -m pytest tests/test_task4_contracts.py -q -k 'private_member_batch or mixed_attention or bulk_partial_http or bulk_string or direct_admin_surface or registered_admin_policy or visible_orphan or delegated_import_controls or openapi_exports or bulk_partial_refusal' > /volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/review-round1-green.txt 2>&1
+docker exec ag-button-runner python -m ruff check app/api/download_jobs.py app/api/import_jobs.py app/api/operations.py app/api/tasks.py app/services/task_actions.py app/schemas/operation_attention.py app/schemas/task_bulk.py tests/test_task4_contracts.py > /volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/review-round1-ruff.txt 2>&1
+```
+
+Focused GREEN: **16 passed, 19 deselected in 244.13s**, exit0: ten new cases (two private states, one mixed feed, six real bulk response cases, one string-error serialization case) and six selected existing contract regressions. Ruff: **All checks passed!**, exit0. No application/test source was amended after these checks.
+
+The existing positive system-only global admission/detail/cancel regression is additionally selected to cover the other side of the amended private/global permission boundary:
+
+```sh
+docker exec ag-button-runner python -m pytest tests/test_scheduler_batches.py::test_http_permissions_and_system_only_batch_control -q > /volume2/docker/auto-gallery-button-audit-artifacts/20260908/backend-task4/review-round1-global-permission.txt 2>&1
+```
+
+Global boundary regression: **1 passed in 14.68s**, exit0. Final `git diff --check` passed. Total covering evidence this round is **17 passing cases**, not a whole-suite claim. Self-review checked the real producer provenance, both permission gates, ordinary admin module checks, actual feed variants, and every current bulk refusal shape (full policy, short final-liveness/receipt, string exception). No outstanding implementation concern is known; independent re-review and subsequent generated frontend adoption remain root's gates.
+
+Scoped round files: `backend/app/api/{tasks,operations,download_jobs,import_jobs}.py`, `backend/app/services/task_actions.py`, new `backend/app/schemas/{operation_attention,task_bulk}.py`, `backend/tests/test_task4_contracts.py`, and this report. Frozen hotfix/acceptance/production resources, frontend source/dependencies/generated types, scheduler dispatch/fences, import lifecycle, search transactions and migrations were not changed. The scoped delivery commit is supplied in the agent's final message.

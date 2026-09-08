@@ -718,3 +718,184 @@ async def test_visible_orphan_can_acknowledge_without_inventing_execution_action
     assert response.status_code == 200 and response.json()["available_actions"] == ["acknowledge"], response.text
     assert (await client.post(f"/api/v1/tasks/{task_id}/acknowledge")).status_code == 200
     assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["attention_state"] == "acknowledged"
+
+
+@pytest.mark.parametrize("attention", ["open", "resolved"])
+async def test_private_member_batch_owner_actions_preserve_global_boundary(db, client, attention):
+    from app.auth import create_access_token
+    from app.models import DownloadJob, User
+    from app.services.operations import prepare_admin_operation
+    from app.services.tasks import TaskService, is_global_subscription_batch
+
+    job_id, _ = await owned_download(db, client.actor_id)
+    job = await db.get(DownloadJob, job_id)
+    owner = await db.get(User, client.actor_id)
+    owner.is_admin = False
+    owner.permissions = ["tasks", "subscriptions"]
+    # Exact provenance of SubscriptionService.sync_all's private aggregate.
+    task = await TaskService(db).create_task(
+        kind="admin", operation_type="subscription-sync-batch", title="Private member batch",
+        status="failed", queue_name="downloads",
+        meta={"subscription_id": str(job.subscription_id), "scope": "subscription"},
+        triggering_user_subscription_id=job.triggering_user_subscription_id,
+        owner_user_id=client.actor_id,
+    )
+    task.attention_state = attention
+    task_id = task.id
+    global_batch = await prepare_admin_operation(
+        db, operation_type="subscription-sync-batch", scope_key="library:subscription-sync-batch:active", queue_name="operations",
+        title="Global batch", entity="subscriptions", options={"mode": "all"},
+    )
+    global_id = global_batch.task.id
+    assert not is_global_subscription_batch(task) and is_global_subscription_batch(global_batch.task)
+    outsider = User(username=f"outsider-{uuid4()}", password_hash="test", is_active=True,
+                    permissions=["tasks", "subscriptions"], must_change_password=False)
+    db.add(outsider)
+    await db.commit()
+    for include in (False, True):
+        response = await client.get("/api/v1/tasks", params={"include_account": str(include).lower()})
+        assert response.status_code == 200, response.text
+        rows = {row["id"]: row for row in response.json()["items"]}
+        assert str(task_id) in rows and str(global_id) not in rows
+        assert rows[str(task_id)]["available_actions"] == ["acknowledge"]
+    response = await client.get(f"/api/v1/tasks/{task_id}")
+    assert response.status_code == 200, response.text
+    assert response.json()["available_actions"] == ["acknowledge"]
+    for action in ("retry", "cancel"):
+        response = await client.post(f"/api/v1/tasks/{task_id}/{action}")
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["reason"] == "batch_results_preserved"
+    headers = {"Authorization": f"Bearer {create_access_token(outsider.username, must_change_password=False)}"}
+    for suffix, method in (("", "GET"), ("/cancel", "POST"), ("/acknowledge", "POST")):
+        assert (await client.request(method, f"/api/v1/tasks/{task_id}{suffix}", headers=headers)).status_code == 404
+        assert (await client.request(method, f"/api/v1/tasks/{global_id}{suffix}")).status_code == 403
+    response = await client.post(f"/api/v1/tasks/{task_id}/acknowledge")
+    assert response.status_code == 200, response.text
+    assert response.json()["attention_state"] == "acknowledged"
+    assert response.json()["available_actions"] == []
+
+
+async def test_mixed_attention_http_and_discriminated_schema_preserve_navigation(db, client):
+    from app.models import TaskRun, UserSubscriptionSource
+
+    _, task_id = await owned_download(db, client.actor_id, "failed")
+    task = await db.get(TaskRun, task_id)
+    task.attention_state = "open"
+    task.reason_code = "process_failed"
+    binding = (await db.execute(select(UserSubscriptionSource).where(UserSubscriptionSource.user_id == client.actor_id))).scalar_one()
+    binding.auth_healthy = False
+    binding.auth_error_reason = "Fixture credential expired"
+    repository_id = str(binding.subscription_source_id)
+    await db.commit()
+    paths = ("/api/v1/operations/overview", "/api/v1/tasks/anomalies")
+    for path in paths:
+        response = await client.get(path)
+        assert response.status_code == 200, response.text
+        items = response.json()["items"]
+        task_item = next(row for row in items if row["type"] == "task")
+        repository = next(row for row in items if row["type"] == "repository")
+        assert task_item["task_id"] == str(task_id)
+        assert "acknowledge" in task_item["available_actions"]
+        assert task_item["available_actions"] == task_item["task"]["available_actions"]
+        assert task_item["disabled_reasons"] == task_item["task"]["disabled_reasons"]
+        assert task_item["navigation_actions"] == ["open_repository", "copy_diagnostics"]
+        assert repository["repository_id"] == repository_id
+        assert repository["task"] is None and repository["task_id"] is None
+        assert repository["available_actions"] == ["open_repository", "copy_diagnostics"]
+        assert "disabled_reasons" not in repository and "navigation_actions" not in repository
+    schema = (await client.get("/api/openapi.json")).json()
+    components = schema["components"]["schemas"]
+    for path in paths:
+        ref = schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+        items = components[ref.rsplit("/", 1)[1]]["properties"]["items"]["items"]
+        assert items["discriminator"]["propertyName"] == "type"
+        assert set(items["discriminator"]["mapping"]) == {"task", "repository"}
+        assert len(items["oneOf"]) == 2
+        task_schema = components[items["discriminator"]["mapping"]["task"].rsplit("/", 1)[1]]["properties"]
+        assert {"available_actions", "disabled_reasons", "navigation_actions"} <= set(task_schema)
+        assert task_schema["task"]["$ref"].endswith("/TaskRead")
+
+
+@pytest.mark.parametrize("route", ["download-batch", "download-batch-short", "download-filter", "download-clear", "download-retry-all", "import-filter"])
+async def test_bulk_partial_http_and_schema_keep_structured_errors(db, client, route):
+    from app.models import DownloadJob, ImportJob
+    from app.services.tasks import TaskService
+
+    job_id, _ = await owned_download(db, client.actor_id, "failed")
+    first = await db.get(DownloadJob, job_id)
+    other = DownloadJob(owner_user_id=client.actor_id, source="pixiv", source_url=first.source_url,
+                        subscription_id=first.subscription_id, subscription_source_id=first.subscription_source_id,
+                        triggering_user_subscription_id=first.triggering_user_subscription_id, status="downloading")
+    db.add(other)
+    await db.flush()
+    await TaskService(db).ensure_download_task(other)
+    if route == "import-filter":
+        jobs = [ImportJob(download_job_id=job_id, status="failed"), ImportJob(download_job_id=other.id, status="running")]
+        db.add_all(jobs)
+        await db.flush()
+        for job in jobs:
+            await TaskService(db).ensure_import_task(job)
+        ids = [str(job.id) for job in jobs]
+        path = "/api/v1/import-jobs/batch-by-filter"
+        body = {"filters": {"ids": ids}, "action": "delete"}
+    else:
+        ids = [str(job_id), str(other.id)]
+        if route == "download-retry-all":
+            # Retry publishes the first job through the real outbox; the
+            # second job requires an explicit staging-conflict decision.
+            other.status = "failed"
+            other.manifest = {"events": [{"event": "staging_conflict", "conflict_details": {"path": "fixture.jpg"}}]}
+            path, body = "/api/v1/download-jobs/retry-all", None
+        elif route == "download-clear":
+            path, body = "/api/v1/download-jobs/clear", {"statuses": ["failed", "downloading"]}
+        elif route == "download-filter":
+            path, body = "/api/v1/download-jobs/batch-by-filter", {"filters": {"ids": ids}, "action": "delete"}
+        else:
+            path, body = "/api/v1/download-jobs/batch", {"ids": ids, "action": "delete"}
+    if route == "download-batch-short":
+        from app.services.redis_client import get_redis
+
+        other.status = "failed"
+        get_redis().set(f"task:{other.id}:heartbeat_ts", "alive", ex=120)
+    await db.commit()
+    response = await client.post(path, json=body)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["total_matched"] == 2
+    if route != "download-retry-all":
+        assert result["succeeded"] == 1 and result["failed"] == 1
+        assert result["errors"][0]["id"] == ids[1]
+        if route == "download-batch-short":
+            assert result["errors"][0]["error"] == {
+                "code": "invalid_task_action", "action": "delete", "reason": "execution_unsettled",
+            }
+        else:
+            assert result["errors"][0]["error"]["reason"] == "active_work_cancel_first"
+    else:
+        assert result["succeeded"] == 1 and result["failed"] == 1
+        assert result["errors"][0]["id"] == ids[1]
+        assert result["errors"][0]["error"]["reason"] == "conflict_resolution_required"
+    if route in {"download-clear", "download-retry-all"}:
+        assert result["status"] == "ok"
+    if route == "download-clear":
+        assert result["deleted"] == result["succeeded"]
+    schema = (await client.get("/api/openapi.json")).json()
+    components = schema["components"]["schemas"]
+    ref = schema["paths"][path]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    result_schema = components[ref.rsplit("/", 1)[1]]["properties"]
+    assert {"total_matched", "succeeded", "failed", "errors"} <= set(result_schema)
+    error_schema = components[result_schema["errors"]["items"]["$ref"].rsplit("/", 1)[1]]["properties"]
+    assert error_schema["id"]["format"] == "uuid"
+    variants = error_schema["error"]["anyOf"]
+    assert {"type": "string"} in variants
+    refusal = components[next(v["$ref"] for v in variants if "$ref" in v).rsplit("/", 1)[1]]["properties"]
+    assert {"code", "reason", "available_actions", "disabled_reasons"} <= set(refusal)
+
+
+async def test_bulk_string_failure_contract_preserves_engine_message():
+    from app.schemas.task_bulk import TaskBulkResult
+
+    payload = {"action": "retry", "task_type": "download", "filters": {"ids": []},
+               "total_matched": 1, "succeeded": 0, "failed": 1,
+               "errors": [{"id": str(uuid4()), "error": "Redis connection refused"}]}
+    assert TaskBulkResult.model_validate(payload).model_dump(mode="json", exclude_unset=True) == payload
