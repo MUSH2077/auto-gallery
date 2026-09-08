@@ -473,7 +473,15 @@ async def _persist_terminal_rq_record(
     return True
 
 
-async def recover_download_dispatch_candidate(
+async def recover_download_dispatch_candidate(db, task, job, *, redis_client=None) -> str:
+    if (task.meta or {}).get("scheduler_batch_task_id"):
+        from app.services.redis_budget import budget_redis
+        with budget_redis(seconds=5, reserve_seconds=0):
+            return await _recover_download_dispatch_candidate(db, task, job, redis_client=get_redis())
+    return await _recover_download_dispatch_candidate(db, task, job, redis_client=redis_client)
+
+
+async def _recover_download_dispatch_candidate(
     db: AsyncSession,
     task: TaskRun,
     job: DownloadJob,
@@ -501,6 +509,22 @@ async def recover_download_dispatch_candidate(
         logger.error("Invalid download dispatch outbox task=%s: %s", task_id, exc)
         return "invalid"
 
+    # A batch parent is the cancellation fence for *all* publications,
+    # including outbox replay after a process restart. Take it after domain
+    # locks; cancellation commits its parent-only fence before child cleanup.
+    batch = None
+    batch_parent_id = (task.meta or {}).get("scheduler_batch_task_id")
+    if batch_parent_id:
+        from app.models.scheduler_batch import SchedulerBatch
+        batch = (await db.execute(select(SchedulerBatch).where(
+            SchedulerBatch.task_id == UUID(batch_parent_id)))).scalar_one_or_none()
+        if batch is not None:
+            parent = (await db.execute(select(TaskRun).where(TaskRun.id == UUID(batch_parent_id))
+                .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+            if parent is None or parent.status not in {"enqueued", "running", "recovering", "paused"}:
+                await db.rollback()
+                return "cancelled"
+
     try:
         existing = await asyncio.to_thread(
             _fetch_download_rq_job,
@@ -523,7 +547,8 @@ async def recover_download_dispatch_candidate(
                 )
                 return "terminal" if persisted else "skipped"
         if existing is None:
-            await asyncio.to_thread(
+            from app.jobs.admin_operations import _await_admin_file_finalizer
+            await _await_admin_file_finalizer(asyncio.to_thread(
                 enqueue_download_rq,
                 payload["queue_name"],
                 "app.jobs.download.run_download_job",
@@ -532,7 +557,7 @@ async def recover_download_dispatch_candidate(
                 job_timeout=payload["job_timeout"],
                 delay_seconds=payload["delay_seconds"],
                 redis_client=redis_client,
-            )
+            ))
             outcome = "replayed"
         else:
             outcome = "existing"
@@ -550,7 +575,19 @@ async def recover_download_dispatch_candidate(
 
     # Refresh after Redis work so a concurrent worker/API transition is not
     # overwritten; only the TaskRun outbox metadata is changed.
-    await db.refresh(task)
+    if batch is None:
+        await db.refresh(task)
+    else:
+        # A very fast worker may already have compacted the operational row.
+        # Its durable receipt remains authoritative; never recreate the dispatch.
+        task = (await db.execute(select(TaskRun).where(TaskRun.id == UUID(task_id))
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if task is None:
+            from app.models.repository_sync_receipt import RepositorySyncReceipt
+            receipt = (await db.execute(select(RepositorySyncReceipt.id).where(
+                RepositorySyncReceipt.source_download_job_id == UUID(job_id)))).scalar_one_or_none()
+            await db.commit()
+            return "terminal" if receipt else "skipped"
     if ((task.meta or {}).get(DISPATCH_META_KEY) or {}).get("state") == DISPATCH_PENDING:
         _set_dispatch_state(task, DISPATCH_PUBLISHED)
         await db.commit()

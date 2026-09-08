@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -41,6 +41,8 @@ ADMIN_DISPATCH_RETRY_MAX_SECONDS = 15 * 60
 ADMIN_RQ_FUNCTION = "app.jobs.admin_operations.run_registered_admin_operation"
 _ACTIVE_ADMIN_STATUSES = frozenset({"enqueued", "running", "paused", "recovering"})
 _ADMIN_INTERNAL_RESOURCE_PROFILES = {
+    "subscription-sync-batch": "download",
+    "subscription-sync-batch-cleanup": "download",
     "admin-clear": "maintenance",
     "admin-rebuild": "maintenance",
     "admin-disk-import": "maintenance",
@@ -127,6 +129,18 @@ def _spec(
 ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
     spec.operation_type: spec
     for spec in (
+        _spec(
+            "subscription-sync-batch-cleanup",
+            "app.jobs.admin_operations.run_subscription_sync_batch_cleanup",
+            queues=("operations",), scopes=("library:subscription-sync-cancel:",),
+            timeout=120, permission="system",
+        ),
+        _spec(
+            "subscription-sync-batch",
+            "app.jobs.admin_operations.run_subscription_sync_batch",
+            queues=("operations",), scopes=("library:subscription-sync-batch:active",),
+            timeout=120, permission="system",
+        ),
         _spec(
             "admin-clear",
             "app.jobs.admin_operations.run_clear_operation",
@@ -311,6 +325,10 @@ def inaccessible_admin_operation_types_for_permissions(
         operation_type
         for operation_type, spec in ADMIN_OPERATION_REGISTRY.items()
         if spec.required_permission not in permission_set
+        # Private member batches share this historical operation name. Their
+        # ownership/global visibility predicate, not a type-only filter, is
+        # authoritative on generic task surfaces.
+        and operation_type != "subscription-sync-batch"
     )
 
 
@@ -1614,7 +1632,7 @@ async def publish_admin_operation(
     from app.services.tasks import TaskService
 
     task_uuid = UUID(str(task_id))
-    async with async_session() as db:
+    async with async_session() as db, AsyncExitStack() as redis_budget_scope:
         task = (
             await db.execute(
                 select(TaskRun)
@@ -1634,6 +1652,10 @@ async def publish_admin_operation(
         ):
             await db.rollback()
             return "skipped"
+        if task.operation_type in {"subscription-sync-batch", "subscription-sync-batch-cleanup"}:
+            from app.services.redis_budget import budget_redis
+            redis_budget_scope.enter_context(budget_redis(seconds=3, reserve_seconds=0))
+            redis_client = get_redis()
         rq_job_id = str(dispatch["rq_job_id"])
         try:
             existing = await asyncio.to_thread(

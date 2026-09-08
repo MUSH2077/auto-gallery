@@ -449,7 +449,12 @@ async def enqueue_subscription_source_sync(
     scheduler_config: dict | None = None,
     triggering_user_subscription_id: UUID | None = None,
     triggering_remote_account_id: UUID | None = None,
+    batch_item_id: UUID | None = None,
+    batch_mode: str | None = None,
 ) -> dict:
+    if batch_mode is not None and (batch_item_id is None or parent_task_id is None):
+        raise ValueError("Batch mode requires a durable item and parent")
+    batch_manual = batch_item_id is not None and batch_mode == "manual_all_enabled"
     now = datetime.now(timezone.utc)
     explicit_private_manual = (
         trigger != "scheduler" and triggering_user_subscription_id is not None
@@ -463,9 +468,9 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "subscription_not_found")
     if not sub.is_active:
         return skip_result(ss.id, "subscription_inactive")
-    if not force and not ss.is_enabled and not explicit_private_manual:
+    if not force and not ss.is_enabled and not explicit_private_manual and not batch_manual:
         return skip_result(ss.id, "source_disabled")
-    if not force and ss.auth_healthy is False and not explicit_private_manual:
+    if not force and ss.auth_healthy is False and not explicit_private_manual and not batch_manual:
         return skip_result(ss.id, "auth_unhealthy", auth_status=ss.auth_status, auth_error_reason=ss.auth_error_reason)
     if not force:
         try:
@@ -530,8 +535,22 @@ async def enqueue_subscription_source_sync(
         if ss is None:
             return skip_result(subscription_source_id, "source_not_found")
 
+        if batch_item_id is not None:
+            # Mutable eligibility is checked again under the source claim lock.
+            sub = await db.get(Subscription, ss.subscription_id, populate_existing=True)
+            if sub is None or not sub.is_active:
+                return skip_result(ss.id, "subscription_inactive")
+            if not ss.is_enabled and not batch_manual:
+                return skip_result(ss.id, "source_disabled")
+            if ss.auth_healthy is False and not batch_manual:
+                return skip_result(ss.id, "auth_unhealthy")
+            if batch_mode != "manual_all_enabled" and not sub.sync_enabled:
+                return skip_result(ss.id, "subscription_sync_disabled")
+
         if scheduler_config is None:
             scheduler_config = await get_scheduler_config(db)
+        if batch_mode == "due_scan" and not scheduler_config.get("scheduler_enabled", True):
+            return skip_result(ss.id, "scheduler_disabled")
 
         selection = await select_eligible_membership_source(
             db,
@@ -545,7 +564,7 @@ async def enqueue_subscription_source_sync(
                 if trigger == "scheduler" and not force
                 else None
             ),
-            require_sync_enabled=not explicit_private_manual,
+            require_sync_enabled=not explicit_private_manual and batch_mode != "manual_all_enabled",
             require_preferred_account_match=explicit_private_manual,
         )
         if selection is None:
@@ -683,6 +702,27 @@ async def enqueue_subscription_source_sync(
         claimed_account_auth_status = (
             selection.account.auth_status if selection.account is not None else None
         )
+        if batch_item_id is not None:
+            from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem
+            from app.services.operations import fence_current_admin_operation_transaction
+            item = await db.get(SchedulerBatchItem, batch_item_id)
+            batch = await db.get(SchedulerBatch, item.batch_id) if item else None
+            if (item is None or batch is None or batch.task_id != parent_task_id
+                    or item.source_id != subscription_source_id or item.download_job_id is not None):
+                raise ValueError("Invalid or already-bound scheduler batch item")
+            item.download_job_id = job.id
+            item.child_task_id = prepared.task.id
+            prepared.task.meta = {**(prepared.task.meta or {}), "scheduler_batch_task_id": str(parent_task_id)}
+            item.owns_download = True
+            item.status = "queued"
+            await fence_current_admin_operation_transaction(db, task_id=parent_task_id)
+            # Batch identity and deterministic child outbox become durable
+            # together. The caller publishes through the cancellable outbox
+            # recovery path immediately after this commit.
+            await db.commit()
+            return {"status": "enqueued", "source_id": str(subscription_source_id),
+                    "job_id": str(job.id), "task_id": str(prepared.task.id)}
+
         try:
             await publish_prepared_download(
                 db,

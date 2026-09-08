@@ -102,3 +102,4 @@ __all__ = [
 
 from app.models.search_delivery_receipt import SearchDeliveryReceipt
 from app.models.search_rebuild import SearchRebuild, SearchRebuildReplay
+from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem

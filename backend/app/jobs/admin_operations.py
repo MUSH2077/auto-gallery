@@ -287,6 +287,8 @@ def _registered_terminal_outcome(
 ) -> tuple[str, str | None, str | None]:
     """Interpret semantic handler outcomes at the sole terminal writer."""
 
+    if operation_type == "subscription-sync-batch" and result.get("failed_count", 0):
+        return "failed", "Some subscription sources failed", "batch_partial_failure"
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"} and result.get(
         "aborted"
     ):
@@ -357,6 +359,25 @@ async def _heartbeat_registered_admin_operation(
 
 
 async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
+    result = await _run_registered_admin_operation_delivery(task_id, attempt)
+    # A ready successor is already durable. Publish only after the previous
+    # execution lease has been released, so another worker can claim it safely.
+    successor = result.pop("_admin_ready_successor", None)
+    successor_deadline = result.pop("_admin_successor_deadline", None)
+    if successor is not None:
+        import time
+        from app.services.operations import publish_admin_operation
+        from app.services.redis_budget import budget_redis
+        remaining = successor_deadline - time.monotonic() if successor_deadline is not None else 3
+        # The durable outbox owns recovery when the worker has spent its tail
+        # reserve. Never start another Redis wait with no budget remaining.
+        if remaining >= .75:
+            with budget_redis(seconds=min(3, remaining), reserve_seconds=0):
+                await publish_admin_operation(task_id, int(successor))
+    return result
+
+
+async def _run_registered_admin_operation_delivery(task_id: str, attempt: int) -> dict:
     from app.services.operations import (
         AdminOperationAttemptRejected,
         admin_operation_execution_lease,
@@ -412,6 +433,10 @@ async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
                 allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
                 status=terminal_status,
                 progress={
+                    **({**{key: value for key, value in result.items() if key.endswith("_count")},
+                        "current": result.get("candidate_count", 0),
+                        "total": result.get("candidate_count", 0)}
+                       if operation_type == "subscription-sync-batch" else {}),
                     "phase": terminal_status,
                     "label": str(
                         result.get("message")
@@ -457,6 +482,12 @@ async def _execute_registered_admin_operation(
 ) -> dict:
     """Dispatch a registered business handler after its durable claim."""
 
+    if operation_type == "subscription-sync-batch-cleanup":
+        from app.services.scheduler_batches import run_batch_cleanup_slice
+        return await run_batch_cleanup_slice(task_id, options)
+    if operation_type == "subscription-sync-batch":
+        from app.services.scheduler_batches import run_batch_slice
+        return await run_batch_slice(task_id, options)
     if operation_type == "admin-clear":
         entity = str(options.get("entity") or "")
         return await _run_clear_operation(entity, task_id)
@@ -1808,3 +1839,13 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
             "library:hierarchy-delete:active",
             job_id,
         )
+
+
+def run_subscription_sync_batch(task_id: str, options: dict | None = None) -> dict:
+    from app.services.scheduler_batches import run_batch_slice
+    return asyncio.run(run_batch_slice(task_id, options or {}))
+
+
+def run_subscription_sync_batch_cleanup(task_id: str, options: dict | None = None) -> dict:
+    from app.services.scheduler_batches import run_batch_cleanup_slice
+    return asyncio.run(run_batch_cleanup_slice(task_id, options or {}))

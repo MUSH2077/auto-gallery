@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdminUser, RequirePermission, get_admin_key
+from app.auth import RequireAdminUser, RequirePermission, RequireAnyPermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
     admin_operation_required_permission,
@@ -42,7 +42,8 @@ from app.services.operation_attention import (
 )
 
 _require_tasks = RequirePermission("tasks")
-router = APIRouter(dependencies=[_require_tasks])
+_require_task_surface = RequireAnyPermission("tasks", "system")
+router = APIRouter(dependencies=[_require_task_surface])
 logger = logging.getLogger(__name__)
 
 
@@ -92,8 +93,29 @@ async def list_tasks(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    user=_require_tasks,
+    user=_require_task_surface,
 ):
+    if not user.is_admin and "tasks" not in (user.permissions or []):
+        # System-only access is restricted to the global batch surface. It
+        # does not grant private task or credential visibility, even for self.
+        from app.models import TaskRun
+        from app.services.tasks import _global_subscription_batch_condition
+        from sqlalchemy import func
+        filters = [_global_subscription_batch_condition()]
+        if kind:
+            filters.append(TaskRun.kind == kind)
+        if status:
+            filters.append(TaskRun.status == status)
+        if operation_type:
+            filters.append(TaskRun.operation_type == operation_type)
+        if source:
+            filters.append(TaskRun.source == source)
+        if q:
+            filters.append(TaskRun.title.ilike(f"%{q}%"))
+        total = (await db.execute(select(func.count()).select_from(TaskRun).where(*filters))).scalar_one()
+        rows = (await db.execute(select(TaskRun).where(*filters).order_by(TaskRun.created_at.desc())
+            .offset(max(0, offset)).limit(max(1, min(100, limit))))).scalars()
+        return {"total": total, "items": [task_payload(task) for task in rows]}
     excluded_operation_types = inaccessible_admin_operation_types(user)
     if include_account:
         svc = TaskService(db)
@@ -190,19 +212,24 @@ async def reconcile_subscription_slot(
 async def get_task(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user=_require_tasks,
+    user=_require_task_surface,
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if (not getattr(user, "is_admin", False)
+            and "tasks" not in (getattr(user, "permissions", None) or [])
+            and not is_global_subscription_batch(task)):
+        raise HTTPException(status_code=403, detail="Missing permission: tasks")
     if task.owner_user_id is not None:
         if not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(status_code=404, detail="Task not found")
     elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
-    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    elif (task.kind == "admin" and task.operation_type != "subscription-sync-batch"
+          and admin_operation_required_permission(task.operation_type)):
         require_admin_operation_access(user, task.operation_type)
     elif not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -357,7 +384,8 @@ async def acknowledge_task(
     elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
-    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+    elif (task.kind == "admin" and task.operation_type != "subscription-sync-batch"
+          and admin_operation_required_permission(task.operation_type)):
         require_admin_operation_access(user, task.operation_type)
     elif user is not None and not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
@@ -387,13 +415,21 @@ async def _control_task(
     task = await svc.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if (not getattr(user, "is_admin", False)
+            and "tasks" not in (getattr(user, "permissions", None) or [])
+            and not is_global_subscription_batch(task)):
+        raise HTTPException(status_code=403, detail="Missing permission: tasks")
     if task.owner_user_id is not None:
         if user is None or not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(status_code=404, detail="Task not found")
     elif is_global_subscription_batch(task):
         if not can_access_global_subscription_batch(user):
             raise HTTPException(status_code=403, detail="Missing permission: system")
-    elif task.kind == "admin" and admin_operation_required_permission(task.operation_type):
+        if action == "cancel":
+            from app.services.scheduler_batches import cancel_batch
+            return await cancel_batch(db, task_id, operator=operator, note=note)
+    elif (task.kind == "admin" and task.operation_type != "subscription-sync-batch"
+          and admin_operation_required_permission(task.operation_type)):
         require_admin_operation_access(user, task.operation_type)
         if action != "retry":
             raise HTTPException(
@@ -1037,7 +1073,7 @@ async def cancel_task(
     data: dict | None = None,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
-    user=_require_tasks,
+    user=_require_task_surface,
 ):
     return await _control_task(
         task_id,

@@ -778,6 +778,8 @@ async def compact_terminal_tasks(
             )
         ).scalars()
     )
+    from app.models.scheduler_batch import SchedulerBatch
+    durable_batch_parent = exists().where(SchedulerBatch.task_id == TaskRun.id)
     tasks = list(
         (
             await db.execute(
@@ -789,6 +791,7 @@ async def compact_terminal_tasks(
                     TaskRun.id.not_in(protected_snapshot_ids)
                     if protected_snapshot_ids
                     else True,
+                    ~durable_batch_parent,
                     ~open_child_attention,
                     or_(TaskRun.subject_type.is_(None), TaskRun.subject_type != "import_job"),
                     or_(
