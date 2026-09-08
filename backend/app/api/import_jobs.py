@@ -11,13 +11,14 @@ from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.models.subscription import Subscription
 from app.models.creator import Creator
-from app.schemas.import_job import ImportJobRead
+from app.schemas.import_job import ImportJobRead, ImportJobPage
 from app.models.task_state import transition_import_job
 from app.services.job_progress import import_progress_from_job
 from app.services.progress import ProgressTracker
 from app.services.search import SearchService
 from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.task_engine import TaskEngine, TaskEngineError
+from app.services.task_actions import enrich_actions
 from app.services.tasks import import_job_visibility_condition
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ async def scan_imports(
     }
 
 
-@router.get("")
+@router.get("", response_model=ImportJobPage)
 async def list_import_jobs(
     status: str | None = None,
     download_job_id: UUID | None = None,
@@ -155,6 +156,7 @@ async def list_import_jobs(
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
+    await enrich_actions(db, jobs, user=user, domain_kind="import")
     ctx = await _enrich_import_context(db, jobs)
     items = []
     for j in jobs:
@@ -177,13 +179,14 @@ async def _owned_import_job(db: AsyncSession, job_id: UUID, user_id: int) -> Imp
     return job
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id}", response_model=ImportJobRead)
 async def get_import_job(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
     user=RequirePermission("tasks"),
 ):
     job = await _owned_import_job(db, job_id, user.id)
+    await enrich_actions(db, [job], user=user, domain_kind="import")
     return _import_job_payload(job)
 
 
@@ -271,26 +274,8 @@ async def batch_import_by_filter(
     note = data.get("note")
     engine = TaskEngine(db)
     try:
-        statement = select(ImportJob.id).where(import_job_visibility_condition(user.id))
-        if "ids" in filters:
-            try:
-                requested_ids = [UUID(str(value)) for value in filters["ids"]]
-            except (TypeError, ValueError) as exc:
-                raise TaskEngineError("Invalid import batch ids") from exc
-            statement = statement.where(ImportJob.id.in_(requested_ids))
-        if filters.get("status"):
-            statement = statement.where(ImportJob.status == filters["status"])
-        if filters.get("source") or filters.get("subscription_id"):
-            statement = statement.join(
-                DownloadJob, DownloadJob.id == ImportJob.download_job_id
-            )
-        if filters.get("source"):
-            statement = statement.where(DownloadJob.source == filters["source"])
-        if filters.get("subscription_id"):
-            statement = statement.where(
-                DownloadJob.subscription_id == UUID(str(filters["subscription_id"]))
-            )
-        owned_ids = list((await db.execute(statement)).scalars())
+        from app.services.task_bulk import owned_batch_ids
+        owned_ids = await owned_batch_ids(db, "import", filters, user.id)
         return await engine.batch_by_filter(
             "import",
             {"ids": [str(item) for item in owned_ids]},

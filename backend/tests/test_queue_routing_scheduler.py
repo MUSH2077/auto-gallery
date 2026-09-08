@@ -134,7 +134,8 @@ def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
 
 def test_unsafe_staging_conflict_cannot_be_blindly_retried():
     """A classified canonical overwrite must require manual intervention."""
-    from app.services.task_engine import TaskEngine, TaskEngineError
+    from app.services.task_engine import TaskEngine
+    from fastapi import HTTPException
 
     job = SimpleNamespace(
         id=uuid4(),
@@ -162,8 +163,9 @@ def test_unsafe_staging_conflict_cannot_be_blindly_retried():
 
     try:
         asyncio.run(engine.retry_download(job.id))
-    except TaskEngineError as exc:
-        assert "cannot be fixed by retrying" in str(exc)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert exc.detail["reason"] == "conflict_resolution_required"
     else:  # pragma: no cover - explicit assertion message for regressions
         raise AssertionError("unsafe staging conflict was re-enqueued")
 

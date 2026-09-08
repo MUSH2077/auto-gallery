@@ -2734,8 +2734,11 @@ class SearchService:
         *,
         permissions: set[str] | frozenset[str],
         user_id: int | None = None,
+        operation_type: str | None = None,
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
+        if operation_type:
+            conditions.append(TaskRun.operation_type == operation_type)
         excluded_admin_operation_types = (
             inaccessible_admin_operation_types_for_permissions(permissions)
         )
@@ -2807,6 +2810,8 @@ class SearchService:
             stmt = stmt.order_by(TaskRun.created_at.desc())
         total = int((await self.db.execute(count_stmt)).scalar_one())
         rows = (await self.db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, rows, user_id=user_id)
         return {"total": total, "items": [task_payload(row) for row in rows]}
 
     async def search_tasks(
@@ -2818,6 +2823,7 @@ class SearchService:
         limit: int = 50,
         permissions: set[str] | frozenset[str] | None = None,
         user_id: int | None = None,
+        operation_type: str | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2829,6 +2835,7 @@ class SearchService:
             visibility=visibility,
             permissions=permissions if permissions is not None else frozenset(),
             user_id=user_id,
+            operation_type=operation_type,
         )
 
     async def search_download_jobs(

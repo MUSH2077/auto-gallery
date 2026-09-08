@@ -1283,6 +1283,8 @@ async def operations_overview(
         ).scalar_one()
     )
 
+    from app.services.task_actions import enrich_actions
+    await enrich_actions(db, tasks, user_id=user_id)
     items = []
     for task in tasks:
         payload = task_payload(task)
@@ -1299,16 +1301,9 @@ async def operations_overview(
             "task_id": str(task.id),
             "occurred_at": (task.updated_at or task.created_at).isoformat(),
             "source": task.source,
-            "available_actions": (
-                ["acknowledge", "open_repository", "copy_diagnostics"]
-                if task.attention_state == "open" and task.reason_code in {
-                    "download_staging_conflict",
-                    "download_staging_manifest_error",
-                }
-                else ["retry", "acknowledge", "open_repository", "copy_diagnostics"]
-                if task.attention_state == "open"
-                else ["pause", "resume", "open_repository"]
-            ),
+            "available_actions": payload["available_actions"],
+            "navigation_actions": ["open_repository", "copy_diagnostics"],
+            "disabled_reasons": payload["disabled_reasons"],
             "task": payload,
         })
     if view == "attention":

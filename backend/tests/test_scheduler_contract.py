@@ -391,9 +391,9 @@ def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
 def test_scheduler_disabled_is_global_suppression_not_one_attention_per_source():
     import inspect
 
-    from app.api.system import scheduler_decisions
+    from app.services.scheduler_decisions import decision_item
 
-    source = inspect.getsource(scheduler_decisions)
+    source = inspect.getsource(decision_item)
     assert 'suppression_reason = "scheduler_disabled"' in source
     assert '\n            reason = "scheduler_disabled"' not in source
     assert '"scheduler_disabled",' not in source[source.index("is_attention =") :]

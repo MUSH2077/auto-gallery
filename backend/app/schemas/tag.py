@@ -38,3 +38,11 @@ class CreatorRef(BaseModel):
 
 class TagDetail(TagRead):
     top_creators: list[CreatorRef] = []
+
+
+class TagPage(BaseModel):
+    items: list[TagRead]
+    total: int
+    offset: int
+    limit: int
+    next_offset: int | None

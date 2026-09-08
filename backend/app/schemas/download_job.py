@@ -1,3 +1,4 @@
+from app.schemas.task_actions import TaskCapabilities
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -23,7 +24,7 @@ class SyncOutcomeRead(BaseModel):
     completed_at: datetime
 
 
-class DownloadJobRead(BaseModel):
+class DownloadJobRead(TaskCapabilities):
     id: UUID
     subscription_id: UUID
     subscription_source_id: UUID | None = None
@@ -78,9 +79,8 @@ class DownloadJobRead(BaseModel):
     @computed_field
     @property
     def retryable(self) -> bool:
-        return not (
-            self.reason_code in {"download_staging_conflict", "download_staging_manifest_error"}
-            and bool(self.conflict_details)
-        )
+        """Compatibility field; available_actions is the authoritative policy."""
+        return "retry" in self.available_actions
+
 
     model_config = {"from_attributes": True}

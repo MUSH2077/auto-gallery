@@ -13,6 +13,10 @@ from app.auth import RequirePermission
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas.scheduler_decisions import SchedulerDecisionPage
+from app.schemas.task_actions import WorkbenchSummary
+from app.services.task_actions import enrich_actions
+from app.services.tasks import download_job_visibility_condition, import_job_visibility_condition
 from app.config import settings
 from app.database import get_db
 from app.jobs.subscription_sync import schedule_decision_snapshot
@@ -323,19 +327,23 @@ async def _count_active_rebuilds() -> int:
 
 _workbench_cache: dict | None = None
 _workbench_cache_ts: float = 0.0
+_workbench_cache_actor = None
 _WORKBENCH_CACHE_TTL = 10.0
 
 
-@router.get("/system/workbench")
+@router.get("/system/workbench", response_model=WorkbenchSummary)
 async def workbench_summary(
     refresh: bool = Query(False),
+    user=RequirePermission("system"),
     db: AsyncSession = Depends(get_db),
 ):
     """Read-only dashboard aggregation for the live admin workbench."""
-    global _workbench_cache, _workbench_cache_ts
+    global _workbench_cache, _workbench_cache_ts, _workbench_cache_actor
+    actor = (user.id, user.is_admin, tuple(sorted(user.permissions or [])))
     _now_mono = time.monotonic()
     if (
         not refresh
+        and _workbench_cache_actor == actor
         and _workbench_cache is not None
         and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL
     ):
@@ -382,6 +390,7 @@ async def workbench_summary(
         select(DownloadJob, Subscription, Creator)
         .join(Subscription, DownloadJob.subscription_id == Subscription.id)
         .join(Creator, Subscription.creator_id == Creator.id)
+        .where(download_job_visibility_condition(user.id) if user.is_admin or "tasks" in (user.permissions or []) else False)
         .order_by(DownloadJob.created_at.desc())
         .limit(5)
     )).all())
@@ -390,6 +399,7 @@ async def workbench_summary(
         .join(DownloadJob, ImportJob.download_job_id == DownloadJob.id)
         .join(Subscription, DownloadJob.subscription_id == Subscription.id)
         .join(Creator, Subscription.creator_id == Creator.id)
+        .where(import_job_visibility_condition(user.id) if user.is_admin or "tasks" in (user.permissions or []) else False)
         .order_by(ImportJob.created_at.desc())
         .limit(5)
     )).all())
@@ -448,6 +458,8 @@ async def workbench_summary(
         .limit(5)
     )).all())
 
+    await enrich_actions(db, [row[0] for row in latest_download_rows], user=user, domain_kind="download")
+    await enrich_actions(db, [row[0] for row in latest_import_rows], user=user, domain_kind="import")
     payload = {
         "updated_at": now.isoformat(),
         "queue": {
@@ -494,6 +506,8 @@ async def workbench_summary(
         "recent": {
             "download_jobs": [{
                 "id": str(j.id),
+                "available_actions": j.available_actions,
+                "disabled_reasons": j.disabled_reasons,
                 "subscription_id": str(j.subscription_id),
                 "subscription_source_id": str(j.subscription_source_id) if j.subscription_source_id else None,
                 "source": j.source,
@@ -511,6 +525,8 @@ async def workbench_summary(
             } for j, sub, creator in latest_download_rows],
             "import_jobs": [{
                 "id": str(j.id),
+                "available_actions": j.available_actions,
+                "disabled_reasons": j.disabled_reasons,
                 "download_job_id": str(j.download_job_id),
                 "source": download.source,
                 "source_url": download.source_url,
@@ -547,174 +563,32 @@ async def workbench_summary(
             } for ss, sub, creator in successful_sync_rows],
         },
     }
+    _workbench_cache_actor = actor
     _workbench_cache = payload
     _workbench_cache_ts = time.monotonic()
     return payload
 
 
-@tasks_ops_router.get("/system/scheduler-decisions")
+@tasks_ops_router.get("/system/scheduler-decisions", response_model=SchedulerDecisionPage)
 async def scheduler_decisions(
     view: Literal["attention", "all"] = "all",
     subscription_ids: str | None = None,
-    offset: int = 0,
-    limit: int = 100,
+    offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
+    q: str | None = Query(None, max_length=255),
+    state: Literal["all", "due", "manual", "disabled"] = "all",
     db: AsyncSession = Depends(get_db),
 ):
-    """Explain current scheduler decisions at subscription-source granularity.
-
-    This endpoint is deliberately read-only: it does not enqueue jobs or mutate
-    last_attempted_at/last_synced_at.
-    """
-    config = await get_scheduler_config(db)
-    tz_name = config.get("timezone", "UTC")
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = timezone.utc
-    now = datetime.now(tz)
-    scheduler_enabled = bool(config.get("scheduler_enabled", True))
-    scan_minutes = max(
-        5,
-        int(config.get("scheduler_scan_interval_minutes", 60)),
-    )
-    overdue_cutoff = now - timedelta(minutes=scan_minutes * 2)
-
-    statement = (
-        select(SubscriptionSource, Subscription, Creator)
-        .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
-        .join(Creator, Subscription.creator_id == Creator.id)
-        .order_by(Creator.display_name, Creator.name, SubscriptionSource.source, SubscriptionSource.created_at.desc())
-    )
+    """Read-only, complete filtered plans and global suppression summary."""
+    from app.services.scheduler_decisions import decision_page
+    selected_ids = None
     if subscription_ids:
         try:
-            selected_ids = [
-                UUID(value.strip())
-                for value in subscription_ids.split(",")
-                if value.strip()
-            ]
+            selected_ids = [UUID(value.strip()) for value in subscription_ids.split(",") if value.strip()]
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="subscription_ids contains an invalid UUID") from exc
         if not selected_ids or len(selected_ids) > 50:
             raise HTTPException(status_code=422, detail="subscription_ids must contain between 1 and 50 UUIDs")
-        statement = statement.where(Subscription.id.in_(selected_ids))
-    rows = list((await db.execute(statement)).all())
-
-    items = []
-    suppressed_count = 0
-    for ss, sub, creator in rows:
-        provider_state = _provider_state(ss.source, ss.source_url)
-        can_download = bool(provider_state["can_download"])
-        url_valid = bool(provider_state["url_valid"])
-        auth_healthy = ss.auth_healthy is not False
-        decision = schedule_decision_snapshot(
-            sub,
-            config,
-            ss.last_synced_at,
-            ss.last_attempted_at,
-            now,
-            tz,
-            ss.next_sync_at,
-        )
-        due = bool(decision.get("due"))
-        reason = str(decision.get("reason"))
-        suppression_reason = None
-
-        if not sub.is_active:
-            due = False
-            reason = "subscription_inactive"
-        elif not sub.sync_enabled:
-            due = False
-            reason = "subscription_sync_disabled"
-        elif not ss.is_enabled:
-            due = False
-            reason = "source_disabled"
-        elif not auth_healthy:
-            due = False
-            reason = "auth_unhealthy"
-        elif not can_download:
-            due = False
-            reason = provider_state["skip_reason"] or "provider_not_downloadable"
-        elif not url_valid:
-            due = False
-            reason = "url_invalid"
-
-        if not scheduler_enabled:
-            if due:
-                suppressed_count += 1
-            due = False
-            suppression_reason = "scheduler_disabled"
-
-        next_due_at = decision.get("next_due_at")
-        parsed_next_due_at = None
-        if next_due_at:
-            try:
-                parsed_next_due_at = datetime.fromisoformat(next_due_at)
-                if parsed_next_due_at.tzinfo is None:
-                    parsed_next_due_at = parsed_next_due_at.replace(tzinfo=tz)
-            except (TypeError, ValueError):
-                parsed_next_due_at = None
-        is_overdue = bool(
-            due
-            and parsed_next_due_at
-            and parsed_next_due_at <= overdue_cutoff
-        )
-        is_attention = reason in {
-            "auth_unhealthy",
-            "url_invalid",
-            "provider_not_downloadable",
-        } or is_overdue
-
-        items.append({
-            "subscription_id": str(sub.id),
-            "subscription_name": sub.name,
-            "subscription_active": sub.is_active,
-            "subscription_sync_enabled": sub.sync_enabled,
-            "creator_id": str(creator.id),
-            "creator_name": creator.display_name or creator.name,
-            "source_id": str(ss.id),
-            "source": ss.source,
-            "source_display_name": provider_state["provider_display_name"],
-            "source_url": ss.source_url,
-            "source_creator_id": ss.source_creator_id,
-            "source_enabled": ss.is_enabled,
-            "effective_mode": decision.get("mode") or sub.schedule_mode or config.get("schedule_mode", "interval"),
-            "timezone": tz_name,
-            "scheduled_times": sub.scheduled_times or config.get("scheduled_times", ""),
-            "schedule_rule": (
-                effective_calendar_rule(sub, config)
-                if (sub.schedule_mode or config.get("schedule_mode"))
-                in {"calendar", "fixed_time"}
-                else None
-            ),
-            "sync_interval_hours": sub.sync_interval_hours,
-            "last_synced_at": _iso(ss.last_synced_at),
-            "last_attempted_at": _iso(ss.last_attempted_at),
-            "due": due,
-            "decision": "due_now" if due else reason,
-            "reason": reason,
-            "suppression_reason": suppression_reason,
-            "next_due_at": next_due_at,
-            "window_start": decision.get("window_start"),
-            "window_end": decision.get("window_end"),
-            "auth_healthy": auth_healthy,
-            "url_valid": url_valid,
-            "can_download": can_download,
-            "is_overdue": is_overdue,
-            "is_attention": is_attention,
-        })
-
-    visible_items = [item for item in items if item["is_attention"]] if view == "attention" else items
-    bounded_limit = max(1, min(int(limit), 500))
-    bounded_offset = max(0, int(offset))
-    return {
-        "updated_at": now.isoformat(),
-        "scheduler_enabled": scheduler_enabled,
-        "suppressed_count": suppressed_count,
-        "timezone": tz_name,
-        "view": view,
-        "total": len(visible_items),
-        "items": visible_items[bounded_offset : bounded_offset + bounded_limit],
-    }
+    return await decision_page(db, view=view, q=q, state=state, subscription_ids=selected_ids, offset=offset, limit=limit)
 
 
 @router.get("/system/logs")

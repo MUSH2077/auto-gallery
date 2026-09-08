@@ -452,6 +452,7 @@ async def enqueue_subscription_source_sync(
     triggering_remote_account_id: UUID | None = None,
     batch_item_id: UUID | None = None,
     batch_mode: str | None = None,
+    repeat_intent: dict | None = None,
 ) -> dict:
     if batch_mode is not None and (batch_item_id is None or parent_task_id is None):
         raise ValueError("Batch mode requires a durable item and parent")
@@ -729,6 +730,15 @@ async def enqueue_subscription_source_sync(
         claimed_account_auth_status = (
             selection.account.auth_status if selection.account is not None else None
         )
+        if repeat_intent is not None:
+            from app.models.download_repeat import DownloadRepeatIntent
+            if not explicit_private_manual or selection.membership.user_id != repeat_intent["actor_user_id"]:
+                raise ValueError("Repeat intent requires its acting membership")
+            db.add(DownloadRepeatIntent(**repeat_intent, download_job_id=job.id, task_id=prepared.task.id))
+            # New identity, actor/request receipt and ordinary dispatch outbox
+            # commit together, before any Redis visibility or worker callback.
+            await db.commit()
+            return {"status": "enqueued", "job_id": str(job.id), "task_id": str(prepared.task.id)}
         if batch_item_id is not None:
             from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem
             from app.services.operations import fence_current_admin_operation_transaction

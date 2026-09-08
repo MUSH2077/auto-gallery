@@ -14,6 +14,8 @@ from app.services.search_language import SearchQueryError
 from app.services.task_engine import TaskEngine, TaskEngineError
 from app.services.backpressure import DownloadAdmissionError
 
+from app.services.task_bulk import owned_batch_ids, BULK_ACTION_LIMIT
+
 router = APIRouter(dependencies=[RequirePermission("tasks")])
 
 
@@ -183,11 +185,7 @@ async def batch_jobs(
         raise HTTPException(status_code=400, detail="action must be retry/delete/pause/resume/cancel")
     ids = [UUID(i) for i in ids_raw]
     engine = TaskEngine(db)
-    for job_id in ids:
-        try:
-            await DownloadService(db).get_job(job_id, user_id=user.id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="DownloadJob not found") from exc
+    ids = await owned_batch_ids(db, "download", {"ids": ids}, user.id, limit=BULK_ACTION_LIMIT)
     # Reuse batch_by_filter with an explicit ID list
     result = await engine.batch_by_filter(
         "download", {"ids": [str(i) for i in ids]}, action,
@@ -208,8 +206,8 @@ async def clear_jobs(
     if not statuses or not isinstance(statuses, list):
         raise HTTPException(status_code=400, detail="statuses list is required")
     svc = DownloadService(db)
-    count = await svc.clear_completed(statuses, user_id=user.id)
-    return {"status": "ok", "deleted": count}
+    result = await svc.clear_completed(statuses, user_id=user.id)
+    return {"status": "ok", "deleted": result["succeeded"], **result}
 
 
 @router.post("/kill-stuck")
@@ -231,19 +229,9 @@ async def retry_all_failed(
 ):
     """Retry all failed and stale download jobs via batch-by-filter."""
     engine = TaskEngine(db)
-    failed = await DownloadService(db).list_jobs(status="failed", limit=10000, user_id=user.id)
-    stale = await DownloadService(db).list_jobs(status="stale", limit=10000, user_id=user.id)
-    result = await engine.batch_by_filter(
-        "download", {"ids": [str(job.id) for job in failed]}, "retry", operator=user.username)
-    stale_result = await engine.batch_by_filter(
-        "download", {"ids": [str(job.id) for job in stale]}, "retry", operator=user.username)
-    total = {
-        "succeeded": result["succeeded"] + stale_result["succeeded"],
-        "failed": result["failed"] + stale_result["failed"],
-        "errors": result.get("errors", []) + stale_result.get("errors", []),
-    }
-    await db.commit()
-    return {"status": "ok", **total}
+    ids = await owned_batch_ids(db, "download", {"statuses": ["failed", "stale"]}, user.id, limit=BULK_ACTION_LIMIT)
+    result = await engine.batch_by_filter("download", {"ids": [str(i) for i in ids]}, "retry", operator=user.username)
+    return {"status": "ok", **result}
 
 
 @router.get("/{job_id}/imports", response_model=list[ImportJobRead])
@@ -257,7 +245,9 @@ async def list_imports(
         await svc.get_job(job_id, user_id=user.id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="DownloadJob not found") from exc
-    return await svc.list_imports(job_id)
+    from app.services.task_actions import enrich_actions
+    rows = await svc.list_imports(job_id)
+    return await enrich_actions(db, rows, user=user, domain_kind="import")
 
 
 # ── Task Engine endpoints (Phase 7) ──────────────────────────────
@@ -320,17 +310,10 @@ async def batch_by_filter(
     note = data.get("note")
     engine = TaskEngine(db)
     try:
-        jobs = await DownloadService(db).list_jobs(
-            status=filters.get("status"),
-            source=filters.get("source"),
-            subscription_id=filters.get("subscription_id"),
-            subscription_source_id=filters.get("subscription_source_id"),
-            limit=10000,
-            user_id=user.id,
-        )
+        ids = await owned_batch_ids(db, "download", filters, user.id, limit=BULK_ACTION_LIMIT)
         result = await engine.batch_by_filter(
             "download",
-            {"ids": [str(job.id) for job in jobs]},
+            {"ids": [str(i) for i in ids]},
             action,
             operator=user.username,
             note=note,
@@ -389,3 +372,12 @@ async def get_pipeline(
         "stages": pipeline,
         "progress": job.progress_data,
     }
+
+
+from app.schemas.task_actions import RepeatSyncRequest, RepeatSyncAccepted
+
+
+@router.post("/{job_id}/repeat-sync", status_code=202, response_model=RepeatSyncAccepted)
+async def repeat_download_sync(job_id: UUID, data: RepeatSyncRequest, db: AsyncSession = Depends(get_db), user=RequirePermission("tasks")):
+    from app.services.download_repeat import repeat_sync
+    return await repeat_sync(db, user, data.request_id, job_id=job_id)

@@ -744,6 +744,7 @@ class TaskService:
         status: str | None = None,
         operation_type: str | None = None,
         source: str | None = None,
+        q: str | None = None,
         include_account: bool = False,
         visibility: str = "all",
         offset: int = 0,
@@ -772,6 +773,8 @@ class TaskService:
             filters.append(TaskRun.operation_type == operation_type)
         if source:
             filters.append(TaskRun.source == source)
+        if q:
+            filters.append(or_(TaskRun.title.icontains(q, autoescape=True), TaskRun.source.icontains(q, autoescape=True), TaskRun.error_log.icontains(q, autoescape=True)))
         if excluded_admin_operation_types:
             filters.append(or_(
                 TaskRun.kind != "admin",
@@ -815,6 +818,8 @@ def task_payload(task: TaskRun, events: list[TaskEvent] | None = None) -> dict[s
 
     return {
         "id": str(task.id),
+        "available_actions": getattr(task, "available_actions", []),
+        "disabled_reasons": getattr(task, "disabled_reasons", {}),
         "kind": task.kind,
         "operation_type": task.operation_type,
         "subject_type": task.subject_type,

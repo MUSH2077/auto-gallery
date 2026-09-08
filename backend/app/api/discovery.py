@@ -46,12 +46,13 @@ from app.services.remote_discovery_rollout import RemoteDiscoveryUnavailable
 from app.services.tasks import TaskService
 from app.services.subscription import SubscriptionService
 from app.services.tasks import task_payload
+from app.schemas.task_actions import TaskRead, TaskPage
 
 
 router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
-@router.post("/scans", status_code=201)
+@router.post("/scans", status_code=201, response_model=TaskRead)
 async def create_discovery_scan(
     data: DiscoveryScanCreate,
     db: AsyncSession = Depends(get_db),
@@ -94,10 +95,12 @@ async def create_discovery_scan(
             )
             await db.commit()
         raise HTTPException(status_code=503, detail="Discovery queue is unavailable") from exc
+    from app.services.task_actions import enrich_actions
+    await enrich_actions(db, [task], user=user)
     return task_payload(task)
 
 
-@router.get("/scans")
+@router.get("/scans", response_model=TaskPage)
 async def list_discovery_scans(
     remote_account_id: UUID | None = None,
     offset: int = 0,
@@ -111,6 +114,8 @@ async def list_discovery_scans(
         offset=offset,
         limit=limit,
     )
+    from app.services.task_actions import enrich_actions
+    await enrich_actions(db, tasks, user=user)
     return {"total": total, "items": [task_payload(task) for task in tasks]}
 
 

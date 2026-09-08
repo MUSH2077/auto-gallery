@@ -88,7 +88,8 @@ class DownloadService:
                 continue
             progress = ProgressTracker.get(str(job.id))
             if progress:
-                job.progress_data = progress
+                from sqlalchemy.orm.attributes import set_committed_value
+                set_committed_value(job, "progress_data", progress)
         return jobs
 
     async def list_jobs(self, status: str | None = None, source: str | None = None,
@@ -131,6 +132,8 @@ class DownloadService:
             subscription_id=subscription_id,
         )
         jobs = await self._enrich_job_context(jobs, user_id=user_id)
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, jobs, user_id=user_id, domain_kind="download")
         self._enrich_progress(jobs)
         return jobs
 
@@ -152,6 +155,8 @@ class DownloadService:
         if not job:
             raise ValueError("DownloadJob not found")
         enriched = await self._enrich_job_context([job], user_id=user_id)
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, enriched, user_id=user_id, domain_kind="download")
         self._enrich_progress(enriched)
         return enriched[0]
 
@@ -169,11 +174,8 @@ class DownloadService:
         return await engine.retry_download(job_id)
 
     async def delete_job(self, job_id: UUID):
-        job = await self.get_job(job_id)
-        if job.status in ("importing",):
-            raise ValueError(f"Cannot delete job with status '{job.status}' — import is in progress")
-        await self.db.delete(job)
-        await self.db.commit()
+        from app.services.task_engine import TaskEngine
+        await TaskEngine(self.db).delete_download(job_id)
 
     async def pause_job(self, job_id: UUID):
         from app.services.task_engine import TaskEngine
@@ -190,25 +192,15 @@ class DownloadService:
         engine = TaskEngine(self.db)
         return await engine.batch_by_filter("download", {"ids": [str(i) for i in ids]}, action)
 
-    async def clear_completed(self, statuses: list[str], *, user_id: int | None = None) -> int:
+    async def clear_completed(self, statuses: list[str], *, user_id: int | None = None) -> dict:
         """Delete all jobs matching given statuses (e.g. complete, failed, stale)."""
-        if user_id is not None:
-            from app.services.task_engine import TaskEngine, TaskEngineError
-
-            jobs = []
-            for status in statuses:
-                jobs.extend(await self.list_jobs(status=status, limit=10000, user_id=user_id))
-            deleted = 0
-            for job in {job.id: job for job in jobs}.values():
-                try:
-                    await TaskEngine(self.db).delete_download(job.id)
-                    deleted += 1
-                except TaskEngineError:
-                    continue
-            return deleted
-        count = await self.repo.delete_by_status(statuses)
-        await self.db.commit()
-        return count
+        from app.services.task_bulk import owned_batch_ids
+        from app.services.task_engine import TaskEngine
+        if user_id is None:
+            raise ValueError("History deletion requires an actor")
+        ids = await owned_batch_ids(self.db, "download", {"statuses": statuses}, user_id)
+        result = await TaskEngine(self.db).batch_by_filter("download", {"ids": [str(i) for i in ids]}, "delete")
+        return result
 
     async def kill_stuck_jobs(self) -> int:
         """Detect stale tasks via heartbeat timeout."""

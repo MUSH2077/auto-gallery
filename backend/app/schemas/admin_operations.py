@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
+from app.schemas.task_actions import TaskCapabilities
 
 
 class AdminOperationAccepted(BaseModel):
@@ -36,3 +37,15 @@ class AdminOperationCurrent(BaseModel):
 class AdminOperationSnapshotResponse(BaseModel):
     snapshot: AdminOperationSnapshot | None = None
     current: AdminOperationCurrent | None = None
+
+
+class AdminOperationRead(TaskCapabilities):
+    task_id: str | None = None
+    job_id: str | None = None
+    status: str
+    operation_type: str | None = None
+    model_config = {"extra": "allow"}
+
+
+class AdminOperationPage(BaseModel):
+    operations: list[AdminOperationRead]
