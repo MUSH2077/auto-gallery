@@ -128,24 +128,79 @@ async def _enqueue_projection_action(
     return len(identities)
 
 
+_INDEX_GENERATION_INTENTS = "search_index_generation_intents"
+_INDEX_GENERATIONS_LOCKED = "search_index_generations_locked"
+
+
 async def _mark_index_changed(db: AsyncSession, index_uid: str) -> None:
-    insert_state = pg_insert(SearchIndexState).values(
-        id=uuid4(),
-        index_uid=index_uid,
-        database_generation=1,
-        indexed_generation=0,
-        status="catching_up",
-    )
-    await db.execute(
-        insert_state.on_conflict_do_update(
-            index_elements=["index_uid"],
-            set_={
-                "database_generation": SearchIndexState.database_generation + 1,
-                "status": "catching_up",
-                "updated_at": func.now(),
-            },
+    """Stage a generation delta on the owning transaction/savepoint.
+
+    The outbox is written immediately. Its global consistency watermark is
+    updated atomically at outer commit, after all business/FK/TaskRun writes.
+    """
+    session = db.sync_session
+    if session.get_transaction() is None:
+        await db.begin()
+    transaction = session.get_nested_transaction() or session.get_transaction()
+    intents = session.info.setdefault(_INDEX_GENERATION_INTENTS, {})
+    deltas = intents.setdefault(transaction, {})
+    deltas[index_uid] = deltas.get(index_uid, 0) + 1
+
+
+@event.listens_for(Session, "before_commit")
+def _commit_index_generations_last(session: Session) -> None:
+    if session.in_nested_transaction():
+        return
+    intents = session.info.get(_INDEX_GENERATION_INTENTS, {})
+    deltas = intents.get(session.get_transaction(), {})
+    if not deltas:
+        return
+    # Session.commit normally flushes after before_commit. Do that work now,
+    # before hot rows, and use Core Connection writes to avoid another autoflush.
+    session.flush()
+    connection = session.connection()
+    for index_uid, delta in sorted(deltas.items()):
+        statement = pg_insert(SearchIndexState.__table__).values(
+            id=uuid4(), index_uid=index_uid, database_generation=delta,
+            indexed_generation=0, status="catching_up",
         )
-    )
+        connection.execute(statement.on_conflict_do_update(
+            index_elements=["index_uid"],
+            set_={"database_generation": SearchIndexState.database_generation + delta,
+                  "status": "catching_up", "updated_at": func.now()},
+        ))
+    session.info[_INDEX_GENERATIONS_LOCKED] = True
+
+
+@event.listens_for(Session, "before_flush")
+def _reject_business_flush_after_index_locks(session: Session, *_args) -> None:
+    if session.info.get(_INDEX_GENERATIONS_LOCKED):
+        raise RuntimeError("Domain writes must flush before search generation locks")
+
+
+@event.listens_for(Session, "after_commit")
+def _merge_or_clear_index_generation_intents(session: Session) -> None:
+    intents = session.info.get(_INDEX_GENERATION_INTENTS, {})
+    nested = session.get_nested_transaction()
+    if nested is not None:
+        deltas = intents.pop(nested, {})
+        parent = intents.setdefault(nested.parent, {})
+        for index_uid, delta in deltas.items():
+            parent[index_uid] = parent.get(index_uid, 0) + delta
+    else:
+        session.info.pop(_INDEX_GENERATION_INTENTS, None)
+        session.info.pop(_INDEX_GENERATIONS_LOCKED, None)
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _discard_rolled_back_index_generation_intents(session: Session, previous_transaction) -> None:
+    if previous_transaction.parent is None:
+        session.info.pop(_INDEX_GENERATION_INTENTS, None)
+        session.info.pop(_INDEX_GENERATIONS_LOCKED, None)
+        session.info.pop(_WORKS_GENERATION_PENDING, None)
+        session.info.pop(_WORKS_GENERATION_COMMITTING, None)
+    else:
+        session.info.get(_INDEX_GENERATION_INTENTS, {}).pop(previous_transaction, None)
 
 
 async def request_search_projection(
