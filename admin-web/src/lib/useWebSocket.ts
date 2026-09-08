@@ -19,6 +19,7 @@ type UseWsOptions = {
 };
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "polling";
+const RECONNECT_DELAY_MS = 5_000;
 
 function resolveWebSocketUrl(ticket?: string): string | null {
   if (typeof window === "undefined") return null;
@@ -64,6 +65,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
   const ticketFallbackTriedRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const connectGenerationRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     handlersRef.current = { onStatusChange, onProgress };
@@ -89,6 +91,18 @@ export function useJobWebSocket(options?: UseWsOptions) {
     intentionalCloseRef.current = false;
     setStatus("connecting");
 
+    const scheduleReconnect = () => {
+      if (intentionalCloseRef.current || generation !== connectGenerationRef.current) return;
+      setStatus("polling");
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (intentionalCloseRef.current || generation !== connectGenerationRef.current) return;
+        ticketFallbackTriedRef.current = false;
+        connect();
+      }, RECONNECT_DELAY_MS);
+    };
+
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -97,6 +111,8 @@ export function useJobWebSocket(options?: UseWsOptions) {
       ws.onopen = () => {
         if (generation !== connectGenerationRef.current) return;
         opened = true;
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
         setConnected(true);
         setStatus("connected");
       };
@@ -118,7 +134,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
             return;
           }
         }
-        setStatus("polling");
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
@@ -139,7 +155,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
       };
     } catch {
       setConnected(false);
-      setStatus("polling");
+      scheduleReconnect();
     }
   }, []);
 
@@ -164,6 +180,8 @@ export function useJobWebSocket(options?: UseWsOptions) {
       intentionalCloseRef.current = true;
       connectGenerationRef.current += 1;
       clearInterval(pingInterval);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
       wsRef.current?.close();
       wsRef.current = null;
     };

@@ -2457,8 +2457,8 @@ test("scheduler separates task controls from system status permissions", async (
   await expect(page.getByRole("heading", { level: 1, name: "Scheduler" })).toBeVisible();
   await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toBeVisible();
   expect(authRequests).toBe(0);
 
   authRequests = 0;
@@ -2471,9 +2471,9 @@ test("scheduler separates task controls from system status permissions", async (
     },
   }));
   await page.goto("/admin/scheduler");
-  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toBeVisible();
-  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   expect(authRequests).toBe(0);
 });
@@ -2502,16 +2502,12 @@ test("Danbooru refresh and scheduler sync-all send the bounded batch modes", asy
   });
   await page.route("**/api/v1/admin/scheduler/sync-now", async (route) => {
     schedulerPayload = JSON.parse(route.request().postData() || "{}");
-    await route.fulfill({ json: {
-      status: "ok",
-      message: "queued",
+    await route.fulfill({ status: 202, json: {
+      status: "enqueued",
       task_id: "sync-all-task",
+      job_id: "sync-all-rq",
+      operation_type: "subscription-sync-batch",
       mode: "manual_all_enabled",
-      candidate_count: 3,
-      enqueued_count: 2,
-      skipped_count: 1,
-      error_count: 0,
-      job_ids: ["one", "two"],
     } });
   });
 
@@ -2522,8 +2518,9 @@ test("Danbooru refresh and scheduler sync-all send the bounded batch modes", asy
 
   await page.goto("/admin/scheduler");
   await page.getByRole("button", { name: "Sync all enabled sources" }).click();
-  await expect.poll(() => schedulerPayload).toEqual({ mode: "manual_all_enabled" });
-  await expect(page.getByText("Checked 3 enabled sources: 2 queued, 1 skipped, 0 failed")).toBeVisible();
+  await expect.poll(() => schedulerPayload).toMatchObject({ mode: "manual_all_enabled" });
+  expect((schedulerPayload as { request_id?: string })?.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(page.getByRole("log").getByText("Batch accepted", { exact: true })).toBeVisible();
 });
 
 test("mobile data management switcher keeps curation and dedup reachable", async ({ page }) => {

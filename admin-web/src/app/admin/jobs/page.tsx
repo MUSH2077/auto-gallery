@@ -1670,7 +1670,7 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
 
 export default function JobsPage() {
   return (
-    <PermissionGuard module="tasks">
+    <PermissionGuard anyOf={["tasks", "system"]}>
       <Suspense>
         <JobsContent />
       </Suspense>

@@ -11,6 +11,7 @@ import { classifyError } from "@/lib/jobCategory";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
 import { canPauseDownload } from "@/lib/task-actions";
+import { POLL_ACTIVE_MS } from "@/lib/polling";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -68,6 +69,16 @@ export function TaskDetailDrawer({
     queryKey: queryKeys.tasks.detail(heldId || ""),
     queryFn: () => api.getTask(heldId || ""),
     enabled: !!id,
+    refetchInterval: (query) => {
+      const current = query.state.data;
+      if (current?.operation_type !== "subscription-sync-batch") return false;
+      const cleanupPending = current.status === "cancelled"
+        && (current.result_data as { cleanup_pending?: boolean } | null)?.cleanup_pending !== false;
+      return cleanupPending || !["complete", "failed", "stale", "cancelled"].includes(current.status)
+        ? POLL_ACTIVE_MS
+        : false;
+    },
+    refetchIntervalInBackground: true,
   });
   if (!mounted || !heldId) return null;
   const item = task.data;

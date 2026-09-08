@@ -1018,6 +1018,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/scheduler/batches/{task_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scheduler Batch Items
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_admin_scheduler_batches_task_id_items"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/scheduler/sync-now": {
         parameters: {
             query?: never;
@@ -1029,14 +1049,7 @@ export interface paths {
         put?: never;
         /**
          * Trigger Sync Now
-         * @description Manually trigger subscription sync work.
-         *
-         *     ``force_eligible`` means "sync everything the operator would reasonably
-         *     expect to sync now": active/enabled/downloadable sources with healthy auth,
-         *     valid URLs, and no running job.  It bypasses schedule windows only.
-         *     ``manual_all_enabled`` additionally includes subscriptions configured with
-         *     the explicit manual strategy while preserving every schedule setting.
-         *     ``due_scan`` preserves the old behavior: run the scheduler's due-only scan.
+         * @description Persist bounded admission; the operations worker owns all source iteration.
          */
         post: operations["post_api_v1_admin_scheduler_sync_now"];
         delete?: never;
@@ -7531,6 +7544,69 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** SchedulerBatchItemPage */
+        SchedulerBatchItemPage: {
+            /** Items */
+            items: components["schemas"]["SchedulerBatchItemRead"][];
+            /** Total */
+            total: number;
+        };
+        /** SchedulerBatchItemRead */
+        SchedulerBatchItemRead: {
+            /** Attempts */
+            attempts: number;
+            /** Download Job Id */
+            download_job_id: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Next Retry At */
+            next_retry_at: string | null;
+            /** Outcome */
+            outcome: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Source */
+            source: string | null;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "queued" | "waiting" | "downloading" | "importing" | "succeeded" | "skipped" | "failed" | "cancelled";
+        };
+        /** SchedulerSyncAcceptance */
+        SchedulerSyncAcceptance: {
+            /** Job Id */
+            job_id: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "force_eligible" | "due_scan" | "manual_all_enabled";
+            /**
+             * Operation Type
+             * @constant
+             */
+            operation_type: "subscription-sync-batch";
+            /** Status */
+            status: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+        };
         /** SchedulerSyncNowRequest */
         SchedulerSyncNowRequest: {
             /**
@@ -7539,6 +7615,8 @@ export interface components {
              * @enum {string}
              */
             mode: "force_eligible" | "due_scan" | "manual_all_enabled";
+            /** Request Id */
+            request_id?: string | null;
         };
         /** SearchAssistRequest */
         SearchAssistRequest: {
@@ -11193,6 +11271,58 @@ export interface operations {
             };
         };
     };
+    get_api_v1_admin_scheduler_batches_task_id_items: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulerBatchItemPage"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_admin_scheduler_sync_now: {
         parameters: {
             query?: never;
@@ -11207,12 +11337,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["SchedulerSyncAcceptance"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

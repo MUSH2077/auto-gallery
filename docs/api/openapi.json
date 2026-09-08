@@ -8217,6 +8217,190 @@
         "title": "RuleSuggestionRead",
         "type": "object"
       },
+      "SchedulerBatchItemPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SchedulerBatchItemRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "SchedulerBatchItemPage",
+        "type": "object"
+      },
+      "SchedulerBatchItemRead": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "download_job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Job Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "queued",
+              "waiting",
+              "downloading",
+              "importing",
+              "succeeded",
+              "skipped",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "source",
+          "status",
+          "attempts",
+          "next_retry_at",
+          "download_job_id",
+          "reason_code",
+          "error",
+          "outcome"
+        ],
+        "title": "SchedulerBatchItemRead",
+        "type": "object"
+      },
+      "SchedulerSyncAcceptance": {
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "mode": {
+            "enum": [
+              "force_eligible",
+              "due_scan",
+              "manual_all_enabled"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "operation_type": {
+            "const": "subscription-sync-batch",
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "format": "uuid",
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "status",
+          "operation_type",
+          "mode"
+        ],
+        "title": "SchedulerSyncAcceptance",
+        "type": "object"
+      },
       "SchedulerSyncNowRequest": {
         "properties": {
           "mode": {
@@ -8228,6 +8412,18 @@
             ],
             "title": "Mode",
             "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
           }
         },
         "title": "SchedulerSyncNowRequest",
@@ -15526,9 +15722,106 @@
         "x-response-schema-status": "generic"
       }
     },
+    "/api/v1/admin/scheduler/batches/{task_id}/items": {
+      "get": {
+        "description": "See the request, response, permission, and risk metadata for this operation.",
+        "operationId": "get_api_v1_admin_scheduler_batches_task_id_items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulerBatchItemPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Scheduler Batch Items",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
+      }
+    },
     "/api/v1/admin/scheduler/sync-now": {
       "post": {
-        "description": "Manually trigger subscription sync work.\n\n``force_eligible`` means \"sync everything the operator would reasonably\nexpect to sync now\": active/enabled/downloadable sources with healthy auth,\nvalid URLs, and no running job.  It bypasses schedule windows only.\n``manual_all_enabled`` additionally includes subscriptions configured with\nthe explicit manual strategy while preserving every schedule setting.\n``due_scan`` preserves the old behavior: run the scheduler's due-only scan.",
+        "description": "Persist bounded admission; the operations worker owns all source iteration.",
         "operationId": "post_api_v1_admin_scheduler_sync_now",
         "requestBody": {
           "content": {
@@ -15548,11 +15841,11 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SchedulerSyncAcceptance"
                 }
               }
             },
@@ -15604,9 +15897,8 @@
         "x-dangerous": false,
         "x-permission-mode": "allOf",
         "x-required-permissions": [
-          "tasks"
-        ],
-        "x-response-schema-status": "generic"
+          "system"
+        ]
       }
     },
     "/api/v1/admin/search/reindex": {
@@ -28889,8 +29181,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -28977,8 +29270,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29053,7 +29347,7 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
           "system",
           "tasks"
@@ -29130,7 +29424,7 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
           "system",
           "tasks"
@@ -29207,7 +29501,7 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
           "system",
           "tasks"
@@ -29286,8 +29580,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29364,8 +29659,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29460,8 +29756,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29538,8 +29835,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29640,8 +29938,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29727,8 +30026,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29815,8 +30115,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29911,8 +30212,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -29989,8 +30291,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"
@@ -30067,8 +30370,9 @@
         "x-authentication": "bearer",
         "x-background-task": false,
         "x-dangerous": false,
-        "x-permission-mode": "allOf",
+        "x-permission-mode": "anyOf",
         "x-required-permissions": [
+          "system",
           "tasks"
         ],
         "x-response-schema-status": "generic"

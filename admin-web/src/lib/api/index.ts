@@ -116,7 +116,7 @@ export const api = {
     }),
   retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
   cancelTask: (id: string, note?: string) =>
-    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
+    request<T.TaskControlResponse>(`/api/v1/tasks/${id}/cancel`, {
       method: "POST",
       body: note ? JSON.stringify({ note }) : undefined,
     }),
@@ -698,13 +698,16 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: (mode: "force_eligible" | "due_scan" | "manual_all_enabled" = "force_eligible") =>
-    request<{
-      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan" | "manual_all_enabled";
-      candidate_count?: number;
-      enqueued_count: number; skipped_count: number; error_count?: number;
-      skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
-    }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
+  triggerSyncNow: (mode: T.SchedulerSyncMode = "force_eligible", requestId?: string) =>
+    request<T.SchedulerSyncAcceptance>("/api/v1/admin/scheduler/sync-now", {
+      method: "POST",
+      body: JSON.stringify({ mode, request_id: requestId }),
+    }),
+
+  getSchedulerBatchItems: (taskId: string, offset = 0, limit = 50) =>
+    request<T.SchedulerBatchItemPage>(
+      `/api/v1/admin/scheduler/batches/${encodeURIComponent(taskId)}/items?offset=${offset}&limit=${limit}`,
+    ),
 
   clearFailedJobs: () =>
     request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),

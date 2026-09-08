@@ -1235,6 +1235,39 @@ export interface SchedulerDecisionsResponse {
   items: SchedulerDecisionItem[];
 }
 
+export type SchedulerSyncMode = components["schemas"]["SchedulerSyncNowRequest"]["mode"];
+export type SchedulerSyncAcceptance = components["schemas"]["SchedulerSyncAcceptance"];
+export type SchedulerBatchItem = components["schemas"]["SchedulerBatchItemRead"];
+export type SchedulerBatchItemPage = components["schemas"]["SchedulerBatchItemPage"];
+
+export interface SchedulerBatchResult extends Record<string, unknown> {
+  status?: "pending" | "partial_error" | "complete" | "noop" | "cancelled" | string;
+  mode?: SchedulerSyncMode;
+  candidate_count?: number;
+  pending_count?: number;
+  queued_count?: number;
+  waiting_count?: number;
+  downloading_count?: number;
+  importing_count?: number;
+  succeeded_count?: number;
+  skipped_count?: number;
+  failed_count?: number;
+  cancelled_count?: number;
+  enqueued_count?: number;
+  error_count?: number;
+  cleanup_pending?: boolean;
+  cleanup_task_id?: string;
+  skipped_reasons?: Record<string, number>;
+  message?: string;
+}
+
+export interface TaskControlResponse {
+  task_id: string;
+  status: string;
+  cleanup_pending?: boolean;
+  cleanup_task_id?: string;
+}
+
 export interface DownloadJob {
   id: string;
   subscription_id: string;

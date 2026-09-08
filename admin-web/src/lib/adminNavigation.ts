@@ -62,7 +62,7 @@ export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
   [adminRoutes.discovery]: "subscriptions",
   [adminRoutes.danbooru]: "subscriptions",
   [adminRoutes.jobs]: "tasks",
-  [adminRoutes.scheduler]: ["tasks", "system"],
+  [adminRoutes.scheduler]: "system",
   [adminRoutes.notifications]: "tasks",
   [adminRoutes.dataManagement]: "system",
   [adminRoutes.system]: ["system", "subscriptions"],

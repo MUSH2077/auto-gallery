@@ -146,7 +146,7 @@ export default function AppSidebar({
   const schedulerBadge = useQuery({
     queryKey: [...queryKeys.schedulerDecisions, "attention", "badge"],
     queryFn: () => api.schedulerDecisionsView("attention", 0, 1),
-    enabled: canSeeTasks,
+    enabled: canSeeStatus,
     staleTime: 15_000,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
