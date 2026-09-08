@@ -1,62 +1,90 @@
 """Recover terminal import work from durable, assignment-scoped evidence."""
-from collections import Counter
-from uuid import UUID
+from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
-from app.models import Asset, AssetSource, ImportJob, StorageArtifact, TaskRun, Work, WorkSource
+from app.models import Asset, AssetSource, StorageArtifact, TaskRun, Work, WorkSource
 
 CHECKPOINT_KEY = "import_completion_checkpoint"
 
 
-async def _committed_content(db, child):
-    rows = list((await db.execute(select(StorageArtifact).where(
+class ImportCompletionUnresolved(RuntimeError):
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: Completed import evidence needs reconciliation; committed content is retained")
+
+
+async def _assigned_artifacts(db, child):
+    return list((await db.execute(select(StorageArtifact).where(
         StorageArtifact.download_job_id == child.download_job_id,
         StorageArtifact.import_job_id == child.id,
         StorageArtifact.storage_root == "downloads",
-    ))).scalars())
+    ).execution_options(populate_existing=True))).scalars())
+
+
+async def _committed_content(db, rows):
     metadata = [row for row in rows if row.artifact_type == "metadata_json"]
-    # Empty/missing/failed inputs are not completion evidence. A DONE ledger
-    # alone is also insufficient: every work must still have committed domain
-    # and media identities, not merely a historical filename.
     if not metadata or any(row.state != "done" for row in rows):
         return None
     identities = {(row.source, row.source_work_id) for row in metadata}
-    from sqlalchemy import tuple_
     sources = list((await db.execute(select(WorkSource).join(Work, Work.id == WorkSource.work_id).where(
         tuple_(WorkSource.source, WorkSource.source_work_id).in_(identities),
-    ))).scalars())
-    if {(row.source, row.source_work_id) for row in sources} != identities:
+    ).execution_options(populate_existing=True))).scalars())
+    by_source = {(row.source, row.source_work_id): row for row in sources}
+    if set(by_source) != identities:
         return None
-    assets = (await db.execute(select(AssetSource.work_source_id, Asset.id, Asset.created_at).join(
-        Asset, Asset.id == AssetSource.asset_id).where(AssetSource.work_source_id.in_([row.id for row in sources])))).all()
-    media_counts = Counter(row.work_source_id for row in assets)
-    if any(not media_counts[row.id] for row in sources):
+    assets = (await db.execute(select(AssetSource, Asset).join(
+        Asset, Asset.id == AssetSource.asset_id).where(AssetSource.work_source_id.in_([row.id for row in sources]))
+        .execution_options(populate_existing=True))).all()
+    if {link.work_source_id for link, _ in assets} != {row.id for row in sources}:
         return None
+    # Importer's source_asset_id is the input media filename stem. Bind each
+    # available image/video assignment to that exact source-work/source-asset
+    # relationship, rather than accepting any asset attached to the work.
+    assigned_media = []
+    for row in rows:
+        if row.artifact_type not in {"image", "video"}:
+            continue
+        source = by_source.get((row.source, row.source_work_id))
+        matches = [(link, asset) for link, asset in assets if source is not None
+                   and link.work_source_id == source.id and link.source == row.source
+                   and link.source_asset_id == Path(row.file_name).stem]
+        if len(matches) != 1:
+            return None
+        link, asset = matches[0]
+        assigned_media.append([str(row.id), str(source.id), str(source.work_id), str(link.id), str(asset.id)])
     signature = {
-        "artifact_ids": sorted(str(row.id) for row in rows),
-        "work_source_ids": sorted(str(row.id) for row in sources),
-        "asset_ids": sorted({str(row.id) for row in assets}),
+        "artifacts": sorted([
+            str(row.id), str(row.download_job_id), str(row.import_job_id), row.source,
+            row.source_work_id, row.artifact_type, row.file_path, row.file_name,
+            row.file_size, row.mtime_ns, row.content_version,
+        ] for row in rows),
+        "work_sources": sorted([str(row.id), str(row.work_id), row.source, row.source_work_id, row.source_creator_id] for row in sources),
+        "asset_sources": sorted([
+            str(link.id), str(link.work_source_id), link.source, link.source_asset_id,
+            link.ordinal, link.role, str(asset.id), asset.file_path, asset.file_name,
+        ] for link, asset in assets),
+        "assigned_media": sorted(assigned_media),
     }
-    return signature, sources, assets, media_counts
+    return signature, len(sources)
 
 
 async def save_import_completion_checkpoint(db, child, *, stats, total_groups, message):
     """Persist exact successful statistics before the terminal transaction."""
     if stats.get("skipped") or total_groups <= 0:
         return
-    content = await _committed_content(db, child)
+    content = await _committed_content(db, await _assigned_artifacts(db, child))
     if content is None:
         return
-    signature, sources, _, _ = content
-    if len(sources) != total_groups or stats["works"] + stats["existing"] != total_groups:
+    signature, source_count = content
+    if source_count != total_groups or stats["works"] + stats["existing"] != total_groups:
         return
     task = (await db.execute(select(TaskRun).where(
         TaskRun.subject_type == "import_job", TaskRun.subject_id == child.id,
     ).with_for_update())).scalar_one_or_none()
     if task is not None:
         task.meta = {**(task.meta or {}), CHECKPOINT_KEY: {
-            "version": 1, "download_job_id": str(child.download_job_id),
+            "version": 2, "download_job_id": str(child.download_job_id), "import_job_id": str(child.id),
             "stats": dict(stats), "total_groups": total_groups, "message": message,
             "signature": signature,
         }}
@@ -65,28 +93,25 @@ async def save_import_completion_checkpoint(db, child, *, stats, total_groups, m
 async def load_import_completion_checkpoint(db, child):
     if (child.execution_attempt or 0) < 2:
         return None
-    content = await _committed_content(db, child)
-    if content is None:
-        return None
-    signature, sources, assets, media_counts = content
+    rows = await _assigned_artifacts(db, child)
     task = (await db.execute(select(TaskRun).where(
         TaskRun.subject_type == "import_job", TaskRun.subject_id == child.id,
-    ))).scalar_one_or_none()
+    ).execution_options(populate_existing=True))).scalar_one_or_none()
     checkpoint = (task.meta or {}).get(CHECKPOINT_KEY) if task else None
     if checkpoint:
-        if (checkpoint.get("version") == 1
-                and UUID(checkpoint["download_job_id"]) == child.download_job_id
-                and checkpoint.get("signature") == signature):
-            return checkpoint
-        return None
-    # Compatibility for an already committed import from before checkpoints:
-    # new domain identities created within this import establish exact stats.
-    # An older/updated existing work is ambiguous without its saved statistics;
-    # do not turn such an unknown case into a guessed success.
-    if any(row.created_at < child.created_at for row in sources) or any(row.created_at < child.created_at for row in assets):
-        return None
-    return {
-        "stats": {"works": len(sources), "assets": len(signature["asset_ids"]),
-                  "existing": 0, "skipped": 0, "multi_page": sum(count > 1 for count in media_counts.values())},
-        "total_groups": len(sources), "message": "Recovered committed import completion",
-    }
+        # Version 1 contains only independent ID sets and cannot prove the
+        # original Work or media associations. Do not upgrade it by inference.
+        if checkpoint.get("version") != 2:
+            raise ImportCompletionUnresolved("import_completion_evidence_missing")
+        content = await _committed_content(db, rows)
+        if (content is None or checkpoint.get("download_job_id") != str(child.download_job_id)
+                or checkpoint.get("import_job_id") != str(child.id)
+                or checkpoint.get("signature") != content[0]):
+            raise ImportCompletionUnresolved("import_completion_identity_mismatch")
+        return checkpoint
+    metadata = [row for row in rows if row.artifact_type == "metadata_json"]
+    if metadata and all(row.state == "done" for row in metadata):
+        # Chronology cannot attribute domain creation or recover exact stats.
+        # This is known completed input with missing evidence, not empty JSON.
+        raise ImportCompletionUnresolved("import_completion_evidence_missing")
+    return None

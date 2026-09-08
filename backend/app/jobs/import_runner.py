@@ -39,6 +39,7 @@ from app.repositories.download_job import DownloadJobRepository
 from app.services.job_progress import apply_download_progress, apply_import_progress
 from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.download_finalization import finalize_download_job
+from app.services.import_completion_checkpoint import ImportCompletionUnresolved
 from app.services.import_lifecycle import (
     coordinate_import_parent_completion,
     project_import_pipeline_state,
@@ -2743,6 +2744,23 @@ async def run_import_job(import_job_id: str):
         )
         logger.info("Import finished: %d works, %d assets, %d skipped, %d multi-page (batched)",
                      stats["works"], stats["assets"], stats.get("skipped", 0), stats["multi_page"])
+
+    except ImportCompletionUnresolved as exc:
+        async with async_session() as db:
+            # Use the existing lifecycle/attention projection, with its normal
+            # parent -> child lock order and current execution fence. Unknown
+            # evidence must not generate another content attempt or fake stats.
+            await db.execute(select(DownloadJob.id).where(
+                DownloadJob.id == import_job.download_job_id).with_for_update(of=DownloadJob))
+            ij = await _owned_import_job(db, job_uuid, execution_token, lock=True)
+            if ij is not None and ij.status == "running":
+                transition_import_job(ij, "failed", str(exc))
+                apply_import_progress(ij, "failed", str(exc), reason_code=exc.reason_code)
+                await project_import_pipeline_state(
+                    db, ij, status="failed", error=str(exc), reason_code=exc.reason_code,
+                    result={"status": "unresolved", "reason_code": exc.reason_code},
+                )
+                await _commit_import(db)
 
     except _ImportControlRequested as control:
         status = "paused" if control.command == "pause" else "cancelled"

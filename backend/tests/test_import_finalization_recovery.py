@@ -107,7 +107,7 @@ async def test_projection_generation_savepoints_and_outer_rollback_are_atomic(db
     assert len((await db.execute(select(SearchProjectionOutbox))).scalars().all()) == 2
 
 
-async def _import_fixture(db, tmp_path, monkeypatch, *, corrupt=False):
+async def _import_fixture(db, tmp_path, monkeypatch, *, corrupt=False, number=1):
     from PIL import Image
     from app.config import settings
     from app.models import Creator, Subscription, SubscriptionSource, DownloadJob, ImportJob, StorageArtifact
@@ -138,18 +138,19 @@ async def _import_fixture(db, tmp_path, monkeypatch, *, corrupt=False):
     await db.flush()
     await TaskService(db).ensure_download_task(parent)
     await TaskService(db).ensure_import_task(child)
-    workdir = downloads / "pixiv/88001/8800100"
-    workdir.mkdir(parents=True)
-    media = workdir / "8800100_p0.jpg"
-    Image.new("RGB", (32, 32), "blue").save(media)
-    metadata = workdir / "8800100_p0.jpg.json"
-    metadata.write_text("{bad JSON" if corrupt else json.dumps({
-        "id": 8800100, "num": 0, "title": "Checkpoint work", "user": {"id": 88001, "name": "Finalization regression", "account": "88001"},
-        "tags": [], "date": "2026-09-08T00:00:00+00:00", "page_count": 1, "width": 32, "height": 32,
-    }))
-    for path, kind in ((media, "image"), (metadata, "metadata_json")):
-        db.add(StorageArtifact(storage_root="downloads", file_path=str(path.relative_to(downloads)), source="pixiv", creator_dir="88001", source_work_id="8800100",
-                               file_name=path.name, artifact_type=kind, download_job_id=parent.id, import_job_id=child.id, state="new"))
+    for index in range(number):
+        workdir = downloads / f"pixiv/88001/{8800100 + index}"
+        workdir.mkdir(parents=True)
+        media = workdir / f"{8800100 + index}_p0.jpg"
+        Image.new("RGB", (32, 32), "blue").save(media)
+        metadata = workdir / f"{8800100 + index}_p0.jpg.json"
+        metadata.write_text("{bad JSON" if corrupt else json.dumps({
+            "id": 8800100 + index, "num": 0, "title": "Checkpoint work", "user": {"id": 88001, "name": "Finalization regression", "account": "88001"},
+            "tags": [], "date": "2026-09-08T00:00:00+00:00", "page_count": 1, "width": 32, "height": 32,
+        }))
+        for path, kind in ((media, "image"), (metadata, "metadata_json")):
+            db.add(StorageArtifact(storage_root="downloads", file_path=str(path.relative_to(downloads)), source="pixiv", creator_dir="88001", source_work_id=str(8800100 + index),
+                                   file_name=path.name, artifact_type=kind, download_job_id=parent.id, import_job_id=child.id, state="new"))
     await db.commit()
     return parent.id, child.id, metadata
 
@@ -193,6 +194,12 @@ async def test_retry_after_committed_import_finalization_preserves_outcome_witho
     await import_runner.run_import_job(str(child_id))
     await db.rollback()
     child = await db.get(ImportJob, child_id, populate_existing=True)
+    if without_checkpoint:
+        assert child.status == "failed"
+        assert "import_completion_evidence_missing" in child.error_log
+        assert {w.id for w in (await db.execute(select(Work))).scalars()} == before_works
+        assert {a.id for a in (await db.execute(select(Asset))).scalars()} == before_assets
+        return
     assert child.status == "complete", child.error_log
     assert child.error_log is None
     assert (await db.get(DownloadJob, parent_id, populate_existing=True)).status == "complete"
@@ -253,3 +260,97 @@ async def test_late_orm_write_cannot_reintroduce_index_to_task_lock_order(db):
         await db.rollback()
     assert not (await db.execute(select(SearchIndexState))).scalars().all()
     assert not (await db.execute(select(SearchProjectionOutbox))).scalars().all()
+
+
+async def test_queued_legacy_child_cannot_claim_another_imports_new_content(db, tmp_path, monkeypatch):
+    from app.jobs import import_runner
+    from app.models import DownloadJob, ImportJob, StorageArtifact, TaskRun, WorkSource
+    from app.services.tasks import TaskService
+    from app.services.import_completion_checkpoint import CHECKPOINT_KEY
+    parent_id, child_id, metadata = await _import_fixture(db, tmp_path, monkeypatch)
+    original_bytes = {path: path.read_bytes() for path in metadata.parent.iterdir()}
+    original_parent = await db.get(DownloadJob, parent_id)
+    other_parent = DownloadJob(subscription_id=original_parent.subscription_id, subscription_source_id=original_parent.subscription_source_id,
+                               source="pixiv", source_url=original_parent.source_url, status="importing")
+    db.add(other_parent)
+    await db.flush()
+    other_child = ImportJob(download_job_id=other_parent.id, status="enqueued")
+    db.add(other_child)
+    await db.flush()
+    other_id = other_child.id
+    await TaskService(db).ensure_download_task(other_parent)
+    await TaskService(db).ensure_import_task(other_child)
+    for row in (await db.execute(select(StorageArtifact).where(StorageArtifact.storage_root == "downloads"))).scalars():
+        row.download_job_id, row.import_job_id = other_parent.id, other_id
+    await db.commit()
+    await import_runner.run_import_job(str(other_id))
+    await db.rollback()
+    assert (await db.get(ImportJob, other_id, populate_existing=True)).status == "complete"
+    child = await db.get(ImportJob, child_id, populate_existing=True)
+    source = (await db.execute(select(WorkSource))).scalar_one()
+    assert source.created_at >= child.created_at  # Chronology is deliberately misleading.
+    for row in (await db.execute(select(StorageArtifact).where(StorageArtifact.storage_root == "downloads").execution_options(populate_existing=True))).scalars():
+        row.download_job_id, row.import_job_id, row.state = parent_id, child_id, "new"
+    for path, contents in original_bytes.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    await db.commit()
+    async def abort_terminal(*args, **kwargs):
+        assert kwargs["status"] == "complete"
+        raise RuntimeError("terminal abort after actual existing-content path")
+    monkeypatch.setattr(import_runner, "finalize_download_job", abort_terminal)
+    await import_runner.run_import_job(str(child_id))
+    await db.rollback()
+    task = (await db.execute(select(TaskRun).where(TaskRun.subject_id == child_id))).scalar_one()
+    exact = task.meta[CHECKPOINT_KEY]["stats"]
+    assert exact["existing"] == 1 and exact["works"] == exact["assets"] == 0
+    task.meta = {key: value for key, value in task.meta.items() if key != CHECKPOINT_KEY}
+    await db.commit()
+    metadata.unlink(missing_ok=True)
+    # If the fallback invents a completion, this records what it tried to claim.
+    claimed = []
+    async def record_terminal(*args, **kwargs):
+        claimed.append(kwargs)
+    monkeypatch.setattr(import_runner, "_complete_import_execution", record_terminal)
+    await import_runner.run_import_job(str(child_id))
+    await db.rollback()
+    assert not claimed, "Timestamp-only evidence must not reach the terminal success writer"
+    child = await db.get(ImportJob, child_id, populate_existing=True)
+    assert child.status == "failed"
+    assert "import_completion_evidence_missing" in child.error_log
+    task = (await db.execute(select(TaskRun).where(TaskRun.subject_id == child_id).execution_options(populate_existing=True))).scalar_one()
+    assert task.reason_code == "import_completion_evidence_missing"
+    assert task.result_data["status"] == "unresolved"
+
+
+@pytest.mark.parametrize("mutation", ["reparent_work", "swap_assets", "assigned_media"])
+async def test_checkpoint_rejects_changed_relations_with_same_identity_sets(db, tmp_path, monkeypatch, mutation):
+    from app.jobs import import_runner
+    from app.models import ImportJob, Work, WorkSource, Asset, AssetSource, StorageArtifact
+    from app.services.import_completion_checkpoint import load_import_completion_checkpoint
+    _, child_id, _ = await _import_fixture(db, tmp_path, monkeypatch, number=2)
+    await import_runner.run_import_job(str(child_id))
+    await db.rollback()
+    child = await db.get(ImportJob, child_id, populate_existing=True)
+    assert child.status == "complete"
+    child.execution_attempt = 2
+    await db.commit()
+    assert await load_import_completion_checkpoint(db, child) is not None
+    sources = list((await db.execute(select(WorkSource).order_by(WorkSource.source_work_id))).scalars())
+    links = list((await db.execute(select(AssetSource).order_by(AssetSource.source_asset_id))).scalars())
+    previous_ids = {"sources": {row.id for row in sources}, "assets": set((await db.execute(select(Asset.id))).scalars())}
+    if mutation == "reparent_work":
+        replacement = Work(title="Unrelated existing work")
+        db.add(replacement)
+        await db.flush()
+        sources[0].work_id = replacement.id
+    elif mutation == "swap_assets":
+        links[0].asset_id, links[1].asset_id = links[1].asset_id, links[0].asset_id
+    else:
+        media = (await db.execute(select(StorageArtifact).where(StorageArtifact.storage_root == "downloads", StorageArtifact.artifact_type == "image").order_by(StorageArtifact.source_work_id))).scalars().first()
+        media.file_name = "different_unassigned_media.jpg"
+    await db.commit()
+    assert {row.id for row in (await db.execute(select(WorkSource))).scalars()} == previous_ids["sources"]
+    assert set((await db.execute(select(Asset.id))).scalars()) == previous_ids["assets"]
+    with pytest.raises(RuntimeError, match="import_completion_identity_mismatch"):
+        await load_import_completion_checkpoint(db, child)
