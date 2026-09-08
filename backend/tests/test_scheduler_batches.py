@@ -1242,3 +1242,225 @@ async def test_future_only_items_leave_delayed_successor_unpublished(db, item_st
     assert abs((datetime.fromisoformat(dispatch["next_retry_at"]) - retry_at).total_seconds()) < 2
     items = (await db.execute(select(SchedulerBatchItem))).scalars().all()
     assert all(item.attempts == 2 and item.next_retry_at == retry_at for item in items)
+
+
+@pytest.fixture
+async def orphan_redis():
+    from app.services.redis_client import get_redis
+    connection = get_redis()
+    assert int(connection.connection_pool.connection_kwargs["db"]) == 15
+    connection.flushdb()
+    yield connection
+    connection.flushdb()
+
+
+async def retain_running_rq_attempt(db, task_id, connection, *, rq_status="started", fresh=False):
+    from rq.job import Job
+    from app.models import TaskRun
+    from app.services import operations
+
+    await db.rollback()
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    attempt = task.attempts
+    await db.rollback()
+    assert await operations.publish_admin_operation(task_id, attempt) == "published"
+    await operations.claim_admin_operation(task_id, attempt)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    job = Job.fetch(task.rq_job_id, connection=connection)
+    job.set_status(rq_status)
+    if rq_status not in {"queued", "deferred", "scheduled"}:
+        connection.lrem("rq:queue:operations", 0, job.id)
+    checked_at = datetime.now(timezone.utc)
+    task.last_heartbeat_at = checked_at if fresh else checked_at - timedelta(seconds=120)
+    dispatch = dict(task.meta[operations.ADMIN_DISPATCH_META_KEY])
+    dispatch.update(prepared_at=(checked_at - timedelta(minutes=5)).isoformat(),
+                    next_probe_at=(checked_at - timedelta(seconds=1)).isoformat())
+    task.meta = {**task.meta, operations.ADMIN_DISPATCH_META_KEY: dispatch}
+    await db.commit()
+    return job, checked_at
+
+
+@pytest.mark.parametrize("boundary", ["before_commit", "after_binding"])
+async def test_retained_started_batch_recovers_crash_binding_atomically(db, monkeypatch, orphan_redis, boundary):
+    from rq.job import Job
+    from app.models import TaskRun, DownloadJob, RepositorySyncReceipt
+    from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem
+    from app.services import operations, scheduler_batches, backpressure
+    from app.services.download_finalization import finalize_download_job
+    from app.jobs.admin_operations import _run_registered_admin_operation
+
+    async def no_pressure(*args, **kwargs):
+        return None
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    await seed(db)
+    task_id = UUID((await admit(db))["task_id"])
+    batch = await scheduler_batches.initialize_batch(db, task_id)
+    batch_id = batch.id
+    item_id = (await db.execute(select(SchedulerBatchItem.id))).scalar_one()
+    await db.commit()
+    old_rq, checked_at = await retain_running_rq_attempt(db, task_id, orphan_redis)
+
+    class ProcessLost(BaseException):
+        pass
+
+    # Real helper creates and binds child/outbox. Only the crash boundary is
+    # injected, and BaseException avoids ordinary application error handling.
+    with monkeypatch.context() as crash:
+        if boundary == "before_commit":
+            real_fence = operations.fence_current_admin_operation_transaction
+            async def crash_before_commit(session, **kwargs):
+                await real_fence(session, **kwargs)
+                bound = await session.get(SchedulerBatchItem, item_id)
+                assert bound.download_job_id and bound.child_task_id
+                raise ProcessLost()
+            crash.setattr(operations, "fence_current_admin_operation_transaction", crash_before_commit)
+        else:
+            async def crash_before_publish(_item_id):
+                raise ProcessLost()
+            crash.setattr(scheduler_batches, "_publish_bound_child", crash_before_publish)
+        with operations.admin_operation_attempt_context(task_id, 1):
+            with pytest.raises(ProcessLost):
+                await scheduler_batches._process_item(item_id, str(task_id), "force_eligible")
+    await db.rollback()
+    item = await db.get(SchedulerBatchItem, item_id, populate_existing=True)
+    bound_id, child_id = item.download_job_id, item.child_task_id
+    jobs = list((await db.execute(select(DownloadJob))).scalars())
+    assert len(jobs) == (0 if boundary == "before_commit" else 1)
+    if child_id:
+        child = await db.get(TaskRun, child_id)
+        assert not orphan_redis.exists(f"rq:job:{child.rq_job_id}")
+        # Model the same elapsed downtime as the stale heartbeat: the
+        # committed 30-second child wait has also become due after the crash.
+        item.next_retry_at = checked_at - timedelta(seconds=1)
+        await db.commit()
+    await db.rollback()
+
+    report = await operations.recover_admin_operation_dispatches(now=checked_at, grace_seconds=0, include_published=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert task.attempts == 2, "A stale STARTED RQ record is not evidence of a live executor"
+    assert report["published"] == 1
+    assert task.status == "enqueued"
+    replacement = Job.fetch(task.rq_job_id, connection=orphan_redis)
+    assert replacement.args == (str(task_id), 2)
+    assert old_rq.get_status(refresh=True).value == "started"
+    assert not await operations.update_admin_task(task_id, 1, status="failed", error="late abandoned callback")
+    assert await operations.publish_admin_operation(task_id, 1) == "skipped"
+    await db.rollback()
+    await _run_registered_admin_operation(*replacement.args)
+    await db.rollback()
+    item = await db.get(SchedulerBatchItem, item_id, populate_existing=True)
+    assert item.batch_id == batch_id
+    if bound_id:
+        assert (item.download_job_id, item.child_task_id) == (bound_id, child_id)
+    assert len(list((await db.execute(select(DownloadJob))).scalars())) == 1
+    child = await db.get(TaskRun, item.child_task_id, populate_existing=True)
+    assert orphan_redis.exists(f"rq:job:{child.rq_job_id}")
+    job = await db.get(DownloadJob, item.download_job_id, populate_existing=True)
+    completed_job_id = job.id
+    from app.repositories.download_job import DownloadJobRepository
+    await DownloadJobRepository(db).update_status(job, "downloading")
+    await DownloadJobRepository(db).update_status(job, "downloaded")
+    await finalize_download_job(db, job, status="complete")
+    item.next_retry_at = None
+    await db.commit()
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    attempt = task.attempts
+    await db.rollback()
+    result = await _run_registered_admin_operation(str(task_id), attempt)
+    assert result["status"] == "complete" and result["succeeded_count"] == 1
+    await db.rollback()
+    assert (await db.get(SchedulerBatch, batch_id)).state == "complete"
+    receipt = (await db.execute(select(RepositorySyncReceipt))).scalar_one()
+    assert receipt.source_download_job_id == completed_job_id and receipt.status == "complete"
+    assert len(list((await db.execute(select(DownloadJob))).scalars())) == 1
+
+
+@pytest.mark.parametrize("rq_status", ["failed", "finished"])
+async def test_retained_terminal_batch_attempt_recovers_without_callback(db, orphan_redis, rq_status):
+    from app.models import TaskRun, RepositorySyncReceipt
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import operations, scheduler_batches
+    from app.jobs.admin_operations import _run_registered_admin_operation
+
+    await seed(db)
+    task_id = UUID((await admit(db))["task_id"])
+    await scheduler_batches.initialize_batch(db, task_id)
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    receipt_id = uuid4()
+    item.download_job_id = receipt_id
+    db.add(RepositorySyncReceipt(repository_id=item.source_id, source_download_job_id=receipt_id,
+                                 source="pixiv", status="complete", finished_at=datetime.now(timezone.utc)))
+    await db.commit()
+    await retain_running_rq_attempt(db, task_id, orphan_redis, rq_status=rq_status)
+    report = await operations.recover_admin_operation_dispatches(grace_seconds=0, include_published=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert task.attempts == 2 and task.status == "enqueued"
+    assert report["failed"] == 0 and report["published"] == 1
+    assert not await operations.update_admin_task(task_id, 1, status="failed", error="abandoned callback")
+    await db.rollback()
+    result = await _run_registered_admin_operation(str(task_id), 2)
+    assert result["status"] == "complete" and result["succeeded_count"] == 1
+    await db.rollback()
+    assert (await db.execute(select(RepositorySyncReceipt))).scalar_one().source_download_job_id == receipt_id
+
+
+async def test_retained_rq_batch_recovery_preserves_live_and_terminal_fences(db, orphan_redis):
+    from contextlib import AsyncExitStack
+    from app.models import TaskRun
+    from app.services import operations
+
+    task_id = UUID((await admit(db))["task_id"])
+    retained, _ = await retain_running_rq_attempt(db, task_id, orphan_redis)
+    for protection in ["fresh", "lease", "queued", "deferred", "scheduled", "cancelled", "failed", "fresh_terminal", "lease_terminal"]:
+        rq_status = protection if protection in {"queued", "deferred", "scheduled"} else "failed" if protection.endswith("terminal") else "started"
+        retained.set_status(rq_status)
+        expected_status = protection if protection in {"cancelled", "failed"} else "running"
+        task = await db.get(TaskRun, task_id, populate_existing=True)
+        task.status = expected_status
+        checked_at = datetime.now(timezone.utc)
+        task.last_heartbeat_at = checked_at if protection.startswith("fresh") else checked_at - timedelta(seconds=120)
+        dispatch = dict(task.meta[operations.ADMIN_DISPATCH_META_KEY])
+        dispatch["next_probe_at"] = (checked_at - timedelta(seconds=1)).isoformat()
+        task.meta = {**task.meta, operations.ADMIN_DISPATCH_META_KEY: dispatch}
+        await db.commit()
+        async with AsyncExitStack() as stack:
+            if protection.startswith("lease"):
+                await stack.enter_async_context(operations.admin_operation_execution_lease(task_id))
+            await operations.recover_admin_operation_dispatches(grace_seconds=0, include_published=True)
+            task = await db.get(TaskRun, task_id, populate_existing=True)
+            assert task.attempts == 1 and task.status == expected_status, protection
+            assert not orphan_redis.exists(f"rq:job:admin-{task_id}-attempt-2"), protection
+            await db.rollback()
+
+
+@pytest.mark.parametrize("rq_status", ["started", "failed"])
+async def test_retained_started_cleanup_recovers_counts_and_completed_receipts(db, orphan_redis, rq_status):
+    from app.models import TaskRun, RepositorySyncReceipt
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import operations, scheduler_batches
+    from app.jobs.admin_operations import _run_registered_admin_operation
+
+    await seed(db, number=2)
+    task_id = UUID((await admit(db))["task_id"])
+    await scheduler_batches.initialize_batch(db, task_id)
+    items = list((await db.execute(select(SchedulerBatchItem))).scalars())
+    items[0].download_job_id = uuid4()
+    items[0].status = "succeeded"
+    db.add(RepositorySyncReceipt(repository_id=items[0].source_id, source_download_job_id=items[0].download_job_id,
+                                 source="pixiv", status="complete", finished_at=datetime.now(timezone.utc)))
+    await db.commit()
+    cancelled = await scheduler_batches.cancel_batch(db, task_id, operator="test")
+    cleanup_id = UUID(cancelled["cleanup_task_id"])
+    await retain_running_rq_attempt(db, cleanup_id, orphan_redis, rq_status=rq_status)
+    await operations.recover_admin_operation_dispatches(grace_seconds=0, include_published=True)
+    cleanup = await db.get(TaskRun, cleanup_id, populate_existing=True)
+    assert cleanup.attempts == 2
+    await db.rollback()
+    await _run_registered_admin_operation(str(cleanup_id), 2)
+    await db.rollback()
+    parent = await db.get(TaskRun, task_id, populate_existing=True)
+    assert parent.status == "cancelled"
+    assert parent.result_data["cleanup_pending"] is False
+    assert parent.result_data["cancelled_count"] == parent.result_data["succeeded_count"] == 1
+    assert (await db.get(TaskRun, cleanup_id, populate_existing=True)).status == "complete"
+    assert (await db.execute(select(RepositorySyncReceipt))).scalar_one().status == "complete"

@@ -1665,6 +1665,31 @@ async def publish_admin_operation(
             )
             if existing is not None:
                 status = await asyncio.to_thread(_rq_status, existing)
+                if (
+                    task.operation_type in {"subscription-sync-batch", "subscription-sync-batch-cleanup"}
+                    and task.status == "running"
+                    and status not in {"queued", "deferred", "scheduled"}
+                ):
+                    # RQ can retain STARTED after its workhorse dies, or mark
+                    # that abandoned delivery terminal without a callback.
+                    # Neither proves that the durable batch has finished.
+                    # Nominate only: the recovery transaction must still take
+                    # the scope/execution leases and recheck attempt/status.
+                    checked_at = _utcnow()
+                    heartbeat_at = task.last_heartbeat_at
+                    heartbeat_fresh = heartbeat_at is not None and heartbeat_at > (
+                        checked_at - timedelta(seconds=ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS)
+                    )
+                    dispatch.update(
+                        next_probe_at=(checked_at + timedelta(seconds=ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS)).isoformat(),
+                        last_error=f"RQ attempt {status} while durable batch is running; checking execution lease",
+                        updated_at=checked_at.isoformat(),
+                    )
+                    task.meta = {**(task.meta or {}), ADMIN_DISPATCH_META_KEY: dispatch}
+                    # Release this TaskRun row lock before the coordinator
+                    # opens the separate scope -> execution -> TaskRun path.
+                    await db.commit()
+                    return "active" if heartbeat_fresh else "orphaned"
                 if status not in {"queued", "started", "deferred", "scheduled"}:
                     message = f"RQ attempt ended as {status} without a current TaskRun callback"
                     dispatch["publication_state"] = ADMIN_DISPATCH_FAILED
@@ -2015,7 +2040,7 @@ async def recover_admin_operation_dispatches(
             attempt,
             redis_client=redis_client,
         )
-        if outcome == "missing":
+        if outcome in {"missing", "orphaned"}:
             recovered = await prepare_admin_operation_recovery(
                 candidate_id,
                 attempt,
