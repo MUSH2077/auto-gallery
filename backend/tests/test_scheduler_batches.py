@@ -1023,3 +1023,146 @@ async def test_full_batch_slice_defers_blackholed_redis_within_its_budget(db):
         server.close()
         await server.wait_closed()
         await asyncio.sleep(.05)
+
+
+async def test_locked_eligible_membership_defers_then_admits_once(db, monkeypatch):
+    import asyncio
+    from app.database import async_session
+    from app.models import DownloadJob
+    from app.models.remote_discovery import UserSubscriptionSource
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure
+
+    async def no_pressure(*args, **kwargs):
+        return None
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    source_id = (await seed(db))[0]
+    accepted = await admit(db)
+    async with async_session() as locker:
+        await locker.execute(select(UserSubscriptionSource).where(
+            UserSubscriptionSource.subscription_source_id == source_id).with_for_update())
+        await asyncio.wait_for(slice_batch(db, accepted["task_id"]), timeout=8)
+        item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+        assert item.status == "waiting"
+        assert item.reason_code == "membership_lock_busy"
+        assert 0 < (item.next_retry_at - datetime.now(timezone.utc)).total_seconds() <= 30
+        assert not (await db.execute(select(DownloadJob))).scalars().all()
+        item.next_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await db.commit()
+        await locker.rollback()
+    await slice_batch(db, accepted["task_id"])
+    await db.rollback()
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    jobs = (await db.execute(select(DownloadJob))).scalars().all()
+    assert len(jobs) == 1
+    assert item.download_job_id == jobs[0].id
+    assert item.owns_download is True
+
+
+@pytest.mark.parametrize("with_import", [False, True])
+async def test_cancel_preserves_completion_between_reconcile_and_domain_lock(db, monkeypatch, with_import):
+    from app.database import async_session
+    from app.models import DownloadJob, ImportJob, SubscriptionSource, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import scheduler_batches
+    from app.services.operation_attention import upsert_repository_sync_receipt
+
+    source_id = (await seed(db))[0]
+    source = await db.get(SubscriptionSource, source_id)
+    job = DownloadJob(subscription_id=source.subscription_id, subscription_source_id=source_id,
+                      source="pixiv", source_url=source.source_url, status="importing" if with_import else "downloading")
+    db.add(job)
+    await db.flush()
+    if with_import:
+        db.add(ImportJob(download_job_id=job.id, status="running"))
+    await db.commit()
+    job_id = job.id
+    task_id = UUID((await admit(db))["task_id"])
+    await scheduler_batches.initialize_batch(db, task_id)
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    item.download_job_id, item.owns_download = job_id, True
+    await db.commit()
+    await scheduler_batches.cancel_batch(db, task_id, operator="race-test")
+    real_reconcile = scheduler_batches.reconcile_item
+    completed = False
+
+    async def complete_after_first_reconcile(session, item):
+        nonlocal completed
+        await real_reconcile(session, item)
+        if not completed:
+            completed = True
+            async with async_session() as worker:
+                current = await worker.get(DownloadJob, job_id)
+                if with_import:
+                    child = (await worker.execute(select(ImportJob).where(ImportJob.download_job_id == job_id))).scalar_one()
+                    child.status = "complete"
+                current.status = "complete"
+                await worker.flush()
+                await worker.refresh(current)
+                await upsert_repository_sync_receipt(worker, current, status="complete")
+                await worker.commit()
+    monkeypatch.setattr(scheduler_batches, "reconcile_item", complete_after_first_reconcile)
+    await cleanup_cancelled(db, task_id)
+    await db.rollback()
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    assert completed
+    assert item.status == "succeeded"
+    assert item.outcome["status"] == "complete"
+    assert item.outcome["receipt_id"]
+    parent = await db.get(TaskRun, task_id)
+    assert parent.result_data["succeeded_count"] == 1
+    assert parent.result_data["cancelled_count"] == 0
+    assert (await db.get(DownloadJob, job_id)).status == "complete"
+
+
+@pytest.mark.parametrize("compacted", [False, True])
+async def test_legacy_unbound_item_rechecks_completion_after_preparation(db, monkeypatch, compacted):
+    from app.models import DownloadJob, SubscriptionSource, TaskRun, RepositorySyncReceipt
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import scheduler_batches, backpressure
+
+    async def no_pressure(*args, **kwargs):
+        return None
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    source_id = (await seed(db))[0]
+    db.add(TaskRun(id=scheduler_batches.LEGACY_ID, kind="admin", operation_type="subscription-sync-batch",
+                   status="complete", created_at=datetime.now(timezone.utc) - timedelta(days=1),
+                   result_data={"candidate_count": 1, "mode": "manual_all_enabled", "job_ids": [],
+                                "skipped": [{"source_id": str(source_id), "skip_reason": "queue_saturated"}]}))
+    await db.commit()
+    recovered = await scheduler_batches.recover_legacy_batch(db, apply=True)
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    assert item.download_job_id is None
+    source = await db.get(SubscriptionSource, source_id)
+    later_id = uuid4()
+    if not compacted:
+        db.add(DownloadJob(id=later_id, subscription_id=source.subscription_id, subscription_source_id=source_id,
+                           source="pixiv", source_url=source.source_url, status="complete"))
+    db.add(RepositorySyncReceipt(repository_id=source_id, source_download_job_id=later_id,
+                                 source="pixiv", status="complete", finished_at=datetime.now(timezone.utc)))
+    await db.commit()
+    from app.database import async_session
+    from sqlalchemy.exc import DBAPIError
+    real_lookup = scheduler_batches.subsequent_sync_identity
+    lock_checked = False
+
+    async def lookup_with_lock_observation(session, source_id, cutoff):
+        nonlocal lock_checked
+        async with async_session() as observer:
+            with pytest.raises(DBAPIError) as locked:
+                await observer.execute(select(SubscriptionSource).where(
+                    SubscriptionSource.id == source_id).with_for_update(nowait=True))
+            assert locked.value.orig.sqlstate == "55P03"
+            await observer.rollback()
+        lock_checked = True
+        return await real_lookup(session, source_id, cutoff)
+    monkeypatch.setattr(scheduler_batches, "subsequent_sync_identity", lookup_with_lock_observation)
+    await slice_batch(db, recovered["task_id"])
+    await db.rollback()
+    assert lock_checked
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    assert item.download_job_id == later_id
+    assert item.status == "succeeded"
+    assert item.owns_download is False
+    jobs = (await db.execute(select(DownloadJob))).scalars().all()
+    assert {j.id for j in jobs} == (set() if compacted else {later_id})

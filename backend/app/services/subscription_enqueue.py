@@ -36,6 +36,7 @@ def skip_result(source_id: UUID | str, code: str, message: str | None = None, **
         "message": message or code.replace("_", " "),
         "retryable": code in {
             "lock_busy",
+            "membership_lock_busy",
             "already_running",
             "recent_failure_backoff",
             "resource_pressure",
@@ -536,6 +537,27 @@ async def enqueue_subscription_source_sync(
             return skip_result(subscription_source_id, "source_not_found")
 
         if batch_item_id is not None:
+            from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem
+            from app.models.task_run import TaskRun
+            from app.services.scheduler_batches import subsequent_sync_identity
+
+            item = await db.get(SchedulerBatchItem, batch_item_id)
+            batch = await db.get(SchedulerBatch, item.batch_id) if item else None
+            if (item is None or batch is None or batch.task_id != parent_task_id
+                    or item.source_id != subscription_source_id or item.download_job_id is not None):
+                raise ValueError("Invalid or already-bound scheduler batch item")
+            if batch.legacy_task_id:
+                parent = await db.get(TaskRun, batch.task_id)
+                cutoff = (parent.meta or {}).get("legacy_reconciliation_since")
+                if cutoff is None:
+                    raise ValueError("Legacy reconciliation cutoff is missing")
+                # The same source row/Redis claim used by ordinary admission is
+                # held through evidence lookup and creation/binding commit.
+                linked = await subsequent_sync_identity(db, ss.id, datetime.fromisoformat(cutoff))
+                if linked is not None:
+                    item.download_job_id = linked
+                    item.owns_download = False
+                    return {"status": "linked", "job_id": str(linked)}
             # Mutable eligibility is checked again under the source claim lock.
             sub = await db.get(Subscription, ss.subscription_id, populate_existing=True)
             if sub is None or not sub.is_active:
@@ -552,9 +574,7 @@ async def enqueue_subscription_source_sync(
         if batch_mode == "due_scan" and not scheduler_config.get("scheduler_enabled", True):
             return skip_result(ss.id, "scheduler_disabled")
 
-        selection = await select_eligible_membership_source(
-            db,
-            ss,
+        selection_options = dict(
             now=now,
             preferred_membership_id=triggering_user_subscription_id,
             preferred_account_id=triggering_remote_account_id,
@@ -567,7 +587,14 @@ async def enqueue_subscription_source_sync(
             require_sync_enabled=not explicit_private_manual and batch_mode != "manual_all_enabled",
             require_preferred_account_match=explicit_private_manual,
         )
+        selection = await select_eligible_membership_source(db, ss, **selection_options)
         if selection is None:
+            # A committed eligible binding hidden by SKIP LOCKED is pressure,
+            # not a permanent eligibility decision. This read takes no row lock.
+            if batch_item_id is not None and await select_eligible_membership_source(
+                db, ss, **selection_options, acquire_lock=False
+            ) is not None:
+                return skip_result(ss.id, "membership_lock_busy")
             return skip_result(ss.id, "no_eligible_member_source")
         triggering_user_subscription_id = selection.membership.id
         triggering_remote_account_id = (

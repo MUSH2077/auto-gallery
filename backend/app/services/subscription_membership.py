@@ -109,8 +109,13 @@ async def select_eligible_membership_source(
     system_schedule_mode: str | None = None,
     require_sync_enabled: bool = True,
     require_preferred_account_match: bool = False,
+    acquire_lock: bool = True,
 ) -> EligibleMembershipSource | None:
-    """Lock and return the earliest usable private demand for a shared source."""
+    """Return the earliest usable private demand, locking it by default.
+
+    ``acquire_lock=False`` is only an eligibility probe after SKIP LOCKED
+    found nothing; callers must not use that unlocked result to admit work.
+    """
 
     conditions = [
         UserSubscriptionSource.subscription_source_id == source.id,
@@ -149,26 +154,26 @@ async def select_eligible_membership_source(
     elif require_preferred_account_match:
         conditions.append(UserSubscriptionSource.remote_account_id.is_(None))
 
-    row = (
-        await db.execute(
-            select(UserSubscriptionSource, UserSubscription, RemoteAccount)
-            .join(
-                UserSubscription,
-                UserSubscription.id == UserSubscriptionSource.user_subscription_id,
-            )
-            .outerjoin(
-                RemoteAccount,
-                RemoteAccount.id == UserSubscriptionSource.remote_account_id,
-            )
-            .where(*conditions)
-            .order_by(
-                UserSubscriptionSource.next_sync_at.asc().nullsfirst(),
-                UserSubscriptionSource.id.asc(),
-            )
-            .limit(1)
-            .with_for_update(of=UserSubscriptionSource, skip_locked=True)
+    statement = (
+        select(UserSubscriptionSource, UserSubscription, RemoteAccount)
+        .join(
+            UserSubscription,
+            UserSubscription.id == UserSubscriptionSource.user_subscription_id,
         )
-    ).first()
+        .outerjoin(
+            RemoteAccount,
+            RemoteAccount.id == UserSubscriptionSource.remote_account_id,
+        )
+        .where(*conditions)
+        .order_by(
+            UserSubscriptionSource.next_sync_at.asc().nullsfirst(),
+            UserSubscriptionSource.id.asc(),
+        )
+        .limit(1)
+    )
+    if acquire_lock:
+        statement = statement.with_for_update(of=UserSubscriptionSource, skip_locked=True)
+    row = (await db.execute(statement)).first()
     if row is None:
         return None
     binding, membership, account = row

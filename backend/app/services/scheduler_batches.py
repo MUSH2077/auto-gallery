@@ -40,6 +40,7 @@ TERMINAL = frozenset({"succeeded", "skipped", "failed", "cancelled"})
 TRANSIENT = frozenset(
     {
         "lock_busy",
+        "membership_lock_busy",
         "already_running",
         "recent_failure_backoff",
         "resource_pressure",
@@ -490,11 +491,20 @@ async def _cancel_batch_item(item_id, cleanup_task_id, options):
             return
         item.attempts += 1
         await reconcile_item(db, item)
+        if item.status not in TERMINAL and item.download_job_id:
+            # Lifecycle lock order is DownloadJob -> ImportJob -> TaskRun.
+            # Reconcile again after acquisition: completion may have committed
+            # since the optimistic read above. Refresh identity-map objects too.
+            job = (await db.execute(select(DownloadJob).where(
+                DownloadJob.id == item.download_job_id).with_for_update()
+                .execution_options(populate_existing=True))).scalar_one_or_none()
+            await db.execute(select(ImportJob).where(
+                ImportJob.download_job_id == item.download_job_id).order_by(ImportJob.id)
+                .with_for_update().execution_options(populate_existing=True))
+            await reconcile_item(db, item)
+            if item.status not in TERMINAL and item.owns_download and job and job.status in DOWNLOAD_CANCELLABLE_STATUSES:
+                await TaskEngine(db).cancel_download(job.id, operator=options.get("operator"), note=options.get("note"))
         if item.status not in TERMINAL:
-            if item.owns_download and item.download_job_id:
-                job = (await db.execute(select(DownloadJob).where(DownloadJob.id == item.download_job_id).with_for_update())).scalar_one_or_none()
-                if job and job.status in DOWNLOAD_CANCELLABLE_STATUSES:
-                    await TaskEngine(db).cancel_download(job.id, operator=options.get("operator"), note=options.get("note"))
             item.status = "cancelled"
             item.reason_code = "batch_cancelled"
             item.next_retry_at = None
@@ -638,6 +648,26 @@ async def batch_items(db, task_id, *, offset=0, limit=50):
     }
 
 
+async def subsequent_sync_identity(db, source_id, cutoff):
+    """Use any active job first, otherwise the newest subsequent evidence."""
+    current = (await db.execute(
+        select(DownloadJob)
+        .where(DownloadJob.subscription_source_id == source_id, DownloadJob.created_at >= cutoff)
+        .order_by(DownloadJob.status.not_in(("complete", "failed", "stale", "cancelled")).desc(), DownloadJob.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    receipt = (await db.execute(
+        select(RepositorySyncReceipt)
+        .where(RepositorySyncReceipt.repository_id == source_id, RepositorySyncReceipt.finished_at >= cutoff)
+        .order_by(RepositorySyncReceipt.finished_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if current and (current.status not in {"complete", "failed", "stale", "cancelled"}
+                    or receipt is None or current.created_at >= receipt.finished_at):
+        return current.id
+    return receipt.source_download_job_id if receipt else None
+
+
 async def recover_legacy_batch(db, *, apply=False, legacy_task_id=LEGACY_ID):
     """Derive an idempotent recovery batch; never rewrite legacy evidence."""
     legacy = await db.get(TaskRun, legacy_task_id)
@@ -663,33 +693,11 @@ async def recover_legacy_batch(db, *, apply=False, legacy_task_id=LEGACY_ID):
     for row in recorded.get("skipped", []) + recorded.get("errors", []):
         if row.get("source_id"):
             candidates.setdefault(UUID(row["source_id"]), None)
-    # Reconcile queue-skipped candidates against later domain evidence before
-    # deciding that another enqueue is needed. Failed attempts are explicit
-    # outcomes; missing evidence is never interpreted as successful processing.
+    # Preparation is an initial projection only. Still-unbound items repeat
+    # this lookup under the source admission lock immediately before enqueue.
     for source_id, original_job in list(candidates.items()):
-        if original_job is not None:
-            continue
-        current = (
-            await db.execute(
-                select(DownloadJob)
-                .where(DownloadJob.subscription_source_id == source_id, DownloadJob.created_at >= legacy.created_at)
-                .order_by(DownloadJob.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        receipt = (
-            await db.execute(
-                select(RepositorySyncReceipt)
-                .where(RepositorySyncReceipt.repository_id == source_id, RepositorySyncReceipt.finished_at >= legacy.created_at)
-                .order_by(RepositorySyncReceipt.finished_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        # Any active job wins; otherwise the newest terminal evidence wins.
-        if current and (current.status not in {"complete", "failed", "stale", "cancelled"} or receipt is None or current.created_at >= receipt.finished_at):
-            candidates[source_id] = current.id
-        elif receipt:
-            candidates[source_id] = receipt.source_download_job_id
+        if original_job is None:
+            candidates[source_id] = await subsequent_sync_identity(db, source_id, legacy.created_at)
     preview = {
         "dry_run": not apply,
         "legacy_task_id": str(legacy_task_id),
@@ -708,6 +716,8 @@ async def recover_legacy_batch(db, *, apply=False, legacy_task_id=LEGACY_ID):
     accepted = await admit_batch(db, mode=mode, request_id=recovery_request, legacy_task_id=legacy_task_id, commit=False)
     batch = (await db.execute(select(SchedulerBatch).where(SchedulerBatch.task_id == UUID(accepted["task_id"])).with_for_update())).scalar_one()
     if batch.initialized_at is None:
+        parent = await db.get(TaskRun, batch.task_id)
+        parent.meta = {**(parent.meta or {}), "legacy_reconciliation_since": legacy.created_at.isoformat()}
         for source_id, job_id in candidates.items():
             item = SchedulerBatchItem(batch_id=batch.id, source_id=source_id, download_job_id=job_id, owns_download=False, status="pending")
             db.add(item)
