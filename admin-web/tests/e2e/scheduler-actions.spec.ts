@@ -6,9 +6,10 @@ type FixtureOptions = {
   post?: "accepted" | "conflict" | "network-once";
   language?: "en" | "zh";
   taskStates?: Array<Record<string, unknown>>;
+  taskReadDelayMs?: number;
   taskReadError?: { status?: number; network?: boolean; count?: number };
   itemReadError?: { status?: number; network?: boolean; count?: number };
-  itemPage?: (offset: number, limit: number) => { total: number; items: Array<Record<string, unknown>> };
+  itemPage?: (offset: number, limit: number, read: number) => { total: number; items: Array<Record<string, unknown>> };
 };
 
 const systemUser = {
@@ -107,7 +108,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
       posts.push(JSON.parse(request.postData() || "{}"));
       if (options.post === "network-once" && postAttempts === 1) return route.abort("connectionreset");
       if (options.post === "conflict") return json(route, {
-        detail: { code: "batch_active", message: "A subscription sync batch is already active", task_id: "task-existing", mode: "due_scan" },
+        detail: { code: "batch_active", message: "A subscription sync batch is already active", task_id: "task-existing" },
       }, 409);
       return json(route, {
         task_id: "task-accepted", job_id: "rq-accepted", status: "enqueued",
@@ -121,6 +122,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
         const status = options.taskReadError.status || 503;
         return json(route, { detail: `Task fixture ${status}` }, status);
       }
+      if (options.taskReadDelayMs) await new Promise((resolve) => setTimeout(resolve, options.taskReadDelayMs));
       const state = taskStates[Math.min(taskSuccessReads, taskStates.length - 1)];
       taskSuccessReads += 1;
       return json(route, { ...state, id: path.split("/").at(-1) });
@@ -134,7 +136,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
       }
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 50);
-      if (options.itemPage) return json(route, options.itemPage(offset, limit));
+      if (options.itemPage) return json(route, options.itemPage(offset, limit, itemReads));
       return json(route, {
         total: 2,
         items: [
@@ -300,7 +302,10 @@ for (const status of [403, 404]) {
   });
 }
 
-test("scheduler replays a lost response after refresh with the same intent", async ({ context, page }) => {
+test("scheduler creates and replays a stable UUID when randomUUID is unavailable", async ({ context, page }) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(window.crypto, "randomUUID", { configurable: true, value: undefined });
+  });
   const fixture = await installSchedulerFixtures(context, { post: "network-once" });
   await page.goto("/admin/scheduler");
   const button = page.getByRole("button", { name: "Run scheduler scan" });
@@ -309,24 +314,84 @@ test("scheduler replays a lost response after refresh with the same intent", asy
   await expect(button).toBeEnabled();
   await page.reload();
   await expect.poll(() => fixture.posts.length).toBe(2);
+  expect(fixture.posts[0].request_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(fixture.posts[1].request_id).toBe(fixture.posts[0].request_id);
 });
 
-test("scheduler opens the durable task named by a 409 conflict", async ({ context, page }) => {
-  await installSchedulerFixtures(context, { post: "conflict" });
+test("scheduler resolves the active batch mode from its task after an actual 409", async ({ context, page }) => {
+  const fixture = await installSchedulerFixtures(context, {
+    post: "conflict",
+    taskReadDelayMs: 8_000,
+    taskStates: [{
+      id: "task-existing", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
+      progress_stage: "waiting", progress_current: 0, progress_total: 2,
+      result_data: { status: "pending", mode: "due_scan", candidate_count: 2, waiting_count: 2 },
+    }],
+  });
   await page.goto("/admin/scheduler");
-  await page.getByRole("button", { name: "Run scheduler scan" }).click();
+  await page.getByRole("button", { name: "Sync all enabled sources" }).click();
   await expect(page.getByRole("log").getByText("Opened the active batch")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Current sync batch" })).toBeVisible();
+  const batch = page.locator("section").filter({ has: page.getByRole("heading", { name: "Current sync batch" }) });
+  await expect(batch).toContainText("Determining batch scope");
+  await expect(batch).not.toContainText("All enabled sources");
   const taskLink = page.getByRole("link", { name: "View task" });
   await expect(taskLink).toHaveAttribute("href", /task=task-existing/);
-  await taskLink.click();
-  await expect(page).toHaveURL(/\/admin\/jobs\?tab=admin&task=task-existing/, { timeout: 15_000 });
-  await expect(page.getByRole("complementary", { name: "Task detail" })).toBeVisible();
+  await expect(batch).toContainText("Due scan", { timeout: 15_000 });
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("auto-gallery-scheduler-batch-v1:7") || "null"));
+  expect(stored).toMatchObject({ mode: "manual_all_enabled", trackedMode: "due_scan", taskId: "task-existing" });
+  expect(stored.requestId).toBe(fixture.posts[0].request_id);
+  await page.reload();
+  await expect(batch).toContainText("Due scan", { timeout: 15_000 });
+  await page.screenshot({ path: "/evidence/frontend-task3/scheduler-conflict-mode.png", fullPage: false });
+  expect(fixture.posts).toHaveLength(1);
 });
 
-test("cancelled batch remains tracked while child cleanup is pending", async ({ context, page }) => {
-  const fixture = await installSchedulerFixtures(context, { taskStates: [{
+test("terminal settlement refreshes every loaded item page before polling stops", async ({ context, page }) => {
+  const readsByOffset = new Map<number, number>();
+  const fixture = await installSchedulerFixtures(context, {
+    taskReadDelayMs: 3_000,
+    taskStates: [{
+      id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
+      progress_stage: "importing", progress_current: 50, progress_total: 51,
+      result_data: { status: "pending", mode: "manual_all_enabled", candidate_count: 51, importing_count: 1, succeeded_count: 50 },
+    }, {
+      id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "failed",
+      progress_stage: "failed", progress_current: 51, progress_total: 51,
+      result_data: { status: "partial_error", mode: "manual_all_enabled", candidate_count: 51, succeeded_count: 50, failed_count: 1 },
+    }],
+    itemPage: (offset, limit) => {
+      const read = (readsByOffset.get(offset) || 0) + 1;
+      readsByOffset.set(offset, read);
+      const items = Array.from({ length: 51 }, (_, index) => ({
+        id: `terminal-item-${index + 1}`,
+        source_id: `terminal-source-${index + 1}`,
+        source: "pixiv",
+        status: index === 50 && read >= 3 ? "failed" : index === 50 ? "importing" : "succeeded",
+        attempts: 1,
+        next_retry_at: null,
+        download_job_id: `terminal-download-${index + 1}`,
+        reason_code: index === 50 && read >= 3 ? "import_failed" : null,
+        error: index === 50 && read >= 3 ? "Final failure after parent settled" : null,
+        outcome: index === 50 && read >= 3 ? { import_status: "failed" } : null,
+      }));
+      return { total: items.length, items: items.slice(offset, offset + limit) };
+    },
+  });
+  await page.goto("/admin/scheduler");
+  await page.getByRole("button", { name: "Sync all enabled sources" }).click();
+  await expect(page.getByText("50 of 51 item details loaded", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load more batch details" }).click();
+  await expect(page.getByText("51 of 51 item details loaded", { exact: true })).toBeVisible();
+  await expect(page.getByText("Final failure after parent settled", { exact: true })).toBeVisible({ timeout: 25_000 });
+  expect(readsByOffset.get(0)).toBeGreaterThanOrEqual(3);
+  expect(readsByOffset.get(50)).toBeGreaterThanOrEqual(3);
+  expect(fixture.wsTicketReads()).toBeGreaterThan(0);
+  await page.screenshot({ path: "/evidence/frontend-task3/scheduler-final-item-refresh.png", fullPage: false });
+});
+
+test("cancelled batch remains tracked and refreshes final details after cleanup", async ({ context, page }) => {
+  let itemPageReads = 0;
+  const fixture = await installSchedulerFixtures(context, { taskReadDelayMs: 1_000, taskStates: [{
     id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
     progress_stage: "downloading", progress_current: 1, progress_total: 3,
     result_data: { status: "pending", mode: "manual_all_enabled", candidate_count: 3, succeeded_count: 1, cancelled_count: 0, pending_count: 2, queued_count: 0, waiting_count: 0, downloading_count: 0, importing_count: 0, skipped_count: 0, failed_count: 0 },
@@ -338,7 +403,17 @@ test("cancelled batch remains tracked while child cleanup is pending", async ({ 
     id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "cancelled",
     progress_stage: "cancelled", progress_current: 3, progress_total: 3,
     result_data: { status: "cancelled", mode: "manual_all_enabled", candidate_count: 3, succeeded_count: 1, cancelled_count: 2, pending_count: 0, queued_count: 0, waiting_count: 0, downloading_count: 0, importing_count: 0, skipped_count: 0, failed_count: 0, cleanup_pending: false, cleanup_task_id: "cleanup-task" },
-  }] });
+  }], itemPage: (_offset, _limit) => {
+    itemPageReads += 1;
+    const final = itemPageReads >= 4;
+    return { total: 1, items: [{
+      id: "cleanup-item", source_id: "cleanup-source", source: "pixiv",
+      status: final ? "cancelled" : "waiting", attempts: 1, next_retry_at: null, download_job_id: null,
+      reason_code: final ? "batch_cancelled" : null,
+      error: final ? "Cancelled after cleanup completed" : null,
+      outcome: null,
+    }] };
+  } });
   await page.goto("/admin/scheduler");
   await page.getByRole("button", { name: "Sync all enabled sources" }).click();
   await expect(page.getByText("1 succeeded", { exact: true })).toBeVisible();
@@ -349,6 +424,8 @@ test("cancelled batch remains tracked while child cleanup is pending", async ({ 
   await expect.poll(() => fixture.wsTicketReads(), { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
   await expect(page.getByText("Publication stopped; child cleanup is still running")).toHaveCount(0);
   await expect(page.getByText("2 cancelled", { exact: true })).toBeVisible();
+  await expect(page.getByText("Cancelled after cleanup completed", { exact: true })).toBeVisible();
+  expect(itemPageReads).toBeGreaterThanOrEqual(4);
 });
 
 test("tasks-only users cannot enter or start the global scheduler", async ({ context, page }) => {

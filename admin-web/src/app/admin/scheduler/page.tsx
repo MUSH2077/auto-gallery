@@ -32,6 +32,7 @@ import { useT, type TFunction } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
+import { secureRandomUuid } from "@/lib/random";
 import {
   scheduleModeLabel,
   schedulerDecisionLabel,
@@ -47,6 +48,7 @@ interface StoredBatchIntent {
   userId: number;
   requestId: string;
   mode: SchedulerSyncMode;
+  trackedMode?: SchedulerSyncMode | null;
   taskId?: string;
   finalNotified?: boolean;
 }
@@ -62,7 +64,13 @@ function readStoredBatchIntent(userId: number): StoredBatchIntent | null {
     const raw = localStorage.getItem(batchStorageKey(userId));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<StoredBatchIntent>;
-    if (value.version !== 1 || value.userId !== userId || typeof value.requestId !== "string" || !BATCH_MODES.has(value.mode as SchedulerSyncMode)) {
+    if (
+      value.version !== 1
+      || value.userId !== userId
+      || typeof value.requestId !== "string"
+      || !BATCH_MODES.has(value.mode as SchedulerSyncMode)
+      || (value.trackedMode != null && !BATCH_MODES.has(value.trackedMode as SchedulerSyncMode))
+    ) {
       return null;
     }
     return value as StoredBatchIntent;
@@ -73,6 +81,13 @@ function readStoredBatchIntent(userId: number): StoredBatchIntent | null {
 
 function schedulerBatchResult(task?: TaskRun): SchedulerBatchResult {
   return (task?.result_data || {}) as SchedulerBatchResult;
+}
+
+function schedulerBatchMode(task?: TaskRun): SchedulerSyncMode | null {
+  const mode = schedulerBatchResult(task).mode;
+  return typeof mode === "string" && BATCH_MODES.has(mode as SchedulerSyncMode)
+    ? mode as SchedulerSyncMode
+    : null;
 }
 
 function schedulerBatchSettled(task?: TaskRun) {
@@ -173,6 +188,10 @@ function SchedulerBatchStatus({
   const active = !schedulerBatchSettled(task);
   const cleanupPending = task?.status === "cancelled" && result.cleanup_pending !== false;
   const progressLabel = schedulerBatchProgressLabel(t, task, result);
+  const trackedMode = schedulerBatchMode(task) || intent.trackedMode;
+  const modeLabel = intent.taskId
+    ? trackedMode ? t(`scheduler.batch_mode.${trackedMode}`) : t("scheduler.batch_mode_loading")
+    : t(`scheduler.batch_mode.${intent.mode}`);
   const diagnosticLabel = typeof task?.progress_data?.label === "string" ? task.progress_data.label : undefined;
   const taskReferenceIrrecoverable = isIrrecoverableTrackingError(taskError);
   const itemReferenceIrrecoverable = isIrrecoverableTrackingError(itemError);
@@ -198,7 +217,7 @@ function SchedulerBatchStatus({
             {taskError ? <StatusBadge status="failed" /> : task ? <StatusBadge status={cleanupPending ? "running" : task.status} /> : <StatusBadge status="enqueued" />}
           </div>
           <p className="mt-1 text-xs text-muted">
-            {t(`scheduler.batch_mode.${intent.mode}`)} · <span className="font-mono">{intent.taskId?.slice(0, 8) || intent.requestId.slice(0, 8)}</span>
+            {modeLabel} · <span className="font-mono">{intent.taskId?.slice(0, 8) || intent.requestId.slice(0, 8)}</span>
           </p>
           <p className="mt-1 text-xs text-muted">{t("scheduler.batch_completion_boundary")}</p>
         </div>
@@ -380,6 +399,7 @@ function SchedulerContent() {
   const [intentLoaded, setIntentLoaded] = useState(false);
   const restoredPendingRef = useRef(false);
   const finalToastRef = useRef<string | null>(null);
+  const finalItemRefreshRef = useRef<string | null>(null);
 
   const persistBatchIntent = useCallback((next: StoredBatchIntent | null) => {
     setBatchIntent(next);
@@ -456,6 +476,26 @@ function SchedulerContent() {
     [batchItems.data?.pages],
   );
   const batchItemTotal = batchItems.data?.pages[0]?.total || 0;
+  const batchItemsLoaded = (batchItems.data?.pages.length || 0) > 0;
+  const refetchBatchItems = batchItems.refetch;
+  const batchSettled = schedulerBatchSettled(batchTask.data);
+  const cleanupComplete = schedulerBatchResult(batchTask.data).cleanup_pending === false;
+
+  useEffect(() => {
+    const taskId = batchIntent?.taskId;
+    const taskStatus = batchTask.data?.status;
+    if (!taskId || !taskStatus || !batchSettled || !batchItemsLoaded || batchItems.isFetching) return;
+    const signature = `${taskId}:${taskStatus}:${cleanupComplete}`;
+    if (finalItemRefreshRef.current === signature) return;
+    finalItemRefreshRef.current = signature;
+    void refetchBatchItems();
+  }, [batchIntent?.taskId, batchItems.isFetching, batchItemsLoaded, batchSettled, batchTask.data?.status, cleanupComplete, refetchBatchItems]);
+
+  const authoritativeBatchMode = schedulerBatchMode(batchTask.data);
+  useEffect(() => {
+    if (!batchIntent?.taskId || !authoritativeBatchMode || batchIntent.trackedMode === authoritativeBatchMode) return;
+    persistBatchIntent({ ...batchIntent, trackedMode: authoritativeBatchMode });
+  }, [authoritativeBatchMode, batchIntent, persistBatchIntent]);
 
   useJobWebSocket({
     enabled: !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data),
@@ -475,7 +515,7 @@ function SchedulerContent() {
   const submitBatch = useMutation({
     mutationFn: (intent: StoredBatchIntent) => api.triggerSyncNow(intent.mode, intent.requestId),
     onSuccess: (data, intent) => {
-      const accepted: StoredBatchIntent = { ...intent, taskId: data.task_id, finalNotified: false };
+      const accepted: StoredBatchIntent = { ...intent, trackedMode: data.mode, taskId: data.task_id, finalNotified: false };
       persistBatchIntent(accepted);
       toast.info({
         message: t("scheduler.batch_accepted"),
@@ -488,13 +528,10 @@ function SchedulerContent() {
     onError: (error: Error, intent) => {
       const apiError = error instanceof ApiError ? error : null;
       const detail = apiError?.detail && typeof apiError.detail === "object"
-        ? apiError.detail as { task_id?: unknown; mode?: unknown }
+        ? apiError.detail as { task_id?: unknown }
         : null;
       if (apiError?.status === 409 && typeof detail?.task_id === "string") {
-        const existingMode = typeof detail.mode === "string" && BATCH_MODES.has(detail.mode as SchedulerSyncMode)
-          ? detail.mode as SchedulerSyncMode
-          : intent.mode;
-        persistBatchIntent({ ...intent, mode: existingMode, taskId: detail.task_id, finalNotified: false });
+        persistBatchIntent({ ...intent, trackedMode: null, taskId: detail.task_id, finalNotified: false });
         toast.info({
           message: t("scheduler.batch_existing"),
           action: { label: t("jobs.open_task"), onClick: () => router.push(`${adminRoutes.jobs}?tab=admin&task=${detail.task_id}`) },
@@ -541,7 +578,7 @@ function SchedulerContent() {
     }
     const intent = !batchIntent?.taskId && batchIntent?.mode === mode
       ? batchIntent
-      : { version: 1 as const, userId: user.id, requestId: crypto.randomUUID(), mode };
+      : { version: 1 as const, userId: user.id, requestId: secureRandomUuid(), mode };
     persistBatchIntent(intent);
     submitBatch.mutate(intent);
   };
@@ -550,6 +587,7 @@ function SchedulerContent() {
     const taskId = batchIntent?.taskId;
     persistBatchIntent(null);
     finalToastRef.current = null;
+    finalItemRefreshRef.current = null;
     restoredPendingRef.current = false;
     if (taskId) {
       queryClient.removeQueries({ queryKey: queryKeys.tasks.detail(taskId) });
@@ -563,7 +601,7 @@ function SchedulerContent() {
     const signature = `${batchIntent.taskId}:${task?.status}:${task?.updated_at || ""}`;
     if (finalToastRef.current === signature) return;
     finalToastRef.current = signature;
-    persistBatchIntent({ ...batchIntent, finalNotified: true });
+    persistBatchIntent({ ...batchIntent, trackedMode: schedulerBatchMode(task) || batchIntent.trackedMode, finalNotified: true });
     const result = schedulerBatchResult(task);
     const summary = t("scheduler.batch_final_summary", {
       succeeded: schedulerCount(result, "succeeded_count"),
