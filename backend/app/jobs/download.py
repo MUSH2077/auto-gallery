@@ -36,6 +36,10 @@ from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, redacted_manifest_config, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.download_finalization import finalize_download_job
+from app.services.download_failure_evidence import (
+    clear_unresolved_provider_failure,
+    record_unresolved_provider_failure,
+)
 from app.services.download_dispatch import (
     prepare_download_dispatch,
     recover_download_dispatch_candidate,
@@ -472,11 +476,17 @@ async def _enqueue_download_retry(
         # use the outbox recovery contract that leaves capacity/Redis failures
         # pending for a later bounded recovery cycle.
         await retry_db.commit()
-        return await recover_download_dispatch_candidate(
+        outcome = await recover_download_dispatch_candidate(
             retry_db,
             prepared.task,
             retry_job,
         )
+        if outcome in {"error", "invalid"}:
+            raise RuntimeError(
+                "download retry dispatch recovery "
+                f"returned {outcome} for {download_job_id}"
+            )
+        return outcome
 
 
 def _log_retry_dispatch_outcome(
@@ -500,6 +510,15 @@ def _log_retry_dispatch_outcome(
     elif outcome == "deferred":
         logger.info(
             "Deferred %s %d/%d for job %s in durable dispatch outbox (delay=%ds)",
+            action,
+            retry_count,
+            max_retries,
+            job_id,
+            delay_seconds,
+        )
+    elif outcome == "error":
+        logger.error(
+            "Retry dispatch failed for %s %d/%d job %s (delay=%ds)",
             action,
             retry_count,
             max_retries,
@@ -1745,7 +1764,14 @@ async def run_download_job(job_id: str):
                             f"Retry queued after unexpected error: {error_text[:180]}",
                         )
                     else:
-                        await repo2.update_status(j, "failed", f"unexpected error: {error_text}")
+                        failure_reason = f"unexpected error: {error_text}"
+                        await repo2.update_status(j, "failed", failure_reason)
+                        record_unresolved_provider_failure(
+                            j,
+                            kind="unexpected",
+                            reason=failure_reason,
+                            max_retries=max_retries,
+                        )
                         apply_download_progress(
                             j,
                             "failed",
@@ -1775,6 +1801,7 @@ async def run_download_job(job_id: str):
                     exc_info=True,
                 )
 
+        retry_outcome = None
         if unexpected_retry_count is not None:
             retry_delay = backoff_base * (2 ** (unexpected_retry_count - 1))
             try:
@@ -1797,12 +1824,17 @@ async def run_download_job(job_id: str):
                     job_id,
                     exc_info=True,
                 )
+                raise
 
         # A staging conflict stays quarantined.  Importing older ledger rows in
         # this branch could incorrectly present the conflict as a recovered job.
-        if not terminal_stage_error and not personal_credential_failure:
+        if (
+            unexpected_retry_count is None
+            and not terminal_stage_error
+            and not personal_credential_failure
+        ):
             metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-            if metadata_count > 0:
+            if metadata_count > 0 and retry_outcome is None:
                 logger.info("Partial recovery: found %d metadata JSONs after error for job %s", metadata_count, job_id)
                 await _enqueue_import(str(job_uuid), f"partial import after unexpected error (found {metadata_count} metadata files)")
         _cleanup_temp_config(ai_config_path)
@@ -1878,10 +1910,17 @@ async def run_download_job(job_id: str):
                 # Normal completion (success or non-zero exit)
                 if detected_auth_issue:
                     j.retry_count = max_retries
+                    failure_reason = f"Download authentication failed: {detected_auth_issue}"
                     await repo2.update_status(
                         j,
                         "failed",
-                        f"Download authentication failed: {detected_auth_issue}",
+                        failure_reason,
+                    )
+                    record_unresolved_provider_failure(
+                        j,
+                        kind="authentication",
+                        reason=failure_reason,
+                        max_retries=max_retries,
                     )
                     apply_download_progress(
                         j,
@@ -1889,6 +1928,7 @@ async def run_download_job(job_id: str):
                         "Download authentication requires attention",
                     )
                 elif result.returncode == 0:
+                    clear_unresolved_provider_failure(j)
                     await repo2.update_status(j, "downloaded")
                     apply_download_progress(
                         j,
@@ -1909,7 +1949,18 @@ async def run_download_job(job_id: str):
                             "Retry queued after gallery-dl returned an error",
                         )
                     else:
-                        await repo2.update_status(j, "failed", result.stderr[:5000] if result.stderr else None)
+                        failure_reason = (
+                            result.stderr[:5000]
+                            if result.stderr
+                            else f"gallery-dl exited with code {result.returncode}"
+                        )
+                        await repo2.update_status(j, "failed", failure_reason)
+                        record_unresolved_provider_failure(
+                            j,
+                            kind="nonzero",
+                            reason=failure_reason,
+                            max_retries=max_retries,
+                        )
                         apply_download_progress(
                             j,
                             "failed",
@@ -1945,6 +1996,12 @@ async def run_download_job(job_id: str):
                     )
                 else:
                     await repo2.update_status(j, "failed", timeout_msg)
+                    record_unresolved_provider_failure(
+                        j,
+                        kind="timeout",
+                        reason=timeout_msg,
+                        max_retries=max_retries,
+                    )
                     apply_download_progress(
                         j,
                         "failed",
@@ -1957,6 +2014,29 @@ async def run_download_job(job_id: str):
                 subscription_ids=[j.subscription_id] if j.subscription_id else (),
             )
             await db2.commit()
+
+        # A live retry owns the parent lifecycle.  Establish that durable
+        # attempt before considering partial salvage so the two pipelines can
+        # never compete for the same DownloadJob state.
+        retry_outcome = None
+        ctrl_cmd = control_listener.command if control_listener else None
+        if j and j.retry_count < max_retries and ctrl_cmd is None:
+            needs_retry = (result is None) or (result.returncode != 0)
+            if needs_retry:
+                retry_delay = backoff_base * (2 ** (j.retry_count - 1))
+                retry_outcome = await _enqueue_download_retry(
+                    job_uuid,
+                    delay_seconds=retry_delay,
+                    action="auto_retry",
+                )
+                _log_retry_dispatch_outcome(
+                    retry_outcome,
+                    action="auto_retry",
+                    retry_count=j.retry_count,
+                    max_retries=max_retries,
+                    job_id=job_id,
+                    delay_seconds=retry_delay,
+                )
 
         # ── Enqueue import on success, auto-retry on failure, partial recovery on timeout ──
 
@@ -2095,47 +2175,21 @@ async def run_download_job(job_id: str):
         elif result is not None and result.returncode != 0:
             # Non-zero exit — maybe partial files were downloaded
             metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-            if metadata_count > 0:
+            if metadata_count > 0 and retry_outcome is None:
                 logger.info("Partial recovery: found %d metadata JSONs after failure for job %s", metadata_count, job_id)
                 await _enqueue_import(str(job_uuid), f"partial import after download failure (found {metadata_count} metadata files)")
 
-        else:
+        elif ctrl_cmd is None:
             # Timeout or interrupted (pause/cancel) — attempt partial import recovery
             ctrl_cmd = control_listener.command if control_listener else None
             reason = "timeout" if ctrl_cmd is None else f"interrupted ({ctrl_cmd})"
             metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-            if metadata_count > 0:
+            if metadata_count > 0 and retry_outcome is None:
                 logger.info("Partial recovery: found %d metadata JSONs after %s for job %s", metadata_count, reason, job_id)
                 await _enqueue_import(str(job_uuid),
                                      f"partial import after {reason} (found {metadata_count} metadata files)",
                                      new_json_paths=new_json_paths)
 
-        # ── Enqueue retry for transient failures ──
-        # Only auto-retry on actual failures (non-zero exit, timeout), NOT on pause/cancel.
-
-        ctrl_cmd = control_listener.command if control_listener else None
-        if j and j.retry_count < max_retries and ctrl_cmd is None:
-            # Only auto-retry non-zero exits and timeouts
-            needs_retry = (result is None) or (result.returncode != 0)
-            if needs_retry:
-                retry_delay = backoff_base * (2 ** (j.retry_count - 1))
-                try:
-                    retry_outcome = await _enqueue_download_retry(
-                        job_uuid,
-                        delay_seconds=retry_delay,
-                        action="auto_retry",
-                    )
-                    _log_retry_dispatch_outcome(
-                        retry_outcome,
-                        action="auto_retry",
-                        retry_count=j.retry_count,
-                        max_retries=max_retries,
-                        job_id=job_id,
-                        delay_seconds=retry_delay,
-                    )
-                except Exception:
-                    logger.error("Failed to enqueue retry for download job %s", job_id, exc_info=True)
-                    raise
     finally:
         if heartbeat:
             heartbeat.stop()

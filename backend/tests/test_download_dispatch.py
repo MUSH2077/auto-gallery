@@ -469,6 +469,99 @@ def test_outbox_recovery_transient_rejection_stays_pending(monkeypatch):
     assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TypeError("broken recovery call"),
+        ValueError("broken recovery value"),
+        RuntimeError("broken recovery invariant"),
+    ],
+)
+def test_outbox_recovery_does_not_classify_programming_faults_as_capacity(
+    monkeypatch,
+    exc,
+):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(exc),
+    )
+    persisted = []
+
+    async def persist(*_args, **kwargs):
+        persisted.append(type(kwargs["exc"]))
+        return True
+
+    monkeypatch.setattr(
+        download_dispatch,
+        "_persist_dispatch_recovery_error",
+        persist,
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "error"
+    assert db.rollback_count == 1
+    assert persisted == [type(exc)]
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+def test_outbox_recovery_redis_transport_error_remains_deferred(monkeypatch):
+    from redis.exceptions import ConnectionError
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(ConnectionError("redis reset")),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "deferred"
+    assert db.rollback_count == 1
+
+
+def test_dispatch_classifier_rejects_persistent_redis_errors():
+    from redis.exceptions import (
+        AuthenticationError,
+        AuthorizationError,
+        DataError,
+        ResponseError,
+    )
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    for exc in (
+        AuthenticationError("bad credentials"),
+        AuthorizationError("forbidden"),
+        DataError("bad command input"),
+        ResponseError("invalid command"),
+    ):
+        assert is_transient_download_dispatch_error(exc) is False
+
+
+def test_dispatch_classifier_accepts_redis_transport_and_loading_errors():
+    from redis.exceptions import BusyLoadingError, ConnectionError, TimeoutError
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    for exc in (
+        ConnectionError("reset"),
+        TimeoutError("timeout"),
+        BusyLoadingError("loading"),
+    ):
+        assert is_transient_download_dispatch_error(exc) is True
+
+
 def test_outbox_recovery_marks_malformed_retry_intent_invalid(monkeypatch):
     from app.services import download_dispatch
 
@@ -493,6 +586,37 @@ def test_outbox_recovery_marks_malformed_retry_intent_invalid(monkeypatch):
     dispatch = task.meta[download_dispatch.DISPATCH_META_KEY]
     assert dispatch["state"] == download_dispatch.DISPATCH_INVALID
     assert "does not match" in dispatch["last_error"]
+
+
+def test_existing_rq_record_is_publication_proof_when_status_adapter_breaks(monkeypatch):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_rq_job_state",
+        lambda *_a, **_k: (_ for _ in ()).throw(TypeError("bad status adapter")),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("an existing fixed id must not be re-enqueued")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "existing"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "published"
 
 
 def test_outbox_recovery_existing_fixed_id_does_not_reenqueue(monkeypatch):

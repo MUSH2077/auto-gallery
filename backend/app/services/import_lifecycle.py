@@ -15,6 +15,7 @@ from app.models.import_job import ImportJob
 from app.models.task_state import transition_download_job
 from app.services.job_manifest import append_manifest_event, get_manifest, update_manifest
 from app.services.tasks import TaskService
+from app.services.download_failure_evidence import unresolved_provider_failure
 
 
 # Stable lifecycle lock order across workers, recovery, retries, and projection:
@@ -233,6 +234,23 @@ async def coordinate_import_parent_completion(
     await db.flush([import_job])
     manifest = get_manifest(parent)
     if not manifest.get("disk_import_recovery"):
+        provider_failure = unresolved_provider_failure(parent)
+        if status == "complete" and provider_failure is not None:
+            should_finalize = parent.status not in PARENT_TERMINAL_STATUSES
+            if should_finalize:
+                transition_download_job(
+                    parent,
+                    "failed",
+                    provider_failure["reason"],
+                )
+            return ImportParentCompletion(
+                parent=parent,
+                should_finalize=should_finalize,
+                status="failed",
+                message=provider_failure["reason"],
+                stats=dict(stats),
+                total_groups=int(total_groups),
+            )
         return ImportParentCompletion(
             parent=parent,
             should_finalize=parent.status not in PARENT_TERMINAL_STATUSES,

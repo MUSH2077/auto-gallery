@@ -4,7 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
@@ -209,6 +209,163 @@ async def test_retry_after_committed_import_finalization_preserves_outcome_witho
     assert len(tasks) == 2 and all(task.status == "complete" for task in tasks)
     receipt = (await db.execute(select(RepositorySyncReceipt).where(RepositorySyncReceipt.source_download_job_id == parent_id))).scalar_one()
     assert receipt.status == "complete" and receipt.works_imported == 1
+
+
+async def test_real_partial_import_preserves_exhausted_provider_failure(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    from app.jobs import import_runner
+    from app.models import (
+        Asset,
+        DownloadJob,
+        ImportJob,
+        RepositorySyncReceipt,
+        TaskRun,
+        Work,
+    )
+    from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem
+    from app.services.download_failure_evidence import (
+        record_unresolved_provider_failure,
+    )
+
+    parent_id, child_id, _metadata = await _import_fixture(
+        db,
+        tmp_path,
+        monkeypatch,
+    )
+    parent = await db.get(DownloadJob, parent_id)
+    parent.retry_count = 4
+    provider_reason = "gallery-dl exited with code 17"
+    parent.error_log = provider_reason
+    record_unresolved_provider_failure(
+        parent,
+        kind="nonzero",
+        reason=provider_reason,
+        max_retries=4,
+    )
+    batch = SchedulerBatch(
+        task_id=uuid4(),
+        request_id=uuid4(),
+        mode="force_eligible",
+        state="active",
+    )
+    db.add(batch)
+    await db.flush()
+    item = SchedulerBatchItem(
+        batch_id=batch.id,
+        source_id=parent.subscription_source_id,
+        source=parent.source,
+        status="importing",
+        download_job_id=parent.id,
+        owns_download=True,
+    )
+    db.add(item)
+    await db.commit()
+
+    await import_runner.run_import_job(str(child_id))
+
+    await db.rollback()
+    parent = await db.get(DownloadJob, parent_id, populate_existing=True)
+    child = await db.get(ImportJob, child_id, populate_existing=True)
+    receipt = (await db.execute(select(RepositorySyncReceipt).where(
+        RepositorySyncReceipt.source_download_job_id == parent_id
+    ))).scalar_one()
+    assert child.status == "complete"
+    assert parent.status == "failed"
+    assert parent.error_log == provider_reason
+    assert receipt.status == "failed"
+    assert receipt.error_excerpt == provider_reason
+    assert receipt.works_imported == 1
+    parent_task = (await db.execute(select(TaskRun).where(
+        TaskRun.subject_type == "download_job",
+        TaskRun.subject_id == parent_id,
+    ))).scalar_one()
+    assert parent_task.status == "failed"
+    assert parent_task.error_log == provider_reason
+    assert len((await db.execute(select(Work))).scalars().all()) == 1
+    assert len((await db.execute(select(Asset))).scalars().all()) == 1
+    from app.services.scheduler_batches import reconcile_item
+
+    await reconcile_item(db, item)
+    assert item.status == "failed"
+    assert item.outcome["works_imported"] == 1
+
+
+async def test_later_success_plans_and_imports_retained_retry_artifact_once(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    from app.jobs import download, import_runner
+    from app.models import Asset, DownloadJob, ImportJob, StorageArtifact, Work
+    from app.services.download_failure_evidence import (
+        clear_unresolved_provider_failure,
+        record_unresolved_provider_failure,
+        unresolved_provider_failure,
+    )
+
+    parent_id, abandoned_child_id, _metadata = await _import_fixture(
+        db,
+        tmp_path,
+        monkeypatch,
+    )
+    artifacts = list((await db.execute(select(StorageArtifact))).scalars())
+    for artifact in artifacts:
+        artifact.import_job_id = None
+    await db.delete(await db.get(ImportJob, abandoned_child_id))
+    parent = await db.get(DownloadJob, parent_id)
+    parent.retry_count = 4
+    record_unresolved_provider_failure(
+        parent,
+        kind="nonzero",
+        reason="earlier provider failure",
+        max_retries=4,
+    )
+    clear_unresolved_provider_failure(parent)
+    parent.retry_count = 0
+    parent.status = "downloaded"
+    await db.commit()
+    assert unresolved_provider_failure(parent) is None
+
+    pending_count, paths, reconciliation = await download._successful_repository_import_plan(
+        db,
+        parent,
+        metadata_count=0,
+        metadata_paths=[],
+    )
+    assert pending_count == 1
+    assert len(paths) == 1
+    assert paths == {str(_metadata.relative_to(tmp_path / "downloads"))}
+    assert reconciliation is not None
+    await db.commit()
+
+    async def retain(_download_id, import_id, *_args, **_kwargs):
+        return import_id
+
+    monkeypatch.setattr(download, "_publish_import_intent", retain)
+    child_id = await download._enqueue_import(str(parent_id), new_json_paths=set(paths))
+    await db.rollback()
+    assigned_metadata = (await db.execute(select(StorageArtifact).where(
+        StorageArtifact.artifact_type == "metadata_json"
+    ).execution_options(populate_existing=True))).scalar_one()
+    assert assigned_metadata.import_job_id == UUID(str(child_id))
+    await import_runner.run_import_job(str(child_id))
+
+    await db.rollback()
+    parent = await db.get(DownloadJob, parent_id, populate_existing=True)
+    imports = list((await db.execute(select(ImportJob).where(
+        ImportJob.download_job_id == parent_id
+    ))).scalars())
+    assert parent.status == "complete"
+    assert len(imports) == 1 and imports[0].status == "complete"
+    assert len((await db.execute(select(Work))).scalars().all()) == 1
+    assert len((await db.execute(select(Asset))).scalars().all()) == 1
+    metadata_rows = list((await db.execute(select(StorageArtifact).where(
+        StorageArtifact.artifact_type == "metadata_json"
+    ))).scalars())
+    assert len(metadata_rows) == 1
 
 
 @pytest.mark.parametrize("missing", [False, True])

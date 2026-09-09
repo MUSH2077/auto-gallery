@@ -2370,3 +2370,54 @@ async def test_concurrent_legacy_starts_mint_one_private_durable_attempt():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_completed_partial_salvage_keeps_exhausted_provider_failure():
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.services.download_failure_evidence import (
+        record_unresolved_provider_failure,
+    )
+    from app.services.import_lifecycle import coordinate_import_parent_completion
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db, manifest={"events": []})
+            parent.status = "importing"
+            parent.retry_count = 4
+            record_unresolved_provider_failure(
+                parent,
+                kind="timeout",
+                reason="timeout after 120 seconds",
+                max_retries=4,
+            )
+            child = ImportJob(download_job_id=parent.id, status="complete")
+            db.add(child)
+            await db.flush()
+
+            completion = await coordinate_import_parent_completion(
+                db,
+                child,
+                status="complete",
+                stats={
+                    "works": 1,
+                    "assets": 2,
+                    "multi_page": 0,
+                    "skipped": 0,
+                    "existing": 0,
+                },
+                total_groups=1,
+                message="Imported one partial work",
+            )
+
+            assert completion.should_finalize is True
+            assert completion.status == "failed"
+            assert completion.message == "timeout after 120 seconds"
+            assert completion.stats["works"] == 1
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

@@ -805,6 +805,7 @@ async def test_worker_retry_defers_temporary_admission_and_replays_same_attempt(
         "invalid": 0,
         "skipped": 0,
         "cancelled": 0,
+        "error": 0,
     }
     assert len(published) == 1
     queue_name, func, published_job_id, kwargs = published[0]
@@ -901,6 +902,7 @@ async def test_cancelled_parent_blocks_pending_retry_outbox_without_accounting_e
         "invalid": 0,
         "skipped": 0,
         "cancelled": 1,
+        "error": 0,
     }
     await db.rollback()
     job = await db.get(DownloadJob, job_id, populate_existing=True)

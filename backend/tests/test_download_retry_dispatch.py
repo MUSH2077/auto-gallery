@@ -9,6 +9,7 @@ import pytest
         ("replayed", "Enqueued auto_retry 1/4"),
         ("existing", "Enqueued auto_retry 1/4"),
         ("deferred", "Deferred auto_retry 1/4"),
+        ("error", "Retry dispatch failed for auto_retry 1/4"),
         ("cancelled", "Retry dispatch not published for auto_retry 1/4"),
     ],
 )
