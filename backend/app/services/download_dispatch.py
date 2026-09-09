@@ -645,6 +645,7 @@ async def recover_download_dispatch_outbox(
         "deferred": 0,
         "invalid": 0,
         "skipped": 0,
+        "cancelled": 0,
     }
     for task, job in rows:
         await db.refresh(task)

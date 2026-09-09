@@ -663,6 +663,253 @@ async def test_publication_pressure_keeps_bound_identity_waiting_then_resumes(db
     assert item.status == "queued"
 
 
+@pytest.mark.parametrize(
+    ("action", "admission_code"),
+    [
+        ("auto_retry", "queue_saturated"),
+        ("auto_retry", "enqueue_busy"),
+        ("auto_retry", "redis_unwritable"),
+        ("unexpected_error_retry", "queue_saturated"),
+        ("unexpected_error_retry", "enqueue_busy"),
+        ("unexpected_error_retry", "redis_unwritable"),
+    ],
+)
+async def test_worker_retry_defers_temporary_admission_and_replays_same_attempt(
+    db,
+    monkeypatch,
+    action,
+    admission_code,
+):
+    """A provider retry must survive a temporary Redis admission refusal."""
+
+    from app.jobs import download as download_job
+    from app.models import DownloadJob, RepositorySyncReceipt, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def no_pressure(*args, **kwargs):
+        return None
+
+    async def retain_durable_identity(*args):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(
+        scheduler_batches,
+        "_publish_bound_child",
+        retain_durable_identity,
+    )
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job = await db.get(DownloadJob, item.download_job_id)
+    task = await db.get(TaskRun, item.child_task_id)
+    job.retry_count = 1
+    original_identity = {
+        "job_id": job.id,
+        "task_id": task.id,
+        "owner_user_id": job.owner_user_id,
+        "triggering_user_subscription_id": job.triggering_user_subscription_id,
+        "subscription_source_id": job.subscription_source_id,
+        "batch_task_id": task.meta["scheduler_batch_task_id"],
+    }
+    assert original_identity["owner_user_id"] is not None
+    assert original_identity["triggering_user_subscription_id"] is not None
+    await db.commit()
+
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def refuse_temporarily(*_args, **_kwargs):
+        raise backpressure.DownloadAdmissionError(admission_code, "temporary refusal")
+
+    monkeypatch.setattr(download_dispatch, "enqueue_download_rq", refuse_temporarily)
+
+    outcome = await download_job._enqueue_download_retry(
+        job.id,
+        delay_seconds=60,
+        action=action,
+    )
+    assert outcome == "deferred"
+
+    await db.rollback()
+    job = await db.get(
+        DownloadJob,
+        original_identity["job_id"],
+        populate_existing=True,
+    )
+    task = await db.get(
+        TaskRun,
+        original_identity["task_id"],
+        populate_existing=True,
+    )
+    item = await db.get(SchedulerBatchItem, item.id, populate_existing=True)
+    dispatch = task.meta[download_dispatch.DISPATCH_META_KEY]
+    retry_rq_id = download_dispatch.deterministic_download_rq_job_id(job.id, 2)
+    assert job.status == task.status == "enqueued"
+    assert job.retry_count == 1
+    assert task.attempts == 2
+    assert task.rq_job_id == retry_rq_id
+    assert dispatch["state"] == download_dispatch.DISPATCH_PENDING
+    assert dispatch["rq_job_id"] == retry_rq_id
+    assert dispatch["attempt"] == 2
+    assert dispatch["delay_seconds"] == 60
+    assert dispatch["action"] == action
+    assert not any(
+        event.get("event") == "enqueue_failed"
+        for event in (job.manifest or {}).get("events", [])
+    )
+    assert (
+        await db.execute(
+            select(RepositorySyncReceipt.id).where(
+                RepositorySyncReceipt.source_download_job_id == job.id
+            )
+        )
+    ).scalar_one_or_none() is None
+    assert {
+        "job_id": job.id,
+        "task_id": task.id,
+        "owner_user_id": job.owner_user_id,
+        "triggering_user_subscription_id": job.triggering_user_subscription_id,
+        "subscription_source_id": job.subscription_source_id,
+        "batch_task_id": task.meta["scheduler_batch_task_id"],
+    } == original_identity
+    await scheduler_batches.reconcile_item(db, item)
+    assert item.status == "queued"
+
+    published = []
+
+    def accept(queue_name, func, job_id, **kwargs):
+        published.append((queue_name, func, job_id, kwargs))
+        return type("RQJob", (), {"id": kwargs["rq_job_id"]})()
+
+    monkeypatch.setattr(download_dispatch, "enqueue_download_rq", accept)
+    task.updated_at = datetime.now(timezone.utc) - timedelta(seconds=2)
+    await db.commit()
+    recovered = await download_dispatch.recover_download_dispatch_outbox(
+        db,
+        limit=1,
+        grace_seconds=1,
+    )
+    assert recovered == {
+        "checked": 1,
+        "existing": 0,
+        "replayed": 1,
+        "terminal": 0,
+        "deferred": 0,
+        "invalid": 0,
+        "skipped": 0,
+        "cancelled": 0,
+    }
+    assert len(published) == 1
+    queue_name, func, published_job_id, kwargs = published[0]
+    assert queue_name == "downloads"
+    assert func == "app.jobs.download.run_download_job"
+    assert published_job_id == str(job.id)
+    assert kwargs["rq_job_id"] == retry_rq_id
+    assert kwargs["job_timeout"] == download_job.RQ_JOB_TIMEOUT
+    assert kwargs["delay_seconds"] == 60.0
+    assert kwargs["redis_client"] is not None
+    await db.refresh(task)
+    assert task.attempts == 2
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "published"
+
+    repeated = await download_dispatch.recover_download_dispatch_outbox(
+        db,
+        limit=1,
+        grace_seconds=1,
+    )
+    assert repeated["checked"] == 0
+    assert len(published) == 1
+
+
+async def test_cancelled_parent_blocks_pending_retry_outbox_without_accounting_error(
+    db,
+    monkeypatch,
+):
+    """A cancellation fence can be encountered by the bounded outbox scan."""
+
+    from app.jobs import download as download_job
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def no_pressure(*args, **kwargs):
+        return None
+
+    async def retain_durable_identity(*args):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", no_pressure)
+    monkeypatch.setattr(
+        scheduler_batches,
+        "_publish_bound_child",
+        retain_durable_identity,
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled retry must not publish")
+        ),
+    )
+
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job = await db.get(DownloadJob, item.download_job_id)
+    child = await db.get(TaskRun, item.child_task_id)
+    job_id = job.id
+    child_id = child.id
+    job.retry_count = 1
+    prepared = await download_dispatch.prepare_download_dispatch(
+        db,
+        job,
+        queue_name="downloads",
+        job_timeout=download_job.RQ_JOB_TIMEOUT,
+        delay_seconds=60,
+        action="auto_retry",
+    )
+    await db.commit()
+    parent = await db.get(TaskRun, UUID(accepted["task_id"]))
+    parent.status = "cancelled"
+    prepared.task.updated_at = datetime.now(timezone.utc) - timedelta(seconds=2)
+    await db.commit()
+
+    result = await download_dispatch.recover_download_dispatch_outbox(
+        db,
+        limit=1,
+        grace_seconds=1,
+    )
+    assert result == {
+        "checked": 1,
+        "existing": 0,
+        "replayed": 0,
+        "terminal": 0,
+        "deferred": 0,
+        "invalid": 0,
+        "skipped": 0,
+        "cancelled": 1,
+    }
+    await db.rollback()
+    job = await db.get(DownloadJob, job_id, populate_existing=True)
+    child = await db.get(TaskRun, child_id, populate_existing=True)
+    assert job.status == child.status == "enqueued"
+    assert child.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+    assert child.attempts == 2
+
+
 async def test_batch_parent_is_not_compacted_away_from_request_identity(db):
     from app.models import TaskRun
     from app.models.scheduler_batch import SchedulerBatch

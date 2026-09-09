@@ -469,6 +469,32 @@ def test_outbox_recovery_transient_rejection_stays_pending(monkeypatch):
     assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
 
 
+def test_outbox_recovery_marks_malformed_retry_intent_invalid(monkeypatch):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    task.meta[download_dispatch.DISPATCH_META_KEY]["rq_job_id"] = "wrong-attempt-id"
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid intent must not query Redis")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "invalid"
+    assert db.commit_count == 1
+    assert task.status == job.status == "enqueued"
+    dispatch = task.meta[download_dispatch.DISPATCH_META_KEY]
+    assert dispatch["state"] == download_dispatch.DISPATCH_INVALID
+    assert "does not match" in dispatch["last_error"]
+
+
 def test_outbox_recovery_existing_fixed_id_does_not_reenqueue(monkeypatch):
     from app.services import download_dispatch
 

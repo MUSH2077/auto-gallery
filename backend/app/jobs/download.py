@@ -36,7 +36,10 @@ from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, redacted_manifest_config, update_manifest
 from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
 from app.services.download_finalization import finalize_download_job
-from app.services.download_dispatch import prepare_download_dispatch, publish_prepared_download
+from app.services.download_dispatch import (
+    prepare_download_dispatch,
+    recover_download_dispatch_candidate,
+)
 from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
 from app.services.redis_client import get_redis
 from app.services.settings import (
@@ -449,13 +452,13 @@ async def _enqueue_download_retry(
     *,
     delay_seconds: int,
     action: str = "auto_retry",
-) -> bool:
-    """Durably prepare and publish one delayed retry through the hard cap."""
+) -> str:
+    """Durably prepare one delayed retry and attempt bounded publication."""
 
     async with async_session() as retry_db:
         retry_job = await DownloadJobRepository(retry_db).get(download_job_id)
         if not retry_job or retry_job.status != "enqueued":
-            return False
+            return "skipped"
         prepared = await prepare_download_dispatch(
             retry_db,
             retry_job,
@@ -464,15 +467,54 @@ async def _enqueue_download_retry(
             delay_seconds=delay_seconds,
             action=action,
         )
-        await publish_prepared_download(
+        # Worker-created retries have no waiting HTTP caller to repeat a
+        # temporary admission failure. Commit the fixed-id intent first, then
+        # use the outbox recovery contract that leaves capacity/Redis failures
+        # pending for a later bounded recovery cycle.
+        await retry_db.commit()
+        return await recover_download_dispatch_candidate(
             retry_db,
+            prepared.task,
             retry_job,
-            prepared,
-            job_timeout=RQ_JOB_TIMEOUT,
-            delay_seconds=delay_seconds,
-            action=action,
         )
-    return True
+
+
+def _log_retry_dispatch_outcome(
+    outcome: str,
+    *,
+    action: str,
+    retry_count: int,
+    max_retries: int,
+    job_id: UUID | str,
+    delay_seconds: int,
+) -> None:
+    if outcome in {"replayed", "existing"}:
+        logger.info(
+            "Enqueued %s %d/%d for job %s in %ds",
+            action,
+            retry_count,
+            max_retries,
+            job_id,
+            delay_seconds,
+        )
+    elif outcome == "deferred":
+        logger.info(
+            "Deferred %s %d/%d for job %s in durable dispatch outbox (delay=%ds)",
+            action,
+            retry_count,
+            max_retries,
+            job_id,
+            delay_seconds,
+        )
+    else:
+        logger.warning(
+            "Retry dispatch not published for %s %d/%d job %s (outcome=%s)",
+            action,
+            retry_count,
+            max_retries,
+            job_id,
+            outcome,
+        )
 
 
 AUTH_ERROR_PATTERNS = [
@@ -1736,22 +1778,20 @@ async def run_download_job(job_id: str):
         if unexpected_retry_count is not None:
             retry_delay = backoff_base * (2 ** (unexpected_retry_count - 1))
             try:
-                await _enqueue_download_retry(
+                retry_outcome = await _enqueue_download_retry(
                     job_uuid,
                     delay_seconds=retry_delay,
                     action="unexpected_error_retry",
                 )
-                logger.info(
-                    "Enqueued unexpected-error retry %d/%d for job %s in %ds",
-                    unexpected_retry_count,
-                    max_retries,
-                    job_id,
-                    retry_delay,
+                _log_retry_dispatch_outcome(
+                    retry_outcome,
+                    action="unexpected_error_retry",
+                    retry_count=unexpected_retry_count,
+                    max_retries=max_retries,
+                    job_id=job_id,
+                    delay_seconds=retry_delay,
                 )
             except Exception:
-                # The shared publisher has already made DownloadJob and
-                # TaskRun consistently failed; partial-import recovery below
-                # remains useful and must still run.
                 logger.error(
                     "Failed to enqueue unexpected-error retry for download job %s",
                     job_id,
@@ -2080,18 +2120,21 @@ async def run_download_job(job_id: str):
             if needs_retry:
                 retry_delay = backoff_base * (2 ** (j.retry_count - 1))
                 try:
-                    await _enqueue_download_retry(
+                    retry_outcome = await _enqueue_download_retry(
                         job_uuid,
                         delay_seconds=retry_delay,
                         action="auto_retry",
                     )
-                    logger.info("Enqueued retry %d/%d for job %s in %ds",
-                               j.retry_count, max_retries, job_id,
-                               retry_delay)
+                    _log_retry_dispatch_outcome(
+                        retry_outcome,
+                        action="auto_retry",
+                        retry_count=j.retry_count,
+                        max_retries=max_retries,
+                        job_id=job_id,
+                        delay_seconds=retry_delay,
+                    )
                 except Exception:
                     logger.error("Failed to enqueue retry for download job %s", job_id, exc_info=True)
-                    # publish_prepared_download already compensates DownloadJob
-                    # and TaskRun in one database transaction.
                     raise
     finally:
         if heartbeat:
