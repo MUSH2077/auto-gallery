@@ -2897,17 +2897,6 @@ async def run_import_job(import_job_id: str):
             )
 
 async def cleanup_metadata_jsons(download_root: str = None):
-    """Remove orphaned gallery-dl metadata JSON files from downloads directory."""
-    import os, logging
-    from pathlib import Path
-    logger = logging.getLogger(__name__)
-    root = Path(download_root or "/downloads")
-    removed = 0
-    for json_file in root.rglob("*.json"):
-        try:
-            json_file.unlink()
-            removed += 1
-        except Exception:
-            pass
-    logger.info("Cleaned up %d metadata JSON files from %s", removed, root)
-    return removed
+    """Remove only proved redundant metadata through a registered attempt."""
+    from app.services.metadata_cleanup import cleanup_metadata_jsons as cleanup
+    return await cleanup(download_root)

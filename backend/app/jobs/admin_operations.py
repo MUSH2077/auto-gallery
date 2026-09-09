@@ -287,6 +287,8 @@ def _registered_terminal_outcome(
 ) -> tuple[str, str | None, str | None]:
     """Interpret semantic handler outcomes at the sole terminal writer."""
 
+    if operation_type == "admin-cleanup-metadata-jsons" and result.get("failed", 0):
+        return "failed", str(result["message"]), "metadata_cleanup_partial_failure"
     if operation_type == "subscription-sync-batch" and result.get("failed_count", 0):
         return "failed", "Some subscription sources failed", "batch_partial_failure"
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"} and result.get(
@@ -495,8 +497,7 @@ async def _execute_registered_admin_operation(
         from app.config import settings
         from app.jobs.import_runner import cleanup_metadata_jsons
 
-        removed = await cleanup_metadata_jsons(settings.download_root)
-        return {"removed": removed, "message": f"Removed {removed} metadata files"}
+        return await cleanup_metadata_jsons(settings.download_root)
     if operation_type == "admin-rebuild":
         return await _run_library_rebuild_operation(task_id, options)
     if operation_type == "admin-disk-import":
@@ -657,12 +658,9 @@ def run_cleanup_metadata_jsons_operation(
 ) -> dict:
     """Rolling-upgrade bridge; new deliveries use the registered entrypoint."""
 
-    del job_id, options
-    from app.config import settings
-    from app.jobs.import_runner import cleanup_metadata_jsons
-
-    removed = asyncio.run(cleanup_metadata_jsons(settings.download_root))
-    return {"removed": removed, "message": f"Removed {removed} metadata files"}
+    raise RuntimeError(
+        "Legacy metadata cleanup delivery has no exact registered attempt; submit a new cleanup task"
+    )
 
 
 async def _run_clear_operation(entity: str, job_id: str) -> dict:

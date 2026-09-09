@@ -954,6 +954,8 @@ async def compact_terminal_tasks(
     report["deleted_import_jobs"] = len(import_ids)
     report["deleted_download_jobs"] = len(download_ids)
     if not dry_run:
+        from app.services.metadata_cleanup_proof import capture_compaction_proofs
+        await capture_compaction_proofs(db, download_ids)
         # Set-based deletes avoid one FK/index scan per historical download.
         # SKIP LOCKED above also lets the periodic compactor and an operator
         # repair run safely make progress on disjoint batches.

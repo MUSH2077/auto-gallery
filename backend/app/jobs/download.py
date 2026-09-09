@@ -607,6 +607,7 @@ async def _prepare_import_intent(
         **extra,
     })
     for artifact in artifact_rows:
+        artifact.metadata_completion_proof = None
         artifact.state = "new"
         artifact.import_job_id = import_job.id
         artifact.lease_token = None

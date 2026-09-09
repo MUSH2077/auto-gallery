@@ -994,11 +994,16 @@ async def test_operation_reads_are_postgresql_first_when_redis_is_down(monkeypat
     from app.api.admin import data as data_api
     from app.database import async_session, engine
     from app.services import operations
+    from app.models.user import User
+    from tests.test_admin_slow_operations import _seed_user
 
     task_id = None
+    username = f"dispatch_read_{uuid4().hex}"
     try:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            await _seed_user(db, username, permissions=["system"])
+            user = (await db.execute(select(User).where(User.username == username))).scalar_one()
             prepared = await operations.prepare_admin_operation(
                 db,
                 operation_type="admin-search-reindex",
@@ -1017,14 +1022,16 @@ async def test_operation_reads_are_postgresql_first_when_redis_is_down(monkeypat
             "get_redis",
             lambda: (_ for _ in ()).throw(redis_lib.ConnectionError("redis down")),
         )
-        detail = await data_api.get_admin_operation(str(task_id))
-        listing = await data_api.list_active_operations()
+        detail = await data_api.get_admin_operation(str(task_id), user=user)
+        listing = await data_api.list_active_operations(user=user)
         assert detail["job_id"] == str(task_id)
         assert detail["status"] == "enqueued"
         assert [item["job_id"] for item in listing["operations"]] == [str(task_id)]
     finally:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            await db.execute(delete(User).where(User.username == username))
+            await db.commit()
         await engine.dispose()
 
 
@@ -1115,11 +1122,10 @@ async def test_cleaning_danbooru_and_job_diagnostic_starts_are_durable_without_r
     monkeypatch.setattr(operations, "get_redis", lambda: unavailable)
     monkeypatch.setattr(reference_api, "get_redis", lambda: unavailable)
     monkeypatch.setattr(settings_api, "get_redis", lambda: unavailable)
-    monkeypatch.setattr(
-        import_runner,
-        "cleanup_metadata_jsons",
-        lambda _root: asyncio.sleep(0, result=7),
-    )
+    async def forbidden_cleanup(_root):
+        raise AssertionError("HTTP admission must not perform metadata cleanup")
+
+    monkeypatch.setattr(import_runner, "cleanup_metadata_jsons", forbidden_cleanup)
     monkeypatch.setattr(
         reference_api,
         "_precheck_pixiv_ids",

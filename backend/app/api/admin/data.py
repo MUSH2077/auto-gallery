@@ -55,7 +55,7 @@ DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seco
 
 @router.post("/cleanup-metadata-jsons", status_code=202)
 async def cleanup_metadata_jsons():
-    """Remove all gallery-dl metadata JSON files from downloads directory."""
+    """Queue evidence-based cleanup of successfully imported gallery-dl sidecars."""
     from app.services.operations import enqueue_admin_operation
 
     return await enqueue_admin_operation(
