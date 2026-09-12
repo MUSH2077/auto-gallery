@@ -18,6 +18,13 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    BusyLoadingError,
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from app.config import settings
 from app.models.storage_artifact import StorageArtifact
@@ -53,6 +60,14 @@ RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
 logger = logging.getLogger(__name__)
 
 
+class _AdmissionReason(dict[str, Any]):
+    """JSON-compatible reason carrying private exception classification."""
+
+    def __init__(self, *args, transient: bool | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transient = transient
+
+
 class DownloadAdmissionError(RuntimeError):
     """Structured error for HTTP/RQ download admission failures."""
 
@@ -63,14 +78,29 @@ class DownloadAdmissionError(RuntimeError):
         *,
         status_code: int = 503,
         details: dict[str, Any] | None = None,
+        transient: bool | None = None,
+        publication_uncertain: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.details = details or {}
+        self.transient = transient
+        self.publication_uncertain = publication_uncertain
 
     def payload(self) -> dict[str, Any]:
         return {"code": self.code, "message": str(self), **self.details}
+
+
+def is_transient_redis_admission_error(exc: Exception) -> bool:
+    """Classify Redis failures without relying on messages or class names."""
+
+    if isinstance(exc, (AuthenticationError, AuthorizationError)):
+        return False
+    return isinstance(
+        exc,
+        (RedisConnectionError, RedisTimeoutError, BusyLoadingError),
+    )
 
 
 @dataclass
@@ -181,11 +211,11 @@ def _redis_capacity_and_queue_state(
             }, waiting, maximum_queued
         return None, waiting, maximum_queued
     except Exception as exc:
-        return {
+        return _AdmissionReason({
             "code": "redis_unwritable",
             "message": "Redis cannot accept download jobs",
             "error_type": type(exc).__name__,
-        }, None, maximum_queued
+        }, transient=is_transient_redis_admission_error(exc)), None, maximum_queued
 
 
 def _redis_capacity_and_queue_reason(
@@ -255,6 +285,7 @@ def enqueue_download_rq(
             "redis_unwritable",
             "Redis download admission lock is unavailable",
             details={"error_type": type(exc).__name__},
+            transient=is_transient_redis_admission_error(exc),
         ) from exc
     if not acquired:
         raise DownloadAdmissionError(
@@ -300,9 +331,11 @@ def enqueue_download_rq(
         except Exception as exc:
             # Resolve the ambiguous-response case: Redis may have committed the
             # job even though the client observed a timeout/reset.
+            confirmation_error: Exception | None = None
             try:
                 existing = _existing_rq_job(redis, rq_job_id)
-            except Exception:
+            except Exception as confirmation_exc:
+                confirmation_error = confirmation_exc
                 existing = None
             if existing is not None:
                 logger.warning(
@@ -315,7 +348,21 @@ def enqueue_download_rq(
             raise DownloadAdmissionError(
                 "redis_unwritable",
                 "Redis rejected the download job",
-                details={"error_type": type(exc).__name__, "rq_job_id": rq_job_id},
+                details={
+                    "error_type": type(exc).__name__,
+                    "rq_job_id": rq_job_id,
+                    **(
+                        {
+                            "confirmation_error_type": type(
+                                confirmation_error
+                            ).__name__,
+                        }
+                        if confirmation_error is not None
+                        else {}
+                    ),
+                },
+                transient=is_transient_redis_admission_error(exc),
+                publication_uncertain=confirmation_error is not None,
             ) from exc
         _consume_batch_slot()
         _notify_download_worker(redis)
@@ -534,5 +581,10 @@ def admission_error(reason: dict[str, Any]) -> DownloadAdmissionError:
         code,
         message,
         status_code=status_code,
-        details={key: value for key, value in reason.items() if key not in {"code", "message"}},
+        details={
+            key: value
+            for key, value in reason.items()
+            if key not in {"code", "message"}
+        },
+        transient=getattr(reason, "transient", None),
     )

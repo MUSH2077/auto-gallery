@@ -1,5 +1,7 @@
 """Real worker regressions for durable retry ownership and partial artifacts."""
 
+import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from uuid import UUID, uuid4
@@ -348,3 +350,397 @@ async def test_programming_fault_terminalizes_exact_pending_dispatch_attempt(
     await scheduler_batches.reconcile_item(db, item)
     assert item.status == "failed"
     assert item.reason_code == "child_failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delayed", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [
+        TypeError("bad queue call"),
+        pytest.param(
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad queue credentials"),
+            id="authentication",
+        ),
+    ],
+)
+async def test_actual_admission_wrapper_makes_persistent_fault_actionable(
+    db,
+    monkeypatch,
+    delayed,
+    error,
+):
+    from app.jobs import download as download_job
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def retain(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", retain)
+    monkeypatch.setattr(scheduler_batches, "_publish_bound_child", retain)
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job = await db.get(DownloadJob, item.download_job_id)
+    task = await db.get(TaskRun, item.child_task_id)
+    if delayed:
+        await download_dispatch.prepare_download_dispatch(
+            db,
+            job,
+            queue_name="downloads",
+            job_timeout=download_job.RQ_JOB_TIMEOUT,
+            delay_seconds=60,
+            action="auto_retry",
+        )
+        await db.commit()
+
+    class Lock:
+        def acquire(self, *, blocking):
+            assert blocking is True
+            return True
+
+        def release(self):
+            pass
+
+    class Redis:
+        def lock(self, *_args, **_kwargs):
+            return Lock()
+
+    class Queue:
+        def __init__(self, **_kwargs):
+            pass
+
+        def enqueue(self, *_args, **_kwargs):
+            raise error
+
+        def enqueue_in(self, *_args, **_kwargs):
+            raise error
+
+    redis = Redis()
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(download_dispatch, "get_redis", lambda: redis)
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lambda *_a, **_k: None)
+    monkeypatch.setattr(backpressure, "_existing_rq_job", lambda *_a, **_k: None)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(backpressure, "_redis_capacity_reason", lambda *_a, **_k: None)
+
+    outcome = await download_dispatch.recover_download_dispatch_candidate(db, task, job)
+
+    await db.refresh(job)
+    await db.refresh(task)
+    assert outcome == "error"
+    assert job.status == task.status == "failed"
+    assert task.reason_code == "dispatch_recovery_error"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "failed"
+    assert task.result_data["download_dispatch_failure"]["error_type"] == type(error).__name__
+
+
+@pytest.mark.asyncio
+async def test_late_publication_proof_wins_while_second_recovery_is_serialized(
+    db,
+    monkeypatch,
+):
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def retain(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", retain)
+    monkeypatch.setattr(scheduler_batches, "_publish_bound_child", retain)
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job_id, task_id = item.download_job_id, item.child_task_id
+    await db.rollback()
+
+    late_lookup_started = threading.Event()
+    release_late_lookup = threading.Event()
+    lookup_lock = threading.Lock()
+    lookup_count = 0
+    accepted_rq = object()
+
+    def lookup(*_args, **_kwargs):
+        nonlocal lookup_count
+        with lookup_lock:
+            lookup_count += 1
+            call = lookup_count
+        if call == 1:
+            return None
+        if call == 2:
+            late_lookup_started.set()
+            assert release_late_lookup.wait(timeout=3)
+            return accepted_rq
+        raise AssertionError("serialized loser must not reach Redis")
+
+    def persistent_failure(*_args, **_kwargs):
+        raise backpressure.DownloadAdmissionError(
+            "redis_unwritable",
+            "queue adapter failed",
+            transient=False,
+        )
+
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lookup)
+    monkeypatch.setattr(download_dispatch, "enqueue_download_rq", persistent_failure)
+
+    async def recover_one():
+        from app.database import async_session
+
+        async with async_session() as recovery_db:
+            job = await recovery_db.get(DownloadJob, job_id)
+            task = await recovery_db.get(TaskRun, task_id)
+            return await download_dispatch.recover_download_dispatch_candidate(
+                recovery_db,
+                task,
+                job,
+            )
+
+    first = asyncio.create_task(recover_one())
+    assert await asyncio.to_thread(late_lookup_started.wait, 3)
+    second = asyncio.create_task(recover_one())
+    await asyncio.sleep(0.1)
+    assert second.done() is False
+    assert lookup_count == 2
+    release_late_lookup.set()
+    first_outcome, second_outcome = await asyncio.wait_for(
+        asyncio.gather(first, second),
+        timeout=5,
+    )
+
+    assert first_outcome == "existing"
+    assert second_outcome == "skipped"
+    assert lookup_count == 2
+    await db.rollback()
+    job = await db.get(DownloadJob, job_id, populate_existing=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert job.status == task.status == "enqueued"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_direct_publisher_cannot_publish_after_recovery_terminalizes_attempt(
+    db,
+    monkeypatch,
+):
+    from app.database import async_session
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def retain(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", retain)
+    monkeypatch.setattr(scheduler_batches, "_publish_bound_child", retain)
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job_id, task_id = item.download_job_id, item.child_task_id
+    await db.rollback()
+
+    persistence_started = asyncio.Event()
+    release_persistence = asyncio.Event()
+    enqueue_calls = 0
+
+    async def pause_before_terminal_commit(*_args, **_kwargs):
+        persistence_started.set()
+        await release_persistence.wait()
+
+    def queue_once_then_accept(*_args, **_kwargs):
+        nonlocal enqueue_calls
+        enqueue_calls += 1
+        if enqueue_calls == 1:
+            raise backpressure.DownloadAdmissionError(
+                "redis_unwritable",
+                "queue adapter failed",
+                transient=False,
+            )
+        return object()
+
+    monkeypatch.setattr(download_dispatch, "request_search_projection", pause_before_terminal_commit)
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lambda *_a, **_k: None)
+    monkeypatch.setattr(download_dispatch, "enqueue_download_rq", queue_once_then_accept)
+
+    async with async_session() as publisher_db:
+        publisher_job = await publisher_db.get(DownloadJob, job_id)
+        publisher_task = await publisher_db.get(TaskRun, task_id)
+        dispatch = publisher_task.meta[download_dispatch.DISPATCH_META_KEY]
+        prepared = download_dispatch.PreparedDownloadDispatch(
+            task=publisher_task,
+            queue_name=dispatch["queue_name"],
+            rq_job_id=dispatch["rq_job_id"],
+            attempt=dispatch["attempt"],
+            job_timeout=dispatch["job_timeout"],
+            delay_seconds=dispatch["delay_seconds"],
+            action=dispatch["action"],
+        )
+
+        async def recover():
+            async with async_session() as recovery_db:
+                recovery_job = await recovery_db.get(DownloadJob, job_id)
+                recovery_task = await recovery_db.get(TaskRun, task_id)
+                return await download_dispatch.recover_download_dispatch_candidate(
+                    recovery_db,
+                    recovery_task,
+                    recovery_job,
+                )
+
+        recovery = asyncio.create_task(recover())
+        await asyncio.wait_for(persistence_started.wait(), timeout=3)
+        publisher = asyncio.create_task(
+            download_dispatch.publish_prepared_download(
+                publisher_db,
+                publisher_job,
+                prepared,
+            )
+        )
+        await asyncio.sleep(0.1)
+        publisher_was_blocked = not publisher.done()
+        calls_before_recovery_commit = enqueue_calls
+        release_persistence.set()
+        recovery_outcome, publisher_outcome = await asyncio.wait_for(
+            asyncio.gather(recovery, publisher, return_exceptions=True),
+            timeout=5,
+        )
+
+    assert publisher_was_blocked is True
+    assert calls_before_recovery_commit == 1
+    assert recovery_outcome == "error"
+    assert isinstance(publisher_outcome, backpressure.DownloadAdmissionError)
+    assert publisher_outcome.code == "dispatch_superseded"
+    assert enqueue_calls == 1
+    await db.rollback()
+    job = await db.get(DownloadJob, job_id, populate_existing=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert job.status == task.status == "failed"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_publication_fence_times_out_as_transient_deferral(
+    db,
+    monkeypatch,
+):
+    from app.database import async_session
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def retain(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", retain)
+    monkeypatch.setattr(scheduler_batches, "_publish_bound_child", retain)
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job_id, task_id = item.download_job_id, item.child_task_id
+    await db.rollback()
+
+    monkeypatch.setattr(download_dispatch, "DOWNLOAD_DISPATCH_LOCK_WAIT_MS", 50)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("Redis must not be touched without the row fence")
+        ),
+    )
+
+    async with async_session() as owner_db:
+        await owner_db.execute(
+            select(DownloadJob).where(DownloadJob.id == job_id).with_for_update()
+        )
+        async with async_session() as recovery_db:
+            recovery_job = await recovery_db.get(DownloadJob, job_id)
+            recovery_task = await recovery_db.get(TaskRun, task_id)
+            outcome = await asyncio.wait_for(
+                download_dispatch.recover_download_dispatch_candidate(
+                    recovery_db,
+                    recovery_task,
+                    recovery_job,
+                ),
+                timeout=1,
+            )
+
+    assert outcome == "deferred"
+    await db.rollback()
+    job = await db.get(DownloadJob, job_id, populate_existing=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert job.status == task.status == "enqueued"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_direct_publisher_row_fence_timeout_preserves_pending_attempt(
+    db,
+    monkeypatch,
+):
+    from app.database import async_session
+    from app.models import DownloadJob, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import backpressure, download_dispatch, scheduler_batches
+
+    async def retain(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backpressure, "download_backpressure_reason", retain)
+    monkeypatch.setattr(scheduler_batches, "_publish_bound_child", retain)
+    await seed(db)
+    accepted = await admit(db)
+    await slice_batch(db, accepted["task_id"])
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    job_id, task_id = item.download_job_id, item.child_task_id
+    await db.rollback()
+
+    monkeypatch.setattr(download_dispatch, "DOWNLOAD_DISPATCH_LOCK_WAIT_MS", 50)
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("publisher must own the row fence before enqueue")
+        ),
+    )
+
+    async with async_session() as publisher_db:
+        publisher_job = await publisher_db.get(DownloadJob, job_id)
+        publisher_task = await publisher_db.get(TaskRun, task_id)
+        dispatch = publisher_task.meta[download_dispatch.DISPATCH_META_KEY]
+        prepared = download_dispatch.PreparedDownloadDispatch(
+            task=publisher_task,
+            queue_name=dispatch["queue_name"],
+            rq_job_id=dispatch["rq_job_id"],
+            attempt=dispatch["attempt"],
+            job_timeout=dispatch["job_timeout"],
+            delay_seconds=dispatch["delay_seconds"],
+            action=dispatch["action"],
+        )
+
+        async with async_session() as owner_db:
+            await owner_db.execute(
+                select(DownloadJob).where(DownloadJob.id == job_id).with_for_update()
+            )
+            with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+                await asyncio.wait_for(
+                    download_dispatch.publish_prepared_download(
+                        publisher_db,
+                        publisher_job,
+                        prepared,
+                    ),
+                    timeout=1,
+                )
+
+    assert caught.value.code == "enqueue_busy"
+    assert caught.value.transient is True
+    await db.rollback()
+    job = await db.get(DownloadJob, job_id, populate_existing=True)
+    task = await db.get(TaskRun, task_id, populate_existing=True)
+    assert job.status == task.status == "enqueued"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
