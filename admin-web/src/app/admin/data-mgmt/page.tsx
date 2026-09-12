@@ -177,17 +177,10 @@ export default function DataManagementPage() {
     onSuccess: (data, vars) => {
       setResult({ ok: true, msg: t("datamgmt.action_queued", { action: vars.title }) });
       notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
-      if (vars.entity === "creators" || vars.entity === "subscriptions" || vars.entity === "all") {
-        qc.setQueryData(queryKeys.creators.count, { count: 0 });
-        qc.setQueryData(queryKeys.subscriptions.count, { count: 0 });
-        qc.setQueriesData({ queryKey: ["creators", "list"] }, { items: [], total: 0 });
-        qc.setQueriesData({ queryKey: ["subscriptions", "list"] }, []);
-      }
       setConfirmAction(null);
     },
     onError: (e) => {
       setResult({ ok: false, msg: (e as Error).message });
-      setConfirmAction(null);
     },
     onSettled: () => {
       setActiveAction(null);

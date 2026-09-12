@@ -188,3 +188,16 @@ test("backup download rejects an HTTP 200 JSON diagnostic instead of returning a
   const archive = { blob: new Blob([new Uint8Array([1, 2, 3])]), contentType: "application/gzip", contentDisposition: null };
   assert.equal(await assertBackupArchiveResponse(archive), archive);
 });
+
+test("backup archive validation accepts only the backend gzip media type", async () => {
+  const bytes = new Blob([new Uint8Array([0x1f, 0x8b, 0x08])]);
+  for (const contentType of [null, "", "text/plain", "text/html; charset=utf-8", "application/octet-stream", "application/x-gzip"]) {
+    await assert.rejects(
+      assertBackupArchiveResponse({ blob: bytes, contentType, contentDisposition: "attachment; filename=unsafe.tar.gz" }),
+      /unexpected backup archive content type/i,
+      `must reject ${contentType ?? "missing Content-Type"}`,
+    );
+  }
+  const archive = { blob: bytes, contentType: "Application/GZip; charset=binary", contentDisposition: "attachment; filename=safe.tar.gz" };
+  assert.equal(await assertBackupArchiveResponse(archive), archive);
+});

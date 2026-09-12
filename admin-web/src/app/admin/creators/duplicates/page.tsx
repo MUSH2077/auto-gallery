@@ -14,6 +14,11 @@ type MergeSelection = {
   sources: Map<string, string>;
 };
 
+function duplicateGroupKey(group: { reason: string; description: string }) {
+  const normalize = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase();
+  return `${normalize(group.reason)}\u0000${normalize(group.description)}`;
+}
+
 export default function CreatorDuplicatesPage() {
   const t = useT();
   const router = useRouter();
@@ -24,11 +29,11 @@ export default function CreatorDuplicatesPage() {
   const [confirmMerge, setConfirmMerge] = useState(false);
   const duplicateGroups = dups.data?.duplicates || [];
   const groupEntrance = useStaggeredEntrance(
-    duplicateGroups.map((group) => group.creator_ids.join(":")),
+    duplicateGroups.map(duplicateGroupKey),
   );
   // Merge feedback: the merged group collapses briefly before the refetch
   // removes it (state confirmation → essential, survives low-end gate).
-  const [collapsingGroup, setCollapsingGroup] = useState<number | null>(null);
+  const [collapsingGroup, setCollapsingGroup] = useState<string | null>(null);
 
   const merge = useMutation({
     mutationFn: (params: { targetId: string; sourceIds: string[] }) =>
@@ -58,11 +63,11 @@ export default function CreatorDuplicatesPage() {
         setSelection(null);
         setCollapsingGroup(null);
       };
-      const gi = dups.data?.duplicates.findIndex(
-        (group) => group.creator_ids.join(":") === selection?.key,
-      ) ?? -1;
-      if (gi >= 0 && motionConfig.shouldAnimate({ essential: true })) {
-        setCollapsingGroup(gi);
+      const matchedGroup = dups.data?.duplicates.find(
+        (group) => duplicateGroupKey(group) === selection?.key,
+      );
+      if (matchedGroup && motionConfig.shouldAnimate({ essential: true })) {
+        setCollapsingGroup(duplicateGroupKey(matchedGroup));
         window.setTimeout(finish, motionTokens.duration.slow);
       } else {
         finish();
@@ -70,8 +75,8 @@ export default function CreatorDuplicatesPage() {
     },
   });
 
-  const toggleSource = (group: { creator_ids: string[]; creator_names: string[] }, id: string) => {
-    const key = group.creator_ids.join(":");
+  const toggleSource = (group: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }, id: string) => {
+    const key = duplicateGroupKey(group);
     const nameAt = (creatorId: string) => group.creator_names[group.creator_ids.indexOf(creatorId)] || creatorId;
     const targetId = group.creator_ids.find((creatorId) => creatorId !== id) || id;
     setMergeFailures([]);
@@ -108,13 +113,13 @@ export default function CreatorDuplicatesPage() {
       )}
 
       {dups.data?.duplicates.map((group, gi) => {
-        const entrance = groupEntrance(group.creator_ids.join(":"), gi);
-        const groupKey = group.creator_ids.join(":");
+        const groupKey = duplicateGroupKey(group);
+        const entrance = groupEntrance(groupKey, gi);
         const activeGroup = selection?.key === groupKey;
         const displayedTargetId = activeGroup ? selection.targetId : group.creator_ids[0];
         return (
         <div key={groupKey}
-          className={`card mb-4 p-4 ${entrance.className} ${collapsingGroup === gi ? "merge-collapse" : ""}`}
+          className={`card mb-4 p-4 ${entrance.className} ${collapsingGroup === groupKey ? "merge-collapse" : ""}`}
           style={entrance.style}>
           <div className="flex items-center justify-between mb-3">
             <div>

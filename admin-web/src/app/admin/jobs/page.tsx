@@ -28,6 +28,13 @@ const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", 
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 type JobsTab = "all" | "downloads" | "imports" | "admin";
 type BatchAction = "retry" | "pause" | "resume" | "cancel" | "delete";
+type UtilityOutcome = {
+  kind: "clear" | "retry_all";
+  totalMatched: number;
+  succeeded: number;
+  failed: number;
+  deleted?: number;
+};
 const JOBS_TABS: { value: JobsTab; labelKey: string }[] = [
   { value: "all", labelKey: "jobs.tab_all" },
   { value: "downloads", labelKey: "jobs.tab_downloads" },
@@ -998,6 +1005,7 @@ function JobsContent() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [batchOutcome, setBatchOutcome] = useState<Array<{ id: string; reason: string }> | null>(null);
+  const [utilityOutcome, setUtilityOutcome] = useState<UtilityOutcome | null>(null);
   const [recoverableRepeats, setRecoverableRepeats] = useState<RepeatSyncIntent[]>([]);
 
   useEffect(() => {
@@ -1181,19 +1189,21 @@ function JobsContent() {
   }, [activeTab, downloads.data, imports.data?.items, tasks.data?.items]);
   const currentPageIds = useMemo(() => currentRows.map((row: { id: string }) => row.id), [currentRows]);
   const pageAllSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selected.has(id));
+  const selectionScope = useMemo(() => JSON.stringify([
+    activeTab,
+    subscriptionSourceId,
+    downloadJobId,
+    search,
+    page,
+  ]), [activeTab, subscriptionSourceId, downloadJobId, search, page]);
+  const priorSelectionScope = useRef(selectionScope);
 
   useEffect(() => {
-    const visible = new Set(currentPageIds);
-    setSelected((prev) => {
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of prev) {
-        if (visible.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [currentPageIds]);
+    if (priorSelectionScope.current === selectionScope) return;
+    priorSelectionScope.current = selectionScope;
+    setSelected(new Set());
+    setBatchOutcome(null);
+  }, [selectionScope]);
 
   const clearFilters = () => updateParams({
     status: null,
@@ -1272,9 +1282,12 @@ function JobsContent() {
 
   const clearDL = useMutation({
     mutationFn: (statuses: string[]) => api.clearDownloadJobs(statuses),
+    onMutate: () => { setUtilityOutcome(null); setBatchOutcome(null); },
     onSuccess: (result) => {
+      setUtilityOutcome({ kind: "clear", totalMatched: result.total_matched, succeeded: result.succeeded, failed: result.failed, deleted: result.deleted });
       setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) })));
     },
+    onError: () => { setUtilityOutcome(null); },
     onSettled: () => { void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); void qc.invalidateQueries({ queryKey: queryKeys.tasks.all }); void qc.invalidateQueries({ queryKey: queryKeys.workbench }); void qc.invalidateQueries({ queryKey: ["tasks", "operations"] }); },
   });
   const killStuck = useMutation({
@@ -1283,7 +1296,12 @@ function JobsContent() {
   });
   const retryAllFailed = useMutation({
     mutationFn: () => api.retryAllFailedJobs(),
-    onSuccess: (result) => { setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) }))); },
+    onMutate: () => { setUtilityOutcome(null); setBatchOutcome(null); },
+    onSuccess: (result) => {
+      setUtilityOutcome({ kind: "retry_all", totalMatched: result.total_matched, succeeded: result.succeeded, failed: result.failed });
+      setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) })));
+    },
+    onError: () => { setUtilityOutcome(null); },
     onSettled: () => { void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); void qc.invalidateQueries({ queryKey: queryKeys.tasks.all }); void qc.invalidateQueries({ queryKey: queryKeys.workbench }); void qc.invalidateQueries({ queryKey: ["tasks", "operations"] }); },
   });
   const compactPreview = useMutation({
@@ -1441,6 +1459,13 @@ function JobsContent() {
           isApplying={batchJobs.isPending}
         />
       )}
+      {utilityOutcome && (
+        <p role="status" aria-label={t("jobs.utility_result")} className="mb-4 text-sm text-muted">
+          {utilityOutcome.kind === "clear"
+            ? t("jobs.clear_result", { matched: utilityOutcome.totalMatched, deleted: utilityOutcome.deleted ?? utilityOutcome.succeeded, failed: utilityOutcome.failed })
+            : t("jobs.retry_all_result", { matched: utilityOutcome.totalMatched, succeeded: utilityOutcome.succeeded, failed: utilityOutcome.failed })}
+        </p>
+      )}
       {batchOutcome && batchOutcome.length > 0 && <div role="alert" className="mb-4 rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger"><p className="font-medium">{t("jobs.batch_partial")}</p>{batchOutcome.map((error) => <p key={error.id}><span className="font-mono">{shortId(error.id)}</span>: {error.reason}</p>)}</div>}
 
       <JobsFilterPanel
@@ -1461,7 +1486,10 @@ function JobsContent() {
         onSelectAll={handleSelectAll}
         onBatchModeChange={(enabled) => {
           setBatchMode(enabled);
-          if (!enabled) setSelected(new Set());
+          if (!enabled) {
+            setSelected(new Set());
+            setBatchOutcome(null);
+          }
         }}
       />
 
@@ -1711,7 +1739,7 @@ function JobsContent() {
         </details>
       )}
 
-      <details className="mb-8 rounded-md border border-danger/30 bg-danger/5">
+      {canManageSystem && <details className="mb-8 rounded-md border border-danger/30 bg-danger/5">
         <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm font-medium text-danger">
           {t("jobs.danger_zone")}
         </summary>
@@ -1740,7 +1768,7 @@ function JobsContent() {
             )}
           </div>
         </div>
-      </details>
+      </details>}
 
       <TaskDetailDrawer
         id={selectedTaskId}

@@ -28,7 +28,9 @@ test("creator merge keeps one group, excludes its target, and retains partial fa
       duplicateReads += 1;
       return json(route, { total: 2, duplicates: [
         { reason: "same_identity", description: "Group one", creator_ids: ["a-target", "a-source"], creator_names: ["Alpha Target", "Alpha Source"] },
-        { reason: "same_identity", description: "Group two", creator_ids: ["b-target", "b-source", "g-source"], creator_names: ["Beta Target", "Beta Source", "Gamma Source"] },
+        duplicateReads === 1
+          ? { reason: "same_identity", description: "Group two", creator_ids: ["b-target", "b-source", "g-source"], creator_names: ["Beta Target", "Beta Source", "Gamma Source"] }
+          : { reason: "same_identity", description: "Group two", creator_ids: ["g-source", "b-target"], creator_names: ["Gamma Source", "Beta Target"] },
       ] });
     }
     if (path === "/api/v1/creators/merge") {
@@ -56,7 +58,7 @@ test("creator merge keeps one group, excludes its target, and retains partial fa
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("Gamma Source");
   expect(bodies).toEqual([{ target_id: "b-target", source_ids: ["b-source", "g-source"] }]);
   expect(duplicateReads).toBeGreaterThan(1);
-  await expect(page.getByRole("checkbox", { name: /Beta Source/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Beta Source/ })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /Gamma Source/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /Beta Target/ })).not.toBeChecked();
 });

@@ -16,7 +16,13 @@ test("backup delete retains its dialog on failure and download sends bearer", as
     if (path === "/api/v1/admin/backup/list") return json(route, { backups: [{ filename: "safe.tar.gz", size_mb: 1, size_bytes: 1024, created_at: "2026-09-08T00:00:00Z", contents: ["database"], restorable: true, component_sizes: {} }] });
     if (path.includes("/latest")) return json(route, { current: null, snapshot: null });
     if (path === "/api/v1/admin/backup/safe.tar.gz" && req.method() === "DELETE") { deletes += 1; return deletes === 1 ? json(route, { detail: "Backup is in use" }, 409) : json(route, { status: "ok", message: "deleted" }); }
-    if (path === "/api/v1/admin/backup/download") { downloadAuth = req.headers()["authorization"] || ""; downloads += 1; return downloads === 1 ? route.fulfill({ status: 200, headers: { "Content-Type": "application/gzip", "Content-Disposition": "attachment; filename=server-safe.tar.gz" }, body: "bytes" }) : json(route, { status: "error", message: "No backups available" }); }
+    if (path === "/api/v1/admin/backup/download") {
+      downloadAuth = req.headers()["authorization"] || ""; downloads += 1;
+      if (downloads === 1) return route.fulfill({ status: 200, headers: { "Content-Type": "application/gzip", "Content-Disposition": "attachment; filename=server-safe.tar.gz" }, body: "bytes" });
+      if (downloads === 2) return json(route, { status: "error", message: "No backups available" });
+      if (downloads === 3) return route.fulfill({ status: 200, headers: { "Content-Type": "text/html" }, body: "<h1>gateway</h1>" });
+      return route.fulfill({ status: 200, body: "headerless" });
+    }
     if (path === "/api/v1/auth/ws-ticket") return json(route, { detail: "fixture websocket unavailable" }, 503);
     if (path === "/api/v1/tasks") return json(route, { total: 0, items: [] });
     if (path === "/api/v1/system/scheduler-decisions") return json(route, { total: 0, items: [], summary: { blocked_count: 0 } });
@@ -45,6 +51,10 @@ test("backup delete retains its dialog on failure and download sends bearer", as
   await expect.poll(() => page.evaluate(() => (window as any).__downloads)).toEqual([{ type: "application/gzip", size: 5 }, { filename: "server-safe.tar.gz", href: "blob:fixture" }]);
   await page.getByRole("button", { name: "Download" }).click();
   await expect(page.getByText("No backups available")).toBeVisible();
+  await page.getByRole("button", { name: "Download" }).click();
+  await expect(page.getByText(/unexpected backup archive content type: text\/html/i)).toBeVisible();
+  await page.getByRole("button", { name: "Download" }).click();
+  await expect(page.getByText(/unexpected backup archive content type: missing/i)).toBeVisible();
   expect(await page.evaluate(() => (window as any).__downloads)).toHaveLength(2);
   expect(deletes).toBe(2);
   expect(unhandled).toEqual([]);
