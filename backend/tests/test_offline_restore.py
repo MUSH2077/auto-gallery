@@ -702,6 +702,125 @@ def test_created_backup_manifest_carries_every_file_hash(tmp_path, monkeypatch):
     }
 
 
+def test_database_backup_excludes_pgpass_and_passes_restore_validation(
+    tmp_path,
+    monkeypatch,
+):
+    """Generated database backups contain only portable restore payloads."""
+    from app.api.admin import backup
+    from app.services.offline_restore import validate_upload
+
+    secret = "backup-passfile-canary"
+    backup_dir = tmp_path / "backups"
+    temporary_directories: list[Path] = []
+    observed: dict[str, Path] = {}
+    real_mkdtemp = backup.tempfile.mkdtemp
+
+    def tracked_mkdtemp(*args, **kwargs):
+        path = Path(real_mkdtemp(*args, **kwargs))
+        temporary_directories.append(path)
+        return str(path)
+
+    def fake_pg_dump(command, *, capture_output, text, env, timeout):
+        assert capture_output is True
+        assert text is True
+        assert timeout == 120
+        dump_path = Path(command[command.index("-f") + 1])
+        passfile_path = Path(env["PGPASSFILE"])
+        assert passfile_path.is_file()
+        observed.update(dump=dump_path, passfile=passfile_path)
+        dump_path.write_bytes(b"portable-custom-dump")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(
+        backup.settings,
+        "database_url",
+        f"postgresql+asyncpg://autogallery:{secret}@postgres:5432/autogallery",
+    )
+    monkeypatch.setattr(backup.tempfile, "mkdtemp", tracked_mkdtemp)
+    monkeypatch.setattr(backup.subprocess, "run", fake_pg_dump)
+
+    result = backup._create_backup_sync({"contents": ["database"]})
+    archive_path = backup_dir / result["filename"]
+    archive_bytes = archive_path.read_bytes()
+
+    assert observed["passfile"].parent != observed["dump"].parent
+    assert not observed["passfile"].exists()
+    assert all(not directory.exists() for directory in temporary_directories)
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+        regular_names = {
+            member.name for member in archive.getmembers() if member.isreg()
+        }
+        manifest = json.load(archive.extractfile("manifest.json"))
+        archived_bytes = b"".join(
+            archive.extractfile(member).read()
+            for member in archive.getmembers()
+            if member.isreg()
+        )
+    assert regular_names == {"database.dump", "manifest.json"}
+    assert set(manifest["entries"]) == {"database.dump"}
+    assert secret.encode() not in archived_bytes
+
+    restore_root = tmp_path / "restore"
+    created = _new_session(restore_root, archive_bytes, chunk_size=len(archive_bytes))
+    _upload_all(
+        restore_root,
+        created,
+        archive_bytes,
+        chunk_size=len(archive_bytes),
+    )
+    validated = validate_upload(
+        root=restore_root,
+        upload_id=created["upload_id"],
+        task_id="00000000-0000-0000-0000-000000000101",
+    )
+
+    assert validated["state"] == "ready"
+    payload = restore_root / created["upload_id"] / "payload" / "database.dump"
+    assert payload.read_bytes() == b"portable-custom-dump"
+
+
+def test_database_backup_failure_removes_credentials_payload_and_candidate(
+    tmp_path,
+    monkeypatch,
+):
+    """A failed pg_dump leaves no credential, payload, or candidate file."""
+    from app.api.admin import backup
+
+    backup_dir = tmp_path / "backups"
+    temporary_directories: list[Path] = []
+    observed: dict[str, Path] = {}
+    real_mkdtemp = backup.tempfile.mkdtemp
+
+    def tracked_mkdtemp(*args, **kwargs):
+        path = Path(real_mkdtemp(*args, **kwargs))
+        temporary_directories.append(path)
+        return str(path)
+
+    def failed_pg_dump(command, *, capture_output, text, env, timeout):
+        dump_path = Path(command[command.index("-f") + 1])
+        passfile_path = Path(env["PGPASSFILE"])
+        assert passfile_path.is_file()
+        observed.update(dump=dump_path, passfile=passfile_path)
+        return SimpleNamespace(returncode=1, stderr="injected pg_dump failure")
+
+    monkeypatch.setattr(backup, "BACKUP_DIR", backup_dir)
+    monkeypatch.setattr(backup.tempfile, "mkdtemp", tracked_mkdtemp)
+    monkeypatch.setattr(backup.subprocess, "run", failed_pg_dump)
+
+    with pytest.raises(RuntimeError, match="Database dump failed"):
+        backup._create_backup_sync(
+            {"contents": ["database"]},
+            publish=False,
+            candidate_token="00000000-0000-0000-0000-000000000102-attempt-1",
+        )
+
+    assert observed["passfile"].parent != observed["dump"].parent
+    assert all(not directory.exists() for directory in temporary_directories)
+    assert list((backup_dir / ".pending").iterdir()) == []
+
+
 def test_registered_backup_stage_neither_publishes_nor_prunes(tmp_path, monkeypatch):
     """A cancelled backup thread may leave a candidate, never a visible backup."""
     from app.api.admin import backup

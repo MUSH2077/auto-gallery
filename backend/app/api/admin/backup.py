@@ -376,12 +376,15 @@ def _create_backup_sync(
         # 1. PostgreSQL dump
         if "database" in selected:
             dump_path = os.path.join(tmpdir, "database.dump")
-            env = _pg_env_with_passfile(tmpdir, db_info)
-            result = subprocess.run(
-                ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
-                 "-d", db_info["dbname"], "--format=custom", "--compress=3",
-                 "--no-owner", "--no-acl", "-f", dump_path],
-                capture_output=True, text=True, env=env, timeout=120)
+            with tempfile.TemporaryDirectory(
+                prefix="ag-backup-credentials-"
+            ) as credential_tmpdir:
+                env = _pg_env_with_passfile(credential_tmpdir, db_info)
+                result = subprocess.run(
+                    ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
+                     "-d", db_info["dbname"], "--format=custom", "--compress=3",
+                     "--no-owner", "--no-acl", "-f", dump_path],
+                    capture_output=True, text=True, env=env, timeout=120)
             if result.returncode != 0:
                 raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
             sizes["database"] = os.path.getsize(dump_path)
