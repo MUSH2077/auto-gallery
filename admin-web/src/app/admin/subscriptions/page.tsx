@@ -84,7 +84,7 @@ function SubscriptionsContent() {
   const toast = useToast();
   const qc = useQueryClient();
   const notify = useNotifications();
-  const { isAdmin, user } = usePermissions();
+  const { user } = usePermissions();
   const sp = useSearchParams();
   const pathname = usePathname();
 
@@ -282,12 +282,12 @@ function SubscriptionsContent() {
     mutationFn: (id: string) => api.deleteSubscription(id, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscriptions.remove_title"), {
           entity: "hierarchy-delete", entity_type: "subscription", entity_ids: result.entity_ids,
         });
-        toast.success({ message: t("deletion.queued") });
+        toast.success({ message: t("subscriptions.remove_queued") });
       } else {
-        toast.success({ message: t("deletion.soft_deleted") });
+        toast.success({ message: t("subscriptions.removed") });
       }
       setDeleteId(null);
       setDeleteFiles(false);
@@ -325,12 +325,12 @@ function SubscriptionsContent() {
     mutationFn: (ids: string[]) => api.batchDeleteSubscriptions(ids, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscriptions.remove_title"), {
           entity: "hierarchy-delete", entity_type: "subscription", entity_ids: result.entity_ids,
         });
-        toast.success({ message: t("deletion.queued") });
+        toast.success({ message: t("subscriptions.remove_queued") });
       } else {
-        toast.success({ message: t("deletion.soft_deleted") });
+        toast.success({ message: t("subscriptions.removed") });
       }
       setSelected(new Set());
       setConfirmBatchDel(false);
@@ -484,7 +484,7 @@ function SubscriptionsContent() {
       <PageSection>
       <SelectionBar
         count={selected.size}
-        label={(isAdmin ? t("subscriptions.delete_selected") : t("deletion.disable_selected")).replace("{count}", String(selected.size))}
+        label={t("subscriptions.remove_selected", { count: selected.size })}
         clearLabel={t("common.clear")}
         onClear={() => setSelected(new Set())}
       >
@@ -493,7 +493,7 @@ function SubscriptionsContent() {
         <button onClick={() => batchSync.mutate({ ids: [...selected], enable: false })} disabled={batchSync.isPending}
           className="btn-ghost text-xs disabled:opacity-50">{t("subscriptions.disable_sync")}</button>
         <button onClick={() => { setDeleteFiles(false); setConfirmBatchDel(true); }} className="btn-danger text-xs">
-          {(isAdmin ? t("subscriptions.delete_selected") : t("deletion.disable_selected")).replace("{count}", String(selected.size))}
+          {t("subscriptions.remove_selected", { count: selected.size })}
         </button>
       </SelectionBar>
 
@@ -648,14 +648,12 @@ function SubscriptionsContent() {
                     label={t("common.more_actions")}
                     items={[
                       {
-                        label: !isAdmin && !s.is_active
+                        label: !s.is_active
                           ? t("creator_detail.restore")
-                          : isAdmin
-                            ? t("deletion.permanent_title")
-                            : t("deletion.soft_title"),
-                        tone: isAdmin || s.is_active ? "danger" : undefined,
+                          : t("subscriptions.remove_title"),
+                        tone: s.is_active ? "danger" : undefined,
                         onSelect: () => {
-                          if (!isAdmin && !s.is_active) {
+                          if (!s.is_active) {
                             restoreSubscription.mutate(s.id);
                             return;
                           }
@@ -680,7 +678,8 @@ function SubscriptionsContent() {
       {deleteId && (
         <HierarchyDeletionDialog
           open
-          title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+          title={t("subscriptions.remove_title")}
+          message={t("subscriptions.remove_message")}
           confirmationPhrase={subscriptionItems.find((subscription) => subscription.id === deleteId)?.name || deleteId}
           preview={deletionPreview.data}
           previewLoading={deletionPreview.isLoading}
@@ -695,7 +694,8 @@ function SubscriptionsContent() {
       {confirmBatchDel && (
         <HierarchyDeletionDialog
           open
-          title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+          title={t("subscriptions.remove_title")}
+          message={t("subscriptions.remove_message")}
           confirmationPhrase={String(selected.size)}
           preview={batchDeletionPreview.data}
           previewLoading={batchDeletionPreview.isLoading}

@@ -413,12 +413,12 @@ export default function RepositoryDetailPage() {
     mutationFn: () => api.deleteRepository(id, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscription_detail.remove_source"), {
           entity: "hierarchy-delete", entity_type: "repository", entity_ids: [id],
         });
-        toast.success(t("deletion.queued"));
+        toast.success(t("subscription_detail.remove_source_queued"));
       } else {
-        toast.success(t("deletion.soft_deleted"));
+        toast.success(t("subscription_detail.source_removed"));
       }
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       qc.invalidateQueries({ queryKey: ["repositories"] });
@@ -485,9 +485,9 @@ export default function RepositoryDetailPage() {
                 {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
               </button>
             )}
-            {canManageRepositories && (isAdmin || repo.is_enabled) && (
+            {canManageRepositories && (
               <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-                {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+                {t("subscription_detail.remove_source")}
               </button>
             )}
             <Link href={`/admin/subscriptions/${subscription.id}`} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
@@ -624,7 +624,8 @@ export default function RepositoryDetailPage() {
       </section>
       <HierarchyDeletionDialog
         open={showDelete}
-        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        title={t("subscription_detail.remove_source")}
+        message={t("subscription_detail.remove_source_message")}
         confirmationPhrase={repoName(repo)}
         preview={deletionPreview.data}
         previewLoading={deletionPreview.isLoading}

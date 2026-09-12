@@ -9,6 +9,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 type Props = {
   open: boolean;
   title: string;
+  message?: string;
   confirmationPhrase: string;
   preview?: DeletionPreview;
   previewLoading?: boolean;
@@ -23,6 +24,7 @@ type Props = {
 export default function HierarchyDeletionDialog({
   open,
   title,
+  message,
   confirmationPhrase,
   preview,
   previewLoading,
@@ -43,7 +45,7 @@ export default function HierarchyDeletionDialog({
     <ConfirmDialog
       open={open}
       title={title}
-      message={isPermanent ? t("deletion.permanent_message") : t("deletion.soft_message")}
+      message={message || (isPermanent ? t("deletion.permanent_message") : t("deletion.soft_message"))}
       confirmationPhrase={isPermanent ? confirmationPhrase : undefined}
       onConfirm={onConfirm}
       onCancel={onCancel}
