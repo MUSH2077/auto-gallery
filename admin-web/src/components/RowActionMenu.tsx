@@ -44,6 +44,14 @@ export default function RowActionMenu({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<"first" | "last" | null>(null);
+  const openingViewport = useRef<{
+    scrollX: number;
+    scrollY: number;
+    triggerTop: number;
+    triggerRight: number;
+    triggerBottom: number;
+    triggerLeft: number;
+  } | null>(null);
   const menuId = useId();
   const [position, setPosition] = useState({ left: 0, top: 0 });
 
@@ -54,6 +62,14 @@ export default function RowActionMenu({
   const measureTrigger = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    openingViewport.current = {
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      triggerTop: rect.top,
+      triggerRight: rect.right,
+      triggerBottom: rect.bottom,
+      triggerLeft: rect.left,
+    };
     const menuWidth = 176;
     setPosition({
       left: Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth)),
@@ -99,14 +115,31 @@ export default function RowActionMenu({
         setOpen(false);
       }
     };
-    const handleViewportChange = () => setOpen(false);
+    const handleScroll = (event: Event) => {
+      const measured = openingViewport.current;
+      const rect = triggerRef.current?.getBoundingClientRect();
+      // A click can arrive before the browser dispatches the scroll event that
+      // brought its trigger into view. Keep that newly opened menu only when
+      // both the viewport and trigger are still exactly where we measured them.
+      const isQueuedOpeningScroll = (event.target === document || event.target === window)
+        && measured
+        && rect
+        && window.scrollX === measured.scrollX
+        && window.scrollY === measured.scrollY
+        && Math.abs(rect.top - measured.triggerTop) < 0.5
+        && Math.abs(rect.right - measured.triggerRight) < 0.5
+        && Math.abs(rect.bottom - measured.triggerBottom) < 0.5
+        && Math.abs(rect.left - measured.triggerLeft) < 0.5;
+      if (!isQueuedOpeningScroll) setOpen(false);
+    };
+    const handleResize = () => setOpen(false);
     document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("resize", handleViewportChange);
-    window.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("scroll", handleScroll, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("resize", handleViewportChange);
-      window.removeEventListener("scroll", handleViewportChange, true);
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [open]);
 
