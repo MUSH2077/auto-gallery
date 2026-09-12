@@ -880,12 +880,11 @@ async def _recover_download_dispatch_candidate(
                 job_id,
                 exc_info=True,
             )
-            if (
-                isinstance(exc, DownloadAdmissionError)
-                and exc.publication_uncertain
-            ):
-                await db.rollback()
-                return "deferred"
+            # A failed lookup never proves that the deterministic RQ job is
+            # absent, regardless of the original error category. Keep the
+            # exact durable attempt pending until its state can be checked.
+            await db.rollback()
+            return "deferred"
         if late_existing is not None:
             logger.warning(
                 "Recovered late fixed-id publication proof task=%s job=%s rq_job=%s",

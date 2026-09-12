@@ -547,7 +547,7 @@ def test_outbox_recovery_transient_rejection_stays_pending(monkeypatch):
         RuntimeError("broken recovery invariant"),
     ],
 )
-def test_outbox_recovery_does_not_classify_programming_faults_as_capacity(
+def test_outbox_recovery_terminalizes_programming_fault_after_confirmed_absence(
     monkeypatch,
     exc,
 ):
@@ -555,11 +555,15 @@ def test_outbox_recovery_does_not_classify_programming_faults_as_capacity(
 
     db = _DispatchDB()
     task, job = _pending_outbox_pair(download_dispatch)
-    monkeypatch.setattr(
-        download_dispatch,
-        "_fetch_download_rq_job",
-        lambda *_a, **_k: (_ for _ in ()).throw(exc),
-    )
+    lookups = iter([exc, None])
+
+    def lookup(*_args, **_kwargs):
+        result = next(lookups)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lookup)
     persisted = []
 
     async def persist(*_args, **kwargs):
@@ -678,6 +682,52 @@ def test_real_admission_adapter_preserves_nontransient_queue_error(
 
     assert caught.value.code == "redis_unwritable"
     assert caught.value.transient is False
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_transient"),
+    [
+        (TypeError("bad lookup call"), False),
+        (
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad credentials"),
+            False,
+        ),
+        (
+            __import__("redis.exceptions", fromlist=["ConnectionError"])
+            .ConnectionError("reset"),
+            True,
+        ),
+    ],
+)
+def test_initial_fixed_id_lookup_failure_is_typed_as_uncertain(
+    monkeypatch,
+    error,
+    expected_transient,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+        backpressure.enqueue_download_rq(
+            "downloads",
+            "app.jobs.download.run_download_job",
+            "domain-job",
+            rq_job_id="download-domain-job-attempt-1",
+            job_timeout=7200,
+            redis_client=redis,
+        )
+
+    assert caught.value.transient is expected_transient
+    assert caught.value.publication_uncertain is True
+    assert caught.value.details["error_type"] == type(error).__name__
     assert caught.value.__cause__ is error
 
 
@@ -865,6 +915,72 @@ def test_recovery_does_not_compensate_when_final_publication_lookup_fails(
     assert outcome == "deferred"
     assert db.rollback_count == 1
     assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capacity_result", "expected_transient", "expected_code"),
+    [
+        (TypeError("bad capacity call"), False, "redis_unwritable"),
+        (
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad credentials"),
+            False,
+            "redis_unwritable",
+        ),
+        (
+            __import__("redis.exceptions", fromlist=["ConnectionError"])
+            .ConnectionError("reset"),
+            True,
+            "redis_unwritable",
+        ),
+        (8, True, "queue_saturated"),
+    ],
+)
+async def test_cached_automatic_admission_preserves_dispatch_classification(
+    monkeypatch,
+    capacity_result,
+    expected_transient,
+    expected_code,
+):
+    from app.services import backpressure, resource_pressure
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    async def no_base_pressure(*_args, **_kwargs):
+        return None
+
+    async def healthy_pressure():
+        return {"status": "normal", "budget": {"throughput_scale": 1.0}}
+
+    monkeypatch.setattr(backpressure, "_base_download_backpressure_reason", no_base_pressure)
+    monkeypatch.setattr(resource_pressure, "get_resource_pressure_snapshot", healthy_pressure)
+    monkeypatch.setattr(backpressure, "_download_queue_limit", lambda: 8)
+    monkeypatch.setattr(backpressure, "get_redis", lambda: object())
+    if isinstance(capacity_result, Exception):
+        monkeypatch.setattr(
+            backpressure,
+            "_redis_capacity_reason",
+            lambda *_a, **_k: (_ for _ in ()).throw(capacity_result),
+        )
+    else:
+        monkeypatch.setattr(backpressure, "_redis_capacity_reason", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            backpressure,
+            "_download_waiting_count",
+            lambda *_a, **_k: capacity_result,
+        )
+
+    async with backpressure.download_admission_batch(object(), automatic=True):
+        reason = await backpressure.download_backpressure_reason(
+            object(),
+            automatic=True,
+            include_queue=True,
+        )
+
+    error = backpressure.admission_error(reason)
+    assert reason["code"] == expected_code
+    assert error.transient is (None if expected_code == "queue_saturated" else expected_transient)
+    assert is_transient_download_dispatch_error(error) is expected_transient
 
 
 def test_outbox_recovery_marks_malformed_retry_intent_invalid(monkeypatch):

@@ -67,6 +67,11 @@ class _AdmissionReason(dict[str, Any]):
         super().__init__(*args, **kwargs)
         self.transient = transient
 
+    def copy(self) -> _AdmissionReason:
+        """Return a defensive copy without discarding private provenance."""
+
+        return type(self)(self, transient=self.transient)
+
 
 class DownloadAdmissionError(RuntimeError):
     """Structured error for HTTP/RQ download admission failures."""
@@ -298,7 +303,19 @@ def enqueue_download_rq(
         # An earlier request may have succeeded but lost its Redis response.
         # Treat the durable id as proof of publication before applying current
         # capacity gates, otherwise an idempotent retry could be rejected.
-        existing = _existing_rq_job(redis, rq_job_id)
+        try:
+            existing = _existing_rq_job(redis, rq_job_id)
+        except Exception as exc:
+            raise DownloadAdmissionError(
+                "redis_unwritable",
+                "Unable to confirm an existing download job",
+                details={
+                    "error_type": type(exc).__name__,
+                    "rq_job_id": rq_job_id,
+                },
+                transient=is_transient_redis_admission_error(exc),
+                publication_uncertain=True,
+            ) from exc
         if existing is not None:
             return existing
 
@@ -554,7 +571,7 @@ async def download_backpressure_reason(
     cached = _download_admission_snapshot.get()
     if cached is not None and cached.automatic == automatic:
         if cached.reason:
-            return dict(cached.reason)
+            return cached.reason.copy()
         if include_queue and cached.remaining_slots <= 0:
             return {
                 "code": "queue_saturated",
