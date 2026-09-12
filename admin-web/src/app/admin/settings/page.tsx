@@ -16,7 +16,7 @@ export default function SettingsPage() {
   const reindex = useMutation({
     mutationFn: api.reindexSearch,
     onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: t("settings.reindex_started") }); },
-    onError: (e: Error) => { setConfirmReindex(false); toast.error({ message: e.message }); },
+    onError: (e: Error) => { toast.error({ message: e.message }); },
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 

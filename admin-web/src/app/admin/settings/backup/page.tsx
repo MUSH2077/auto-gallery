@@ -6,7 +6,7 @@ import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } fr
 import { useT } from "@/lib/i18n";
 import { sha256Blob } from "@/lib/sha256";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu } from "@/components";
+import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Archive, Database, FileJson, FileText, Settings } from "lucide-react";
@@ -153,7 +153,7 @@ function RestoreValidationFlow({ flow }: { flow: RestoreFlow }) {
   );
 }
 
-export default function BackupPage() {
+function BackupContent() {
   const toast = useToast();
   const t = useT();
   const fmt = useI18nFormat();
@@ -447,5 +447,13 @@ export default function BackupPage() {
           error={(deleteBackup.error as Error)?.message} />
       )}
     </PageShell>
+  );
+}
+
+export default function BackupPage() {
+  return (
+    <PermissionGuard module="system">
+      <BackupContent />
+    </PermissionGuard>
   );
 }
