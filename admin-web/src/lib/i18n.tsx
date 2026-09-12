@@ -554,6 +554,7 @@ const zh: Record<string, string> = {
   "mapping.stage_subscription": "订阅设置",
   "mapping.stage_source": "来源设置",
   "mapping.retry_setup": "重试仓库设置",
+  "mapping.repository_setup_requires_subscriptions": "验证并设置仓库链接需要订阅权限。",
 
   // Creators - Duplicates
   "duplicates.title": "创作者去重",
@@ -3641,6 +3642,7 @@ function buildEn(): Record<string, string> {
     "mapping.stage_subscription": "subscription setup",
     "mapping.stage_source": "source setup",
     "mapping.retry_setup": "Retry repository setup",
+    "mapping.repository_setup_requires_subscriptions": "Subscriptions permission is required to verify and set up repository links.",
 
     "duplicates.title": "Creator Duplicates",
     "duplicates.desc": "Detect and merge duplicate creator records across sources.",

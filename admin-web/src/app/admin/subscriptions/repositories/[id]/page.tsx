@@ -480,9 +480,11 @@ export default function RepositoryDetailPage() {
             <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary disabled:opacity-50">
               {running || sync.isPending ? t("repo.syncing") : t("repo.sync_now")}
             </button>
-            <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
-              {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
-            </button>
+            {canManageRepositories && (
+              <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
+                {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
+              </button>
+            )}
             {canManageRepositories && (isAdmin || repo.is_enabled) && (
               <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
                 {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}

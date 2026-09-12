@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, PageShell, SectionPanel, ConfirmDialog, Modal, ErrorState, StatusBadge } from "@/components";
+import { PageHeader, PageShell, SectionPanel, ConfirmDialog, Modal, ErrorState, StatusBadge, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { formatBytes } from "@/lib/format";
@@ -25,7 +25,7 @@ function ToggleSwitch({ checked, onChange, label, disabled }: { checked: boolean
   );
 }
 
-export default function UserDetailPage() {
+function UserDetailContent() {
   const t = useT();
   const toast = useToast();
   const router = useRouter();
@@ -256,4 +256,8 @@ export default function UserDetailPage() {
       </Modal>
     </PageShell>
   );
+}
+
+export default function UserDetailPage() {
+  return <PermissionGuard adminOnly><UserDetailContent /></PermissionGuard>;
 }

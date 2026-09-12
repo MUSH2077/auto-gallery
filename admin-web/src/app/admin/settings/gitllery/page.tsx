@@ -9,6 +9,7 @@ import { useToast } from "@/components/Toast";
 import { api, queryKeys, type GitllerySettings } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
+import { usePermissions } from "@/lib/usePermissions";
 
 type CapabilityName = keyof GitllerySettings["capabilities"];
 
@@ -33,6 +34,7 @@ function shortId(value?: string | null) {
 export default function GitllerySettingsPage() {
   const t = useT();
   const toast = useToast();
+  const { isAdmin } = usePermissions();
   const [copyingCommand, setCopyingCommand] = useState<string | null>(null);
   const settings = useQuery({
     queryKey: queryKeys.gitllery.settings,
@@ -174,16 +176,18 @@ export default function GitllerySettingsPage() {
                         <td className="px-4 py-3 font-mono text-xs" title={repo.head_segment ?? undefined}>{shortId(repo.head_segment)}</td>
                         <td className="px-4 py-3 font-mono text-xs" title={repo.last_complete_commit_id ?? undefined}>{shortId(repo.last_complete_commit_id)}</td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => verify.mutate(repo.repository_id)}
-                            disabled={!data.capabilities.verify.enabled || verify.isPending}
-                            className="btn-ghost min-h-10 px-3 text-xs"
-                          >
-                            {verify.isPending && verify.variables === repo.repository_id
-                              ? t("gitllery_settings.queueing")
-                              : t("gitllery_settings.verify")}
-                          </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => verify.mutate(repo.repository_id)}
+                              disabled={!data.capabilities.verify.enabled || verify.isPending}
+                              className="btn-ghost min-h-10 px-3 text-xs"
+                            >
+                              {verify.isPending && verify.variables === repo.repository_id
+                                ? t("gitllery_settings.queueing")
+                                : t("gitllery_settings.verify")}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

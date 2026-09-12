@@ -3,9 +3,10 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { motionConfig, motionTokens, useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
+import { usePermissions } from "@/lib/usePermissions";
 
 type MergeSelection = {
   key: string;
@@ -19,10 +20,12 @@ function duplicateGroupKey(group: { reason: string; description: string }) {
   return `${normalize(group.reason)}\u0000${normalize(group.description)}`;
 }
 
-export default function CreatorDuplicatesPage() {
+function CreatorDuplicatesContent() {
   const t = useT();
   const router = useRouter();
   const qc = useQueryClient();
+  const { has } = usePermissions();
+  const canCurate = has("curation");
   const dups = useQuery({ queryKey: queryKeys.creators.duplicates, queryFn: api.listDuplicateCreators });
   const [selection, setSelection] = useState<MergeSelection | null>(null);
   const [mergeFailures, setMergeFailures] = useState<Array<{ id: string; name: string; reason: string }>>([]);
@@ -134,12 +137,14 @@ export default function CreatorDuplicatesPage() {
           <div className="space-y-2">
             {group.creator_ids.map((cid, i) => (
               <div key={cid} className="flex items-center gap-3 rounded-md border border-border p-2 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle">
-                <input type="checkbox" aria-label={t("common.select_item", { name: group.creator_names[i] || cid.slice(0, 8) })}
-                  checked={activeGroup && selection.sources.has(cid)}
-                  disabled={activeGroup && selection.targetId === cid}
-                  onChange={() => toggleSource(group, cid)}
-                  className="rounded shrink-0"
-                />
+                {canCurate && (
+                  <input type="checkbox" aria-label={t("common.select_item", { name: group.creator_names[i] || cid.slice(0, 8) })}
+                    checked={activeGroup && selection.sources.has(cid)}
+                    disabled={activeGroup && selection.targetId === cid}
+                    onChange={() => toggleSource(group, cid)}
+                    className="rounded shrink-0"
+                  />
+                )}
                 <div className="flex-1 min-w-0">
                   <button
                     onClick={() => router.push(`/admin/creators/${cid}`)}
@@ -160,7 +165,7 @@ export default function CreatorDuplicatesPage() {
       })}
 
       {/* Merge action bar */}
-      {selection && selection.sources.size > 0 && (
+      {canCurate && selection && selection.sources.size > 0 && (
         <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-border bg-white p-4 shadow-lg dark:border-border dark:bg-surface">
           <div>
             <span className="text-sm font-medium">
@@ -213,4 +218,8 @@ export default function CreatorDuplicatesPage() {
       )}
     </PageShell>
   );
+}
+
+export default function CreatorDuplicatesPage() {
+  return <PermissionGuard module="library"><CreatorDuplicatesContent /></PermissionGuard>;
 }

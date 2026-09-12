@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
-import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
+import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
@@ -39,11 +39,13 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   );
 }
 
-export default function MappingPage() {
+function MappingContent() {
   const t = useT();
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const id = params.id as string;
-  const { user } = usePermissions();
+  const { user, has } = usePermissions();
+  const canCurate = has("curation");
+  const canSetupRepositories = has("subscriptions");
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
@@ -105,8 +107,11 @@ export default function MappingPage() {
 
   const verifyLink = useMutation({
     mutationFn: async (linkId: string) => {
-      await api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 });
       const link = links.data?.find((l: CreatorLinkType) => l.id === linkId);
+      if (link && ["pixiv", "iwara"].includes(link.link_type) && !canSetupRepositories) {
+        throw new Error(t("mapping.repository_setup_requires_subscriptions"));
+      }
+      await api.updateCreatorLink(id, linkId, { is_verified: true, confidence: 1.0 });
       await links.refetch();
       if (link && ["pixiv", "iwara"].includes(link.link_type)) {
         return { linkId, failure: await setupRepository(link) };
@@ -144,7 +149,7 @@ export default function MappingPage() {
       <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
         <div className="flex gap-2">
           <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>
-          <button onClick={() => setShowAdd(true)} className="btn-primary">{t("mapping.add_link")}</button>
+          {canCurate && <button onClick={() => setShowAdd(true)} className="btn-primary">{t("mapping.add_link")}</button>}
         </div>
       </PageHeader>
 
@@ -155,9 +160,13 @@ export default function MappingPage() {
       {Object.entries(setupFailures).map(([linkId, failure]) => (
         <div key={linkId} role="alert" className="mb-6 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
           <p>{t("mapping.partial_setup", { url: failure.link.url, stage: t(`mapping.stage_${failure.stage}`) })}: {failure.message}</p>
-          <button className="btn-ghost mt-2" disabled={retrySetup.isPending} onClick={() => retrySetup.mutate(linkId)}>
-            {retrySetup.isPending && retrySetup.variables === linkId ? t("common.processing") : t("mapping.retry_setup")}
-          </button>
+          {canCurate && canSetupRepositories ? (
+            <button className="btn-ghost mt-2" disabled={retrySetup.isPending} onClick={() => retrySetup.mutate(linkId)}>
+              {retrySetup.isPending && retrySetup.variables === linkId ? t("common.processing") : t("mapping.retry_setup")}
+            </button>
+          ) : canCurate ? (
+            <p className="mt-2 text-xs">{t("mapping.repository_setup_requires_subscriptions")}</p>
+          ) : null}
         </div>
       ))}
 
@@ -173,7 +182,7 @@ export default function MappingPage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-success">{t("mapping.verified")}</span>
-                <button onClick={() => setDialog({ action: "unverify", linkId: l.id })} className="text-xs text-danger hover:underline">{t("mapping.unverify")}</button>
+                {canCurate && <button onClick={() => setDialog({ action: "unverify", linkId: l.id })} className="text-xs text-danger hover:underline">{t("mapping.unverify")}</button>}
               </div>
             </div>
           ))}
@@ -192,7 +201,20 @@ export default function MappingPage() {
                 {l.source && <SourceBadge source={l.source} />}
                 <span className={`text-xs ${l.confidence >= 0.7 ? "text-success" : l.confidence >= 0.4 ? "text-warning" : "text-danger"}`}>{t("mapping.confidence_label")} {l.confidence.toFixed(1)}</span>
               </div>
-              <button onClick={() => setDialog({ action: "verify", linkId: l.id })} className="btn-ghost px-3 py-1 text-xs text-success dark:text-success">{t("mapping.approve")}</button>
+              {canCurate && (
+                <div className="text-right">
+                  <button
+                    onClick={() => setDialog({ action: "verify", linkId: l.id })}
+                    disabled={["pixiv", "iwara"].includes(l.link_type) && !canSetupRepositories}
+                    className="btn-ghost px-3 py-1 text-xs text-success disabled:cursor-not-allowed disabled:opacity-50 dark:text-success"
+                  >
+                    {t("mapping.approve")}
+                  </button>
+                  {["pixiv", "iwara"].includes(l.link_type) && !canSetupRepositories && (
+                    <p className="mt-1 max-w-56 text-xs text-muted">{t("mapping.repository_setup_requires_subscriptions")}</p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           {!suggested.length && <p className="text-sm text-muted">{t("mapping.no_suggested")}</p>}
@@ -213,4 +235,8 @@ export default function MappingPage() {
       {dialog?.action === "unverify" && <ConfirmDialog open title={t("mapping.unverify_title")} message={t("mapping.unverify_msg")} onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={unverifyLink.isPending} error={(unverifyLink.error as Error)?.message} />}
     </PageShell>
   );
+}
+
+export default function MappingPage() {
+  return <PermissionGuard module="library"><MappingContent /></PermissionGuard>;
 }
