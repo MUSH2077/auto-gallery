@@ -120,3 +120,17 @@ export async function requestBlob(path: string, options?: RequestInit): Promise<
     contentType: res.headers.get("Content-Type"),
   };
 }
+
+export async function assertBackupArchiveResponse(response: BlobResponse): Promise<BlobResponse> {
+  const contentType = response.contentType?.split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) return response;
+  let message = "Backup download returned a diagnostic response";
+  try {
+    const body = JSON.parse(await response.blob.text()) as unknown;
+    if (body && typeof body === "object" && "message" in body && typeof body.message === "string" && body.message.trim()) message = body.message;
+    else if (body && typeof body === "object" && "detail" in body && typeof body.detail === "string" && body.detail.trim()) message = body.detail;
+  } catch {
+    // Keep the safe fallback for malformed diagnostic JSON.
+  }
+  throw new ApiError(200, message, message, "business");
+}

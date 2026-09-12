@@ -129,6 +129,7 @@ export interface SmartSearchInputProps {
   showHelp?: boolean;
   onFocus?: () => void;
   onSubmit?: (canonicalQuery: string) => void;
+  keyboardNavigation?: boolean;
 }
 
 export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputProps>(function SmartSearchInput({
@@ -145,6 +146,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   showHelp = false,
   onFocus,
   onSubmit,
+  keyboardNavigation = true,
 }, forwardedRef) {
   const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -169,11 +171,12 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   });
 
   const compose = useSearchComposer({ value, scope, onChange });
-  const suggestions = assist.data?.suggestions || [];
-  const qualifiers = (assist.data?.parsed?.tokens || []).filter(
+  const currentAssist = deferredValue === value && !assist.isPlaceholderData ? assist.data : undefined;
+  const suggestions = currentAssist?.suggestions || [];
+  const qualifiers = (currentAssist?.parsed?.tokens || []).filter(
     (token): token is SearchQualifierToken => token.kind === "qualifier",
   );
-  const diagnostic = assist.data?.diagnostics?.[0];
+  const diagnostic = currentAssist?.diagnostics?.[0];
 
   useEffect(() => {
     setActiveIndex(0);
@@ -192,6 +195,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!keyboardNavigation) return;
     if (event.key === "ArrowDown" && suggestions.length) {
       event.preventDefault();
       setOpen(true);
@@ -215,12 +219,12 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
         selectSuggestion(activeIndex);
       } else if (!diagnostic && onSubmit) {
         event.preventDefault();
-        onSubmit(assist.data?.canonical_query || value);
+        onSubmit(currentAssist?.canonical_query || value);
       }
     }
   };
 
-  const result: SearchAssistResponse | undefined = assist.data;
+  const result: SearchAssistResponse | undefined = currentAssist;
   const status = diagnostic
     ? diagnosticMessage(t, diagnostic)
     : result?.canonical_query && result.canonical_query !== value

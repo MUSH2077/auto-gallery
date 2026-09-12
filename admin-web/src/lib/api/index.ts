@@ -1,4 +1,4 @@
-import { request, requestBlob, ApiError, clearAuthOn401 } from "./client";
+import { assertBackupArchiveResponse, request, requestBlob, ApiError, clearAuthOn401 } from "./client";
 import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
@@ -961,7 +961,7 @@ export const api = {
 
   downloadBackup: async (filename?: string) => {
     const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
-    const response = await requestBlob(`/api/v1/admin/backup/download${params}`);
+    const response = await assertBackupArchiveResponse(await requestBlob(`/api/v1/admin/backup/download${params}`));
     const encoded = response.contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
     const quoted = response.contentDisposition?.match(/filename="?([^";]+)"?/i)?.[1];
     return { blob: response.blob, filename: encoded ? decodeURIComponent(encoded) : quoted || filename || "auto-gallery-backup.tar.gz" };

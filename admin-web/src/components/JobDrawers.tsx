@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
 import { ConfirmDialog, DownloadConflictDialog, ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
 import { useT, type TFunction } from "@/lib/i18n";
@@ -10,9 +10,10 @@ import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyError } from "@/lib/jobCategory";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
-import { hasTaskAction } from "@/lib/task-actions";
+import { actionErrorReason, clearRepeatSyncIntent, createRepeatSyncIntent, hasTaskAction, metadataCleanupPresentation, readRepeatSyncIntent, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance } from "@/lib/task-actions";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
 import { secureRandomUuid } from "@/lib/random";
+import { usePermissions } from "@/lib/usePermissions";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -51,18 +52,27 @@ export function TaskDetailDrawer({
   onRetryTask,
   onOpenDownload,
   onOpenImport,
+  actionPending = false,
+  actionError,
+  onRepeatAccepted,
 }: {
   id: string | null;
   onClose: () => void;
   onRetryTask: (id: string) => void;
   onOpenDownload: (id: string) => void;
   onOpenImport: (id: string) => void;
+  actionPending?: boolean;
+  actionError?: unknown;
+  onRepeatAccepted?: (jobId: string) => void;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const qc = useQueryClient();
+  const { user } = usePermissions();
   const { mounted, closing } = usePresence(!!id, motionTokens.duration.base);
   const [showConflict, setShowConflict] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"repeat_sync" | "delete" | null>(null);
+  const [repeatConflictState, setRepeatConflictState] = useState<ReturnType<typeof repeatSyncConflict> | null>(null);
   // Hold the last id through the slide-out so content doesn't blank mid-exit.
   const lastId = useRef<string | null>(null);
   if (id) lastId.current = id;
@@ -90,23 +100,34 @@ export function TaskDetailDrawer({
       if (action === "cancel") return api.cancelTask(heldId);
       if (action === "delete") return api.deleteTask(heldId);
       if (action === "acknowledge") return api.acknowledgeTask(heldId);
-      const key = `auto-gallery-repeat-sync:task:${heldId}`;
-      let requestId = localStorage.getItem(key);
-      if (!requestId) { requestId = secureRandomUuid(); localStorage.setItem(key, requestId); }
-      const accepted = await api.repeatTask(heldId, requestId);
-      if (accepted.request_id !== requestId || accepted.action !== "repeat_sync" || !accepted.task_id || !accepted.job_id || (task.data?.subject_id && accepted.previous_job_id !== task.data.subject_id)) throw new Error(t("jobs.repeat_identity_invalid"));
-      localStorage.removeItem(key);
+      const originalJobId = task.data?.subject_type === "download_job" ? task.data.subject_id : null;
+      if (!user?.id || !originalJobId) throw new Error(t("jobs.repeat_original_unavailable"));
+      const intent = readRepeatSyncIntent(user.id, originalJobId) || createRepeatSyncIntent(user.id, originalJobId, task.data?.title || originalJobId, secureRandomUuid);
+      storeRepeatSyncIntent(intent);
+      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatTask(heldId, intent.requestId));
+      clearRepeatSyncIntent(intent);
       return accepted;
     },
-    onSuccess: () => { setConfirmAction(null); void task.refetch(); },
+    onSuccess: (result, action) => {
+      setConfirmAction(null);
+      setRepeatConflictState(null);
+      if (action === "repeat_sync" && "job_id" in result) onRepeatAccepted?.(String(result.job_id));
+      else void task.refetch();
+    },
+    onError: (error, action) => {
+      if (action === "repeat_sync") setRepeatConflictState(repeatSyncConflict(error));
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    },
   });
   if (!mounted || !heldId) return null;
   const item = task.data;
   const outcome = parseSyncOutcome(item?.result_data);
-  const removedCount = item?.result_data && typeof item.result_data === "object"
-    && typeof (item.result_data as { removed?: unknown }).removed === "number"
-    ? (item.result_data as { removed: number }).removed
-    : null;
+  const cleanupResult = item ? metadataCleanupPresentation(item) : null;
   const canRetry = hasTaskAction(item, "retry");
   const existingResolution = item?.meta?.staging_conflict_resolution as { resolution_id: string; expires_at?: string } | undefined;
   const hasConflictWorkflow = item?.reason_code === "download_staging_conflict" || !!existingResolution;
@@ -129,13 +150,14 @@ export function TaskDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               {hasConflictWorkflow && <button onClick={() => setShowConflict(true)} className="btn-primary text-xs">{existingResolution ? t("jobs.conflict.view_resolution") : t("jobs.conflict.compare")}</button>}
-              {canRetry && <button onClick={() => onRetryTask(item.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              {hasTaskAction(item, "pause") && <button onClick={() => taskAction.mutate("pause")} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
-              {hasTaskAction(item, "resume") && <button onClick={() => taskAction.mutate("resume")} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
-              {hasTaskAction(item, "cancel") && <button onClick={() => taskAction.mutate("cancel")} className="btn-ghost text-xs">{t("common.cancel")}</button>}
-              {hasTaskAction(item, "acknowledge") && <button onClick={() => taskAction.mutate("acknowledge")} className="btn-ghost text-xs">{t("operations.acknowledge")}</button>}
-              {hasTaskAction(item, "repeat_sync") && <button onClick={() => setConfirmAction("repeat_sync")} className="btn-primary text-xs">{t("jobs.repeat_sync")}</button>}
-              {hasTaskAction(item, "delete") && <button onClick={() => setConfirmAction("delete")} className="btn-danger text-xs">{t("jobs.del")}</button>}
+              {canRetry && <button disabled={actionPending || taskAction.isPending} onClick={() => onRetryTask(item.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              {hasTaskAction(item, "pause") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("pause")} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {hasTaskAction(item, "resume") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("resume")} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
+              {hasTaskAction(item, "cancel") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("cancel")} className="btn-ghost text-xs">{t("common.cancel")}</button>}
+              {hasTaskAction(item, "acknowledge") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("acknowledge")} className="btn-ghost text-xs">{t("operations.acknowledge")}</button>}
+              {hasTaskAction(item, "repeat_sync") && item.subject_type === "download_job" && item.subject_id && <button disabled={actionPending || taskAction.isPending} onClick={() => setConfirmAction("repeat_sync")} className="btn-primary text-xs">{t("jobs.repeat_sync")}</button>}
+              {hasTaskAction(item, "repeat_sync") && (item.subject_type !== "download_job" || !item.subject_id) && <span className="text-xs text-muted">{t("jobs.repeat_original_unavailable")}</span>}
+              {hasTaskAction(item, "delete") && <button disabled={actionPending || taskAction.isPending} onClick={() => setConfirmAction("delete")} className="btn-danger text-xs">{t("jobs.del")}</button>}
               {item.subject_type === "download_job" && item.subject_id && (
                 <button onClick={() => onOpenDownload(item.subject_id!)} className="btn-ghost text-xs">{t("jobs.open_download")}</button>
               )}
@@ -143,6 +165,7 @@ export function TaskDetailDrawer({
                 <button onClick={() => onOpenImport(item.subject_id!)} className="btn-ghost text-xs">{t("jobs.import_detail")}</button>
               )}
             </div>
+            {Boolean(taskAction.error || actionError) && <p role="alert" className="text-sm text-danger">{actionErrorReason(taskAction.error || actionError)}</p>}
             <dl className="rounded-md border border-border px-3 dark:border-border">
               <DetailRow label={t("jobs.status")} value={<StatusBadge status={item.status} />} />
               {item.resource_state ? (
@@ -185,9 +208,12 @@ export function TaskDetailDrawer({
             </section>
             <section>
               <h3 className="mb-2 text-sm font-semibold">{t("jobs.result")}</h3>
-              {removedCount !== null && (
-                <p className="mb-2 text-sm font-medium text-fg">{t("datamgmt.cleanup_json_done", { count: removedCount })}</p>
-              )}
+              {cleanupResult?.kind === "success" && <p className="mb-2 text-sm font-medium text-fg">{t("datamgmt.cleanup_json_done", { count: cleanupResult.removed })}</p>}
+              {cleanupResult?.kind === "partial" && <div className="mb-2 rounded-md border border-danger/30 bg-danger-subtle p-2 text-sm text-danger" role="alert">
+                <p className="font-medium">{t("datamgmt.cleanup_json_partial", { removed: cleanupResult.removed, failed: cleanupResult.failed, skipped: cleanupResult.skipped })}</p>
+                {Object.entries(cleanupResult.reasons).map(([reason, count]) => <p key={reason}>{reason}: {count}</p>)}
+                {cleanupResult.errors.map((error, index) => <p key={`${error}-${index}`}>{error}</p>)}
+              </div>}
               {outcome ? <SyncOutcomeNotice outcome={outcome} /> : <JsonBlock value={item.result_data} />}
             </section>
             <section>
@@ -217,7 +243,14 @@ export function TaskDetailDrawer({
         )}
       </div>
     </aside>
-    {confirmAction && <ConfirmDialog open title={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_title") : t("jobs.delete_task_title")} message={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_confirm") : t("jobs.delete_task_confirm")} onConfirm={() => taskAction.mutate(confirmAction)} onCancel={() => setConfirmAction(null)} isPending={taskAction.isPending} error={(taskAction.error as Error)?.message} />}
+    {confirmAction && <ConfirmDialog open title={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_title") : t("jobs.delete_task_title")} message={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_confirm") : t("jobs.delete_task_confirm")} onConfirm={() => taskAction.mutate(confirmAction)} onCancel={() => setConfirmAction(null)} isPending={taskAction.isPending} error={taskAction.error ? actionErrorReason(taskAction.error) : undefined}>
+      {repeatConflictState?.kind === "existing" && <Link className="mb-3 block text-sm text-accent hover:underline" href={`/admin/jobs?tab=downloads&job=${repeatConflictState.existingJobId}`}>{t("jobs.open_existing_download")}</Link>}
+      {repeatConflictState?.kind === "identity" && <button type="button" className="btn-ghost mb-3" onClick={() => {
+        const originalJobId = task.data?.subject_type === "download_job" ? task.data.subject_id : null;
+        if (user?.id && originalJobId) localStorage.removeItem(`auto-gallery-repeat-sync:${user.id}:${originalJobId}:repeat_sync`);
+        taskAction.reset(); setRepeatConflictState(null);
+      }}>{t("jobs.repeat_new_intent")}</button>}
+    </ConfirmDialog>}
     {hasConflictWorkflow && (
       <DownloadConflictDialog
         open={showConflict}
@@ -237,9 +270,12 @@ export function JobDetailDrawer({
   onRetryDownload,
   onPauseDownload,
   onResumeDownload,
+  onRepeatDownload,
   onDeleteDownload,
   onRetryImport,
   onDeleteImport,
+  actionPending = false,
+  actionError,
 }: {
   kind: "download" | "import";
   id: string | null;
@@ -247,9 +283,12 @@ export function JobDetailDrawer({
   onRetryDownload: (id: string) => void;
   onPauseDownload: (id: string) => void;
   onResumeDownload: (id: string) => void;
+  onRepeatDownload: (id: string) => void;
   onDeleteDownload: (id: string) => void;
   onRetryImport: (id: string) => void;
   onDeleteImport: (id: string) => void;
+  actionPending?: boolean;
+  actionError?: unknown;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -297,11 +336,13 @@ export function JobDetailDrawer({
         {kind === "download" && dl && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              {hasTaskAction(dl, "retry") && <button onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              {hasTaskAction(dl, "pause") && <button onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
-              {hasTaskAction(dl, "resume") && <button onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
-              {hasTaskAction(dl, "delete") && <button onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>}
+              {hasTaskAction(dl, "retry") && <button disabled={actionPending} onClick={() => onRetryDownload(dl.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              {hasTaskAction(dl, "pause") && <button disabled={actionPending} onClick={() => onPauseDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
+              {hasTaskAction(dl, "resume") && <button disabled={actionPending} onClick={() => onResumeDownload(dl.id)} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
+              {hasTaskAction(dl, "repeat_sync") && <button disabled={actionPending} onClick={() => onRepeatDownload(dl.id)} className="btn-primary text-xs">{t("jobs.repeat_sync")}</button>}
+              {hasTaskAction(dl, "delete") && <button disabled={actionPending} onClick={() => onDeleteDownload(dl.id)} className="btn-danger text-xs">{t("jobs.del")}</button>}
             </div>
+            {Boolean(actionError) && <p role="alert" className="text-sm text-danger">{actionErrorReason(actionError)}</p>}
             {dl.retryable === false && dl.reason_code && (
               <div className="rounded-md border border-warning/40 bg-warning-subtle px-3 py-2 text-sm text-warning" role="alert">
                 {t("jobs.staging_conflict_manual")}
@@ -401,8 +442,8 @@ export function JobDetailDrawer({
         {kind === "import" && im && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              {hasTaskAction(im, "retry") && <button onClick={() => onRetryImport(im.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
-              {hasTaskAction(im, "delete") && <button onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>}
+              {hasTaskAction(im, "retry") && <button disabled={actionPending} onClick={() => onRetryImport(im.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              {hasTaskAction(im, "delete") && <button disabled={actionPending} onClick={() => onDeleteImport(im.id)} className="btn-danger text-xs">{t("jobs.del")}</button>}
               <Link href={`/admin/jobs?tab=downloads&job=${im.download_job_id}`} className="btn-ghost text-xs">{t("jobs.open_download")}</Link>
             </div>
             <dl className="rounded-md border border-border px-3 dark:border-border">

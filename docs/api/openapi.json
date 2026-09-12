@@ -15219,7 +15219,7 @@
     },
     "/api/v1/admin/cleanup-metadata-jsons": {
       "post": {
-        "description": "Remove all gallery-dl metadata JSON files from downloads directory.",
+        "description": "Queue evidence-based cleanup of successfully imported gallery-dl sidecars.",
         "operationId": "post_api_v1_admin_cleanup_metadata_jsons",
         "responses": {
           "202": {

@@ -50,7 +50,7 @@ export default function CreatorDuplicatesPage() {
           ...current,
           sources: new Map([...current.sources].filter(([sourceId]) => failedIds.has(sourceId))),
         } : null);
-        setConfirmMerge(false);
+        setConfirmMerge(true);
         return;
       }
       setConfirmMerge(false);
@@ -59,7 +59,7 @@ export default function CreatorDuplicatesPage() {
         setCollapsingGroup(null);
       };
       const gi = dups.data?.duplicates.findIndex(
-        (group) => !!selection?.targetId && group.creator_ids.includes(selection.targetId),
+        (group) => group.creator_ids.join(":") === selection?.key,
       ) ?? -1;
       if (gi >= 0 && motionConfig.shouldAnimate({ essential: true })) {
         setCollapsingGroup(gi);
@@ -76,7 +76,7 @@ export default function CreatorDuplicatesPage() {
     const targetId = group.creator_ids.find((creatorId) => creatorId !== id) || id;
     setMergeFailures([]);
     setSelection((current) => {
-      if (!current || !group.creator_ids.includes(current.targetId)) {
+      if (!current || current.key !== key) {
         return { key, targetId, targetName: nameAt(targetId), sources: new Map([[id, nameAt(id)]]) };
       }
       if (id === current.targetId) return current;
@@ -110,7 +110,7 @@ export default function CreatorDuplicatesPage() {
       {dups.data?.duplicates.map((group, gi) => {
         const entrance = groupEntrance(group.creator_ids.join(":"), gi);
         const groupKey = group.creator_ids.join(":");
-        const activeGroup = !!selection && group.creator_ids.includes(selection.targetId);
+        const activeGroup = selection?.key === groupKey;
         const displayedTargetId = activeGroup ? selection.targetId : group.creator_ids[0];
         return (
         <div key={groupKey}
@@ -168,12 +168,14 @@ export default function CreatorDuplicatesPage() {
           <div className="flex gap-3">
             <button
               onClick={() => { setSelection(null); setMergeFailures([]); }}
+              disabled={merge.isPending}
               className="btn-ghost"
             >
               {t("duplicates.cancel")}
             </button>
             <button
               onClick={() => setConfirmMerge(true)}
+              disabled={merge.isPending}
               className="btn-danger"
             >
               {t("duplicates.merge_btn").replace("{count}", String(selection.sources.size))}
@@ -198,7 +200,11 @@ export default function CreatorDuplicatesPage() {
           onCancel={() => setConfirmMerge(false)}
           isPending={merge.isPending}
           error={(merge.error as Error)?.message}
-        />
+        >
+          {mergeFailures.length > 0 && <div role="alert" className="mb-3 text-sm text-danger">
+            {mergeFailures.map((failure) => <p key={failure.id}>{failure.name}: {failure.reason}</p>)}
+          </div>}
+        </ConfirmDialog>
       )}
     </PageShell>
   );

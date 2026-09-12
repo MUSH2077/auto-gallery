@@ -336,6 +336,8 @@ function WorksContent() {
     : 0;
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
   const limit = 30;
+  const navigationParamsRef = useRef(sp.toString());
+  useEffect(() => { navigationParamsRef.current = sp.toString(); }, [sp]);
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -348,26 +350,28 @@ function WorksContent() {
   useEffect(() => {
     if (inputVal === search) return;
     const timer = setTimeout(() => {
-      const p = new URLSearchParams(sp.toString());
+      const p = new URLSearchParams(navigationParamsRef.current);
       stripLegacyWorkQuery(p);
       if (inputVal) p.set("q", inputVal); else p.delete("q");
       p.delete("p");
+      navigationParamsRef.current = p.toString();
       router.replace(`${pathname}?${p.toString()}`, { scroll: false });
     }, 300);
     return () => clearTimeout(timer);
-  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [inputVal, pathname, router, search]);
 
   function updateParams(
     updates: Record<string, string | null>,
     resetPage = true,
     history: "replace" | "push" = "replace",
   ) {
-    const p = new URLSearchParams(sp.toString());
+    const p = new URLSearchParams(navigationParamsRef.current);
     stripLegacyWorkQuery(p);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
     if (resetPage) p.delete("p");
+    navigationParamsRef.current = p.toString();
     const href = `${pathname}?${p.toString()}`;
     if (history === "push") {
       router.push(href, { scroll: false });
@@ -378,7 +382,6 @@ function WorksContent() {
 
   function setSearchQuery(next: string) {
     setInputVal(next);
-    updateParams({ q: next || null });
   }
 
   function clearFilters() {

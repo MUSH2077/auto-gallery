@@ -398,7 +398,7 @@ export interface paths {
         put?: never;
         /**
          * Cleanup Metadata Jsons
-         * @description Remove all gallery-dl metadata JSON files from downloads directory.
+         * @description Queue evidence-based cleanup of successfully imported gallery-dl sidecars.
          */
         post: operations["post_api_v1_admin_cleanup_metadata_jsons"];
         delete?: never;

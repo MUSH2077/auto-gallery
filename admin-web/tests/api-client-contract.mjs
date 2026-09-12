@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiError, request, requestBlob } from "../src/lib/api/client.ts";
+import { ApiError, assertBackupArchiveResponse, request, requestBlob } from "../src/lib/api/client.ts";
 
 function installBrowserToken(token = "jwt-fixture") {
   const removed = [];
@@ -175,4 +175,16 @@ test("requestBlob shares auth/header/error handling and preserves response metad
     assert.equal(error.detail, "proxy unavailable");
     return true;
   });
+});
+
+test("backup download rejects an HTTP 200 JSON diagnostic instead of returning archive bytes", async () => {
+  const diagnostic = new Blob([JSON.stringify({ status: "error", message: "No backups available" })], {
+    type: "application/json",
+  });
+  await assert.rejects(
+    assertBackupArchiveResponse({ blob: diagnostic, contentType: "application/json", contentDisposition: null }),
+    /No backups available/,
+  );
+  const archive = { blob: new Blob([new Uint8Array([1, 2, 3])]), contentType: "application/gzip", contentDisposition: null };
+  assert.equal(await assertBackupArchiveResponse(archive), archive);
 });

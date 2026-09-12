@@ -15,6 +15,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { secureRandomUuid } from "@/lib/random";
+import { actionErrorReason, clearRepeatSyncIntent, createRepeatSyncIntent, readRepeatSyncIntent, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance } from "@/lib/task-actions";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -37,7 +38,8 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [repeatActivity, setRepeatActivity] = useState<DashboardActivity | null>(null);
-  const { has } = usePermissions();
+  const [repeatConflictState, setRepeatConflictState] = useState<ReturnType<typeof repeatSyncConflict> | null>(null);
+  const { has, user } = usePermissions();
   const canRetry = has("tasks");
 
   const workbench = useQuery({
@@ -93,7 +95,7 @@ export default function Dashboard() {
       const data = await api.refreshWorkbench();
       queryClient.setQueryData(queryKeys.workbench, data);
       if (result.failed > 0) {
-        toast.warning({ message: t("jobs.batch_result", { succeeded: result.succeeded, failed: result.failed }) });
+        toast.warning({ message: `${t("jobs.batch_result", { succeeded: result.succeeded, failed: result.failed })}: ${result.errors.map((entry) => `${entry.id.slice(0, 8)} ${actionErrorReason(entry.error)}`).join("; ")}` });
       } else {
         toast.success(t("dashboard.retry_all_started", { count: result.succeeded }));
       }
@@ -104,36 +106,30 @@ export default function Dashboard() {
         message: error.message,
       });
     },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workbench });
+    },
   });
 
   const repeatOne = useMutation({
     mutationFn: async (activity: DashboardActivity) => {
       if (activity.kind !== "download") throw new Error(t("jobs.repeat_identity_invalid"));
-      const key = `auto-gallery-repeat-sync:${activity.id}`;
-      let requestId = localStorage.getItem(key);
-      if (!requestId) {
-        requestId = secureRandomUuid();
-        localStorage.setItem(key, requestId);
-      }
-      const accepted = await api.repeatDownloadJob(activity.id, requestId);
-      if (
-        accepted.previous_job_id !== activity.id
-        || accepted.request_id !== requestId
-        || accepted.action !== "repeat_sync"
-        || accepted.status !== "enqueued"
-        || !accepted.task_id
-        || !accepted.job_id
-      ) {
-        throw new Error(t("jobs.repeat_identity_invalid"));
-      }
-      localStorage.removeItem(key);
+      if (!user?.id) throw new Error(t("jobs.repeat_original_unavailable"));
+      const intent = readRepeatSyncIntent(user.id, activity.id) || createRepeatSyncIntent(user.id, activity.id, activity.title, secureRandomUuid);
+      storeRepeatSyncIntent(intent);
+      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatDownloadJob(activity.id, intent.requestId));
+      clearRepeatSyncIntent(intent);
       return accepted;
     },
     onSuccess: (accepted) => {
       setRepeatActivity(null);
+      setRepeatConflictState(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.workbench });
       router.push(`/admin/jobs?tab=downloads&job=${encodeURIComponent(accepted.job_id)}`);
     },
+    onError: (error) => setRepeatConflictState(repeatSyncConflict(error)),
   });
 
   if (workbench.error && !workbench.data) {
@@ -199,8 +195,14 @@ export default function Dashboard() {
                 }
               }}
               isPending={repeatOne.isPending}
-              error={(repeatOne.error as Error | null)?.message}
-            />
+              error={repeatOne.error ? actionErrorReason(repeatOne.error) : undefined}
+            >
+              {repeatConflictState?.kind === "existing" && <button type="button" className="btn-ghost mb-3" onClick={() => router.push(`/admin/jobs?tab=downloads&job=${encodeURIComponent(repeatConflictState.existingJobId)}`)}>{t("jobs.open_existing_download")}</button>}
+              {repeatConflictState?.kind === "identity" && <button type="button" className="btn-ghost mb-3" onClick={() => {
+                if (user?.id) localStorage.removeItem(`auto-gallery-repeat-sync:${user.id}:${repeatActivity.id}:repeat_sync`);
+                repeatOne.reset(); setRepeatConflictState(null);
+              }}>{t("jobs.repeat_new_intent")}</button>}
+            </ConfirmDialog>
           )}
         </div>
       )}

@@ -632,13 +632,15 @@ function SchedulerContent() {
   const visibleAttention = attentionItems;
   const planPage = plans.data?.items || [];
   useEffect(() => {
+    if (!plans.isSuccess || plans.isFetching || !plans.data) return;
     const totalPages = Math.max(1, Math.ceil((plans.data?.total || 0) / PLAN_PAGE_SIZE));
     if (page > totalPages) updateParams({ page: totalPages === 1 ? null : String(totalPages) });
-  }, [page, plans.data?.total]);
+  }, [page, plans.data, plans.isFetching, plans.isSuccess]);
   useEffect(() => {
+    if (!attention.isSuccess || attention.isFetching || !attention.data) return;
     const totalPages = Math.max(1, Math.ceil((attention.data?.total || 0) / PLAN_PAGE_SIZE));
     if (attentionPage > totalPages) updateParams({ attention_page: totalPages === 1 ? null : String(totalPages) });
-  }, [attentionPage, attention.data?.total]);
+  }, [attentionPage, attention.data, attention.isFetching, attention.isSuccess]);
   const batchActive = !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data);
 
   return (

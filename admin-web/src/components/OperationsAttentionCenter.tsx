@@ -25,7 +25,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { POLL_ACTIVE_MS, POLL_IDLE_MS } from "@/lib/polling";
-import { hasTaskAction, partitionTaskAction } from "@/lib/task-actions";
+import { actionErrorReason, hasTaskAction, partitionTaskAction } from "@/lib/task-actions";
 import { writeClipboardText } from "@/lib/clipboard";
 
 const TaskDetailDrawer = dynamic(
@@ -86,6 +86,7 @@ export default function OperationsAttentionCenter() {
   const [batchMode, setBatchMode] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [copyingId, setCopyingId] = useState<string | null>(null);
+  const [batchFailures, setBatchFailures] = useState<Array<{ id: string; reason: string }>>([]);
 
   useEffect(() => {
     setSearch(params.get("q") || "");
@@ -116,7 +117,12 @@ export default function OperationsAttentionCenter() {
   });
 
   const invalidate = async () => {
-    await qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.workbench }),
+    ]);
   };
   const action = useMutation({
     mutationFn: async ({ item, name }: { item: OperationAttentionItem; name: "retry" | "pause" | "resume" | "acknowledge" }) => {
@@ -130,26 +136,42 @@ export default function OperationsAttentionCenter() {
       toast.success(t("operations.action_complete"));
       await invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error) => toast.error(actionErrorReason(error)),
+    onSettled: () => { void invalidate(); },
   });
   const batchAction = useMutation({
     mutationFn: async (name: "retry" | "acknowledge") => {
       const selected = (overview.data?.items || []).flatMap((item) => item.type === "task" && item.task_id ? [{ ...item, id: item.task_id }] : []);
       const preview = partitionTaskAction(selected, selectedTaskIds, name);
-      if (!preview.eligible.length) return { succeeded: [] as string[], failed: preview.ineligible.map((entry) => entry.row.id) };
+      if (!preview.eligible.length) return { succeeded: [] as string[], failed: preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })) };
       const settled = await Promise.allSettled(preview.eligible.map((item) => name === "retry" ? api.retryTask(item.id) : api.acknowledgeTask(item.id)));
       return {
         succeeded: settled.flatMap((result, index) => result.status === "fulfilled" ? [preview.eligible[index].id] : []),
-        failed: [...preview.ineligible.map((entry) => entry.row.id), ...settled.flatMap((result, index) => result.status === "rejected" ? [preview.eligible[index].id] : [])],
+        failed: [...preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })), ...settled.flatMap((result, index) => result.status === "rejected" ? [{ id: preview.eligible[index].id, reason: actionErrorReason(result.reason) }] : [])],
       };
     },
     onSuccess: async (result) => {
-      setSelectedTaskIds(new Set(result.failed));
+      setSelectedTaskIds((current) => {
+        const succeeded = new Set(result.succeeded);
+        return new Set([...current].filter((id) => !succeeded.has(id)));
+      });
+      setBatchFailures(result.failed);
       if (result.succeeded.length) toast.success(t("operations.batch_complete", { count: result.succeeded.length }));
       await invalidate();
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const confirmBatch = (name: "retry" | "acknowledge") => {
+    const rows = (overview.data?.items || []).flatMap((item) => item.type === "task" && item.task_id ? [{ ...item, id: item.task_id }] : []);
+    const preview = partitionTaskAction(rows, selectedTaskIds, name);
+    if (!preview.eligible.length) {
+      setBatchFailures(preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })));
+      toast.warning(t("jobs.batch_no_eligible"));
+      return;
+    }
+    if (confirm(t("jobs.batch_confirm", { eligible: preview.eligible.length, ineligible: preview.ineligible.length }))) batchAction.mutate(name);
+  };
 
   const filteredGroups = useMemo(() => {
     let items = [...(overview.data?.items || [])];
@@ -273,7 +295,7 @@ export default function OperationsAttentionCenter() {
             type="button"
             className="btn-ghost min-h-11 px-3"
             disabled={!selectedTaskIds.size || batchAction.isPending}
-            onClick={() => { if (confirm(t("jobs.batch_confirm", { eligible: selectedTaskIds.size, ineligible: 0 }))) batchAction.mutate("retry"); }}
+            onClick={() => confirmBatch("retry")}
           >
             {t("operations.batch_retry")}
           </button>
@@ -281,12 +303,15 @@ export default function OperationsAttentionCenter() {
             type="button"
             className="btn-primary min-h-11 px-3"
             disabled={!selectedTaskIds.size || batchAction.isPending}
-            onClick={() => { if (confirm(t("jobs.batch_confirm", { eligible: selectedTaskIds.size, ineligible: 0 }))) batchAction.mutate("acknowledge"); }}
+            onClick={() => confirmBatch("acknowledge")}
           >
             {t("operations.batch_acknowledge")}
           </button>
         </div>
       )}
+      {batchFailures.length > 0 && <div role="alert" className="mb-4 rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">
+        {batchFailures.map((failure) => <p key={failure.id}>{failure.id.slice(0, 8)}: {reasonLabel(t, failure.reason)}</p>)}
+      </div>}
 
       {overview.isLoading && (
         <div className="space-y-2" aria-hidden="true">
@@ -355,10 +380,10 @@ export default function OperationsAttentionCenter() {
                   </div>
                 </button>
                 <div className="flex flex-wrap items-center gap-2 sm:max-w-[48%] sm:justify-end">
-                  {retryable && <button type="button" className="btn-primary min-h-11 px-4" onClick={() => action.mutate({ item, name: "retry" })}>{t("jobs.retry")}</button>}
-                  {pausable && task?.status !== "paused" && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "pause" })}>{t("jobs.pause")}</button>}
-                  {resumable && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "resume" })}>{t("jobs.resume")}</button>}
-                  {acknowledgeable && item.task_id && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "acknowledge" })}>{t("operations.acknowledge")}</button>}
+                  {retryable && <button type="button" disabled={action.isPending} className="btn-primary min-h-11 px-4" onClick={() => action.mutate({ item, name: "retry" })}>{t("jobs.retry")}</button>}
+                  {pausable && task?.status !== "paused" && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "pause" })}>{t("jobs.pause")}</button>}
+                  {resumable && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "resume" })}>{t("jobs.resume")}</button>}
+                  {acknowledgeable && item.task_id && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "acknowledge" })}>{t("operations.acknowledge")}</button>}
                   {canOpenRepository && item.repository_id && <Link href={adminRoutes.repository(item.repository_id)} className="btn-ghost min-h-11 px-3">{t("operations.open_repository")}</Link>}
                   {canCopyDiagnostics && <button
                     type="button"
@@ -371,7 +396,7 @@ export default function OperationsAttentionCenter() {
                         await writeClipboardText(JSON.stringify(item, null, 2));
                         toast.success(t("operations.diagnostics_copied"));
                       } catch (error) {
-                        toast.error((error as Error).message);
+                        toast.error(`${t("common.copy_failed")}: ${actionErrorReason(error)}`);
                       } finally {
                         setCopyingId(null);
                       }
@@ -395,6 +420,9 @@ export default function OperationsAttentionCenter() {
         }}
         onOpenDownload={openSelectedRepository}
         onOpenImport={openSelectedRepository}
+        actionPending={action.isPending}
+        actionError={action.error}
+        onRepeatAccepted={(jobId) => router.push(`${adminRoutes.jobs}?tab=downloads&job=${encodeURIComponent(jobId)}`)}
       />
       <DomainDangerZone
         entity="jobs"

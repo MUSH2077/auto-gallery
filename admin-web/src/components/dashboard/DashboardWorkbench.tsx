@@ -298,7 +298,7 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
   const downloads = data.recent.download_jobs.filter((job) => {
     const status = job.status.toLowerCase();
-    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status) || Boolean(job.outcome);
+    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status) || Boolean(job.outcome) || hasTaskAction(job, "repeat_sync");
   }).map((job) => {
     const active = ACTIVE_STATUSES.has(job.status.toLowerCase());
     const progress = active ? progressValue(job.progress_data) : { percent: null, label: null };

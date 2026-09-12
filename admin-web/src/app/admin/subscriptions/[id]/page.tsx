@@ -192,6 +192,9 @@ export default function SubscriptionDetailPage() {
     () => new Map((decisions.data?.pages.flatMap((page) => page.items) || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
     [decisions.data?.pages, id],
   );
+  const decisionTotal = decisions.data?.pages[0]?.total || 0;
+  const decisionsComplete = !!decisions.data && !decisions.hasNextPage && decisionBySource.size >= decisionTotal;
+  const authoritativeBlocked = decisions.data?.pages[0]?.summary.blocked_count;
   const detailStats = useMemo(() => {
     const sourceRows = sources.data || [];
     const decisionRows = [...decisionBySource.values()];
@@ -200,12 +203,12 @@ export default function SubscriptionDetailPage() {
       total: sourceRows.length,
       enabled: sourceRows.filter((item) => item.is_enabled).length,
       due: decisionRows.filter((item) => item.due).length,
-      blocked: decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
+      blocked: authoritativeBlocked ?? decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
       running: jobRows.filter((job) => ["enqueued", "pending", "downloading", "downloaded", "importing"].includes(job.status)).length,
       failed: jobRows.filter((job) => ["failed", "stale"].includes(job.status)).length,
       nextDueAt: decisionRows.map((item) => item.next_due_at).filter(Boolean).sort()[0] || null,
     };
-  }, [decisionBySource, jobs.data, sources.data]);
+  }, [authoritativeBlocked, decisionBySource, jobs.data, sources.data]);
 
   const getCreatorName = (creatorId: string) => {
     const c = creators.data?.items.find((c) => c.id === creatorId);
@@ -264,11 +267,11 @@ export default function SubscriptionDetailPage() {
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
         <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources")}</div></div>
-        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_due")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t(decisionsComplete ? "scheduler.filter_due" : "subscriptions.loaded_due")}</div></div>
         <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.blocked ? "text-danger" : "text-fg"}`}>{detailStats.blocked}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_blocked")}</div></div>
         <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running")}</div></div>
         <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed")}</div></div>
-        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short")}</div></div>
+        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t(decisionsComplete ? "subscriptions.next_due_short" : "subscriptions.loaded_next_due")}</div></div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -322,7 +325,7 @@ export default function SubscriptionDetailPage() {
                     onDelete={() => { setDeleteFiles(false); setDeleteSsId(ss.id); }}
                     syncPending={startSync.isPending}
                     togglePending={toggleSource.isPending}
-                    decision={decisionBySource.get(ss.id)} />
+                    decision={decisionBySource.get(ss.id)} decisionLoaded={decisionsComplete || decisionBySource.has(ss.id)} />
                 ))}
               </div>
             ) : (

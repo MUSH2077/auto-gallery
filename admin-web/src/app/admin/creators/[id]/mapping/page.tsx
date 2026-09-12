@@ -1,11 +1,14 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
 import { PageHeader, PageShell, StatusBadge, SourceBadge, Modal, ConfirmDialog } from "@/components";
 import { useT } from "@/lib/i18n";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
+
+type SetupFailure = { link: CreatorLinkType; subscriptionId?: string; stage: "subscription" | "source"; message: string };
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
@@ -40,12 +43,45 @@ export default function MappingPage() {
   const t = useT();
   const params = useParams(); const router = useRouter(); const qc = useQueryClient();
   const id = params.id as string;
+  const { user } = usePermissions();
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
   const [showAdd, setShowAdd] = useState(false);
   const [dialog, setDialog] = useState<{ action: "verify" | "unverify"; linkId: string } | null>(null);
-  const [setupFailure, setSetupFailure] = useState<{ link: CreatorLinkType; subscriptionId?: string; stage: "subscription" | "source"; message: string } | null>(null);
+  const [setupFailures, setSetupFailures] = useState<Record<string, SetupFailure>>({});
+  const recoveryKey = user?.id ? `auto-gallery-setup-recovery:${user.id}:${id}` : null;
+
+  useEffect(() => {
+    if (!recoveryKey) return;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(recoveryKey) || "{}") as Record<string, SetupFailure>;
+      const valid = Object.fromEntries(Object.entries(parsed).filter(([, entry]) => entry
+        && typeof entry === "object"
+        && typeof entry.link?.id === "string"
+        && typeof entry.link?.url === "string"
+        && (entry.stage === "subscription" || entry.stage === "source")
+        && typeof entry.message === "string"));
+      setSetupFailures(valid);
+    } catch {
+      setSetupFailures({});
+    }
+  }, [recoveryKey]);
+
+  const updateSetupFailure = (linkId: string, failure: SetupFailure | null) => {
+    setSetupFailures((current) => {
+      const next = { ...current };
+      if (failure) next[linkId] = failure;
+      else delete next[linkId];
+      if (recoveryKey) {
+        try {
+          if (Object.keys(next).length) localStorage.setItem(recoveryKey, JSON.stringify(next));
+          else localStorage.removeItem(recoveryKey);
+        } catch {}
+      }
+      return next;
+    });
+  };
 
   const setupRepository = async (link: CreatorLinkType, subscriptionId?: string) => {
     let subId = subscriptionId;
@@ -73,22 +109,22 @@ export default function MappingPage() {
       const link = links.data?.find((l: CreatorLinkType) => l.id === linkId);
       await links.refetch();
       if (link && ["pixiv", "iwara"].includes(link.link_type)) {
-        return setupRepository(link);
+        return { linkId, failure: await setupRepository(link) };
       }
-      return null;
+      return { linkId, failure: null };
     },
     onSuccess: (failure) => {
       void qc.invalidateQueries({ queryKey: queryKeys.creators.links(id) });
       void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-      setSetupFailure(failure);
+      updateSetupFailure(failure.linkId, failure.failure);
       setDialog(null);
     },
   });
 
   const retrySetup = useMutation({
-    mutationFn: () => setupFailure ? setupRepository(setupFailure.link, setupFailure.subscriptionId) : Promise.resolve(null),
-    onSuccess: (failure) => {
-      setSetupFailure(failure);
+    mutationFn: async (linkId: string) => ({ linkId, failure: setupFailures[linkId] ? await setupRepository(setupFailures[linkId].link, setupFailures[linkId].subscriptionId) : null }),
+    onSuccess: ({ linkId, failure }) => {
+      updateSetupFailure(linkId, failure);
       void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
     },
   });
@@ -116,14 +152,14 @@ export default function MappingPage() {
         {t("mapping.info_banner")}
       </div>
 
-      {setupFailure && (
-        <div role="alert" className="mb-6 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
-          <p>{t("mapping.partial_setup", { url: setupFailure.link.url, stage: t(`mapping.stage_${setupFailure.stage}`) })}: {setupFailure.message}</p>
-          <button className="btn-ghost mt-2" disabled={retrySetup.isPending} onClick={() => retrySetup.mutate()}>
-            {retrySetup.isPending ? t("common.processing") : t("mapping.retry_setup")}
+      {Object.entries(setupFailures).map(([linkId, failure]) => (
+        <div key={linkId} role="alert" className="mb-6 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
+          <p>{t("mapping.partial_setup", { url: failure.link.url, stage: t(`mapping.stage_${failure.stage}`) })}: {failure.message}</p>
+          <button className="btn-ghost mt-2" disabled={retrySetup.isPending} onClick={() => retrySetup.mutate(linkId)}>
+            {retrySetup.isPending && retrySetup.variables === linkId ? t("common.processing") : t("mapping.retry_setup")}
           </button>
         </div>
-      )}
+      ))}
 
       <section className="mb-8">
         <h2 className="font-semibold mb-3">{t("mapping.verified_links").replace("{count}", String(verified.length))}</h2>

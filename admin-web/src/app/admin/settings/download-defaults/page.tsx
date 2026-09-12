@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
 import { PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
+import { parseOptionalFiniteNumber } from "@/lib/task-actions";
 
 export default function DownloadDefaultsPage() {
   const t = useT();
@@ -121,7 +122,7 @@ export default function DownloadDefaultsPage() {
                 aria-label={t("dldefaults.retries")}
                 type="number" min={0} max={10}
                 value={current.max_retries}
-                onChange={(e) => setNum("max_retries", parseInt(e.target.value) || 3)}
+                onChange={(e) => setNum("max_retries", parseOptionalFiniteNumber(e.target.value, 3) ?? 3)}
                 className="input w-20 px-2 py-1 text-center font-mono"
               />
             </div>

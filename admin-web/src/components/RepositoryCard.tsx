@@ -36,9 +36,9 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof Element && !!target.closest("a,button,input,select,textarea,[role='button']");
 }
 
-function DecisionPill({ decision }: { decision?: SchedulerDecisionItem }) {
+function DecisionPill({ decision, loaded = true }: { decision?: SchedulerDecisionItem; loaded?: boolean }) {
   const t = useT();
-  if (!decision) return null;
+  if (!decision) return loaded ? null : <span className="text-xs text-muted">{t("subscriptions.decision_unloaded")}</span>;
   const displayReason = decision.suppression_reason || decision.reason;
   const warning = ["auth_unhealthy", "url_invalid"].includes(decision.reason);
   const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
@@ -95,6 +95,7 @@ export default function RepositoryCard({
   syncPending,
   togglePending,
   decision,
+  decisionLoaded,
 }: {
   repo: RepoLike;
   onSync?: (repo: RepoLike) => void;
@@ -103,6 +104,7 @@ export default function RepositoryCard({
   syncPending?: boolean;
   togglePending?: boolean;
   decision?: SchedulerDecisionItem;
+  decisionLoaded?: boolean;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -156,7 +158,7 @@ export default function RepositoryCard({
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted">
             <RepoHealthLine repo={repo} />
             <JobPill job={repo.latest_job} />
-            <DecisionPill decision={decision} />
+            <DecisionPill decision={decision} loaded={decisionLoaded} />
           </div>
           {decision && (
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">

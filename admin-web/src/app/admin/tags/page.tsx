@@ -40,12 +40,12 @@ export default function TagsPage() {
   });
 
   useEffect(() => {
-    if (tags.data && page > Math.max(1, Math.ceil(tags.data.total / PAGE_SIZE))) updateParams({ page: null });
-  }, [page, tags.data?.total]); // URL is the source of truth for the bounded page.
+    if (tags.isSuccess && !tags.isPlaceholderData && !tags.isFetching && tags.data && page > Math.max(1, Math.ceil(tags.data.total / PAGE_SIZE))) updateParams({ page: null });
+  }, [page, tags.data?.total, tags.isFetching, tags.isPlaceholderData, tags.isSuccess]); // URL is the source of truth for the bounded page.
 
   const create = useMutation({
     mutationFn: () => api.createTag({ normalized_name: formName.trim().toLowerCase(), category: formCat || undefined }),
-    onSuccess: (created) => { void qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); updateParams({ q: created.normalized_name, page: null }); },
+    onSuccess: (created) => { void qc.invalidateQueries({ queryKey: queryKeys.tags.all }); setShowCreate(false); setFormName(""); setFormCat("general"); updateParams({ q: created.normalized_name, category: created.category || null, page: null }); },
   });
 
   return (
@@ -71,6 +71,7 @@ export default function TagsPage() {
       </div>
 
       <div data-page-primary-content>
+      {tags.isFetching && !tags.isLoading && <div role="status" className="mb-2 text-xs text-muted">{t("common.refreshing")}</div>}
       {tags.isLoading && (
         <div className="flex min-h-80 flex-wrap items-center justify-center gap-3">
           {Array.from({ length: 20 }).map((_, i) => {

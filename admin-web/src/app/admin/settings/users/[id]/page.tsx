@@ -217,8 +217,9 @@ export default function UserDetailPage() {
         <SectionPanel title={t("user_detail.actions_section")}>
           <div className="flex flex-wrap gap-3">
             <button onClick={() => setConfirmReset(true)} className="btn-ghost">{t("user_detail.reset_password")}</button>
-            {!me.isLoading && me.data?.id !== id && <button onClick={() => setConfirmDelete(true)} className="btn-danger">{t("user_detail.delete_user")}</button>}
-            {!me.isLoading && me.data?.id === id && <span className="text-sm text-muted">{t("user_detail.self_delete_disabled")}</span>}
+            {me.isSuccess && me.data.id !== id && <button onClick={() => setConfirmDelete(true)} className="btn-danger">{t("user_detail.delete_user")}</button>}
+            {me.isSuccess && me.data.id === id && <span className="text-sm text-muted">{t("user_detail.self_delete_disabled")}</span>}
+            {me.isError && <button type="button" className="btn-ghost" onClick={() => me.refetch()}>{t("common.retry")}</button>}
           </div>
         </SectionPanel>
       </div>

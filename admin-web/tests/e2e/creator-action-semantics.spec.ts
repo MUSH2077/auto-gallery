@@ -28,13 +28,14 @@ test("creator merge keeps one group, excludes its target, and retains partial fa
       duplicateReads += 1;
       return json(route, { total: 2, duplicates: [
         { reason: "same_identity", description: "Group one", creator_ids: ["a-target", "a-source"], creator_names: ["Alpha Target", "Alpha Source"] },
-        { reason: "same_identity", description: "Group two", creator_ids: ["b-target", "b-source"], creator_names: ["Beta Target", "Beta Source"] },
+        { reason: "same_identity", description: "Group two", creator_ids: ["b-target", "b-source", "g-source"], creator_names: ["Beta Target", "Beta Source", "Gamma Source"] },
       ] });
     }
     if (path === "/api/v1/creators/merge") {
       bodies.push(request.postDataJSON());
       return json(route, { status: "ok", results: [
-        { source_id: "b-source", status: "error", error: "merge_rejected" },
+        { source_id: "b-source", status: "merged", error: null },
+        { source_id: "g-source", status: "error", error: "merge_rejected" },
       ] });
     }
     return json(route, { items: [], total: 0 });
@@ -44,22 +45,25 @@ test("creator merge keeps one group, excludes its target, and retains partial fa
   await page.waitForTimeout(500);
   await page.getByRole("checkbox", { name: /Alpha Source/ }).click();
   await page.getByRole("checkbox", { name: /Beta Source/ }).click();
+  await page.getByRole("checkbox", { name: /Gamma Source/ }).click();
   await expect(page.getByRole("button", { name: "Beta Target" })).toBeVisible();
-  await expect(page.getByText(/1 sources? selected/)).toBeVisible();
-  await page.getByRole("button", { name: /Merge 1/ }).click();
+  await expect(page.getByText(/2 sources? selected/)).toBeVisible();
+  await page.getByRole("button", { name: /Merge 2/ }).click();
   await expect(page.getByRole("dialog")).toContainText("Beta Target");
   await expect(page.getByRole("dialog")).toContainText("Beta Source");
+  await expect(page.getByRole("dialog")).toContainText("Gamma Source");
   await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "Beta Source" })).toContainText("Beta Source");
-  expect(bodies).toEqual([{ target_id: "b-target", source_ids: ["b-source"] }]);
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText("Gamma Source");
+  expect(bodies).toEqual([{ target_id: "b-target", source_ids: ["b-source", "g-source"] }]);
   expect(duplicateReads).toBeGreaterThan(1);
-  await expect(page.getByRole("checkbox", { name: /Beta Source/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Beta Source/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Gamma Source/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /Beta Target/ })).not.toBeChecked();
 });
 
-test("verified link remains committed when repository setup fails and can retry that stage", async ({ context, page }) => {
+test("two-link setup failure survives unrelated success and reload without re-verification", async ({ context, page }) => {
   await auth(context);
-  let linkVerified = false;
+  const verified = new Set<string>();
   let patchCount = 0;
   let sourceCount = 0;
   await context.route("**/api/v1/**", async (route) => {
@@ -68,8 +72,11 @@ test("verified link remains committed when repository setup fails and can retry 
     if (path === "/api/v1/auth/me") return json(route, me);
     if (path === "/api/v1/system/workbench") return json(route, workbench);
     if (path === "/api/v1/creators/creator-1") return json(route, creator);
-    if (path === "/api/v1/creators/creator-1/links" && request.method() === "GET") return json(route, [{ id: "link-1", creator_id: "creator-1", link_type: "pixiv", url: "https://pixiv.net/users/7", confidence: linkVerified ? 1 : 0.8, is_verified: linkVerified, source: "pixiv" }]);
-    if (path === "/api/v1/creators/creator-1/links/link-1") { patchCount += 1; linkVerified = true; return json(route, { status: "ok" }); }
+    if (path === "/api/v1/creators/creator-1/links" && request.method() === "GET") return json(route, [
+      { id: "link-1", creator_id: "creator-1", link_type: "pixiv", url: "https://pixiv.net/users/7", confidence: verified.has("link-1") ? 1 : 0.8, is_verified: verified.has("link-1"), source: "pixiv" },
+      { id: "link-2", creator_id: "creator-1", link_type: "pixiv", url: "https://pixiv.net/users/8", confidence: verified.has("link-2") ? 1 : 0.8, is_verified: verified.has("link-2"), source: "pixiv" },
+    ]);
+    if (path.startsWith("/api/v1/creators/creator-1/links/link-")) { patchCount += 1; verified.add(path.endsWith("link-1") ? "link-1" : "link-2"); return json(route, { status: "ok" }); }
     if (path === "/api/v1/subscriptions") return json(route, [{ id: "sub-1", creator_id: "creator-1", name: "Creator One" }]);
     if (path === "/api/v1/subscriptions/sub-1/sources") {
       sourceCount += 1;
@@ -79,13 +86,17 @@ test("verified link remains committed when repository setup fails and can retry 
     return json(route, { items: [], total: 0 });
   });
   await page.goto("/admin/creators/creator-1/mapping");
-  await page.getByRole("button", { name: "Approve" }).click({ force: true });
+  await page.getByRole("button", { name: "Approve" }).first().click({ force: true });
   await page.getByRole("button", { name: "Confirm" }).click();
   const partial = page.getByRole("alert").filter({ hasText: "Repository authorization failed" });
   await expect(partial).toBeVisible();
-  await expect(page.getByText("Verified", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(partial).toBeVisible();
+  await page.reload();
+  await expect(partial).toBeVisible();
   await page.getByRole("button", { name: /Retry repository setup/ }).click();
   await expect(partial).toHaveCount(0);
-  expect(patchCount).toBe(1);
-  expect(sourceCount).toBe(2);
+  expect(patchCount).toBe(2);
+  expect(sourceCount).toBe(3);
 });

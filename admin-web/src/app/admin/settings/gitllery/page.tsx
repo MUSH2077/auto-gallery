@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, CircleOff, Copy, RefreshCw, ShieldCheck } from "lucide-react";
 
@@ -32,6 +33,7 @@ function shortId(value?: string | null) {
 export default function GitllerySettingsPage() {
   const t = useT();
   const toast = useToast();
+  const [copyingCommand, setCopyingCommand] = useState<string | null>(null);
   const settings = useQuery({
     queryKey: queryKeys.gitllery.settings,
     queryFn: api.getGitllerySettings,
@@ -45,11 +47,15 @@ export default function GitllerySettingsPage() {
   });
 
   const copyCommand = async (command: string) => {
+    if (copyingCommand) return;
+    setCopyingCommand(command);
     try {
       await writeClipboardText(command);
       toast.success({ message: t("common.copied") });
     } catch {
       toast.error({ message: t("gitllery_settings.copy_failed") });
+    } finally {
+      setCopyingCommand(null);
     }
   };
 
@@ -249,6 +255,7 @@ export default function GitllerySettingsPage() {
                       <button
                         type="button"
                         onClick={() => copyCommand(command)}
+                        disabled={copyingCommand !== null}
                         className="btn-ghost inline-flex min-h-10 shrink-0 items-center gap-2 px-3 text-xs"
                         aria-label={t("gitllery_settings.copy_command", { command: name })}
                       >

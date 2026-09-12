@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
+import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
 import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
 import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
 import { useJobWebSocket } from "@/lib/useWebSocket";
@@ -14,8 +14,10 @@ import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/j
 import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
-import { actionReason, hasTaskAction, partitionTaskAction, type TaskAction } from "@/lib/task-actions";
+import { actionErrorReason, actionReason, clearRepeatSyncIntent, createRepeatSyncIntent, hasTaskAction, listRepeatSyncIntents, partitionTaskAction, readRepeatSyncIntent, reconcileTaskBulkResult, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance, type RepeatSyncIntent, type TaskAction, type TaskBulkSubmission } from "@/lib/task-actions";
 import { secureRandomUuid } from "@/lib/random";
+import { BatchByFilter } from "@/components/BatchByFilter";
+import { usePermissions } from "@/lib/usePermissions";
 
 
 const JOB_LIST_LIMIT = 200;
@@ -569,7 +571,9 @@ function TaskRunRow({
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
+  const { user } = usePermissions();
   const [confirmAction, setConfirmAction] = useState<"repeat_sync" | "delete" | null>(null);
+  const [repeatConflictState, setRepeatConflictState] = useState<ReturnType<typeof repeatSyncConflict> | null>(null);
   const taskAction = useMutation({
     mutationFn: async (action: TaskAction) => {
       if (action === "retry") return api.retryTask(task.id);
@@ -578,20 +582,28 @@ function TaskRunRow({
       if (action === "cancel") return api.cancelTask(task.id);
       if (action === "acknowledge") return api.acknowledgeTask(task.id);
       if (action === "delete") return api.deleteTask(task.id);
-      const key = `auto-gallery-repeat-sync:task:${task.id}`;
-      let requestId = localStorage.getItem(key);
-      if (!requestId) { requestId = secureRandomUuid(); localStorage.setItem(key, requestId); }
-      const accepted = await api.repeatTask(task.id, requestId);
-      if (accepted.previous_job_id !== task.subject_id || accepted.request_id !== requestId || accepted.action !== "repeat_sync" || !accepted.task_id) throw new Error(t("jobs.repeat_identity_invalid"));
-      localStorage.removeItem(key);
+      if (!user?.id || task.subject_type !== "download_job" || !task.subject_id) throw new Error(t("jobs.repeat_original_unavailable"));
+      const intent = readRepeatSyncIntent(user.id, task.subject_id) || createRepeatSyncIntent(user.id, task.subject_id, task.title || task.subject_id, secureRandomUuid);
+      storeRepeatSyncIntent(intent);
+      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatTask(task.id, intent.requestId));
+      clearRepeatSyncIntent(intent);
       return accepted;
     },
     onSuccess: (result, action) => {
       setConfirmAction(null);
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      if (action === "repeat_sync" && "task_id" in result) router.push(`/admin/jobs?tab=all&task=${result.task_id}`);
+      setRepeatConflictState(null);
+      if (action === "repeat_sync" && "job_id" in result) router.push(`/admin/jobs?tab=downloads&job=${result.job_id}`);
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error, action) => {
+      if (action === "repeat_sync") setRepeatConflictState(repeatSyncConflict(error));
+      else toast.error(actionErrorReason(error));
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.workbench });
+    },
   });
   const fmt = useI18nFormat();
   const progress = taskRunProgress(task);
@@ -629,12 +641,19 @@ function TaskRunRow({
             {hasTaskAction(task, "resume") && <RowButton disabled={taskAction.isPending} onClick={() => taskAction.mutate("resume")}>{t("jobs.resume")}</RowButton>}
             {hasTaskAction(task, "cancel") && <RowButton disabled={taskAction.isPending} onClick={() => taskAction.mutate("cancel")}>{t("common.cancel")}</RowButton>}
             {hasTaskAction(task, "acknowledge") && <RowButton disabled={taskAction.isPending} onClick={() => taskAction.mutate("acknowledge")}>{t("operations.acknowledge")}</RowButton>}
-            {hasTaskAction(task, "repeat_sync") && <RowButton tone="primary" disabled={taskAction.isPending} onClick={() => setConfirmAction("repeat_sync")}>{t("jobs.repeat_sync")}</RowButton>}
+            {hasTaskAction(task, "repeat_sync") && task.subject_type === "download_job" && task.subject_id && <RowButton tone="primary" disabled={taskAction.isPending} onClick={() => setConfirmAction("repeat_sync")}>{t("jobs.repeat_sync")}</RowButton>}
+            {hasTaskAction(task, "repeat_sync") && (task.subject_type !== "download_job" || !task.subject_id) && <span className="text-xs text-muted">{t("jobs.repeat_original_unavailable")}</span>}
             {hasTaskAction(task, "delete") && <RowButton tone="danger" disabled={taskAction.isPending} onClick={() => setConfirmAction("delete")}>{t("jobs.del")}</RowButton>}
           </>
         )}
       />
-      {confirmAction && <ConfirmDialog open title={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_title") : t("jobs.delete_task_title")} message={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_confirm") : t("jobs.delete_task_confirm")} onConfirm={() => taskAction.mutate(confirmAction)} onCancel={() => setConfirmAction(null)} isPending={taskAction.isPending} error={(taskAction.error as Error)?.message} />}
+      {confirmAction && <ConfirmDialog open title={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_title") : t("jobs.delete_task_title")} message={confirmAction === "repeat_sync" ? t("jobs.repeat_sync_confirm") : t("jobs.delete_task_confirm")} onConfirm={() => taskAction.mutate(confirmAction)} onCancel={() => setConfirmAction(null)} isPending={taskAction.isPending} error={taskAction.error ? actionErrorReason(taskAction.error) : undefined}>
+        {repeatConflictState?.kind === "existing" && <Link className="mb-3 block text-sm text-accent hover:underline" href={`/admin/jobs?tab=downloads&job=${repeatConflictState.existingJobId}`}>{t("jobs.open_existing_download")}</Link>}
+        {repeatConflictState?.kind === "identity" && <button type="button" className="btn-ghost mb-3" onClick={() => {
+          if (user?.id && task.subject_id) localStorage.removeItem(`auto-gallery-repeat-sync:${user.id}:${task.subject_id}:repeat_sync`);
+          taskAction.reset(); setRepeatConflictState(null);
+        }}>{t("jobs.repeat_new_intent")}</button>}
+      </ConfirmDialog>}
     </div>
   );
 }
@@ -892,6 +911,9 @@ function JobsContent() {
   const fmt = useI18nFormat();
   const toast = useToast();
   const qc = useQueryClient();
+  const { has, user } = usePermissions();
+  const canManageTasks = has("tasks");
+  const canManageSystem = has("system");
   const [downloadProgress, setDownloadProgress] = useState<Record<string, JobProgress>>({});
   const [importProgress, setImportProgress] = useState<Record<string, JobProgress>>({});
 
@@ -976,6 +998,11 @@ function JobsContent() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [batchOutcome, setBatchOutcome] = useState<Array<{ id: string; reason: string }> | null>(null);
+  const [recoverableRepeats, setRecoverableRepeats] = useState<RepeatSyncIntent[]>([]);
+
+  useEffect(() => {
+    setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
+  }, [user?.id]);
 
   const updateParams = (updates: Record<string, string | null>, replace = true) => {
     const next = new URLSearchParams(sp.toString());
@@ -1183,10 +1210,12 @@ function JobsContent() {
   const retryDL = useMutation({
     mutationFn: (id: string) => api.retryDownloadJob(id),
     onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    onError: (error) => toast.error(actionErrorReason(error)),
   });
   const retryIM = useMutation({
     mutationFn: (id: string) => api.retryImportJob(id),
     onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
+    onError: (error) => toast.error(actionErrorReason(error)),
   });
   const retryTask = useMutation({
     mutationFn: (id: string) => api.retryTask(id),
@@ -1200,35 +1229,37 @@ function JobsContent() {
   });
   const repeatDL = useMutation({
     mutationFn: async (id: string) => {
-      const key = `auto-gallery-repeat-sync:${id}`;
-      let requestId = localStorage.getItem(key);
-      if (!requestId) { requestId = secureRandomUuid(); localStorage.setItem(key, requestId); }
-      const accepted = await api.repeatDownloadJob(id, requestId);
-      if (accepted.previous_job_id !== id || accepted.request_id !== requestId || accepted.action !== "repeat_sync" || accepted.status !== "enqueued" || !accepted.task_id || !accepted.job_id) {
-        throw new Error(t("jobs.repeat_identity_invalid"));
-      }
-      localStorage.removeItem(key);
+      if (!user?.id) throw new Error(t("jobs.repeat_original_unavailable"));
+      const label = downloads.data?.find((job) => job.id === id)?.creator_name || id;
+      const intent = readRepeatSyncIntent(user.id, id) || createRepeatSyncIntent(user.id, id, label, secureRandomUuid);
+      storeRepeatSyncIntent(intent);
+      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatDownloadJob(id, intent.requestId));
+      clearRepeatSyncIntent(intent);
       return accepted;
     },
     onSuccess: (accepted) => {
       setRepeatConflict(null);
       setRepeatId(null);
+      setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
       void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       updateParams({ tab: "downloads", job: accepted.job_id, task: null });
     },
     onError: (error) => {
-      const detail = error instanceof ApiError && error.detail && typeof error.detail === "object" ? error.detail as Record<string, unknown> : null;
-      setRepeatConflict(detail?.code === "repeat_sync_not_admitted" && typeof detail.existing_job_id === "string" ? { existingJobId: detail.existing_job_id } : detail?.code === "request_identity_conflict" ? { identityMismatch: true } : null);
+      const conflict = repeatSyncConflict(error);
+      setRepeatConflict(conflict.kind === "existing" ? { existingJobId: conflict.existingJobId } : conflict.kind === "identity" ? { identityMismatch: true } : null);
+      setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
     },
   });
   const pauseDL = useMutation({
     mutationFn: (id: string) => api.pauseDownloadJob(id),
     onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    onError: (error) => toast.error(actionErrorReason(error)),
   });
   const resumeDL = useMutation({
     mutationFn: (id: string) => api.resumeDownloadJob(id),
     onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    onError: (error) => toast.error(actionErrorReason(error)),
   });
   const deleteDL = useMutation({
     mutationFn: (id: string) => api.deleteDownloadJob(id),
@@ -1242,19 +1273,18 @@ function JobsContent() {
   const clearDL = useMutation({
     mutationFn: (statuses: string[]) => api.clearDownloadJobs(statuses),
     onSuccess: (result) => {
-      const failed = new Set(result.errors.map((error) => error.id));
       setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) })));
-      setSelected((current) => new Set([...current].filter((id) => failed.has(id))));
-      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
     },
+    onSettled: () => { void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); void qc.invalidateQueries({ queryKey: queryKeys.tasks.all }); void qc.invalidateQueries({ queryKey: queryKeys.workbench }); void qc.invalidateQueries({ queryKey: ["tasks", "operations"] }); },
   });
   const killStuck = useMutation({
     mutationFn: () => api.killStuckJobs(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); void qc.invalidateQueries({ queryKey: queryKeys.tasks.all }); void qc.invalidateQueries({ queryKey: queryKeys.workbench }); void qc.invalidateQueries({ queryKey: ["tasks", "operations"] }); },
   });
   const retryAllFailed = useMutation({
     mutationFn: () => api.retryAllFailedJobs(),
-    onSuccess: (result) => { setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) }))); void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); },
+    onSuccess: (result) => { setBatchOutcome(result.errors.map((error) => ({ id: error.id, reason: bulkErrorText(error.error) }))); },
+    onSettled: () => { void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); void qc.invalidateQueries({ queryKey: queryKeys.tasks.all }); void qc.invalidateQueries({ queryKey: queryKeys.workbench }); void qc.invalidateQueries({ queryKey: ["tasks", "operations"] }); },
   });
   const compactPreview = useMutation({
     mutationFn: () => api.compactTasks(true),
@@ -1277,7 +1307,7 @@ function JobsContent() {
       pause: api.pauseTask,
       resume: api.resumeTask,
       cancel: api.cancelTask,
-      delete: null,
+      delete: api.deleteTask,
     } satisfies Record<BatchAction, ((id: string) => Promise<unknown>) | null>;
     const runner = actionMap[action];
     if (!runner) return { succeeded: 0, failed: ids.length };
@@ -1285,42 +1315,53 @@ function JobsContent() {
     return {
       succeeded: settled.filter((item) => item.status === "fulfilled").length,
       failed: settled.filter((item) => item.status === "rejected").length,
-      errors: settled.flatMap((item, index) => item.status === "rejected" ? [{ id: ids[index], error: item.reason instanceof Error ? item.reason.message : String(item.reason) }] : []),
+      errors: settled.flatMap((item, index) => item.status === "rejected" ? [{ id: ids[index], error: item.reason }] : []),
     };
   };
 
   const batchJobs = useMutation({
     mutationFn: async ({ action }: { action: BatchAction }) => {
-      if (selected.size > 0) {
-        const selectedRows = currentRows.filter((row: { id: string }) => selected.has(row.id)) as Array<{ id: string; available_actions?: readonly string[] | null; disabled_reasons?: Record<string, string> | null }>;
-        const preview = partitionTaskAction(selectedRows, selected, action as TaskAction);
-        if (!preview.eligible.length) return { cancelled: true, succeeded: 0, failed: selected.size, total_matched: selected.size, errors: preview.ineligible.map((entry) => ({ id: entry.row.id, error: entry.reason })) };
-        if (!confirm(t("jobs.batch_confirm", { eligible: preview.eligible.length, ineligible: preview.ineligible.length }))) return { cancelled: true, succeeded: 0, failed: 0, total_matched: selected.size, errors: [] };
-        const ids = preview.eligible.map((row) => row.id);
-        if (activeTab === "downloads") {
-          return api.batchDownloadJobs(ids, action);
-        }
-        if (activeTab === "imports") {
-          return api.batchImportJobsByFilter({ ids }, action);
-        }
-        return runSelectedTaskBatch(ids, action);
+      const selectedIds = [...selected];
+      if (!selectedIds.length) return { kind: "empty" as const };
+      const selectedRows = currentRows.filter((row: { id: string }) => selected.has(row.id)) as Array<{ id: string; available_actions?: readonly string[] | null; disabled_reasons?: Record<string, string> | null }>;
+      const preview = partitionTaskAction(selectedRows, selected, action as TaskAction);
+      const submission: TaskBulkSubmission = {
+        selectedIds,
+        eligibleIds: preview.eligible.map((entry) => entry.id),
+        localRefusals: preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })),
+      };
+      if (!submission.eligibleIds.length) return { kind: "neutral" as const, submission };
+      if (!confirm(t("jobs.batch_confirm", { eligible: submission.eligibleIds.length, ineligible: submission.localRefusals.length }))) return { kind: "cancelled" as const };
+      try {
+        const response = activeTab === "downloads"
+          ? await api.batchDownloadJobs([...submission.eligibleIds], action)
+          : activeTab === "imports"
+            ? await api.batchImportJobsByFilter({ ids: [...submission.eligibleIds] }, action)
+            : await runSelectedTaskBatch([...submission.eligibleIds], action);
+        return { kind: "received" as const, submission, response };
+      } catch (error) {
+        return { kind: "uncertain" as const, submission, error };
       }
-
-      toast.warning({ message: t("jobs.select_rows_first") });
-      return { cancelled: true, succeeded: 0, failed: 0, total_matched: 0, errors: [] };
     },
-    onSuccess: (data: any) => {
-      if (data.cancelled) return;
-      toast.info(t("jobs.batch_result", { succeeded: data.succeeded ?? 0, failed: data.failed ?? 0 }));
-      const failed = new Set((data.errors || []).map((error: { id: string }) => error.id));
-      setBatchOutcome((data.errors || []).map((error: { id: string; error: unknown }) => ({ id: error.id, reason: bulkErrorText(error.error) })));
-      setSelected((current) => new Set([...current].filter((id) => failed.has(id))));
+    onSuccess: (data) => {
+      if (data.kind === "cancelled") return;
+      if (data.kind === "empty") {
+        toast.warning({ message: t("jobs.select_rows_first") });
+        return;
+      }
+      const reconciliation = reconcileTaskBulkResult(data.submission, data.kind === "received" ? data.response : data.kind === "neutral" ? { succeeded: 0, failed: 0, errors: [] } : null);
+      setBatchOutcome(reconciliation.retained);
+      const confirmed = new Set(reconciliation.confirmedSuccessIds);
+      setSelected((current) => new Set([...current].filter((id) => !confirmed.has(id))));
+      if (data.kind === "received") toast.info(t("jobs.batch_result", { succeeded: data.response.succeeded ?? 0, failed: reconciliation.retained.length }));
+      else if (data.kind === "neutral") toast.warning({ message: t("jobs.batch_no_eligible") });
+      else toast.error({ message: actionErrorReason(data.error) });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       qc.invalidateQueries({ queryKey: queryKeys.workbench });
+      qc.invalidateQueries({ queryKey: ["tasks", "operations"] });
     },
-    onError: (err) => toast.error((err as Error).message),
   });
 
   const handleSelectAll = () => {
@@ -1359,6 +1400,11 @@ function JobsContent() {
     stale: summaryRows.filter((task) => task.status === "stale" && task.attention_state === "open").length,
     waiting: summaryRows.filter((task) => task.resource_state === "waiting" && Boolean(task.resource_reason)).length,
   };
+  const currentBatchFilters = Object.fromEntries(Object.entries({
+    status: qualifierValue("status"),
+    source: qualifierValue("source"),
+    subscription_source_id: subscriptionSourceId,
+  }).filter((entry): entry is [string, string] => Boolean(entry[1])));
 
   return (
     <PageShell>
@@ -1378,6 +1424,14 @@ function JobsContent() {
           </span>
         ))}
       </div>
+
+      {recoverableRepeats.length > 0 && <section className="mb-4 rounded-md border border-warning/30 bg-warning-subtle p-3" aria-label={t("jobs.repeat_recovery_title")}>
+        <h2 className="text-sm font-semibold text-warning">{t("jobs.repeat_recovery_title")}</h2>
+        {recoverableRepeats.map((intent) => <div key={intent.originalJobId} className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="min-w-0 break-all">{intent.label} · {shortId(intent.originalJobId)}</span>
+          <button type="button" className="btn-ghost" disabled={repeatDL.isPending} onClick={() => { setRepeatId(intent.originalJobId); setRepeatConflict(null); }}>{t("jobs.repeat_recover")}</button>
+        </div>)}
+      </section>}
 
       {batchMode && (
         <JobsBatchToolbar
@@ -1630,6 +1684,33 @@ function JobsContent() {
         )}
       </section>}
 
+      {activeTab === "downloads" && (canManageTasks || canManageSystem) && (
+        <details className="mb-8 rounded-md border border-border bg-surface">
+          <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm font-medium">{t("jobs.bulk_utilities")}</summary>
+          <div className="space-y-4 border-t border-border p-3">
+            {canManageTasks && Object.keys(currentBatchFilters).length > 0 && (
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted">{t("jobs.current_filter_scope")}</p>
+                <BatchByFilter filters={currentBatchFilters} onSuccess={() => {
+                  void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+                  void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+                  void qc.invalidateQueries({ queryKey: queryKeys.workbench });
+                }} />
+              </div>
+            )}
+            {canManageTasks && <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-ghost" disabled={clearDL.isPending} onClick={() => handleClear(["complete"])}>{t("jobs.clear_complete")}</button>
+              <button type="button" className="btn-ghost" disabled={clearDL.isPending} onClick={() => handleClear(["failed", "stale"])}>{t("jobs.clear_failed")}</button>
+              <button type="button" className="btn-ghost" disabled={retryAllFailed.isPending} onClick={() => retryAllFailed.mutate()}>{t("jobs.retry_all_failed")}</button>
+            </div>}
+            {canManageSystem && <button type="button" className="btn-danger" disabled={killStuck.isPending} onClick={() => {
+              if (confirm(t("jobs.kill_stuck_confirm"))) killStuck.mutate();
+            }}>{t("jobs.kill_stuck")}</button>}
+            {(clearDL.error || killStuck.error || retryAllFailed.error) && <p role="alert" className="text-sm text-danger">{actionErrorReason(clearDL.error || killStuck.error || retryAllFailed.error)}</p>}
+          </div>
+        </details>
+      )}
+
       <details className="mb-8 rounded-md border border-danger/30 bg-danger/5">
         <summary className="flex min-h-11 cursor-pointer items-center px-3 py-2 text-sm font-medium text-danger">
           {t("jobs.danger_zone")}
@@ -1667,6 +1748,9 @@ function JobsContent() {
         onRetryTask={(id) => retryTask.mutate(id)}
         onOpenDownload={openDownloadDetail}
         onOpenImport={openImportDetail}
+        actionPending={retryTask.isPending}
+        actionError={retryTask.error}
+        onRepeatAccepted={openDownloadDetail}
       />
 
       <JobDetailDrawer
@@ -1676,17 +1760,23 @@ function JobsContent() {
         onRetryDownload={(id) => retryDL.mutate(id)}
         onPauseDownload={(id) => pauseDL.mutate(id)}
         onResumeDownload={(id) => resumeDL.mutate(id)}
+        onRepeatDownload={(id) => setRepeatId(id)}
         onDeleteDownload={(id) => { setDeleteId(id); setDeleteType("dl"); }}
         onRetryImport={(id) => retryIM.mutate(id)}
         onDeleteImport={(id) => { setDeleteId(id); setDeleteType("im"); }}
+        actionPending={retryDL.isPending || pauseDL.isPending || resumeDL.isPending || retryIM.isPending}
+        actionError={retryDL.error || pauseDL.error || resumeDL.error || retryIM.error}
       />
 
       {repeatId && (
         <ConfirmDialog open title={t("jobs.repeat_sync_title")} message={t("jobs.repeat_sync_confirm")}
           onConfirm={() => repeatDL.mutate(repeatId)} onCancel={() => setRepeatId(null)}
-          isPending={repeatDL.isPending} error={(repeatDL.error as Error)?.message}>
+          isPending={repeatDL.isPending} error={repeatDL.error ? actionErrorReason(repeatDL.error) : undefined}>
           {repeatConflict?.existingJobId && <Link className="mb-3 block text-sm text-accent hover:underline" href={`/admin/jobs?tab=downloads&job=${repeatConflict.existingJobId}`}>{t("jobs.open_existing_download")}</Link>}
-          {repeatConflict?.identityMismatch && <button type="button" className="btn-ghost mb-3" onClick={() => { localStorage.removeItem(`auto-gallery-repeat-sync:${repeatId}`); repeatDL.reset(); setRepeatConflict(null); }}>{t("jobs.repeat_new_intent")}</button>}
+          {repeatConflict?.identityMismatch && <button type="button" className="btn-ghost mb-3" onClick={() => {
+            if (user?.id) localStorage.removeItem(`auto-gallery-repeat-sync:${user.id}:${repeatId}:repeat_sync`);
+            repeatDL.reset(); setRepeatConflict(null); setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
+          }}>{t("jobs.repeat_new_intent")}</button>}
         </ConfirmDialog>
       )}
 

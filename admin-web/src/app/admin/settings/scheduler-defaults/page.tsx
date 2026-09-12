@@ -5,6 +5,7 @@ import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/ap
 import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
+import { parseOptionalFiniteNumber } from "@/lib/task-actions";
 
 const TIMEZONES = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
   "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
@@ -129,7 +130,7 @@ export default function SchedulerDefaultsPage() {
               <div><span className="font-medium">{t("dldefaults.retries")}</span>
                 <p className="text-xs text-muted mt-1">{t("dldefaults.retries.desc")}</p></div>
               <input aria-label={t("dldefaults.retries")} type="number" min={0} max={10} value={dl.max_retries}
-                onChange={(e) => setDl("max_retries", parseInt(e.target.value) || 3)}
+                onChange={(e) => setDl("max_retries", parseOptionalFiniteNumber(e.target.value, 3) ?? 3)}
                 className="input w-20 px-2 py-1 text-center font-mono" />
             </div>
             <div className="flex items-center justify-between">

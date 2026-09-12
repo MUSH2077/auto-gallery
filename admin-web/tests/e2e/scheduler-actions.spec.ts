@@ -468,7 +468,9 @@ test("scheduler plans page beyond 500 with bounded requests and global summary",
     return { updated_at: "2026-09-08T00:00:00Z", scheduler_enabled: true, timezone: "Asia/Shanghai", view, total: scoped.length, offset, limit, next_offset: offset + limit < scoped.length ? offset + limit : null, summary: { blocked_count: 24, overdue_count: 99, oldest_overdue_at: "2026-09-01T00:00:00Z" }, suppressed_count: 7, items: scoped.slice(offset, offset + limit) };
   }});
   await page.goto("/admin/scheduler?page=21");
-  await page.locator("details").filter({ hasText: "Normal source plans" }).locator("summary").click({ force: true });
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/page=21/);
+  await page.locator("details").filter({ hasText: "Healthy schedules" }).locator("summary").click({ force: true });
   await expect(page.getByText("Creator 500", { exact: true })).toBeVisible();
   expect(reads.every((read) => read.limit <= 500)).toBe(true);
   await expect(page.getByText("99", { exact: true }).first()).toBeVisible();
