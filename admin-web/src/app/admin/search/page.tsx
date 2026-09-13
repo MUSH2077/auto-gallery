@@ -145,7 +145,6 @@ function SearchContent() {
   };
 
   return (
-    <PermissionGuard anyOf={["library", "subscriptions"]}>
       <PageShell>
         <Breadcrumb items={[{ label: t("search.title") }, { label: deferredQuery || "…" }]} />
         <PageHeader
@@ -432,14 +431,15 @@ function SearchContent() {
           </>
         )}
       </PageShell>
-    </PermissionGuard>
   );
 }
 
 export default function SearchPage() {
   return (
-    <Suspense>
-      <SearchContent />
-    </Suspense>
+    <PermissionGuard anyOf={["library", "subscriptions"]}>
+      <Suspense>
+        <SearchContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

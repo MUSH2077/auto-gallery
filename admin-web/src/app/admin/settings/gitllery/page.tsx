@@ -31,7 +31,7 @@ function shortId(value?: string | null) {
   return value.length > 18 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
 }
 
-export default function GitllerySettingsPage() {
+function GitllerySettingsContent() {
   const t = useT();
   const toast = useToast();
   const { isAdmin } = usePermissions();
@@ -66,7 +66,6 @@ export default function GitllerySettingsPage() {
   const integrityFailures = repositories.filter((repo) => !repo.object_integrity_ok).length;
 
   return (
-    <PermissionGuard module="system">
       <PageShell>
         <PageHeader
           title={t("gitllery_settings.title")}
@@ -295,6 +294,13 @@ export default function GitllerySettingsPage() {
           </div>
         )}
       </PageShell>
+  );
+}
+
+export default function GitllerySettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <GitllerySettingsContent />
     </PermissionGuard>
   );
 }

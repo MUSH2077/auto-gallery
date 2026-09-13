@@ -8,7 +8,7 @@ import { useToast } from "@/components/Toast";
 import Link from "next/link";
 import DomainDangerZone from "@/components/DomainDangerZone";
 
-export default function SettingsPage() {
+function SettingsContent() {
   const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
@@ -35,7 +35,6 @@ export default function SettingsPage() {
   ];
 
   return (
-    <PermissionGuard module="system">
     <PageShell>
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
@@ -109,6 +108,13 @@ export default function SettingsPage() {
         description={t("datamgmt.danger_reset_settings_desc")}
       />
     </PageShell>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <SettingsContent />
     </PermissionGuard>
   );
 }

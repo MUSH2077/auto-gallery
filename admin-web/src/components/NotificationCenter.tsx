@@ -8,6 +8,8 @@ import { api, queryKeys } from "@/lib/api";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
+import { useAuth } from "@/lib/auth";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -229,6 +231,16 @@ function refreshOperationQueries(
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const t = useT();
   const qc = useQueryClient();
+  const { isAuthenticated, isLoading: authLoading, user: authUser } = useAuth();
+  const {
+    has,
+    isLoading: permissionsLoading,
+    user: permissionsUser,
+  } = usePermissions({ enabled: isAuthenticated });
+  const canAccessBatchImports = isAuthenticated
+    && !permissionsLoading
+    && permissionsUser?.id === authUser?.id
+    && has("subscriptions");
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
   const [operationJob, setOperationJob] = useState<OperationJobState | null>(null);
@@ -239,6 +251,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const timers = timersRef.current;
     return () => { timers.forEach((t) => clearTimeout(t)); timers.clear(); };
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) setBatchJob(null);
+  }, [authLoading, isAuthenticated]);
 
   const scheduleRemoval = useCallback((id: string) => {
     const existing = timersRef.current.get(id);
@@ -340,6 +356,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   // Mount recovery: restore batch job from sessionStorage (only if recent)
   useEffect(() => {
+    if (!canAccessBatchImports) return;
     try {
       const stored = sessionStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -371,7 +388,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch {}
-  }, []); // eslint-disable-line
+  }, [canAccessBatchImports]);
 
   useEffect(() => {
     try {
@@ -400,7 +417,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const batchStatusQuery = useQuery({
     queryKey: ["batch-import-status-global", batchJob?.jobId],
     queryFn: () => api.getBatchImportStatus(batchJob?.jobId || undefined),
-    enabled: !!batchJob?.jobId,
+    enabled: canAccessBatchImports && !!batchJob?.jobId,
     staleTime: 0, // Always refetch on mount to restore result after navigation
     refetchInterval: (query) => {
       if (!batchJob) return false;

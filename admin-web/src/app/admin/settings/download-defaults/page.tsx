@@ -2,11 +2,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { parseOptionalFiniteNumber } from "@/lib/task-actions";
 
-export default function DownloadDefaultsPage() {
+function DownloadDefaultsContent() {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -268,5 +268,13 @@ export default function DownloadDefaultsPage() {
         </>
       )}
     </PageShell>
+  );
+}
+
+export default function DownloadDefaultsPage() {
+  return (
+    <PermissionGuard module="system">
+      <DownloadDefaultsContent />
+    </PermissionGuard>
   );
 }

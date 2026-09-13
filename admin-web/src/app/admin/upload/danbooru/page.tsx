@@ -306,7 +306,7 @@ function classifyUrl(url: string): string {
 
 const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
-export default function DanbooruReferencePage() {
+function DanbooruReferenceContent() {
   const t = useT();
   const notify = useNotifications();
   const toast = useToast();
@@ -500,7 +500,6 @@ export default function DanbooruReferencePage() {
   }, [artist]);
 
   return (
-    <PermissionGuard module="subscriptions">
     <PageShell>
       <PageHeader
         title={t("danbooru.title")}
@@ -820,6 +819,13 @@ export default function DanbooruReferencePage() {
           importName={importName} setImportName={setImportName} />
       )}
     </PageShell>
+  );
+}
+
+export default function DanbooruReferencePage() {
+  return (
+    <PermissionGuard module="subscriptions">
+      <DanbooruReferenceContent />
     </PermissionGuard>
   );
 }

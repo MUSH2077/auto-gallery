@@ -85,6 +85,17 @@ export default function CommandPalette({
   }, [mounted, open]);
 
   useEffect(() => {
+    if (!open) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [onClose, open]);
+
+  useEffect(() => {
     setActiveIndex(0);
   }, [query]);
 

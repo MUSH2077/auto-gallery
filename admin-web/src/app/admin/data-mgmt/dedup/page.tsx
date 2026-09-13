@@ -195,7 +195,7 @@ function EvidencePanel({ item }: { item: AssetDedupCase }) {
   );
 }
 
-export default function DedupPage() {
+function DedupContent() {
   const t = useT();
   const pathname = usePathname();
   const router = useRouter();
@@ -291,7 +291,6 @@ export default function DedupPage() {
   }, [scan.isPending, scanStatus.data, t]);
 
   return (
-    <PermissionGuard module="curation">
       <PageShell>
         <PageHeader
           title={t("asset_dedup.title")}
@@ -494,6 +493,13 @@ export default function DedupPage() {
           }}
         />
       </PageShell>
+  );
+}
+
+export default function DedupPage() {
+  return (
+    <PermissionGuard module="curation">
+      <DedupContent />
     </PermissionGuard>
   );
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DedupSettings, queryKeys } from "@/lib/api";
-import { ErrorState, PageHeader, PageShell } from "@/components";
+import { ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 
@@ -52,7 +52,7 @@ function NumberSetting({
   );
 }
 
-export default function DedupSettingsPage() {
+function DedupSettingsContent() {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -225,5 +225,13 @@ export default function DedupSettingsPage() {
         </button>
       </div>
     </PageShell>
+  );
+}
+
+export default function DedupSettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <DedupSettingsContent />
+    </PermissionGuard>
   );
 }

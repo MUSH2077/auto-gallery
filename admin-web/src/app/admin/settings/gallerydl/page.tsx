@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta, GalleryDLMultiConfig } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { PageHeader, ErrorState, PageShell } from "@/components";
+import { PageHeader, ErrorState, PageShell, PermissionGuard } from "@/components";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
 import { parseOptionalFiniteNumber } from "@/lib/task-actions";
@@ -479,7 +479,7 @@ function initBilibili(d: any): BilibiliSourceConfig {
   };
 }
 
-export default function GalleryDLConfigPage() {
+function GalleryDLConfigContent() {
   const t = useT();
   const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
   const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
@@ -511,6 +511,14 @@ export default function GalleryDLConfigPage() {
       setActiveTab={setActiveTab}
       connection={connection}
     />
+  );
+}
+
+export default function GalleryDLConfigPage() {
+  return (
+    <PermissionGuard module="system">
+      <GalleryDLConfigContent />
+    </PermissionGuard>
   );
 }
 

@@ -60,7 +60,7 @@ function severityBadge(s: string, t: (k: string) => string) {
   );
 }
 
-export default function DataManagementPage() {
+function DataManagementContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const router = useRouter();
@@ -69,6 +69,7 @@ export default function DataManagementPage() {
   const toast = useToast();
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [resetLedger, setResetLedger] = useState(false);
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ClearEntity | null>(null);
   const [activeAction, setActiveAction] = useState<ClearEntity | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
@@ -149,11 +150,19 @@ export default function DataManagementPage() {
 
   const rebuildLibrary = useMutation({
     mutationFn: () => api.rebuildLibrary(),
-    onSuccess: (d: any) => {
+    onMutate: () => setResult(null),
+    onSuccess: (d) => {
       const title = t("datamgmt.cleanup_reindex");
-      setResult({ ok: true, msg: d.message });
-      notify.startOperationJob(d.job_id, "admin-rebuild", title);
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      setResult({ ok: true, msg: t("datamgmt.cleanup_reindex_accepted") });
+      notify.startOperationJob(d.task_id, "admin-rebuild", title);
+      toast.success({
+        title,
+        message: t("datamgmt.cleanup_reindex_accepted"),
+        persistent: true,
+        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
+      });
+      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      setConfirmRebuild(false);
     },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
   });
@@ -252,7 +261,6 @@ export default function DataManagementPage() {
   const integrityItemEntrance = useStaggeredEntrance(integrityItemKeys);
 
   return (
-    <PermissionGuard module="system">
     <PageShell>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
 
@@ -557,7 +565,7 @@ export default function DataManagementPage() {
                 <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
                 <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
               </div>
-              <button onClick={() => rebuildLibrary.mutate()} disabled={rebuildLibrary.isPending}
+              <button onClick={() => setConfirmRebuild(true)} disabled={rebuildLibrary.isPending}
                 className="btn-primary ml-3 shrink-0 text-xs">
                 {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
               </button>
@@ -686,6 +694,18 @@ export default function DataManagementPage() {
       </div>
 
       {/* Global confirm dialog */}
+      <ConfirmDialog
+        open={confirmRebuild}
+        title={t("datamgmt.cleanup_reindex_confirm_title")}
+        message={t("datamgmt.cleanup_reindex_confirm_msg")}
+        onConfirm={() => rebuildLibrary.mutate()}
+        onCancel={() => {
+          setConfirmRebuild(false);
+          rebuildLibrary.reset();
+        }}
+        isPending={rebuildLibrary.isPending}
+        error={(rebuildLibrary.error as Error)?.message}
+      />
       {confirmAction && (
         <ConfirmDialog
           open
@@ -707,6 +727,13 @@ export default function DataManagementPage() {
         />
       )}
     </PageShell>
+  );
+}
+
+export default function DataManagementPage() {
+  return (
+    <PermissionGuard module="system">
+      <DataManagementContent />
     </PermissionGuard>
   );
 }

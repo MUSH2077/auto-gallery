@@ -11,7 +11,7 @@ import DomainDangerZone from "@/components/DomainDangerZone";
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 const PAGE_SIZE = 100;
 
-export default function TagsPage() {
+function TagsContent() {
   const t = useT();
   const qc = useQueryClient();
   const { has } = usePermissions();
@@ -49,7 +49,6 @@ export default function TagsPage() {
   });
 
   return (
-    <PermissionGuard module="library">
     <PageShell>
       <PageHeader
         title={t("tags.title")}
@@ -121,6 +120,13 @@ export default function TagsPage() {
       />
       </div>
     </PageShell>
+  );
+}
+
+export default function TagsPage() {
+  return (
+    <PermissionGuard module="library">
+      <TagsContent />
     </PermissionGuard>
   );
 }

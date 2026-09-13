@@ -22,7 +22,7 @@ function taskLink(task: TaskRun): string | null {
   return null;
 }
 
-export default function NotificationsPage() {
+function NotificationsContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const [filter, setFilter] = useState<Filter>("all");
@@ -56,7 +56,6 @@ export default function NotificationsPage() {
   ];
 
   return (
-    <PermissionGuard module="tasks">
     <PageShell>
       <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
 
@@ -147,6 +146,13 @@ export default function NotificationsPage() {
         </div>
       )}
     </PageShell>
+  );
+}
+
+export default function NotificationsPage() {
+  return (
+    <PermissionGuard module="tasks">
+      <NotificationsContent />
     </PermissionGuard>
   );
 }

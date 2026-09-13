@@ -662,7 +662,7 @@ export const api = {
     request<T.ClearImpactPreview>(`/api/v1/admin/clear/preview/${entity}`),
 
   rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
+    request<{ task_id: string; job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
       method: "POST",
       body: JSON.stringify(options),
     }),
