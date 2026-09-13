@@ -282,8 +282,16 @@ def test_contains_settings_preserves_order_for_other_arrays(actual, desired):
         ({"filterableAttributes": "title"}, {"filterableAttributes": "title"}),
         ({"filterableAttributes": [1]}, {"filterableAttributes": [1]}),
         (
+            {"filterableAttributes": {"title": "present"}},
+            {"filterableAttributes": {"title": "present"}},
+        ),
+        (
             {"typoTolerance": {"disableOnAttributes": None}},
             {"typoTolerance": {"disableOnAttributes": None}},
+        ),
+        (
+            {"typoTolerance": {"disableOnAttributes": {"title": "present"}}},
+            {"typoTolerance": {"disableOnAttributes": {"title": "present"}}},
         ),
     ],
 )

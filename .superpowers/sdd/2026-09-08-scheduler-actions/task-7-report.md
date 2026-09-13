@@ -72,3 +72,25 @@ The implementation is limited to the comparison helper and test support needed t
 ## Acceptance boundary
 
 Root owns reconciliation of the verified production Meilisearch tasks, production backlog recovery, image build and rollout, container cleanup, and final acceptance under normal I/O conditions. The interrupted broader run should be repeated only after root determines the host is healthy enough for it.
+
+## Independent review correction
+
+The read-only review of `b3252a4` found that dictionary-shaped desired values at the four set-like paths entered ordinary dictionary recursion before list validation. Identical malformed dictionaries could therefore return true. The bounded correction checks the full path first, so all four special paths must pass string-list validation before any general dictionary recursion is considered. Normal nested settings still recurse unchanged.
+
+Review RED:
+
+```text
+docker exec ag-button-runner python -m pytest -q tests/test_search_delivery.py::test_contains_settings_rejects_missing_or_non_string_lists --junitxml=/evidence/task-7-settings-review-red.xml
+```
+
+Result: 2 failed and 4 passed in 1.57 seconds, exit 1. Both failures were the expected matching malformed dictionary cases: top-level `filterableAttributes` and nested `typoTolerance.disableOnAttributes`. JUnit SHA-256: `3c99d34b1f6d4ff0539b464238a692070782a9bed7b432f537ae1401ffb7075c`.
+
+Review GREEN:
+
+```text
+docker exec ag-button-runner python -m pytest -q tests/test_search_delivery.py -k 'reordered_set_like or material_settings or contains_settings' --junitxml=/evidence/task-7-settings-review-green.xml
+```
+
+Result: 14 passed and 23 deselected in 17.48 seconds, exit 0. JUnit SHA-256: `24791d328eaf9f294941026a7fd6af9385238df4434945102604abaf22bf8c0e`.
+
+The added cases close the review finding without changing request behavior, deadlines, marker ownership, or other delivery state transitions.

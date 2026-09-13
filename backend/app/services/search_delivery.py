@@ -418,10 +418,7 @@ def _contains_settings(actual, desired, path=()):
             return False
         actual_value = actual[key]
         value_path = (*path, key)
-        if isinstance(desired_value, dict):
-            if not _contains_settings(actual_value, desired_value, value_path):
-                return False
-        elif value_path in _UNORDERED_STRING_LIST_PATHS:
+        if value_path in _UNORDERED_STRING_LIST_PATHS:
             if (
                 not isinstance(actual_value, list)
                 or not isinstance(desired_value, list)
@@ -429,6 +426,9 @@ def _contains_settings(actual, desired, path=()):
                 or not all(isinstance(item, str) for item in desired_value)
                 or set(actual_value) != set(desired_value)
             ):
+                return False
+        elif isinstance(desired_value, dict):
+            if not _contains_settings(actual_value, desired_value, value_path):
                 return False
         elif actual_value != desired_value:
             return False
