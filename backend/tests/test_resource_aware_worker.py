@@ -730,6 +730,144 @@ def test_registered_admin_transport_preserves_child_owned_resource_profile():
     assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
 
 
+@pytest.mark.parametrize(
+    "operation_type",
+    [
+        "admin-integrity-scan",
+        "admin-backup-estimate",
+        "admin-backup-create",
+        "admin-restore-validate",
+        "admin-proxy-test",
+        "admin-gallerydl-connectivity-test",
+    ],
+)
+def test_unsliced_registered_admin_jobs_ignore_stale_internal_profile(operation_type):
+    """Rolling queued metadata cannot suppress whole-operation admission."""
+    job = type(
+        "Job",
+        (),
+        {
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "meta": {
+                "registered_admin_operation": operation_type,
+                "registered_admin_internal_profile": "maintenance",
+            },
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+    assert ResourceAwareWorker._job_workload(job, queue) == "maintenance"
+
+
+def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(monkeypatch):
+    import rq
+    from app.services import operations
+
+    published = []
+    monkeypatch.setattr(rq, "Queue", lambda name, connection: (name, connection))
+    monkeypatch.setattr(
+        operations,
+        "checked_enqueue",
+        lambda queue, function, *args, **kwargs: published.append((queue, function, args, kwargs)),
+    )
+
+    operation_types = (
+        "admin-integrity-scan",
+        "admin-backup-estimate",
+        "admin-backup-create",
+        "admin-restore-validate",
+        "admin-proxy-test",
+        "admin-gallerydl-connectivity-test",
+    )
+    for operation_type in operation_types:
+        operations._enqueue_admin_rq(
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            operation_type=operation_type,
+            rq_job_id=f"{operation_type}-rq",
+            queue_name="maintenance",
+            job_timeout=60,
+            redis_client=object(),
+        )
+    operations._enqueue_admin_rq(
+        "22222222-2222-4222-8222-222222222222",
+        1,
+        operation_type="admin-rebuild",
+        rq_job_id="admin-rebuild-rq",
+        queue_name="maintenance",
+        job_timeout=60,
+        redis_client=object(),
+    )
+
+    assert [entry[3]["meta"] for entry in published[:-1]] == [
+        {"registered_admin_operation": operation_type}
+        for operation_type in operation_types
+    ]
+    assert published[-1][3]["meta"] == {
+        "registered_admin_operation": "admin-rebuild",
+        "registered_admin_internal_profile": "maintenance",
+    }
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._close_control_pubsub = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    worker._set_job_resource_meta = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "unsliced-admin-job",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": ("11111111-1111-4111-8111-111111111111", 1),
+            "meta": {
+                "registered_admin_operation": "admin-backup-create",
+                "registered_admin_internal_profile": "maintenance",
+            },
+            "refresh": lambda self: None,
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    held = {"value": False}
+
+    class Lock:
+        def try_acquire(self):
+            assert held["value"] is False
+            held["value"] = True
+            return True
+
+        def release(self):
+            assert held["value"] is True
+            held["value"] = False
+
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: [])
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: Lock())
+    monkeypatch.setattr(resource_aware_worker, "_set_resource_state_sync", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(resource_aware_worker, "profile_slice_cooldown_seconds", lambda *_args, **_kwargs: 0.0)
+
+    def _execute(_self, actual_job, actual_queue):
+        assert (actual_job, actual_queue) == (job, queue)
+        assert held["value"] is True
+        if raises:
+            raise RuntimeError("handler failed")
+        return "handled"
+
+    monkeypatch.setattr(Worker, "execute_job", _execute)
+    if raises:
+        with pytest.raises(RuntimeError, match="handler failed"):
+            worker.execute_job(job, queue)
+    else:
+        assert worker.execute_job(job, queue) == "handled"
+    assert held["value"] is False
+
+
 def test_outbox_slice_bounds_are_applied_before_fork():
     media = type("Job", (), {
         "func_name": "app.jobs.media_derivatives.run_media_derivative_outbox",

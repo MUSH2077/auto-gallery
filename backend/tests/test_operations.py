@@ -318,7 +318,9 @@ async def test_active_operations_filter_stale_attempt_cache_and_keep_legacy():
         )
         redis_client.setex(operations.operation_key(legacy_id), 60, legacy_payload)
 
-        response = await data_api.list_active_operations()
+        response = await data_api.list_active_operations(
+            user=SimpleNamespace(id=1, is_admin=True, permissions=[]),
+        )
         visible = {item["job_id"] for item in response["operations"]}
 
         assert stale_id not in visible
@@ -698,7 +700,11 @@ async def test_reference_mapping_refresh_uses_shared_single_flight_operation(mon
 
     async def _enqueue(**kwargs):
         seen.update(kwargs)
-        return {"status": "enqueued", "job_id": "refresh-job"}
+        return {
+            "status": "enqueued",
+            "task_id": "11111111-1111-4111-8111-111111111111",
+            "job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+        }
 
     monkeypatch.setattr(reference, "enqueue_admin_operation", _enqueue)
 
@@ -706,10 +712,15 @@ async def test_reference_mapping_refresh_uses_shared_single_flight_operation(mon
 
     assert response == {
         "status": "enqueued",
-        "job_id": "refresh-job",
+        "task_id": "11111111-1111-4111-8111-111111111111",
+        "job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+        "rq_job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
         "operation_type": "danbooru-mapping-refresh",
         "message": "Danbooru mapping refresh queued",
     }
+    serialized = reference.DanbooruMappingRefreshEnqueueResponse.model_validate(response).model_dump()
+    assert serialized["task_id"] == response["task_id"]
+    assert serialized["rq_job_id"] == response["rq_job_id"]
     assert seen["lock_key"] == "library:creator-reenrich:active"
     assert seen["operation_type"] == "danbooru-mapping-refresh"
     assert seen["options"] == {"scope": "all"}
@@ -717,24 +728,74 @@ async def test_reference_mapping_refresh_uses_shared_single_flight_operation(mon
 
 
 @pytest.mark.asyncio
-async def test_reference_mapping_refresh_status_is_operation_scoped(monkeypatch):
+async def test_reference_mapping_refresh_status_forwards_resolved_principal(monkeypatch):
     from fastapi import HTTPException
     from app.api import reference
+    from app.api.admin import data as data_api
 
-    expected = {
-        "job_id": "refresh-job",
+    durable = {
+        "task_id": "11111111-1111-4111-8111-111111111111",
+        "job_id": "11111111-1111-4111-8111-111111111111",
+        "rq_job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
         "status": "running",
         "operation_type": "danbooru-mapping-refresh",
         "progress": {"scanned": 2, "total": 10},
     }
-    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: expected)
-    assert await reference.get_danbooru_mapping_refresh("refresh-job") == expected
+    seen = []
 
-    monkeypatch.setattr(reference, "get_operation_status", lambda _job_id: {
-        "job_id": "other-job",
-        "status": "running",
-        "operation_type": "admin-clear",
-    })
+    async def _get(job_id, user=None):
+        seen.append((job_id, user))
+        return durable
+
+    monkeypatch.setattr(data_api, "get_admin_operation", _get)
+    users = (
+        SimpleNamespace(id=1, is_admin=True, permissions=[]),
+        SimpleNamespace(id=2, is_admin=False, permissions=["subscriptions"]),
+    )
+    for user in users:
+        response = await reference.get_danbooru_mapping_refresh(
+            durable["rq_job_id"],
+            user=user,
+        )
+        assert response == {
+            **durable,
+            "job_id": durable["rq_job_id"],
+        }
+        serialized = reference.DanbooruMappingRefreshStatusResponse.model_validate(response).model_dump()
+        assert serialized["task_id"] == durable["task_id"]
+        assert serialized["rq_job_id"] == durable["rq_job_id"]
+    assert seen == [(durable["rq_job_id"], users[0]), (durable["rq_job_id"], users[1])]
+
+
+@pytest.mark.asyncio
+async def test_reference_mapping_refresh_preserves_kind_and_visibility_failures(monkeypatch):
+    from fastapi import HTTPException
+    from app.api import reference
+    from app.api.admin import data as data_api
+
+    user = SimpleNamespace(id=3, is_admin=False, permissions=["subscriptions"])
+
+    async def _wrong_kind(_job_id, user=None):
+        assert user is not None
+        return {
+            "task_id": "22222222-2222-4222-8222-222222222222",
+            "job_id": "22222222-2222-4222-8222-222222222222",
+            "rq_job_id": "admin-22222222-2222-4222-8222-222222222222-attempt-1",
+            "status": "running",
+            "operation_type": "admin-clear",
+        }
+
+    monkeypatch.setattr(data_api, "get_admin_operation", _wrong_kind)
     with pytest.raises(HTTPException) as exc:
-        await reference.get_danbooru_mapping_refresh("other-job")
+        await reference.get_danbooru_mapping_refresh("wrong-kind", user=user)
     assert exc.value.status_code == 404
+
+    for status_code in (403, 404):
+        async def _rejected(_job_id, user=None, code=status_code):
+            assert user is not None
+            raise HTTPException(status_code=code, detail="access rejected")
+
+        monkeypatch.setattr(data_api, "get_admin_operation", _rejected)
+        with pytest.raises(HTTPException) as exc:
+            await reference.get_danbooru_mapping_refresh("private-or-denied", user=user)
+        assert exc.value.status_code == status_code

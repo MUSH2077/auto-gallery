@@ -110,7 +110,7 @@ function DataManagementContent() {
     onSuccess: (accepted) => {
       setResult({ ok: true, msg: t("datamgmt.cleanup_json_accepted") });
       toast.success({ title: t("datamgmt.cleanup_json"), message: t("datamgmt.cleanup_json_accepted"), action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${accepted.task_id}`) } });
-      notify.startOperationJob(accepted.job_id, accepted.operation_type, t("datamgmt.cleanup_json"));
+      notify.startOperationJob(accepted.job_id, accepted.operation_type, t("datamgmt.cleanup_json"), undefined, accepted.task_id);
       void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
     onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
@@ -119,14 +119,14 @@ function DataManagementContent() {
   const importFromDisk = useMutation({
     mutationFn: () => api.importFromDisk(resetLedger ? { reset_ledger: true } : {}),
     onMutate: () => setResult(null),
-    onSuccess: (d: any) => {
+    onSuccess: (d) => {
       const title = t("datamgmt.disk_import");
       toast.success({
         title,
         message: d.message,
-        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.job_id}`) },
+        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
       });
-      notify.startOperationJob(d.job_id, "admin-disk-import", title);
+      notify.startOperationJob(d.job_id, "admin-disk-import", title, undefined, d.task_id);
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
     onError: (e) => toast.error({ title: t("datamgmt.disk_import"), message: (e as Error).message }),
@@ -135,14 +135,14 @@ function DataManagementContent() {
   const reenrichCreators = useMutation({
     mutationFn: () => api.reenrichCreators(),
     onMutate: () => setResult(null),
-    onSuccess: (d: any) => {
+    onSuccess: (d) => {
       const title = t("datamgmt.reenrich");
       toast.success({
         title,
         message: d.message,
-        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.job_id}`) },
+        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
       });
-      notify.startOperationJob(d.job_id, "admin-creator-reenrich", title);
+      notify.startOperationJob(d.job_id, "admin-creator-reenrich", title, undefined, d.task_id);
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
     onError: (e) => toast.error({ title: t("datamgmt.reenrich"), message: (e as Error).message }),
@@ -154,7 +154,7 @@ function DataManagementContent() {
     onSuccess: (d) => {
       const title = t("datamgmt.cleanup_reindex");
       setResult({ ok: true, msg: t("datamgmt.cleanup_reindex_accepted") });
-      notify.startOperationJob(d.task_id, "admin-rebuild", title);
+      notify.startOperationJob(d.task_id, "admin-rebuild", title, undefined, d.task_id);
       toast.success({
         title,
         message: t("datamgmt.cleanup_reindex_accepted"),

@@ -2418,15 +2418,25 @@
             "title": "Operation Type",
             "type": "string"
           },
+          "rq_job_id": {
+            "title": "Rq Job Id",
+            "type": "string"
+          },
           "status": {
             "const": "enqueued",
             "title": "Status",
             "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
           }
         },
         "required": [
+          "task_id",
           "status",
           "job_id",
+          "rq_job_id",
           "operation_type",
           "message"
         ],
@@ -2491,9 +2501,31 @@
             ],
             "title": "Result"
           },
+          "rq_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rq Job Id"
+          },
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
           },
           "updated_at": {
             "anyOf": [

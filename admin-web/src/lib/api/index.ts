@@ -668,13 +668,13 @@ export const api = {
     }),
 
   importFromDisk: (options: T.ImportFromDiskRequest = {}) =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/library/import-from-disk", {
       method: "POST",
       body: JSON.stringify(options),
     }),
 
   reenrichCreators: () =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/creators/re-enrich", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/creators/re-enrich", {
       method: "POST",
     }),
 
@@ -694,7 +694,9 @@ export const api = {
 
   getAdminOperationStatus: (jobId: string) =>
     request<{
+      task_id?: string | null;
       job_id: string;
+      rq_job_id?: string | null;
       status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "admin-clear" | "danbooru-import-all" | string;
       progress?: { phase?: string; label?: string; current?: number; total?: number };
@@ -767,15 +769,19 @@ export const api = {
   // Danbooru Reference
   refreshAllDanbooruMappings: () =>
     request<{
+      task_id: string;
       status: "enqueued";
       job_id: string;
+      rq_job_id: string;
       operation_type: "danbooru-mapping-refresh";
       message: string;
     }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
 
   getDanbooruMappingRefreshStatus: (jobId: string) =>
     request<{
+      task_id?: string | null;
       job_id: string;
+      rq_job_id?: string | null;
       status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "danbooru-mapping-refresh";
       progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };

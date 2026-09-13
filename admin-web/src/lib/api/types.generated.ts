@@ -5579,11 +5579,15 @@ export interface components {
              * @constant
              */
             operation_type: "danbooru-mapping-refresh";
+            /** Rq Job Id */
+            rq_job_id: string;
             /**
              * Status
              * @constant
              */
             status: "enqueued";
+            /** Task Id */
+            task_id: string;
         };
         /** DanbooruMappingRefreshStatusResponse */
         DanbooruMappingRefreshStatusResponse: {
@@ -5608,8 +5612,12 @@ export interface components {
             result?: {
                 [key: string]: unknown;
             } | null;
+            /** Rq Job Id */
+            rq_job_id?: string | null;
             /** Status */
             status: string;
+            /** Task Id */
+            task_id?: string | null;
             /** Updated At */
             updated_at?: number | null;
         };

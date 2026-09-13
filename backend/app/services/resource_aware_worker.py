@@ -444,6 +444,16 @@ class ResourceAwareWorker(Worker):
         """
 
         metadata = getattr(job, "meta", None) or {}
+        operation_type = metadata.get("registered_admin_operation")
+        if operation_type:
+            from app.services.operations import ADMIN_PARENT_ADMISSION_OPERATION_TYPES
+
+            if str(operation_type) in ADMIN_PARENT_ADMISSION_OPERATION_TYPES:
+                # Rolling workers can receive deliveries published by the
+                # previous image with stale internal-slice metadata. These
+                # handlers never acquire child slices, so the parent must own
+                # the maintenance lease and POSIX lock for the whole workhorse.
+                return None
         registered_profile = metadata.get("registered_admin_internal_profile")
         if registered_profile:
             return str(registered_profile)

@@ -40,6 +40,14 @@ ADMIN_DISPATCH_RETRY_MIN_SECONDS = 30
 ADMIN_DISPATCH_RETRY_MAX_SECONDS = 15 * 60
 ADMIN_RQ_FUNCTION = "app.jobs.admin_operations.run_registered_admin_operation"
 _ACTIVE_ADMIN_STATUSES = frozenset({"enqueued", "running", "paused", "recovering"})
+ADMIN_PARENT_ADMISSION_OPERATION_TYPES = frozenset({
+    "admin-integrity-scan",
+    "admin-backup-estimate",
+    "admin-backup-create",
+    "admin-restore-validate",
+    "admin-proxy-test",
+    "admin-gallerydl-connectivity-test",
+})
 _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "subscription-sync-batch": "download",
     "subscription-sync-batch-cleanup": "download",
@@ -54,12 +62,6 @@ _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "admin-gitllery-sync": "git_projection",
     "hierarchy-delete": "maintenance",
     "asset-dedup-scan": "image_derive",
-    "admin-integrity-scan": "maintenance",
-    "admin-backup-estimate": "maintenance",
-    "admin-backup-create": "maintenance",
-    "admin-restore-validate": "maintenance",
-    "admin-proxy-test": "maintenance",
-    "admin-gallerydl-connectivity-test": "maintenance",
 }
 _ADMIN_OPERATION_ATTEMPT: ContextVar[tuple[UUID, int] | None] = ContextVar(
     "admin_operation_attempt",

@@ -337,12 +337,13 @@ function DanbooruReferenceContent() {
         data.operation_type,
         title,
         { entity: "creators", scope: "all" },
+        data.task_id,
       );
       toast.success({
         title,
         message: t("danbooru.refresh_queued"),
         action: has("tasks")
-          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.job_id}`) }
+          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) }
           : undefined,
       });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });

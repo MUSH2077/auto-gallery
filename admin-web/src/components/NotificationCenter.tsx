@@ -37,6 +37,7 @@ export interface BatchJobState {
 
 export interface OperationJobState {
   jobId: string;
+  taskId?: string;
   kind: "admin-clear" | "admin-rebuild" | "admin-disk-import" | "danbooru-import-all" | string;
   title: string;
   startedAt: number;
@@ -66,6 +67,7 @@ interface NotificationCtx {
     kind: OperationJobState["kind"],
     title: string,
     meta?: Record<string, any>,
+    taskId?: string,
   ) => void;
   clearOperationJob: () => void;
 }
@@ -111,6 +113,14 @@ function operationResultMessage(operation: OperationJobState, t: TFunction): str
     });
   }
   return operation.result?.message || t("status.completed");
+}
+
+const TASK_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function operationDestination(operation: OperationJobState): string | null {
+  if (operation.kind === "danbooru-import-all") return adminRoutes.danbooru;
+  if (!operation.taskId || !TASK_RUN_ID.test(operation.taskId)) return null;
+  return `${adminRoutes.jobs}?tab=admin&task=${operation.taskId}`;
 }
 
 function refetchCreatorSubscriptionQueries(qc: QueryClient) {
@@ -320,9 +330,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     kind: OperationJobState["kind"],
     title: string,
     meta?: Record<string, any>,
+    taskId?: string,
   ) => {
     const state: OperationJobState = {
-      jobId, kind, title,
+      jobId, taskId, kind, title,
       startedAt: Date.now(),
       progress: null, result: null,
       status: "running",
@@ -331,7 +342,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setOperationJob(state);
     try {
       sessionStorage.setItem(OPERATION_STORAGE_KEY, JSON.stringify({
-        jobId, kind, title, meta, startedAt: state.startedAt,
+        jobId, taskId, kind, title, meta, startedAt: state.startedAt,
       }));
     } catch {}
   }, []);
@@ -402,6 +413,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       }
       setOperationJob({
         jobId: parsed.jobId,
+        taskId: parsed.taskId,
         kind: parsed.kind,
         title: parsed.title,
         meta: parsed.meta,
@@ -469,17 +481,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!operationJob || !operationStatusQuery.data) return;
     const data = operationStatusQuery.data;
+    const taskId = typeof data.task_id === "string" && TASK_RUN_ID.test(data.task_id)
+      ? data.task_id
+      : operationJob.taskId;
 
     if (data.status === "queued" || data.status === "enqueued" || data.status === "running") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, status: "running" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, status: "running" }
         : prev);
       return;
     }
 
     if (data.status === "complete") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
         : prev);
       refreshOperationQueries(qc, operationJob.kind, operationJob.meta, data.result);
       try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
@@ -488,7 +503,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     if (data.status === "failed") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
         : prev);
       try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
     }
@@ -575,6 +590,7 @@ export function NotificationBell() {
     + (operationJob?.status === "running" ? 1 : 0)
     + serverItems.filter((task) => taskActivityStatus(task.status) === "running").length;
   const hasRecent = serverItems.length > 0 || !!batchJob || !!operationJob;
+  const operationLink = operationJob ? operationDestination(operationJob) : null;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
@@ -679,10 +695,11 @@ export function NotificationBell() {
                   </div>
                 )}
                 {operationJob && (
-                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
+                  <div className={`${operationLink ? "cursor-pointer" : "cursor-default"} border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle`}
                     onClick={() => {
+                      if (!operationLink) return;
                       setOpen(false);
-                      router.push(operationJob.kind === "danbooru-import-all" ? adminRoutes.danbooru : `${adminRoutes.jobs}?tab=admin&task=${operationJob.jobId}`);
+                      router.push(operationLink);
                     }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(operationJob.status)}</div>
