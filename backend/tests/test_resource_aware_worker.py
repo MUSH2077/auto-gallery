@@ -560,6 +560,157 @@ def test_operations_worker_selects_profile_from_job_function(monkeypatch):
     assert heavy_io.worker_flock_is_inherited() is False
 
 
+def test_profile_admission_persists_maintenance_pending_before_wait(monkeypatch):
+    from app.services import resource_aware_worker
+
+    owner = "11111111-1111-4111-8111-111111111111"
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "maintenance-pending-admission",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": (owner, 7),
+            "meta": {"registered_admin_operation": "admin-backup-create"},
+            "save_meta": lambda self: None,
+        },
+    )()
+    events = []
+    maintenance_checks = iter((1, 0))
+    worker.connection.exists = lambda _key: next(maintenance_checks)
+    original_set_job_resource_meta = ResourceAwareWorker._set_job_resource_meta
+
+    def record_job_resource_meta(actual_job, workload, state, reason):
+        events.append(("rq", workload, state, reason))
+        original_set_job_resource_meta(actual_job, workload, state, reason)
+
+    worker._set_job_resource_meta = record_job_resource_meta
+    worker._wait_for_control_event = lambda _delay, _workload: events.append(("wait",))
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: [])
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: None)
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "_set_resource_state_sync",
+        lambda actual_owner, state, reason, **kwargs: events.append(
+            ("durable", actual_owner, state, reason, kwargs)
+        ),
+    )
+
+    assert worker._profile_admission(job, "import_db") == (None, None, owner)
+
+    waiting_projection = (
+        "durable",
+        owner,
+        "waiting",
+        "maintenance_pending",
+        {"workload": "import_db", "publisher_attempt": "7"},
+    )
+    assert waiting_projection in events
+    assert events.index(("rq", "import_db", "waiting", "maintenance_pending")) < events.index(
+        waiting_projection
+    ) < events.index(("wait",))
+
+
+@pytest.mark.parametrize("lock_denial", ["busy", "oserror"])
+def test_profile_admission_releases_lease_then_persists_lock_wait_before_wait(
+    monkeypatch,
+    lock_denial,
+):
+    from app.services import resource_aware_worker
+
+    owner = "22222222-2222-4222-8222-222222222222"
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "native-lock-admission",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": (owner, 8),
+            "meta": {"registered_admin_operation": "admin-backup-create"},
+            "save_meta": lambda self: None,
+        },
+    )()
+    events = []
+    leases = []
+    original_set_job_resource_meta = ResourceAwareWorker._set_job_resource_meta
+
+    def record_job_resource_meta(actual_job, workload, state, reason):
+        events.append(("rq", workload, state, reason))
+        original_set_job_resource_meta(actual_job, workload, state, reason)
+
+    class Lease:
+        denial_reason = None
+
+        def __init__(self, *_args, **_kwargs):
+            self.number = len(leases) + 1
+            leases.append(self)
+
+        async def try_acquire(self):
+            events.append(("lease_acquired", self.number))
+            return True
+
+        async def release(self):
+            events.append(("lease_released", self.number))
+
+    class DenyingLock:
+        def try_acquire(self):
+            events.append(("lock_denied", lock_denial))
+            if lock_denial == "oserror":
+                raise OSError("native lock unavailable")
+            return False
+
+    class GrantedLock:
+        def try_acquire(self):
+            events.append(("lock_acquired",))
+            return True
+
+    granted_lock = GrantedLock()
+    locks = iter((DenyingLock(), granted_lock))
+    worker._set_job_resource_meta = record_job_resource_meta
+    worker._wait_for_control_event = lambda _delay, _workload: events.append(("wait",))
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: ["lease"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "resource_reservation_details",
+        lambda _snapshot, _workload: (1, 2),
+    )
+    monkeypatch.setattr(resource_aware_worker, "RenewableRedisLease", Lease)
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: next(locks))
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "_set_resource_state_sync",
+        lambda actual_owner, state, reason, **kwargs: events.append(
+            ("durable", actual_owner, state, reason, kwargs)
+        ),
+    )
+
+    admitted_lock, admitted_lease, admitted_owner = worker._profile_admission(job, "maintenance")
+
+    waiting_projection = (
+        "durable",
+        owner,
+        "waiting",
+        "profile_lock_busy",
+        {"workload": "maintenance", "publisher_attempt": "8"},
+    )
+    assert (admitted_lock, admitted_lease, admitted_owner) == (granted_lock, leases[1], owner)
+    assert waiting_projection in events
+    assert events.index(("lease_released", 1)) < events.index(waiting_projection) < events.index(
+        ("wait",)
+    )
+    assert events.index(("rq", "maintenance", "waiting", "profile_lock_busy")) < events.index(
+        waiting_projection
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_disk_publisher_parent_admission_cannot_mutate_rotated_attempt_resource_state():

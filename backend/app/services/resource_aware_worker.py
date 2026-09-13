@@ -1012,6 +1012,13 @@ class ResourceAwareWorker(Worker):
                         "waiting",
                         "maintenance_pending",
                     )
+                    _set_resource_state_sync(
+                        owner,
+                        "waiting",
+                        "maintenance_pending",
+                        workload=workload,
+                        publisher_attempt=publisher_attempt,
+                    )
                     self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                     attempt += 1
                     continue
@@ -1096,6 +1103,13 @@ class ResourceAwareWorker(Worker):
                 if lease is not None:
                     asyncio.run(lease.release())
                 self._set_job_resource_meta(job, workload, "waiting", "profile_lock_busy")
+                _set_resource_state_sync(
+                    owner,
+                    "waiting",
+                    "profile_lock_busy",
+                    workload=workload,
+                    publisher_attempt=publisher_attempt,
+                )
                 self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                 attempt += 1
                 continue
