@@ -77,13 +77,14 @@ def result(status, *, delay=0, claimed=0, processed=0, action=None):
             "successor_delay_seconds": delay}
 
 
-def _request_timeout(method, deadline):
-    if method.upper() in ("GET", "HEAD"):
-        return min(_SHORT_HTTP_TIMEOUT_SECONDS, remaining(deadline))
-    budget = deadline - time.monotonic()
-    request_budget = budget - _WRITE_COMPLETION_RESERVE_SECONDS
+def _write_request_budget(deadline):
+    request_budget = deadline - _WRITE_COMPLETION_RESERVE_SECONDS - time.monotonic()
     if request_budget <= 0:
         raise _WriteBudgetUnavailable("mutating search request has no completion budget")
+    return request_budget
+
+
+def _write_request_timeout(request_budget):
     short_budget = min(_SHORT_HTTP_TIMEOUT_SECONDS, request_budget)
     return httpx.Timeout(
         connect=short_budget,
@@ -102,13 +103,23 @@ def _exception_diagnostic(exc):
 
 async def request(client, method, path, deadline, payload=None):
     headers = {"Authorization": f"Bearer {settings.meili_master_key}"}
-    kwargs = {"headers": headers, "timeout": _request_timeout(method, deadline)}
+    kwargs = {"headers": headers}
     if payload is not None:
         kwargs["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode()
         headers["Content-Type"] = "application/json"
-    response = await client.request(method, settings.meili_url.rstrip("/") + path, **kwargs)
-    response.raise_for_status()
-    return response.json()
+    url = settings.meili_url.rstrip("/") + path
+    if method.upper() in ("GET", "HEAD"):
+        kwargs["timeout"] = min(_SHORT_HTTP_TIMEOUT_SECONDS, remaining(deadline))
+        response = await client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response.json()
+    request_deadline = deadline - _WRITE_COMPLETION_RESERVE_SECONDS
+    request_budget = _write_request_budget(deadline)
+    kwargs["timeout"] = _write_request_timeout(request_budget)
+    async with asyncio.timeout_at(request_deadline):
+        response = await client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response.json()
 
 
 async def _defer_prepared_for_budget(receipt, token, deadline, *, clear_marker=False):

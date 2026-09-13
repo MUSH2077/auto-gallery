@@ -447,6 +447,71 @@ async def test_mutating_request_reserves_completion_with_short_connect_and_pool(
     assert 16 < timeout.write <= 17
 
 
+@pytest.mark.asyncio
+async def test_mutating_request_rechecks_budget_after_payload_encoding(monkeypatch):
+    from app.services import search_delivery as delivery
+
+    clock = SimpleNamespace(value=100.0)
+    original_dumps = delivery.json.dumps
+    calls = 0
+
+    def slow_dumps(*args, **kwargs):
+        clock.value = 108.0
+        return original_dumps(*args, **kwargs)
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(delivery.time, "monotonic", lambda: clock.value)
+    monkeypatch.setattr(delivery.json, "dumps", slow_dumps)
+
+    with pytest.raises(TimeoutError, match="completion budget"):
+        await delivery.request(Client(), "POST", "/indexes/works/documents", 110.0, [{"id": "one"}])
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_mutating_request_absolute_cutoff_keeps_inflight_write_ambiguous(monkeypatch):
+    import asyncio
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
+    phases = []
+    completed = False
+
+    class Client:
+        async def request(self, method, url, **kwargs):
+            nonlocal completed
+            timeout = kwargs["timeout"]
+            assert timeout.connect <= 5
+            assert timeout.pool <= 5
+            assert timeout.read > 0.5
+            assert timeout.write > 0.5
+            phases.append("pool")
+            await asyncio.sleep(0.5)
+            phases.append("read")
+            await asyncio.sleep(0.5)
+            completed = True
+            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(delivery, "_MIN_PREPARED_WRITE_SECONDS", 0)
+
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 3.8)
+
+    assert phases == ["pool", "read"]
+    assert not completed
+    assert outcome["status"] == "ambiguous"
+    assert receipt.state == "ambiguous"
+    assert receipt.last_error.startswith("TimeoutError:")
+    assert marker == {"owner": str(receipt.id), "workload": "search_index", "task_uid": None}
+
+
 @pytest.mark.parametrize("remaining_seconds", [3, -1])
 @pytest.mark.asyncio
 async def test_mutating_request_without_completion_budget_is_not_issued(remaining_seconds):

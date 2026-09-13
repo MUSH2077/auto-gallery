@@ -78,3 +78,64 @@ git diff --check -- backend/app/services/search_delivery.py backend/tests/test_s
 - Cancellation or any exception after entering the client request preserves the `submitting`/`ambiguous` fence. Known task UIDs are persisted to the marker before the SQL `pending` checkpoint.
 - No new settings, endpoints, resource-admission changes, broad refactors, or production mutations were made.
 - Per the brief, verification stayed focused; the full 46-test search-delivery module and broader backend suite were not run under current disk-pressure constraints.
+
+## Review fix round 1: absolute write cutoff
+
+The Important review finding was correct: independent HTTPX phase timeouts did not cap cumulative pool/connect/write/read time at `deadline - 3 seconds`, and the old timeout calculation occurred before payload encoding. The review fix encodes the payload first, recalculates the remaining write budget immediately before the request, and wraps the complete mutating `client.request` call in `asyncio.timeout_at(deadline - 3 seconds)`. The existing HTTPX connect and pool limits remain at most five seconds, while read and write retain the remaining request budget.
+
+The request is still definitely not sent when payload encoding exhausts the budget: `_WriteBudgetUnavailable` is raised before `client.request`, and `_advance` durably returns the receipt to `prepared` before owner-checked marker cleanup. Once `client.request` has started, an absolute-cutoff `TimeoutError` takes the existing ambiguous path, leaves the receipt's marker in place, and cannot trigger automatic replay.
+
+Two focused regression tests were added:
+
+- `test_mutating_request_rechecks_budget_after_payload_encoding` advances a controlled monotonic clock during JSON encoding and proves the client is never called after the write cutoff.
+- `test_mutating_request_absolute_cutoff_keeps_inflight_write_ambiguous` consumes the cumulative budget across two client phases and proves the request is cancelled, the receipt becomes `ambiguous`, and the owner marker remains without a guessed task UID.
+
+The first RED command was:
+
+```text
+docker exec -e DATABASE_URL=<private> -e TEST_DATABASE_URL=<private> ag-button-runner \
+  sh -lc 'cd /workspace/backend && pytest -q \
+  --junitxml=/evidence/task-7-write-budget-r1-red.xml \
+  tests/test_search_delivery.py -k "mutating_request_rechecks_budget_after_payload_encoding or mutating_request_absolute_cutoff_keeps_inflight_write_ambiguous"'
+```
+
+- Result: 2 failed in 2.841 seconds.
+- The cumulative-phase case failed for the intended reason (`completed` became true). The encoding case reached the client as intended but then errored because its synthetic HTTPX response lacked an attached request; this artifact alone was therefore not valid RED evidence for the expected no-call assertion.
+- Artifact: `/volume2/docker/auto-gallery-button-audit-artifacts/20260908/task-7-write-budget-r1-red.xml`
+- SHA-256: `fe663a316a9070c4a3b391f8823d028eb2f0bb04714e41ae83706bc5839c2962`
+
+After correcting only that response fixture, the RED command was repeated with `--junitxml=/evidence/task-7-write-budget-r1-red-final.xml`:
+
+- Result: 2 failed in 3.448 seconds for the intended reasons: the encoding case did not raise and called the client, while the cumulative-phase request completed beyond the required cutoff.
+- Artifact: `/volume2/docker/auto-gallery-button-audit-artifacts/20260908/task-7-write-budget-r1-red-final.xml`
+- SHA-256: `33d14f9d89fa4ebf579dbed5bd327c0fba5e084c33fe3892559c65057b3d70f4`
+
+After the production fix, the same two-test command was repeated with `--junitxml=/evidence/task-7-write-budget-r1-green.xml`:
+
+- Result: 2 passed in 1.341 seconds.
+- Artifact: `/volume2/docker/auto-gallery-button-audit-artifacts/20260908/task-7-write-budget-r1-green.xml`
+- SHA-256: `2119fd4b0c5cc07b639ce8abe76d144be07abc3ae949e7ce70d726c8582977d0`
+
+The final focused verification command covered the two new regressions plus all thirteen write-budget and ambiguity-safety cases from the prior focused runs:
+
+```text
+docker exec -e DATABASE_URL=<private> -e TEST_DATABASE_URL=<private> ag-button-runner \
+  sh -lc 'cd /workspace/backend && pytest -q \
+  --junitxml=/evidence/task-7-write-budget-r1-final.xml \
+  tests/test_search_delivery.py -k "http_ambiguity_never_releases_or_replays_unproven_write or mutating_request_waits_beyond_five_seconds_for_task_uid or mutating_request_reserves_completion_with_short_connect_and_pool or mutating_request_rechecks_budget_after_payload_encoding or mutating_request_absolute_cutoff_keeps_inflight_write_ambiguous or mutating_request_without_completion_budget_is_not_issued or prepared_receipt_with_short_budget_defers_without_http_or_marker or outer_cancellation_after_send_keeps_unknown_write_fenced or blank_write_timeout_records_nonempty_safe_diagnostic or pending_poll_keeps_short_get_timeout_and_known_uid or task_uid_marker_survives_pending_checkpoint_failure or task_identity_survives_crash_before_sql_response_commit or poll_network_error_keeps_remote_reservation_without_attempt_failure or cancel_during_marker_fsync_does_not_release_its_caller"'
+```
+
+- Result: 15 passed in 13.649 seconds.
+- Artifact: `/volume2/docker/auto-gallery-button-audit-artifacts/20260908/task-7-write-budget-r1-final.xml`
+- SHA-256: `17114192aa8e7401e2e2f266e15d50d9031b9a82b69f23b4c4c0c14ac9d4c241`
+- The final artifact records every selected test name. Its timestamp is after the final service and test file writes; neither file changed afterward. Current source hashes are `7988824547c20dce0c99a5579a7f1860877dbb663814947c4149c2c7cb9deb42` for `search_delivery.py` and `7d79f6e8754b7d322aa2d84ccfd6f3ddb453642bdb390c6e775602944928edf7` for `test_search_delivery.py`.
+
+Fresh post-recovery static verification used:
+
+```text
+git diff --check -- backend/app/services/search_delivery.py backend/tests/test_search_delivery.py
+docker exec ag-button-runner sh -lc 'cd /workspace/backend && ruff check app/services/search_delivery.py tests/test_search_delivery.py'
+```
+
+- Result: both commands exited 0; Ruff reported `All checks passed!`.
+- The already-passing focused tests were not rerun because the preserved final XML corresponds to the unchanged current source and the brief requires keeping verification focused under disk pressure.
