@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
@@ -66,6 +67,51 @@ class Remote:
         if self.fail_submit:
             raise httpx.ReadTimeout("accepted, response lost")
         return httpx.Response(202, json={"taskUid": 41})
+
+
+def _prepared_receipt(**overrides):
+    values = {
+        "id": uuid4(),
+        "state": "prepared",
+        "phase": "documents",
+        "action": "delete",
+        "index_uid": "works",
+        "payload": ["one"],
+        "versions": [],
+        "write_available_at": None,
+        "task_uid": None,
+        "poll_count": 0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _install_memory_delivery(monkeypatch, delivery, receipt, *, fail_pending=False):
+    marker = {}
+
+    def create_marker(owner, workload="search_index"):
+        marker.update(owner=owner, workload=workload)
+
+    def record_task(owner, task_uid):
+        assert marker["owner"] == owner
+        marker["task_uid"] = task_uid
+
+    def clear_marker(owner):
+        if marker.get("owner") == owner:
+            marker.clear()
+
+    async def save(_receipt, _token, _deadline, **values):
+        if fail_pending and values.get("state") == "pending":
+            raise RuntimeError("checkpoint unavailable")
+        for key, value in values.items():
+            setattr(receipt, key, value)
+
+    monkeypatch.setattr(delivery, "_save", save)
+    monkeypatch.setattr(delivery.remote_flight, "create_marker", create_marker)
+    monkeypatch.setattr(delivery.remote_flight, "record_task", record_task)
+    monkeypatch.setattr(delivery.remote_flight, "read_marker", lambda: dict(marker))
+    monkeypatch.setattr(delivery.remote_flight, "clear_marker", clear_marker)
+    return marker
 
 
 async def enqueue_delete(identity=None):
@@ -322,6 +368,226 @@ def test_contains_settings_does_not_mutate_set_like_lists():
     assert _contains_settings(actual, desired)
     assert actual == original_actual
     assert desired == original_desired
+
+
+@pytest.mark.asyncio
+async def test_mutating_request_waits_beyond_five_seconds_for_task_uid(monkeypatch):
+    import asyncio
+    import time
+    from app.services import search_delivery as delivery
+
+    request_received = asyncio.Event()
+    response_finished = asyncio.Event()
+
+    async def delayed_response(reader, writer):
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            request_received.set()
+            await asyncio.sleep(5.2)
+            body = b'{"taskUid":22329}'
+            writer.write(
+                b"HTTP/1.1 202 Accepted\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n".encode()
+                + b"Connection: close\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            response_finished.set()
+
+    server = await asyncio.start_server(delayed_response, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(delivery.settings, "meili_url", f"http://127.0.0.1:{port}")
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            task = await delivery.request(
+                client,
+                "POST",
+                "/indexes/works/documents",
+                started + 10,
+                [{"id": "one"}],
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+        if request_received.is_set():
+            await asyncio.wait_for(response_finished.wait(), timeout=1)
+
+    assert task == {"taskUid": 22329}
+    assert request_received.is_set()
+    assert 5.0 < time.monotonic() - started < 9.0
+
+
+@pytest.mark.asyncio
+async def test_mutating_request_reserves_completion_with_short_connect_and_pool():
+    import time
+    from app.services import search_delivery as delivery
+
+    captured = {}
+
+    class Client:
+        async def request(self, method, url, **kwargs):
+            captured.update(method=method, timeout=kwargs["timeout"])
+            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
+
+    await delivery.request(Client(), "PATCH", "/indexes/works/settings", time.monotonic() + 20, {})
+
+    timeout = captured["timeout"]
+    assert captured["method"] == "PATCH"
+    assert isinstance(timeout, httpx.Timeout)
+    assert 0 < timeout.connect <= 5
+    assert 0 < timeout.pool <= 5
+    assert 16 < timeout.read <= 17
+    assert 16 < timeout.write <= 17
+
+
+@pytest.mark.parametrize("remaining_seconds", [3, -1])
+@pytest.mark.asyncio
+async def test_mutating_request_without_completion_budget_is_not_issued(remaining_seconds):
+    import time
+    from app.services import search_delivery as delivery
+
+    class Client:
+        async def request(self, *_args, **_kwargs):
+            raise AssertionError("request must not be issued without completion budget")
+
+    with pytest.raises(TimeoutError, match="completion budget"):
+        await delivery.request(Client(), "DELETE", "/indexes/works", time.monotonic() + remaining_seconds)
+
+
+@pytest.mark.asyncio
+async def test_prepared_receipt_with_short_budget_defers_without_http_or_marker(monkeypatch):
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    saved = []
+
+    async def save(_receipt, _token, _deadline, **values):
+        saved.append(values)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("insufficient budget must not change a remote marker")
+
+    class Client:
+        async def request(self, *_args, **_kwargs):
+            raise AssertionError("insufficient budget must not issue HTTP")
+
+    monkeypatch.setattr(delivery, "_save", save)
+    monkeypatch.setattr(delivery.remote_flight, "create_marker", forbidden)
+    monkeypatch.setattr(delivery.remote_flight, "record_task", forbidden)
+
+    before = delivery.now()
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 7)
+
+    assert outcome["status"] == "deferred"
+    assert outcome["successor_delay_seconds"] == 30
+    assert len(saved) == 1
+    assert saved[0]["state"] == "prepared"
+    assert saved[0]["lease_until"] is None
+    assert 29 <= (saved[0]["available_at"] - before).total_seconds() <= 31
+    assert saved[0]["last_error"]
+    assert "before submission" in saved[0]["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_outer_cancellation_after_send_keeps_unknown_write_fenced(monkeypatch):
+    import asyncio
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
+    sent = asyncio.Event()
+    calls = 0
+
+    class Client:
+        async def request(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            sent.set()
+            await asyncio.Event().wait()
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):
+            await delivery._advance(receipt, "lease", Client(), time.monotonic() + 10)
+
+    assert sent.is_set()
+    assert receipt.state == "submitting"
+    assert marker["task_uid"] is None
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 10)
+    assert outcome["status"] == "ambiguous"
+    assert calls == 1
+    assert marker["owner"] == str(receipt.id)
+
+
+@pytest.mark.asyncio
+async def test_blank_write_timeout_records_nonempty_safe_diagnostic(monkeypatch):
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
+
+    class Client:
+        async def request(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("")
+
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 10)
+
+    assert outcome["status"] == "ambiguous"
+    assert receipt.last_error.startswith("ReadTimeout:")
+    assert "timed out" in receipt.last_error
+    assert marker == {"owner": str(receipt.id), "workload": "search_index", "task_uid": None}
+
+
+@pytest.mark.asyncio
+async def test_pending_poll_keeps_short_get_timeout_and_known_uid(monkeypatch):
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt(state="pending", task_uid=22329)
+    captured = {}
+    _install_memory_delivery(monkeypatch, delivery, receipt)
+
+    class Client:
+        async def request(self, method, url, **kwargs):
+            captured.update(method=method, url=url, timeout=kwargs["timeout"])
+            return httpx.Response(200, json={"uid": 22329, "status": "processing", "error": None}, request=httpx.Request(method, url))
+
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 20)
+
+    assert outcome["status"] == "pending"
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/tasks/22329")
+    assert isinstance(captured["timeout"], float)
+    assert 0 < captured["timeout"] <= 5
+    assert receipt.task_uid == 22329
+
+
+@pytest.mark.asyncio
+async def test_task_uid_marker_survives_pending_checkpoint_failure(monkeypatch):
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt, fail_pending=True)
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            return httpx.Response(202, json={"taskUid": 22329}, request=httpx.Request(method, url))
+
+    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+        await delivery._advance(receipt, "lease", Client(), time.monotonic() + 20)
+
+    assert receipt.state == "submitting"
+    assert marker["task_uid"] == 22329
 
 
 @pytest.mark.asyncio

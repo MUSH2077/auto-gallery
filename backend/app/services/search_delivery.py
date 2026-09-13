@@ -23,6 +23,14 @@ from app.services import remote_search_flight as remote_flight
 
 MAX_BYTES = 4 * 1024 * 1024
 ACTIVE = Receipt.state.not_in(("complete", "failed"))
+_SHORT_HTTP_TIMEOUT_SECONDS = 5.0
+_WRITE_COMPLETION_RESERVE_SECONDS = 3.0
+_MIN_PREPARED_WRITE_SECONDS = 8.0
+_PREPARED_BUDGET_RETRY_SECONDS = 30
+
+
+class _WriteBudgetUnavailable(TimeoutError):
+    pass
 
 
 async def durable(function, *args):
@@ -69,15 +77,48 @@ def result(status, *, delay=0, claimed=0, processed=0, action=None):
             "successor_delay_seconds": delay}
 
 
+def _request_timeout(method, deadline):
+    if method.upper() in ("GET", "HEAD"):
+        return min(_SHORT_HTTP_TIMEOUT_SECONDS, remaining(deadline))
+    budget = deadline - time.monotonic()
+    request_budget = budget - _WRITE_COMPLETION_RESERVE_SECONDS
+    if request_budget <= 0:
+        raise _WriteBudgetUnavailable("mutating search request has no completion budget")
+    short_budget = min(_SHORT_HTTP_TIMEOUT_SECONDS, request_budget)
+    return httpx.Timeout(
+        connect=short_budget,
+        pool=short_budget,
+        read=request_budget,
+        write=request_budget,
+    )
+
+
+def _exception_diagnostic(exc):
+    reason = str(exc).strip()
+    if not reason:
+        reason = "request timed out without a response" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "no additional detail"
+    return f"{type(exc).__name__}: {reason}"[:4000]
+
+
 async def request(client, method, path, deadline, payload=None):
     headers = {"Authorization": f"Bearer {settings.meili_master_key}"}
-    kwargs = {"headers": headers, "timeout": min(5.0, remaining(deadline))}
+    kwargs = {"headers": headers, "timeout": _request_timeout(method, deadline)}
     if payload is not None:
         kwargs["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode()
         headers["Content-Type"] = "application/json"
     response = await client.request(method, settings.meili_url.rstrip("/") + path, **kwargs)
     response.raise_for_status()
     return response.json()
+
+
+async def _defer_prepared_for_budget(receipt, token, deadline, *, clear_marker=False):
+    retry_at = now() + timedelta(seconds=_PREPARED_BUDGET_RETRY_SECONDS)
+    error = _exception_diagnostic(_WriteBudgetUnavailable("insufficient completion budget before submission"))
+    await _save(receipt, token, deadline, state="prepared", task_uid=None, available_at=retry_at,
+                lease_until=None, last_error=error)
+    if clear_marker:
+        await durable(remote_flight.clear_marker, str(receipt.id))
+    return result("deferred", delay=_PREPARED_BUDGET_RETRY_SECONDS)
 
 
 async def _claim(deadline):
@@ -195,6 +236,8 @@ async def _advance(receipt, token, client, deadline):
         if receipt.write_available_at and receipt.write_available_at > now():
             await _save(receipt, token, deadline, lease_until=None)
             return result("deferred", delay=(receipt.write_available_at - now()).total_seconds())
+        if deadline - time.monotonic() < _MIN_PREPARED_WRITE_SECONDS:
+            return await _defer_prepared_for_budget(receipt, token, deadline)
         settings_payload = None
         if receipt.phase == "settings":
             from app.services.search import INDEX_SETTINGS
@@ -210,11 +253,13 @@ async def _advance(receipt, token, client, deadline):
                 await _save(receipt, token, deadline, phase="documents")
             else:
                 settings_payload = desired
+        if deadline - time.monotonic() < _MIN_PREPARED_WRITE_SECONDS:
+            return await _defer_prepared_for_budget(receipt, token, deadline)
         await durable(remote_flight.create_marker, str(receipt.id), "maintenance" if receipt.action == "swap" else "search_index")
         # Durable intent MUST precede HTTP; a crash here is conservatively
         # ambiguous even if no request was actually sent.
         await durable(remote_flight.record_task, str(receipt.id), None)
-        await _save(receipt, token, deadline, state="submitting")
+        await _save(receipt, token, deadline, state="submitting", last_error=None)
         path = f"/indexes/{receipt.index_uid}/documents"
         method = "POST"
         if receipt.action == "delete":
@@ -235,15 +280,17 @@ async def _advance(receipt, token, client, deadline):
         try:
             task = await request(client, method, path, deadline, settings_payload if settings_payload is not None else receipt.payload)
             uid = int(task["taskUid"])
+        except _WriteBudgetUnavailable:
+            return await _defer_prepared_for_budget(receipt, token, deadline, clear_marker=True)
         except httpx.HTTPStatusError as exc:
             if receipt.action == "drop" and exc.response.status_code == 404:
                 return await _finalize(receipt, token, deadline)
             if 400 <= exc.response.status_code < 500:
-                return await _finalize(receipt, token, deadline, error=str(exc))
-            await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=str(exc)[:4000])
+                return await _finalize(receipt, token, deadline, error=_exception_diagnostic(exc))
+            await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=_exception_diagnostic(exc))
             return result("ambiguous")
         except Exception as exc:
-            await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=str(exc)[:4000])
+            await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=_exception_diagnostic(exc))
             return result("ambiguous")
         await durable(remote_flight.record_task, str(receipt.id), uid)
         await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=2), lease_until=None)
@@ -251,7 +298,8 @@ async def _advance(receipt, token, client, deadline):
     try:
         task = await request(client, "GET", f"/tasks/{receipt.task_uid}", deadline)
     except Exception as exc:
-        await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=15), lease_until=None, last_error=str(exc)[:4000])
+        await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=15), lease_until=None,
+                    last_error=_exception_diagnostic(exc))
         return result("pending", delay=15)
     if task["status"] == "succeeded":
         if receipt.phase == "settings":
