@@ -155,7 +155,7 @@ existing_source_paths() {
 
 source_digest() {
     existing_source_paths \
-        | sort -z \
+        | LC_ALL=C sort -z \
         | while IFS= read -r -d '' path; do
             printf '%s\0' "$path"
             if [[ -L "$path" ]]; then

@@ -4,8 +4,34 @@ import shlex
 import shutil
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _extract_shell_function(source: str, name: str) -> str:
+    start = source.index(f"{name}() {{")
+    end = source.index("\n}\n", start) + 2
+    return source[start:end]
+
+
+def _source_digest_for_locale(repo: Path, locale_name: str) -> str:
+    source = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    harness = "\n\n".join(
+        _extract_shell_function(source, name)
+        for name in ("existing_source_paths", "source_digest")
+    )
+    result = subprocess.run(
+        ["bash", "-c", f"set -Eeuo pipefail\n{harness}\nsource_digest"],
+        cwd=repo,
+        env={**os.environ, "LC_ALL": locale_name},
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 def _run_deploy_rollback(tmp_path: Path, current_revision: str):
@@ -151,6 +177,35 @@ def test_source_digest_and_snapshot_skip_tracked_deletions():
         assert '[[ -f "$path" || -L "$path" ]]' in source
     assert "existing_source_paths | \\" in deploy
     assert "tar --null --files-from=-" in deploy
+
+
+def test_source_digest_is_stable_across_available_collations(tmp_path):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
+    for name in ("A", "a", "_a", "á"):
+        (repo / name).write_text(f"contents for {name}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--", "A", "a", "_a", "á"], cwd=repo, check=True)
+
+    installed_locales = subprocess.run(
+        ["locale", "-a"], capture_output=True, text=True, timeout=5, check=True
+    ).stdout.splitlines()
+    unicode_locale = next(
+        (
+            name
+            for name in installed_locales
+            if name.lower().replace("-", "").replace("_", "").replace(".", "")
+            == "enusutf8"
+        ),
+        None,
+    )
+    if unicode_locale is None:
+        pytest.skip("en_US UTF-8 locale is not installed")
+
+    c_digest = _source_digest_for_locale(repo, "C")
+    unicode_digest = _source_digest_for_locale(repo, unicode_locale)
+
+    assert unicode_digest == c_digest
 
 
 def test_project_backup_and_core_health_failures_are_fail_closed():
