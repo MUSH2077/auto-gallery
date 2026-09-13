@@ -402,12 +402,37 @@ async def _run(limit, client, deadline):
         writer.release()
 
 
-def _contains_settings(actual, desired):
-    return all(
-        _contains_settings(actual.get(key, {}), value) if isinstance(value, dict)
-        else actual.get(key) == value
-        for key, value in desired.items()
-    )
+_UNORDERED_STRING_LIST_PATHS = frozenset({
+    ("filterableAttributes",),
+    ("sortableAttributes",),
+    ("nonSeparatorTokens",),
+    ("typoTolerance", "disableOnAttributes"),
+})
+
+
+def _contains_settings(actual, desired, path=()):
+    if not isinstance(actual, dict) or not isinstance(desired, dict):
+        return False
+    for key, desired_value in desired.items():
+        if key not in actual:
+            return False
+        actual_value = actual[key]
+        value_path = (*path, key)
+        if isinstance(desired_value, dict):
+            if not _contains_settings(actual_value, desired_value, value_path):
+                return False
+        elif value_path in _UNORDERED_STRING_LIST_PATHS:
+            if (
+                not isinstance(actual_value, list)
+                or not isinstance(desired_value, list)
+                or not all(isinstance(item, str) for item in actual_value)
+                or not all(isinstance(item, str) for item in desired_value)
+                or set(actual_value) != set(desired_value)
+            ):
+                return False
+        elif actual_value != desired_value:
+            return False
+    return True
 
 
 async def reconcile_task(receipt_id: UUID, task_uid: int, *, client=None):

@@ -1,4 +1,5 @@
 """Durable search delivery against isolated PostgreSQL and controlled HTTP."""
+from copy import deepcopy
 import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
@@ -42,11 +43,12 @@ async def delivery(monkeypatch, tmp_path):
 
 
 class Remote:
-    def __init__(self):
+    def __init__(self, *, index_settings=None):
         self.status = "processing"
         self.writes = []
         self.polls = 0
         self.fail_submit = False
+        self.index_settings = index_settings
 
     def __call__(self, request):
         if request.method == "GET" and "/tasks/" in request.url.path:
@@ -54,7 +56,10 @@ class Remote:
             return httpx.Response(200, json={"uid": 41, "status": self.status, "error": {"message": "disk full"} if self.status == "failed" else None})
         if request.method == "GET" and request.url.path.endswith("/settings"):
             from app.services.search import INDEX_SETTINGS
-            return httpx.Response(200, json=INDEX_SETTINGS[DEFAULT_WORKS_INDEX_UID])
+            settings = self.index_settings
+            if settings is None:
+                settings = INDEX_SETTINGS[DEFAULT_WORKS_INDEX_UID]
+            return httpx.Response(200, json=settings)
         if request.method == "GET":
             return httpx.Response(200, json={"uid": DEFAULT_WORKS_INDEX_UID, "primaryKey": "id"})
         self.writes.append((request.url.path, json.loads(request.content)))
@@ -204,6 +209,111 @@ async def test_first_index_settings_are_durable_separate_task(delivery):
         await delivery.run_delivery_slice(client=client)
         assert len(remote.writes) == 2
         assert remote.writes[1][0].endswith("/documents/delete-batch")
+
+
+@pytest.mark.asyncio
+async def test_reordered_set_like_settings_skip_patch_through_delivery(delivery):
+    from app.services.search import INDEX_SETTINGS
+
+    actual = deepcopy(INDEX_SETTINGS[DEFAULT_WORKS_INDEX_UID])
+    actual["filterableAttributes"].reverse()
+    actual["sortableAttributes"].reverse()
+    actual["nonSeparatorTokens"].reverse()
+    actual["typoTolerance"]["disableOnAttributes"].reverse()
+    original = deepcopy(actual)
+    await enqueue_delete()
+    remote = Remote(index_settings=actual)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        result = await delivery.run_delivery_slice(client=client)
+
+    assert result["status"] == "pending"
+    assert [path for path, _payload in remote.writes] == [
+        f"/indexes/{DEFAULT_WORKS_INDEX_UID}/documents/delete-batch"
+    ]
+    assert actual == original
+
+
+@pytest.mark.parametrize("difference", ["filterable_membership", "searchable_order"])
+@pytest.mark.asyncio
+async def test_material_settings_difference_still_submits_patch(delivery, difference):
+    from app.services.search import INDEX_SETTINGS
+
+    actual = deepcopy(INDEX_SETTINGS[DEFAULT_WORKS_INDEX_UID])
+    if difference == "filterable_membership":
+        actual["filterableAttributes"].pop()
+    else:
+        actual["searchableAttributes"].reverse()
+    await enqueue_delete()
+    remote = Remote(index_settings=actual)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        result = await delivery.run_delivery_slice(client=client)
+
+    assert result["status"] == "pending"
+    assert [path for path, _payload in remote.writes] == [
+        f"/indexes/{DEFAULT_WORKS_INDEX_UID}/settings"
+    ]
+    assert remote.writes[0][1] == INDEX_SETTINGS[DEFAULT_WORKS_INDEX_UID]
+
+
+@pytest.mark.parametrize(
+    ("actual", "desired"),
+    [
+        ({"searchableAttributes": ["description", "title"]}, {"searchableAttributes": ["title", "description"]}),
+        ({"rankingRules": ["words", "typo"]}, {"rankingRules": ["typo", "words"]}),
+        ({"unknownArray": ["second", "first"]}, {"unknownArray": ["first", "second"]}),
+        (
+            {"nested": {"filterableAttributes": ["second", "first"]}},
+            {"nested": {"filterableAttributes": ["first", "second"]}},
+        ),
+    ],
+)
+def test_contains_settings_preserves_order_for_other_arrays(actual, desired):
+    from app.services.search_delivery import _contains_settings
+
+    assert not _contains_settings(actual, desired)
+
+
+@pytest.mark.parametrize(
+    ("actual", "desired"),
+    [
+        ({}, {"filterableAttributes": ["title"]}),
+        ({"filterableAttributes": "title"}, {"filterableAttributes": "title"}),
+        ({"filterableAttributes": [1]}, {"filterableAttributes": [1]}),
+        (
+            {"typoTolerance": {"disableOnAttributes": None}},
+            {"typoTolerance": {"disableOnAttributes": None}},
+        ),
+    ],
+)
+def test_contains_settings_rejects_missing_or_non_string_lists(actual, desired):
+    from app.services.search_delivery import _contains_settings
+
+    assert not _contains_settings(actual, desired)
+
+
+def test_contains_settings_does_not_mutate_set_like_lists():
+    from app.services.search_delivery import _contains_settings
+
+    actual = {
+        "filterableAttributes": ["second", "first"],
+        "sortableAttributes": ["second", "first"],
+        "nonSeparatorTokens": ["@", "_"],
+        "typoTolerance": {"disableOnAttributes": ["second", "first"]},
+    }
+    desired = {
+        "filterableAttributes": ["first", "second"],
+        "sortableAttributes": ["first", "second"],
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {"disableOnAttributes": ["first", "second"]},
+    }
+    original_actual = deepcopy(actual)
+    original_desired = deepcopy(desired)
+
+    assert _contains_settings(actual, desired)
+    assert actual == original_actual
+    assert desired == original_desired
 
 
 @pytest.mark.asyncio
