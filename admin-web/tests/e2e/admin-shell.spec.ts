@@ -1754,7 +1754,7 @@ test("system and source tabs fetch only their active data and retain provider to
   const pixivCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) });
   await pixivCard.getByRole("button", { name: /Try default URL/ }).click();
   await pixivCard.getByRole("textbox", { name: "Test URL Validation" }).press("Enter");
-  await expect(pixivCard.getByRole("status")).toContainText("matches expected Pixiv pattern");
+  await expect(pixivCard.getByRole("status")).toContainText("matches expected Pixiv format");
 
   const healthRequestsBeforeRefresh = healthRequests;
   const sourceRequestsBeforeRefresh = sourceRequests;
@@ -1771,6 +1771,89 @@ test("system and source tabs fetch only their active data and retain provider to
   expect(axe.violations).toEqual([]);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
+});
+
+test("source URL checker accepts every supported Pixiv format with localized results", async ({ page }) => {
+  await page.route("**/api/v1/sources", (route) => route.fulfill({
+    json: { sources: providerFixtures },
+  }));
+
+  const locales = [
+    {
+      locale: "en",
+      inputName: "Test URL Validation",
+      testName: "Test",
+      defaultName: /Try default URL/,
+      success: "URL matches expected Pixiv format.",
+      invalid: "URL does not match expected Pixiv pattern. Check the format and try again.",
+      empty: "Enter a URL to validate.",
+    },
+    {
+      locale: "zh",
+      inputName: "测试 URL 验证",
+      testName: "测试",
+      defaultName: /尝试默认 URL/,
+      success: "URL 匹配预期的 Pixiv 格式。",
+      invalid: "URL 不匹配预期的 Pixiv 模式。请检查格式后重试。",
+      empty: "请输入要验证的 URL。",
+    },
+  ] as const;
+
+  await page.goto("/admin/system?tab=sources");
+  for (const locale of locales) {
+    await page.evaluate((language) => {
+      window.localStorage.setItem("auto-gallery-lang", language);
+    }, locale.locale);
+    await page.reload();
+
+    const pixivCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) });
+    const input = pixivCard.getByRole("textbox", { name: locale.inputName });
+    const testButton = pixivCard.getByRole("button", { name: locale.testName, exact: true });
+    const result = pixivCard.getByRole("status");
+
+    await input.fill("https://www.pixiv.net/artworks/12345678");
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/users/12345678");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/en/artworks/87654321");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/en/users/87654321");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/stacc/artist_name");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/stacc/Artist_123");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/fanbox/artist-name");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✗ ${locale.invalid}`);
+
+    await input.fill("   ");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✗ ${locale.empty}`);
+
+    await pixivCard.getByRole("button", { name: locale.defaultName }).click();
+    await expect(input).toHaveValue("https://www.pixiv.net/artworks/12345678");
+    await expect(result).toHaveCount(0);
+  }
 });
 
 test("resource controller renders constrained compatibility state and authoritative concurrency", async ({ page }) => {
