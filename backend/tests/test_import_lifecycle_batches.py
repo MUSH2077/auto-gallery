@@ -15,6 +15,212 @@ from sqlalchemy import func, select, text
 _PUBLISHER_ATTEMPT_META_KEY = "_bounded_import_publisher_attempt"
 
 
+class _StalledFailingWakeRedis:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.progressed_before_return = []
+
+    def publish(self, _channel, _payload):
+        self.started.set()
+        self.progressed_before_return.append(self.release.wait(timeout=0.5))
+        raise OSError("wake unavailable")
+
+
+async def _release_stalled_wake(redis):
+    while not redis.started.is_set():
+        await asyncio.sleep(0)
+    redis.release.set()
+
+
+async def _wait_for_postgres_lock_wait(session_factory, backend_pid, *, timeout=2.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    async with session_factory() as observer:
+        while loop.time() < deadline:
+            wait_event_type = (
+                await observer.execute(
+                    text(
+                        "SELECT wait_event_type FROM pg_stat_activity "
+                        "WHERE pid = :backend_pid"
+                    ),
+                    {"backend_pid": backend_pid},
+                )
+            ).scalar_one_or_none()
+            if wait_event_type == "Lock":
+                return
+            await asyncio.sleep(0.01)
+    raise AssertionError(f"PostgreSQL session {backend_pid} did not block on a lock")
+
+
+@pytest.mark.parametrize(
+    ("rq_status", "expected_publications"),
+    [
+        ("queued", [("resource:work:import_db", "queued")]),
+        ("scheduled", []),
+    ],
+)
+def test_import_recovery_wakes_only_existing_queued_delivery(
+    monkeypatch,
+    rq_status,
+    expected_publications,
+):
+    from app.services import import_dispatch
+
+    class DB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class Redis:
+        def __init__(self):
+            self.publications = []
+
+        def publish(self, channel, payload):
+            self.publications.append((channel, payload))
+            return 1
+
+    job = SimpleNamespace(id=uuid4(), status="enqueued")
+    task = SimpleNamespace(
+        rq_job_id="import-existing-attempt-1",
+        meta={import_dispatch.IMPORT_DISPATCH_META_KEY: {"state": "pending"}},
+    )
+    existing = SimpleNamespace(
+        get_status=lambda refresh=True: rq_status,
+    )
+    redis = Redis()
+
+    async def locked_rows(_db, _job_id):
+        return job, task
+
+    monkeypatch.setattr(import_dispatch, "_locked_import_and_task", locked_rows)
+    monkeypatch.setattr(
+        import_dispatch,
+        "_fetch_import_rq_job",
+        lambda *_args, **_kwargs: existing,
+    )
+
+    outcome = asyncio.run(
+        import_dispatch.recover_import_dispatch_candidate(
+            DB(),
+            job.id,
+            redis_client=redis,
+        )
+    )
+
+    assert outcome == "existing"
+    assert redis.publications == expected_publications
+
+
+@pytest.mark.asyncio
+async def test_prepared_import_existing_wake_does_not_block_event_loop_or_outcome(
+    monkeypatch,
+):
+    from app.services import import_dispatch
+
+    class DB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    job = SimpleNamespace(id=uuid4(), status="enqueued")
+    rq_job_id = import_dispatch.deterministic_import_rq_job_id(job.id, 1)
+    task = SimpleNamespace(
+        rq_job_id=rq_job_id,
+        queue_name="imports",
+        meta={
+            import_dispatch.IMPORT_DISPATCH_META_KEY: {
+                "state": import_dispatch.IMPORT_DISPATCH_PENDING,
+                "queue_name": "imports",
+                "rq_job_id": rq_job_id,
+                "job_timeout": import_dispatch.IMPORT_JOB_TIMEOUT_SECONDS,
+                "delay_seconds": None,
+                "action": "enqueue",
+                "attempt": 1,
+            }
+        },
+    )
+    existing = SimpleNamespace(get_status=lambda refresh=True: "queued")
+    redis = _StalledFailingWakeRedis()
+
+    async def locked_rows(_db, _job_id):
+        return job, task
+
+    monkeypatch.setattr(import_dispatch, "_locked_import_and_task", locked_rows)
+    monkeypatch.setattr(
+        import_dispatch,
+        "_fetch_import_rq_job",
+        lambda *_args, **_kwargs: existing,
+    )
+
+    outcome, _ = await asyncio.gather(
+        import_dispatch.publish_prepared_import(
+            DB(),
+            job.id,
+            rq_job_id,
+            redis_client=redis,
+        ),
+        _release_stalled_wake(redis),
+    )
+
+    assert outcome == "existing"
+    assert redis.progressed_before_return == [True]
+    assert task.meta[import_dispatch.IMPORT_DISPATCH_META_KEY]["state"] == (
+        import_dispatch.IMPORT_DISPATCH_PUBLISHED
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_recovery_existing_wake_does_not_block_event_loop_or_outcome(
+    monkeypatch,
+):
+    from app.services import import_dispatch
+
+    class DB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    job = SimpleNamespace(id=uuid4(), status="enqueued")
+    task = SimpleNamespace(
+        rq_job_id="import-existing-attempt-1",
+        meta={import_dispatch.IMPORT_DISPATCH_META_KEY: {"state": "pending"}},
+    )
+    existing = SimpleNamespace(get_status=lambda refresh=True: "queued")
+    redis = _StalledFailingWakeRedis()
+
+    async def locked_rows(_db, _job_id):
+        return job, task
+
+    monkeypatch.setattr(import_dispatch, "_locked_import_and_task", locked_rows)
+    monkeypatch.setattr(
+        import_dispatch,
+        "_fetch_import_rq_job",
+        lambda *_args, **_kwargs: existing,
+    )
+
+    outcome, _ = await asyncio.gather(
+        import_dispatch.recover_import_dispatch_candidate(
+            DB(),
+            job.id,
+            redis_client=redis,
+        ),
+        _release_stalled_wake(redis),
+    )
+
+    assert outcome == "existing"
+    assert redis.progressed_before_return == [True]
+    assert task.meta[import_dispatch.IMPORT_DISPATCH_META_KEY]["state"] == (
+        import_dispatch.IMPORT_DISPATCH_PUBLISHED
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_import_claim_times_current_durable_dispatch_only():
@@ -48,6 +254,159 @@ async def test_import_claim_times_current_durable_dispatch_only():
             task = await db.get(TaskRun, task_id)
             assert task.meta[IMPORT_DISPATCH_META_KEY]["claimed_at"]
     finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_claim_waits_for_publication_lock_then_claims_attempt_once(
+    monkeypatch,
+):
+    from app.jobs import import_runner
+    from app.database import async_session, engine
+    from app.jobs.import_runner import _claim_import_execution
+    from app.models.import_job import ImportJob
+    from app.models.task_run import TaskRun
+    from app.services.import_dispatch import (
+        IMPORT_DISPATCH_META_KEY,
+        IMPORT_DISPATCH_PUBLISHED,
+        _locked_import_and_task,
+        prepare_import_dispatch,
+    )
+
+    claim = None
+    claim_session_started = asyncio.Event()
+    claim_backend_pid = None
+
+    @asynccontextmanager
+    async def instrumented_claim_session():
+        nonlocal claim_backend_pid
+        async with async_session() as db:
+            claim_backend_pid = (
+                await db.execute(text("SELECT pg_backend_pid()"))
+            ).scalar_one()
+            claim_session_started.set()
+            yield db
+
+    monkeypatch.setattr(import_runner, "async_session", instrumented_claim_session)
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            parent = await _shared_parent(setup_db)
+            child = ImportJob(download_job_id=parent.id, status="enqueued")
+            setup_db.add(child)
+            await setup_db.flush()
+            prepared = await prepare_import_dispatch(setup_db, child)
+            await setup_db.commit()
+            child_id = child.id
+            task_id = prepared.task.id
+            rq_job_id = prepared.rq_job_id
+            attempt = prepared.attempt
+
+        async with async_session() as publication_db:
+            locked_child, locked_task = await _locked_import_and_task(
+                publication_db,
+                child_id,
+            )
+            assert locked_child is not None
+            assert locked_task is not None
+            claim = asyncio.create_task(_claim_import_execution(child_id))
+            await asyncio.wait_for(claim_session_started.wait(), timeout=2)
+            await _wait_for_postgres_lock_wait(async_session, claim_backend_pid)
+            assert not claim.done()
+
+            task_meta = dict(locked_task.meta or {})
+            dispatch = dict(task_meta[IMPORT_DISPATCH_META_KEY])
+            dispatch["state"] = IMPORT_DISPATCH_PUBLISHED
+            task_meta[IMPORT_DISPATCH_META_KEY] = dispatch
+            locked_task.meta = task_meta
+            await publication_db.commit()
+
+        claimed = await asyncio.wait_for(claim, timeout=2)
+        assert claimed is not None
+        assert await _claim_import_execution(child_id) is None
+
+        async with async_session() as verify_db:
+            claimed_child = await verify_db.get(ImportJob, child_id)
+            claimed_task = await verify_db.get(TaskRun, task_id)
+            assert claimed_child.status == "running"
+            assert claimed_child.execution_attempt == 1
+            assert claimed_task.rq_job_id == rq_job_id
+            assert claimed_task.meta[IMPORT_DISPATCH_META_KEY]["attempt"] == attempt
+    finally:
+        if claim is not None and not claim.done():
+            claim.cancel()
+            await asyncio.gather(claim, return_exceptions=True)
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_claim_rechecks_cancelled_status_after_publication_unlock(monkeypatch):
+    from app.jobs import import_runner
+    from app.database import async_session, engine
+    from app.jobs.import_runner import _claim_import_execution
+    from app.models.import_job import ImportJob
+    from app.services.import_dispatch import (
+        _locked_import_and_task,
+        prepare_import_dispatch,
+    )
+
+    claim = None
+    claim_session_started = asyncio.Event()
+    claim_backend_pid = None
+
+    @asynccontextmanager
+    async def instrumented_claim_session():
+        nonlocal claim_backend_pid
+        async with async_session() as db:
+            claim_backend_pid = (
+                await db.execute(text("SELECT pg_backend_pid()"))
+            ).scalar_one()
+            claim_session_started.set()
+            yield db
+
+    monkeypatch.setattr(import_runner, "async_session", instrumented_claim_session)
+    try:
+        async with async_session() as setup_db:
+            await _clear(setup_db)
+            parent = await _shared_parent(setup_db)
+            child = ImportJob(download_job_id=parent.id, status="enqueued")
+            setup_db.add(child)
+            await setup_db.flush()
+            await prepare_import_dispatch(setup_db, child)
+            await setup_db.commit()
+            child_id = child.id
+
+        async with async_session() as publication_db:
+            locked_child, locked_task = await _locked_import_and_task(
+                publication_db,
+                child_id,
+            )
+            assert locked_child is not None
+            assert locked_task is not None
+            claim = asyncio.create_task(_claim_import_execution(child_id))
+            await asyncio.wait_for(claim_session_started.wait(), timeout=2)
+            await _wait_for_postgres_lock_wait(async_session, claim_backend_pid)
+            assert not claim.done()
+
+            locked_child.status = "cancelled"
+            await publication_db.commit()
+
+        assert await asyncio.wait_for(claim, timeout=2) is None
+        async with async_session() as verify_db:
+            cancelled_child = await verify_db.get(ImportJob, child_id)
+            assert cancelled_child.status == "cancelled"
+            assert cancelled_child.execution_attempt == 0
+            assert cancelled_child.execution_token is None
+    finally:
+        if claim is not None and not claim.done():
+            claim.cancel()
+            await asyncio.gather(claim, return_exceptions=True)
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()

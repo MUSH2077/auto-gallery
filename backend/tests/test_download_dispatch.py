@@ -27,6 +27,7 @@ class _AdmissionRedis:
         self.mutex = threading.Lock()
         self.jobs = {}
         self.waiting = 0
+        self.publications = []
 
     def lock(self, _name, *, timeout, blocking_timeout):
         assert timeout >= 60
@@ -41,6 +42,10 @@ class _AdmissionRedis:
         return True
 
     def delete(self, *_args):
+        return 1
+
+    def publish(self, channel, payload):
+        self.publications.append((channel, payload))
         return 1
 
 
@@ -114,7 +119,10 @@ def test_ambiguous_enqueue_response_is_resolved_by_deterministic_id(monkeypatch)
             self.connection = connection
 
         def enqueue(self, _func, *_args, **kwargs):
-            job = SimpleNamespace(id=kwargs["job_id"])
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: "queued",
+            )
             self.connection.jobs[job.id] = job
             self.connection.waiting += 1
             raise TimeoutError("response lost after Redis EXEC")
@@ -154,6 +162,114 @@ def test_ambiguous_enqueue_response_is_resolved_by_deterministic_id(monkeypatch)
     )
     assert same_job is rq_job
     assert redis.waiting == 1
+    assert redis.publications == [
+        ("resource:work:download_network", "queued"),
+        ("resource:work:download_network", "queued"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("queue_name", "delay_seconds", "expected_publications"),
+    [
+        (
+            "downloads:pixiv",
+            None,
+            [("resource:work:download_network", "queued")],
+        ),
+        ("downloads:pixiv", 30, []),
+    ],
+)
+def test_download_enqueue_wakes_only_for_immediately_runnable_work(
+    monkeypatch,
+    queue_name,
+    delay_seconds,
+    expected_publications,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+
+    class Queue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.connection = connection
+
+        def _accept(self, kwargs, status):
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: status,
+            )
+            self.connection.jobs[job.id] = job
+            self.connection.waiting += 1
+            return job
+
+        def enqueue(self, _func, *_args, **kwargs):
+            return self._accept(kwargs, "queued")
+
+        def enqueue_in(self, _delay, _func, *_args, **kwargs):
+            return self._accept(kwargs, "scheduled")
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda client, rq_job_id: client.jobs.get(rq_job_id),
+    )
+
+    accepted = backpressure.enqueue_download_rq(
+        queue_name,
+        "app.jobs.download.run_download_job",
+        "domain-job",
+        rq_job_id="download-domain-job-attempt-1",
+        job_timeout=7200,
+        delay_seconds=delay_seconds,
+        redis_client=redis,
+    )
+
+    assert accepted.id == "download-domain-job-attempt-1"
+    assert redis.publications == expected_publications
+
+
+def test_ambiguous_delayed_download_does_not_publish_a_premature_wake(monkeypatch):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+
+    class Queue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.connection = connection
+
+        def enqueue_in(self, _delay, _func, *_args, **kwargs):
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: "scheduled",
+            )
+            self.connection.jobs[job.id] = job
+            self.connection.waiting += 1
+            raise TimeoutError("response lost after Redis EXEC")
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda client, rq_job_id: client.jobs.get(rq_job_id),
+    )
+
+    accepted = backpressure.enqueue_download_rq(
+        "downloads:pixiv",
+        "app.jobs.download.run_download_job",
+        "domain-job",
+        rq_job_id="download-domain-job-attempt-1",
+        job_timeout=7200,
+        delay_seconds=30,
+        redis_client=redis,
+    )
+
+    assert accepted.id == "download-domain-job-attempt-1"
+    assert redis.publications == []
 
 
 def test_waiting_count_includes_queued_intermediate_scheduled_and_deferred(monkeypatch):

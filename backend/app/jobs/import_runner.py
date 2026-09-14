@@ -1786,7 +1786,7 @@ async def _claim_import_execution(
                 ImportJob.id == job_uuid,
                 ImportJob.status.in_(("enqueued", "pending")),
             )
-            .with_for_update(skip_locked=True)
+            .with_for_update()
         )
         import_job = result.scalar_one_or_none()
         if import_job is None:
@@ -1981,7 +1981,7 @@ async def run_import_job(import_job_id: str):
     claimed_execution = await _claim_import_execution(job_uuid)
     if claimed_execution is None:
         logger.info(
-            "Import job %s is locked or no longer runnable; skipping",
+            "Import job %s is missing or no longer runnable; skipping",
             import_job_id,
         )
         return

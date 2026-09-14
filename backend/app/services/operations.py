@@ -19,7 +19,11 @@ from sqlalchemy import DateTime, cast, func as sql_func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.redis_client import get_redis
-from app.services.queue_admission import QueueAdmissionError, checked_enqueue
+from app.services.queue_admission import (
+    QueueAdmissionError,
+    checked_enqueue,
+    notify_queue_worker,
+)
 
 # Long adaptive rebuilds can legitimately spend several days yielding at the
 # 10% budget floor.  Their single-flight/status records must outlive the RQ
@@ -1667,6 +1671,12 @@ async def publish_admin_operation(
             )
             if existing is not None:
                 status = await asyncio.to_thread(_rq_status, existing)
+                if status == "queued":
+                    await asyncio.to_thread(
+                        notify_queue_worker,
+                        str(dispatch["queue_name"]),
+                        redis_client if redis_client is not None else get_redis(),
+                    )
                 if (
                     task.operation_type in {"subscription-sync-batch", "subscription-sync-batch-cleanup"}
                     and task.status == "running"

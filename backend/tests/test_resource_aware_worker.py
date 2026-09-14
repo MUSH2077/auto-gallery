@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import redis
@@ -154,6 +155,95 @@ def test_adaptive_wait_is_jittered_and_capped():
     assert adaptive_wait_delay(3, jitter=False) == 16.0
     assert adaptive_wait_delay(20, jitter=False) == 30.0
     assert adaptive_wait_delay(10**6, jitter=False) == 30.0
+
+
+@pytest.mark.parametrize(
+    ("first_workload", "second_workload"),
+    [
+        ("maintenance", "light"),
+        ("light", "maintenance"),
+    ],
+)
+def test_control_event_subscription_follows_workload_transition(
+    first_workload,
+    second_workload,
+):
+    class PubSub:
+        def __init__(self):
+            self.channels = set()
+            self.closed = False
+
+        def subscribe(self, *channels):
+            self.channels.update(channels)
+
+        def get_message(self, *, timeout):
+            return {"type": "message", "data": "queued"}
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        def __init__(self):
+            self.pubsubs = []
+
+        def pubsub(self, *, ignore_subscribe_messages):
+            assert ignore_subscribe_messages is True
+            pubsub = PubSub()
+            self.pubsubs.append(pubsub)
+            return pubsub
+
+    worker = _bare_worker()
+    worker.connection = Connection()
+
+    worker._wait_for_control_event(1.0, first_workload)
+    old_pubsub = worker.connection.pubsubs[0]
+    worker._wait_for_control_event(1.0, second_workload)
+
+    assert old_pubsub.closed is True
+    assert len(worker.connection.pubsubs) == 2
+    assert worker._resource_control_pubsub is worker.connection.pubsubs[1]
+    assert worker._resource_control_pubsub.channels == {
+        "resource:control",
+        f"resource:work:{second_workload}",
+    }
+
+
+def test_close_control_pubsub_clears_workload_binding():
+    worker = _bare_worker()
+    worker._resource_control_pubsub = None
+    worker._resource_control_workload = "maintenance"
+
+    worker._close_control_pubsub()
+
+    assert worker._resource_control_workload is None
+
+
+def test_control_event_subscribe_failure_closes_new_pubsub(monkeypatch):
+    class PubSub:
+        def __init__(self):
+            self.closed = False
+
+        def subscribe(self, *_channels):
+            raise redis.exceptions.ConnectionError("subscribe unavailable")
+
+        def close(self):
+            self.closed = True
+
+    pubsub = PubSub()
+    worker = _bare_worker()
+    worker.connection = SimpleNamespace(
+        pubsub=lambda **_kwargs: pubsub,
+    )
+    monkeypatch.setattr(
+        "app.services.resource_aware_worker.time.sleep",
+        lambda _seconds: None,
+    )
+
+    worker._wait_for_control_event(1.0, "maintenance")
+
+    assert pubsub.closed is True
+    assert getattr(worker, "_resource_control_pubsub", None) is None
+    assert getattr(worker, "_resource_control_workload", None) is None
 
 
 def test_worker_pressure_hash_writes_only_on_change_or_heartbeat(monkeypatch):

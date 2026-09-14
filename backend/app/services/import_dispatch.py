@@ -29,6 +29,7 @@ from app.services.queue_admission import (
     QueueAdmissionError,
     checked_enqueue,
     checked_enqueue_in,
+    notify_queue_worker,
 )
 from app.services.redis_client import get_redis
 from app.services.tasks import TaskService
@@ -418,6 +419,12 @@ async def publish_prepared_import(
             )
             outcome = "replayed"
         else:
+            await asyncio.to_thread(
+                notify_queue_worker,
+                "imports",
+                redis_client if redis_client is not None else get_redis(),
+                existing_job=existing,
+            )
             outcome = "existing"
     except (QueueAdmissionError, redis_lib.RedisError, OSError) as exc:
         # Redis capacity, disconnection, and ambiguous publication failures are
@@ -500,6 +507,12 @@ async def recover_import_dispatch_candidate(
             logger.exception("Invalid import RQ lookup job=%s", job_uuid)
             return "invalid"
         if existing is not None and not terminal_existing:
+            await asyncio.to_thread(
+                notify_queue_worker,
+                "imports",
+                redis_client if redis_client is not None else get_redis(),
+                existing_job=existing,
+            )
             _set_dispatch_state(task, IMPORT_DISPATCH_PUBLISHED)
             await db.commit()
             return "existing"

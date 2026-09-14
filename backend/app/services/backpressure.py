@@ -32,6 +32,7 @@ from app.services.queue_admission import (
     REDIS_ENQUEUE_STOP_RATIO,
     QueueAdmissionError,
     ensure_redis_enqueue_capacity,
+    notify_queue_worker,
 )
 from app.services.redis_client import get_redis
 
@@ -55,7 +56,6 @@ DOWNLOAD_ENQUEUE_LOCK_KEY = "lock:download-enqueue-admission"
 # degraded Redis cannot expire the lock while the first producer is still in it.
 DOWNLOAD_ENQUEUE_LOCK_SECONDS = 120
 DOWNLOAD_ENQUEUE_LOCK_WAIT_SECONDS = 5
-RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
 
 logger = logging.getLogger(__name__)
 
@@ -246,13 +246,6 @@ def _existing_rq_job(redis, rq_job_id: str):
         return None
 
 
-def _notify_download_worker(redis) -> None:
-    try:
-        redis.publish(f"{RESOURCE_WORK_CHANNEL_PREFIX}download", "queued")
-    except Exception:
-        logger.debug("Unable to publish download work event", exc_info=True)
-
-
 def _consume_batch_slot() -> None:
     snapshot = _download_admission_snapshot.get()
     if snapshot is not None:
@@ -317,6 +310,11 @@ def enqueue_download_rq(
                 publication_uncertain=True,
             ) from exc
         if existing is not None:
+            notify_queue_worker(
+                queue_name,
+                redis,
+                existing_job=existing,
+            )
             return existing
 
         reason = _redis_capacity_and_queue_reason(
@@ -360,7 +358,11 @@ def enqueue_download_rq(
                     rq_job_id,
                 )
                 _consume_batch_slot()
-                _notify_download_worker(redis)
+                notify_queue_worker(
+                    queue_name,
+                    redis,
+                    existing_job=existing,
+                )
                 return existing
             raise DownloadAdmissionError(
                 "redis_unwritable",
@@ -382,7 +384,8 @@ def enqueue_download_rq(
                 publication_uncertain=confirmation_error is not None,
             ) from exc
         _consume_batch_slot()
-        _notify_download_worker(redis)
+        if delay_seconds is None or delay_seconds <= 0:
+            notify_queue_worker(queue_name, redis)
         return rq_job
     finally:
         try:

@@ -603,6 +603,7 @@ class ResourceAwareWorker(Worker):
     def _close_control_pubsub(self) -> None:
         pubsub = getattr(self, "_resource_control_pubsub", None)
         self._resource_control_pubsub = None
+        self._resource_control_workload = None
         if pubsub is not None:
             try:
                 pubsub.close()
@@ -621,13 +622,18 @@ class ResourceAwareWorker(Worker):
 
         try:
             pubsub = getattr(self, "_resource_control_pubsub", None)
+            subscribed_workload = getattr(self, "_resource_control_workload", None)
+            if pubsub is not None and subscribed_workload != workload:
+                self._close_control_pubsub()
+                pubsub = None
             if pubsub is None:
                 pubsub = self.connection.pubsub(ignore_subscribe_messages=True)
+                self._resource_control_pubsub = pubsub
                 pubsub.subscribe(
                     RESOURCE_CONTROL_CHANNEL,
                     f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}",
                 )
-                self._resource_control_pubsub = pubsub
+                self._resource_control_workload = workload
             # An accepted job marks the worker busy, so RQ's warm signal sets
             # a flag instead of raising. Observe it without resampling pressure.
             deadline = time.monotonic() + max(0.05, seconds)
