@@ -59,7 +59,7 @@ async def list_subscriptions(
             limit,
             scope="subscriptions",
             permissions={"subscriptions"},
-            allowed_subscription_ids=await membership_service.subscription_ids(),
+            user_id=user.id,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc

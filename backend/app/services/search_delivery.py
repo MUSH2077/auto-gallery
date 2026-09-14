@@ -156,9 +156,9 @@ async def _save(receipt, token, deadline, **values):
 
 async def _prepare(limit, deadline):
     """Global transaction lock chooses one index/action before bounded hydration."""
-    from app.services.search import SearchService, WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX
+    from app.services.search import SearchService, WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
     builders = {WORKS_INDEX: "_build_work_documents", CREATORS_INDEX: "_build_creator_documents", TAGS_INDEX: "_build_tag_documents",
-                REPOSITORIES_INDEX: "_build_repository_documents", SUBSCRIPTIONS_INDEX: "_build_subscription_documents"}
+                REPOSITORIES_INDEX: "_build_repository_documents", SUBSCRIPTIONS_INDEX: "_build_subscription_documents", MEMBERSHIPS_INDEX: "_build_membership_documents"}
     async with session(deadline) as db:
         if not (await db.execute(text("SELECT pg_try_advisory_xact_lock(73194218)"))).scalar_one():
             return None
@@ -416,9 +416,9 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
 
 async def _checkpoint(client, deadline):
     from app.models.repository_sync_receipt import SearchIndexState
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX
-    models = {WORKS_INDEX: Work, CREATORS_INDEX: Creator, TAGS_INDEX: Tag, REPOSITORIES_INDEX: SubscriptionSource, SUBSCRIPTIONS_INDEX: Subscription}
+    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
+    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
+    models = {WORKS_INDEX: Work, CREATORS_INDEX: Creator, TAGS_INDEX: Tag, REPOSITORIES_INDEX: SubscriptionSource, SUBSCRIPTIONS_INDEX: Subscription, MEMBERSHIPS_INDEX: UserSubscription}
     async with session(deadline) as db:
         state = (await db.execute(select(SearchIndexState).where(
             checkpoint_due_condition(SearchIndexState),

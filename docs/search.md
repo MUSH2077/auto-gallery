@@ -116,3 +116,22 @@ Danbooru remains an explicitly remote query adapter and is never mixed into
 local search results.
 
 Danbooru 始终是明确的远端查询适配器，不混入本地搜索结果。
+
+Authenticated subscription full text uses the versioned
+`subscription_memberships_v1` projection, keyed internally by membership UUID.
+It searches the actor's private label together with canonical subscription,
+creator, alias and source fields. Both the result page and the exact count query
+receive the server's `user_id` filter; public IDs remain subscription IDs. Counts
+are exact for the delivered projection up to the existing 100,000-hit index cap.
+Live membership checks remove stale hits after ownership removal. PostgreSQL
+remains authoritative for empty and structured subscription browsing.
+
+Membership changes and affected canonical changes enqueue transactional search
+requests. Search remains eventually consistent: an immediate GET reflects a
+committed rename/join, while full text reflects it after background delivery.
+An upgrade automatically schedules a bounded membership rebuild through the
+existing search delivery consumer. Its UUID cursor, replay, remote receipts and
+completion marker persist in `search_rebuilds` under owner
+`subscription-memberships-v1-bootstrap`; restarts resume it, and failed builds
+become retryable after five minutes. A missing/unavailable required full-text
+index continues to return HTTP 503.

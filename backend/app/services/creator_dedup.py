@@ -219,6 +219,13 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
     if source.description and source.description not in (target.description or ""):
         target.description = (target.description or "") + "\n" + source.description
 
+    # Preserve private projection identifiers before any successful cascade.
+    # Existing merge restrictions/business behavior remain unchanged.
+    from app.models import UserSubscription
+    from app.services.search_projection_outbox import request_membership_projection_where
+    await request_membership_projection_where(
+        db, UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id == source_id)), deleting=True,
+    )
     # Delete source creator
     await db.delete(source)
     await request_search_projection(

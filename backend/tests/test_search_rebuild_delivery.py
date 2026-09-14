@@ -315,7 +315,7 @@ async def test_cancelled_owner_prevents_next_rebuild_write(delivery):
 
 
 @pytest.mark.asyncio
-async def test_all_five_indexes_share_one_ordered_swap(delivery):
+async def test_all_six_indexes_share_one_ordered_swap(delivery):
     from app.services import search_rebuild
     indexes = tuple(search_rebuild._specs())
     remote = Meili()
@@ -330,7 +330,12 @@ async def test_all_five_indexes_share_one_ordered_swap(delivery):
     assert status["status"] == "ok", status
     swaps = [payload for _, path, payload in remote.writes if path == "/swap-indexes"]
     assert len(swaps) == 1
-    assert len(swaps[0]) == 5
+    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
+    assert indexes == (WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX)
+    assert swaps[0] == [
+        {"indexes": [index, f"{index}__staging_{UUID(started['build_id']).hex[:12]}"]}
+        for index in indexes
+    ]
     assert set(remote.indexes) == set(indexes)
 
 

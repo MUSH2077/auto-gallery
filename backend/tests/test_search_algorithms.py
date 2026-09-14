@@ -382,9 +382,13 @@ async def test_transactional_projection_request_uses_callers_session(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_transactional_projection_request_covers_all_five_indexes(monkeypatch):
+async def test_transactional_projection_request_covers_all_six_indexes(monkeypatch):
     import app.services.search_projection_outbox as outbox
 
+    from unittest.mock import AsyncMock, call
+
+    fanout = AsyncMock(return_value=0)
+    monkeypatch.setattr(outbox, "_fanout_memberships", fanout)
     calls = []
     index_changes = []
 
@@ -400,7 +404,7 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
     )
     monkeypatch.setattr(outbox, "cache_bump_generation", lambda _domain: 1)
     db = SimpleNamespace(info={})
-    identities = [uuid4() for _ in range(5)]
+    identities = [uuid4() for _ in range(7)]
     await outbox.request_search_projection(
         db,
         [identities[0]],
@@ -408,6 +412,8 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         tag_ids=[identities[2]],
         repository_ids=[identities[3]],
         deleted_subscription_ids=[identities[4]],
+        membership_ids=[identities[5]],
+        deleted_membership_ids=[identities[6]],
     )
 
     assert [call[1] for call in calls] == [
@@ -416,11 +422,15 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         outbox.DEFAULT_TAGS_INDEX_UID,
         outbox.DEFAULT_REPOSITORIES_INDEX_UID,
         outbox.DEFAULT_SUBSCRIPTIONS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
     ]
     assert [call[3] for call in calls] == [
         "upsert",
         "upsert",
         "upsert",
+        "upsert",
+        "delete",
         "upsert",
         "delete",
     ]
@@ -430,7 +440,15 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         outbox.DEFAULT_TAGS_INDEX_UID,
         outbox.DEFAULT_REPOSITORIES_INDEX_UID,
         outbox.DEFAULT_SUBSCRIPTIONS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
     }
+
+    assert calls[-2][2] == (str(identities[5]),)
+    assert calls[-1][2] == (str(identities[6]),)
+    assert fanout.await_args_list == [
+        call(db, subscription_ids=(), creator_ids=(identities[1],), repository_ids=(identities[3],)),
+        call(db, subscription_ids=(identities[4],), creator_ids=(), repository_ids=(), deleting=True),
+    ]
 
 
 def test_exact_timestamp_filter_is_equality_not_less_than():

@@ -16,7 +16,7 @@ from app.services.search_projection_outbox import request_search_projection, DEF
 
 
 @pytest.fixture
-async def delivery(monkeypatch, tmp_path):
+async def delivery(monkeypatch, tmp_path, request):
     from app.services import search_delivery as delivery
     from app.services import heavy_io
     from contextlib import asynccontextmanager
@@ -25,6 +25,10 @@ async def delivery(monkeypatch, tmp_path):
     @asynccontextmanager
     async def capacity(*args, **kwargs):
         yield SimpleNamespace(work_units=kwargs["max_work_units"])
+    if not getattr(request, "param", False):
+        from app.services import search_rebuild
+        from unittest.mock import AsyncMock
+        monkeypatch.setattr(search_rebuild, "_bootstrap_memberships", AsyncMock(return_value=None))
     monkeypatch.setattr(heavy_io, "adaptive_resource_slice", capacity)
     monkeypatch.setattr(heavy_io, "_local_lock_path", lambda: tmp_path / "heavy-io.lock")
     async with async_session() as db:

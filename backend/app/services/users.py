@@ -92,6 +92,9 @@ class UserService:
         user = await self.get(user_id)
         if user.is_admin and user.is_active:
             await self._ensure_not_last_admin(user.id)
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        await request_membership_projection_where(self.db, UserSubscription.user_id == user.id, deleting=True)
         await self.db.delete(user)
         await self.db.commit()
 

@@ -31,6 +31,7 @@ DEFAULT_WORKS_INDEX_UID = f"{settings.meili_index_prefix}works"
 DEFAULT_CREATORS_INDEX_UID = f"{settings.meili_index_prefix}creators"
 DEFAULT_TAGS_INDEX_UID = f"{settings.meili_index_prefix}tags"
 DEFAULT_REPOSITORIES_INDEX_UID = f"{settings.meili_index_prefix}repositories"
+DEFAULT_MEMBERSHIPS_INDEX_UID = f"{settings.meili_index_prefix}subscription_memberships_v1"
 DEFAULT_SUBSCRIPTIONS_INDEX_UID = f"{settings.meili_index_prefix}subscriptions"
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,46 @@ def _discard_rolled_back_index_generation_intents(session: Session, previous_tra
         session.info.get(_INDEX_GENERATION_INTENTS, {}).pop(previous_transaction, None)
 
 
+async def request_membership_projection_where(db: AsyncSession, *conditions, deleting: bool = False) -> int:
+    """Keyset fanout in the domain transaction; call before destructive cascades."""
+    from app.models import UserSubscription
+
+    last_id = None
+    count = 0
+    while True:
+        statement = select(UserSubscription.id).where(*conditions).order_by(UserSubscription.id).limit(OUTBOX_SQL_BATCH_SIZE)
+        if last_id is not None:
+            statement = statement.where(UserSubscription.id > last_id)
+        ids = tuple((await db.execute(statement)).scalars())
+        if not ids:
+            break
+        count += await _enqueue_projection_action(
+            db, DEFAULT_MEMBERSHIPS_INDEX_UID, tuple(map(str, ids)),
+            action="delete" if deleting else "upsert",
+        )
+        last_id = ids[-1]
+    if count:
+        await _mark_index_changed(db, DEFAULT_MEMBERSHIPS_INDEX_UID)
+    return count
+
+
+async def _fanout_memberships(db, *, subscription_ids, creator_ids, repository_ids, deleting=False):
+    from app.models import Subscription, SubscriptionSource, UserSubscription
+
+    count = 0
+    for kind, values in (("subscription", subscription_ids), ("creator", creator_ids), ("repository", repository_ids)):
+        for start in range(0, len(values), OUTBOX_SQL_BATCH_SIZE):
+            ids = [UUID(str(value)) for value in values[start:start + OUTBOX_SQL_BATCH_SIZE]]
+            if kind == "subscription":
+                condition = UserSubscription.subscription_id.in_(ids)
+            elif kind == "creator":
+                condition = UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id.in_(ids)))
+            else:
+                condition = UserSubscription.subscription_id.in_(select(SubscriptionSource.subscription_id).where(SubscriptionSource.id.in_(ids)))
+            count += await request_membership_projection_where(db, condition, deleting=deleting)
+    return count
+
+
 async def request_search_projection(
     db: AsyncSession,
     work_ids: Iterable[str | UUID] = (),
@@ -216,6 +257,8 @@ async def request_search_projection(
     deleted_repository_ids: Iterable[str | UUID] = (),
     subscription_ids: Iterable[str | UUID] = (),
     deleted_subscription_ids: Iterable[str | UUID] = (),
+    membership_ids: Iterable[str | UUID] = (),
+    deleted_membership_ids: Iterable[str | UUID] = (),
     index_uid: str | None = None,
 ) -> int:
     """Request work/reference projection changes in the caller's transaction.
@@ -227,14 +270,30 @@ async def request_search_projection(
     both collections, the delete is applied last and therefore wins.
     """
 
+    # Preserve generators for both the canonical requests and bounded fanout.
+    subscription_ids = tuple(subscription_ids)
+    creator_ids = tuple(creator_ids)
+    repository_ids = tuple(repository_ids)
+    deleted_subscription_ids = tuple(deleted_subscription_ids)
+    deleted_creator_ids = tuple(deleted_creator_ids)
+    deleted_repository_ids = tuple(deleted_repository_ids)
     requests = (
         (index_uid or DEFAULT_WORKS_INDEX_UID, work_ids, deleted_work_ids),
         (DEFAULT_CREATORS_INDEX_UID, creator_ids, deleted_creator_ids),
         (DEFAULT_TAGS_INDEX_UID, tag_ids, deleted_tag_ids),
         (DEFAULT_REPOSITORIES_INDEX_UID, repository_ids, deleted_repository_ids),
         (DEFAULT_SUBSCRIPTIONS_INDEX_UID, subscription_ids, deleted_subscription_ids),
+        (DEFAULT_MEMBERSHIPS_INDEX_UID, membership_ids, deleted_membership_ids),
     )
     requested = 0
+    requested += await _fanout_memberships(
+        db, subscription_ids=subscription_ids, creator_ids=creator_ids,
+        repository_ids=repository_ids + deleted_repository_ids,
+    )
+    requested += await _fanout_memberships(
+        db, subscription_ids=deleted_subscription_ids, creator_ids=deleted_creator_ids,
+        repository_ids=(), deleting=True,
+    )
     work_requested = False
     changed_indexes: set[str] = set()
     for position, (projection_uid, upsert_values, delete_values) in enumerate(requests):

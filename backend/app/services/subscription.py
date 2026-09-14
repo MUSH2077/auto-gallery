@@ -281,6 +281,10 @@ class SubscriptionService:
             await self._projection_context(sub_id)
         )
 
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        await request_membership_projection_where(self.db, UserSubscription.subscription_id == sub_id, deleting=True)
+
         # 1. Delete download jobs and their import jobs first
         djs = await self.db.execute(
             select(DownloadJob).where(DownloadJob.subscription_id == sub_id)

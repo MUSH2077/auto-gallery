@@ -595,6 +595,7 @@ async def test_subscription_search_intersects_membership_before_pagination(monke
             )
             await db.commit()
             first_name = first.username
+            actor_id = first.id
             owned_id = owned.id
             foreign_id = foreign.id
 
@@ -604,29 +605,29 @@ async def test_subscription_search_intersects_membership_before_pagination(monke
             offset=0,
             limit=20,
             *,
+            user_id=None,
             allowed_subscription_ids=None,
             **kwargs,
         ):
-            captured["ids"] = allowed_subscription_ids
-            result_id = (
-                owned_id
-                if allowed_subscription_ids and owned_id in allowed_subscription_ids
-                else foreign_id
-            )
+            captured.update(actor=user_id, offset=offset, limit=limit, ids=allowed_subscription_ids)
+            # Include a stale/foreign hit to exercise the endpoint's current
+            # membership guard separately from actor routing into search.
             return {
-                "groups": {"subscriptions": {"items": [SimpleNamespace(id=result_id)]}}
+                "groups": {"subscriptions": {"items": [
+                    {"id": str(foreign_id)}, {"id": str(owned_id)},
+                ]}}
             }
 
         monkeypatch.setattr(SearchService, "search", fake_search)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 "/api/v1/subscriptions",
-                params={"q": "Search", "offset": 0, "limit": 1},
+                params={"q": "Search", "offset": 17, "limit": 1},
                 headers=_headers(first_name),
             )
         assert response.status_code == 200, response.text
         assert [item["id"] for item in response.json()] == [str(owned_id)]
-        assert captured["ids"] == {owned_id}
+        assert captured == {"actor": actor_id, "offset": 17, "limit": 1, "ids": None}
     finally:
         async with async_session() as db:
             await _clear(db)

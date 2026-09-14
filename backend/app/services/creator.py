@@ -154,6 +154,12 @@ class CreatorService:
         creator = await self.get_creator(creator_id)
         dependents = await self._projection_dependents(creator_id)
 
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        await request_membership_projection_where(
+            self.db, UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id == creator_id)), deleting=True,
+        )
+
         # 1. Find all subscriptions for this creator
         subs = await self.db.execute(
             select(Subscription).where(Subscription.creator_id == creator_id)

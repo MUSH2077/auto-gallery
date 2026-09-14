@@ -17,12 +17,44 @@ from app.models.search_projection_outbox import SearchProjectionOutbox as Outbox
 ACTIVE_BUILD = Build.state.not_in(("complete", "failed"))
 
 
+MEMBERSHIP_BOOTSTRAP_OWNER = "subscription-memberships-v1-bootstrap"
+
+
+def membership_bootstrap_due_condition():
+    """Persist completion in rebuild history; failed attempts back off for 5m."""
+    from app.services.search_delivery import now
+    return ~exists().where(
+        Build.owner == MEMBERSHIP_BOOTSTRAP_OWNER,
+        or_(Build.state != "failed", Build.updated_at > now() - timedelta(minutes=5)),
+    )
+
+
+async def _bootstrap_memberships(db, limit):
+    """Called under the existing writer lock; each later slice advances a cursor."""
+    from app.services.search import MEMBERSHIPS_INDEX
+    from app.services.search_delivery import now
+    from app.services.search_projection_outbox import _mark_index_changed
+
+    if not (await db.execute(select(membership_bootstrap_due_condition()))).scalar_one():
+        return None
+    build = Build(id=uuid4(), owner=MEMBERSHIP_BOOTSTRAP_OWNER, phase="settings", progress={
+        "indexes": [MEMBERSHIPS_INDEX], "position": 0, "cursor": None,
+        "batch_size": max(1, min(500, limit)), "counts": {}, "batches": 0,
+        "replayed": 0, "since": now().isoformat(),
+    })
+    db.add(build)
+    await _mark_index_changed(db, MEMBERSHIPS_INDEX)
+    await db.commit()
+    return build
+
+
 def _specs():
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX
+    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
+    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
     return {WORKS_INDEX: (Work, "_build_work_documents"), CREATORS_INDEX: (Creator, "_build_creator_documents"),
             TAGS_INDEX: (Tag, "_build_tag_documents"), REPOSITORIES_INDEX: (SubscriptionSource, "_build_repository_documents"),
-            SUBSCRIPTIONS_INDEX: (Subscription, "_build_subscription_documents")}
+            SUBSCRIPTIONS_INDEX: (Subscription, "_build_subscription_documents"),
+            MEMBERSHIPS_INDEX: (UserSubscription, "_build_membership_documents")}
 
 
 async def start_rebuild(indexes, *, batch_size=500, owner=None):
@@ -117,7 +149,9 @@ async def prepare_next(limit, deadline, client):
     async with session(deadline) as db:
         build = (await db.execute(select(Build).where(ACTIVE_BUILD).with_for_update())).scalar_one_or_none()
         if build is None:
-            return None
+            build = await _bootstrap_memberships(db, limit)
+            if build is None:
+                return None
         # An admin cancellation prevents new remote commands; accepted commands
         # already in receipts are polled first by the delivery engine.
         if build.owner and build.state != "cleaning_failure":

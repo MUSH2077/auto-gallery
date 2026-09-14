@@ -167,7 +167,9 @@ async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[s
         from app.services.search_delivery import checkpoint_due_condition
         active_delivery = exists().where(SearchDeliveryReceipt.state.not_in(("complete", "failed")))
         from app.models.search_rebuild import SearchRebuild
+        from app.services.search_rebuild import membership_bootstrap_due_condition
         search_due = or_(
+            and_(~active_delivery, membership_bootstrap_due_condition()),
             exists().where(SearchRebuild.state.not_in(("complete", "failed"))),
             and_(~active_delivery, exists().where(
                 SearchProjectionOutbox.completed_at.is_(None),

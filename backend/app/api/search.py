@@ -52,26 +52,11 @@ async def name_anchors(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = getattr(user, "id", None)
-    allowed_subscription_ids: set[UUID] | None = None
-    if scope == "subscriptions":
-        if db is not None and user_id is not None:
-            allowed_subscription_ids = set(
-                (
-                    await db.execute(
-                        select(UserSubscription.subscription_id).where(
-                            UserSubscription.user_id == user_id
-                        )
-                    )
-                ).scalars()
-            )
-        else:
-            allowed_subscription_ids = set()
     try:
         return await SearchService(db).name_anchors(
             scope=scope,
             query=q,
             permissions=_permissions(user),
-            allowed_subscription_ids=allowed_subscription_ids,
             user_id=user_id,
         )
     except NameAnchorsUnavailable as error:
@@ -120,36 +105,13 @@ async def search(
         raise HTTPException(status_code=422, detail={"code": "invalid_scope", "message": f"Unknown search scope: {scope}"})
     svc = SearchService(db)
     try:
-        memberships = []
         bindings = []
         user_id = getattr(user, "id", None)
-        # A few API-contract tests intentionally replace the database
-        # dependency with ``None`` while mocking SearchService.  Real requests
-        # always have both a session and authenticated user id; retaining this
-        # narrow seam keeps those request-shape tests independent of storage.
-        if db is not None and user_id is not None:
-            memberships = list(
-                (
-                    await db.execute(
-                        select(UserSubscription).where(UserSubscription.user_id == user_id)
-                    )
-                ).scalars()
-            )
-            bindings = list(
-                (
-                    await db.execute(
-                        select(UserSubscriptionSource).where(
-                            UserSubscriptionSource.user_id == user_id
-                        )
-                    )
-                ).scalars()
-            )
-        memberships_by_subscription = {
-            membership.subscription_id: membership for membership in memberships
-        }
-        bindings_by_repository = {
-            binding.subscription_source_id: binding for binding in bindings
-        }
+        if db is not None and user_id is not None and scope in {"global", "repositories"}:
+            bindings = list((await db.execute(
+                select(UserSubscriptionSource).where(UserSubscriptionSource.user_id == user_id)
+            )).scalars())
+        bindings_by_repository = {binding.subscription_source_id: binding for binding in bindings}
         result = await svc.search(
             q,
             offset,
@@ -158,10 +120,33 @@ async def search(
             permissions=_permissions(user),
             force_sfw=not user.nsfw_visible,
             cursor=cursor,
-            allowed_subscription_ids=set(memberships_by_subscription),
             allowed_repository_ids=set(bindings_by_repository),
             user_id=user_id,
         )
+        # Hydrate only returned pages and owned repository labels. Full-text
+        # membership count/offset are already actor-filtered inside Meili.
+        subscription_group = result.get("groups", {}).get("subscriptions", {})
+        subscription_items = subscription_group.get("items", [])
+        returned_ids = {UUID(str(item["id"])) for item in subscription_items if isinstance(item, dict) and item.get("id")}
+        for item in result.get("groups", {}).get("repositories", {}).get("items", []):
+            if isinstance(item, dict) and item.get("id"):
+                binding = bindings_by_repository.get(UUID(str(item["id"])))
+                if binding is not None:
+                    returned_ids.add(binding.subscription_id)
+        memberships_by_subscription = {}
+        if returned_ids and db is not None and user_id is not None:
+            memberships_by_subscription = {member.subscription_id: member for member in (await db.execute(
+                select(UserSubscription).where(UserSubscription.user_id == user_id, UserSubscription.subscription_id.in_(returned_ids))
+            )).scalars()}
+        if db is not None and user_id is not None:
+            subscription_group["items"] = [item for item in subscription_items
+                                           if isinstance(item, dict) and item.get("id")
+                                           and UUID(str(item["id"])) in memberships_by_subscription]
+            removed = len(subscription_items) - len(subscription_group["items"])
+            subscription_group["total"] = max(0, subscription_group.get("total", 0) - removed)
+            result["subscriptions"] = subscription_group["items"]
+            if scope == "subscriptions":
+                result["total"] = subscription_group["total"]
         for item in result.get("groups", {}).get("subscriptions", {}).get("items", []):
             if not isinstance(item, dict) or not item.get("id"):
                 continue

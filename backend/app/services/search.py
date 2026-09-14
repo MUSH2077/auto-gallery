@@ -147,6 +147,7 @@ CREATORS_INDEX = f"{_INDEX_PREFIX}creators"
 TAGS_INDEX = f"{_INDEX_PREFIX}tags"
 REPOSITORIES_INDEX = f"{_INDEX_PREFIX}repositories"
 SUBSCRIPTIONS_INDEX = f"{_INDEX_PREFIX}subscriptions"
+MEMBERSHIPS_INDEX = f"{_INDEX_PREFIX}subscription_memberships_v1"
 
 INDEX_LABELS = {
     WORKS_INDEX: "works",
@@ -154,6 +155,7 @@ INDEX_LABELS = {
     TAGS_INDEX: "tags",
     REPOSITORIES_INDEX: "repositories",
     SUBSCRIPTIONS_INDEX: "subscriptions",
+    MEMBERSHIPS_INDEX: "subscription_memberships",
 }
 
 MEILI_TARGET_INDEX: dict[SearchTarget, str] = {
@@ -333,6 +335,14 @@ INDEX_SETTINGS = {
             ],
         },
     },
+}
+
+# One physical index for all actors; identity is the private membership UUID.
+INDEX_SETTINGS[MEMBERSHIPS_INDEX] = {
+    **INDEX_SETTINGS[SUBSCRIPTIONS_INDEX],
+    "searchableAttributes": ["name", "canonical_name", *INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["searchableAttributes"][1:]],
+    "filterableAttributes": [*INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["filterableAttributes"], "user_id", "subscription_id"],
+    "sortableAttributes": [*INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["sortableAttributes"], "subscription_id"],
 }
 
 WORK_PROJECTION_VERSION = 4
@@ -685,6 +695,7 @@ async def _refresh_search_index_checkpoints(index_uids: Iterable[str]) -> None:
         TAGS_INDEX: Tag,
         REPOSITORIES_INDEX: SubscriptionSource,
         SUBSCRIPTIONS_INDEX: Subscription,
+        MEMBERSHIPS_INDEX: UserSubscription,
     }
     for index_uid in tuple(dict.fromkeys(index_uids)):
         model = models.get(index_uid)
@@ -1519,6 +1530,7 @@ def _compile_meili_filter(
     resolved: dict[tuple[str, str], Any],
     *,
     force_sfw: bool,
+    identity_field: str = "id",
 ) -> str | None:
     parts: list[str] = []
     fields = MEILI_FIELD[target]
@@ -1542,11 +1554,11 @@ def _compile_meili_filter(
                 identities = source_url.ids_for(target) if source_url else ()
                 if identities:
                     identity_expression = " OR ".join(
-                        f"id = {_meili_literal(identity)}" for identity in identities
+                        f"{identity_field} = {_meili_literal(identity)}" for identity in identities
                     )
                     expression = f"({identity_expression})"
                 else:
-                    expression = 'id = "__source_url_no_match__"'
+                    expression = f'{identity_field} = "__source_url_no_match__"'
                 expressions.append(f"NOT ({expression})" if negated else expression)
         elif key in fields:
             field = fields[key]
@@ -2302,7 +2314,7 @@ class SearchService:
             else parse_search_query(query, scope)
         )
         parsed_at = monotonic_time.perf_counter()
-        permission_set = permissions or {"library", "subscriptions", "tasks", "curation"}
+        permission_set = permissions if permissions is not None else {"library", "subscriptions", "tasks", "curation"}
         targets = self._allowed_targets(parsed, permission_set)
         if parsed.values("is") and "trashed" in parsed.values("is") and "curation" not in permission_set:
             raise SearchPermissionError("works:trashed")
@@ -2323,6 +2335,7 @@ class SearchService:
             target
             for target in targets
             if target in {"works", "creators", "repositories", "subscriptions"}
+            and not (target == "subscriptions" and user_id is not None)
         )
         exact_alias_search = bool(exact_aliases and exact_alias_targets)
         if exact_alias_search:
@@ -2433,6 +2446,7 @@ class SearchService:
                         target_limit,
                         allowed_subscription_ids=allowed_subscription_ids,
                         allowed_repository_ids=allowed_repository_ids,
+                        user_id=user_id,
                     )
         elif not text and targets == ("works",) and self._works_db_compatible(parsed):
             groups["works"], execution = await self._hedged_structured_works_search(
@@ -2470,14 +2484,13 @@ class SearchService:
         )
         if numeric_identity_literal and not exact_alias_search:
             for target in targets:
-                if target in {"creators", "repositories", "subscriptions"}:
+                if target in {"creators", "repositories", "subscriptions"} and not (target == "subscriptions" and user_id is not None):
                     groups.setdefault(target, {"total": 0, "items": []})
 
-        meili_targets = (
-            []
-            if exact_alias_search
-            else [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
-        )
+        meili_targets = [
+            t for t in targets if t in MEILI_TARGET_INDEX and t not in groups
+            and (not exact_alias_search or (t == "subscriptions" and user_id is not None))
+        ]
         if cursor and meili_targets:
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
@@ -2491,6 +2504,7 @@ class SearchService:
                     force_sfw,
                     allowed_subscription_ids=allowed_subscription_ids,
                     allowed_repository_ids=allowed_repository_ids,
+                    user_id=user_id,
                 )
             )
             execution.update({
@@ -2572,13 +2586,15 @@ class SearchService:
         *,
         allowed_subscription_ids: set[UUID] | None = None,
         allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict[str, dict]:
         text = _free_text(query)
         timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
         deadline = monotonic_time.perf_counter() + timeout_seconds
         prepared: list[tuple[SearchTarget, str, dict[str, Any]]] = []
         for target in targets:
-            index_uid = MEILI_TARGET_INDEX[target]
+            membership_target = target == "subscriptions" and user_id is not None
+            index_uid = MEMBERSHIPS_INDEX if membership_target else MEILI_TARGET_INDEX[target]
             target_limit = (
                 min(limit, 10)
                 if query.scope == "global" and len(targets) > 1
@@ -2594,8 +2610,12 @@ class SearchService:
                 target,
                 resolved,
                 force_sfw=force_sfw,
+                identity_field="subscription_id" if membership_target else "id",
             )
-            if target == "subscriptions" and allowed_subscription_ids is not None:
+            if membership_target:
+                ownership_filter = f"user_id = {_meili_literal(user_id)}"
+                filter_expression = f"({filter_expression}) AND {ownership_filter}" if filter_expression else ownership_filter
+            if target == "subscriptions" and not membership_target and allowed_subscription_ids is not None:
                 if allowed_subscription_ids:
                     ownership_filter = "(" + " OR ".join(
                         f"id = {_meili_literal(str(subscription_id))}"
@@ -2624,6 +2644,8 @@ class SearchService:
                     else ownership_filter
                 )
             sort = _meili_sort(query, target)
+            if membership_target and sort:
+                sort = [value.replace("id:", "subscription_id:") if value.startswith("id:") else value for value in sort]
             if filter_expression:
                 search_kwargs["filter"] = filter_expression
             if sort:
@@ -2649,27 +2671,33 @@ class SearchService:
                 raise TimeoutError
 
             def _run_searches(socket_timeout: float = remaining) -> list[Any]:
+                from types import SimpleNamespace
+                requests = [(uid, kwargs) for _target, uid, kwargs in prepared]
+                count_positions = {}
+                for position, (_target, uid, kwargs) in enumerate(prepared):
+                    if uid == MEMBERSHIPS_INDEX:
+                        count_positions[position] = len(requests)
+                        count_kwargs = {key: value for key, value in kwargs.items() if key not in {"offset", "limit", "sort"}}
+                        count_kwargs.update(page=1, hits_per_page=1, attributes_to_retrieve=["id"])
+                        requests.append((uid, count_kwargs))
                 client = _client(timeout_seconds=socket_timeout)
                 multi_search = getattr(client, "multi_search", None)
-                if len(prepared) > 1 and callable(multi_search):
-                    return list(multi_search([
-                        SearchParams(
-                            index_uid=index_uid,
-                            query=text,
-                            **search_kwargs,
-                        )
-                        for _target, index_uid, search_kwargs in prepared
+                if len(requests) > 1 and callable(multi_search):
+                    results = list(multi_search([
+                        SearchParams(index_uid=uid, query=text, **kwargs)
+                        for uid, kwargs in requests
                     ]))
-
-                # Compatibility fallback for older SDKs.  Divide the socket
-                # budget across targets so a cancelled executor thread cannot
-                # continue issuing N full-timeout requests in the background.
-                per_target_timeout = max(0.1, socket_timeout / len(prepared))
-                fallback_client = _client(timeout_seconds=per_target_timeout)
-                return [
-                    fallback_client.index(index_uid).search(text, **search_kwargs)
-                    for _target, index_uid, search_kwargs in prepared
-                ]
+                else:
+                    client = _client(timeout_seconds=max(0.1, socket_timeout / len(requests)))
+                    results = [client.index(uid).search(text, **kwargs) for uid, kwargs in requests]
+                if len(results) != len(requests):
+                    raise RuntimeError("Meilisearch returned an incomplete multi-search response")
+                for position, count_position in count_positions.items():
+                    total = getattr(results[count_position], "total_hits", None)
+                    if total is None:
+                        raise RuntimeError("Meilisearch did not return an exact membership count")
+                    results[position] = SimpleNamespace(hits=results[position].hits, estimated_total_hits=int(total))
+                return results[:len(prepared)]
 
             results = await asyncio.wait_for(
                 asyncio.to_thread(_run_searches),
@@ -2684,6 +2712,25 @@ class SearchService:
             output: dict[str, dict] = {}
             for (target, _index_uid, _kwargs), result in zip(prepared, results):
                 hits, total = _search_hits(result)
+                if target == "subscriptions" and user_id is not None:
+                    # A stale document cannot re-grant a removed membership.
+                    # Hydrate this page, never the actor's complete membership set.
+                    ids = [UUID(str(hit["id"])) for hit in hits]
+                    live = {str(member.id): member for member in (await self.db.execute(
+                        select(UserSubscription).where(UserSubscription.id.in_(ids), UserSubscription.user_id == user_id)
+                    )).scalars()} if ids else {}
+                    safe_hits = []
+                    for hit in hits:
+                        member = live.get(str(hit["id"]))
+                        if member is None or str(member.subscription_id) != str(hit.get("subscription_id")):
+                            continue
+                        hit["id"] = str(member.subscription_id)
+                        hit["name"] = member.name
+                        for field in ("user_id", "subscription_id", "canonical_name", "projection_hash", "projection_version"):
+                            hit.pop(field, None)
+                        safe_hits.append(hit)
+                    total = max(0, total - (len(hits) - len(safe_hits)))
+                    hits = safe_hits
                 for hit in hits:
                     _decorate_alias_hit(hit, text)
                 if target == "works" and query.scope == "works":
@@ -3830,6 +3877,50 @@ class SearchService:
             "synced_ts": _timestamp(repo.last_synced_at),
         } for repo, subscription, creator in rows]
 
+    async def _build_membership_documents(self, membership_ids: Iterable[UUID]) -> list[dict]:
+        """Build one bounded identity window using the canonical search vocabulary."""
+        identities = tuple(membership_ids)
+        if not identities:
+            return []
+        if len(identities) > 500:
+            raise ValueError("Membership projection batches must contain at most 500 IDs")
+        members = list((await self.db.execute(
+            select(UserSubscription).where(UserSubscription.id.in_(identities))
+            .order_by(UserSubscription.id)
+        )).scalars())
+        canonical = {doc["id"]: doc for doc in await self._build_subscription_documents(
+            tuple({member.subscription_id for member in members})
+        )}
+        stats = {row[0]: row[1:] for row in (await self.db.execute(
+            select(UserSubscriptionSource.user_subscription_id,
+                   func.max(UserSubscriptionSource.last_synced_at),
+                   func.count(UserSubscriptionSource.id),
+                   func.count(UserSubscriptionSource.id).filter(UserSubscriptionSource.is_enabled.is_(True)))
+            .where(UserSubscriptionSource.user_subscription_id.in_(identities))
+            .group_by(UserSubscriptionSource.user_subscription_id)
+        )).all()}
+        documents = []
+        for member in members:
+            source_doc = canonical.get(str(member.subscription_id))
+            if source_doc is None:
+                continue
+            latest, count, enabled = stats.get(member.id, (None, 0, 0))
+            document = {
+                **source_doc, "id": str(member.id), "user_id": member.user_id,
+                "subscription_id": str(member.subscription_id),
+                "canonical_name": source_doc["name"], "name": member.name or "",
+                "is_active": bool(member.is_active), "sync_enabled": bool(member.sync_enabled),
+                "sync_interval_hours": member.sync_interval_hours,
+                "schedule_mode": member.schedule_mode, "schedule_rule": member.schedule_rule,
+                "scheduled_times": member.scheduled_times,
+                "last_synced_at": _iso(latest), "synced_ts": _timestamp(latest),
+                "never_synced": latest is None, "has_last_sync": latest is not None,
+                "source_count": int(count), "enabled_source_count": int(enabled),
+                "updated_at": _iso(member.updated_at), "updated_ts": _timestamp(member.updated_at),
+            }
+            documents.append(_with_projection_hash(document))
+        return documents
+
     async def _build_subscription_documents(
         self,
         subscription_ids: Iterable[UUID] | None = None,
@@ -4468,6 +4559,8 @@ class SearchService:
             "subscriptions": Subscription,
         }[target]
         conditions: list[Any] = []
+        if target == "subscriptions" and user_id is not None:
+            conditions.append(Subscription.id.in_(select(UserSubscription.subscription_id).where(UserSubscription.user_id == user_id)))
         if target == "subscriptions" and allowed_subscription_ids is not None:
             conditions.append(Subscription.id.in_(allowed_subscription_ids))
         if target == "repositories" and allowed_repository_ids is not None:
@@ -4754,6 +4847,9 @@ class SearchService:
             if allowed_subscription_ids is not None
             else None
         )
+        if user_id is not None:
+            actor_ownership = Subscription.id.in_(select(UserSubscription.subscription_id).where(UserSubscription.user_id == user_id))
+            ownership = and_(ownership, actor_ownership) if ownership is not None else actor_ownership
         count_stmt = select(func.count()).select_from(Subscription)
         if ownership is not None:
             count_stmt = count_stmt.where(ownership)
@@ -5548,6 +5644,7 @@ class SearchService:
                 TAGS_INDEX,
                 REPOSITORIES_INDEX,
                 SUBSCRIPTIONS_INDEX,
+                MEMBERSHIPS_INDEX,
             ))
         except Exception:
             logger.warning("Reference search indexing failed", exc_info=True)
@@ -5656,6 +5753,7 @@ class SearchService:
             TAGS_INDEX: Tag,
             REPOSITORIES_INDEX: SubscriptionSource,
             SUBSCRIPTIONS_INDEX: Subscription,
+            MEMBERSHIPS_INDEX: UserSubscription,
         }
 
         async def _database_ids(model: Any) -> set[str]:
@@ -5807,6 +5905,39 @@ class SearchService:
         indexes["works"]["field_drift_ids_truncated"] = (
             field_drift_count > len(field_drift_ids)
         )
+        member_audited = 0
+        member_drift = []
+        member_drift_count = 0
+        cursor = None
+        while True:
+            statement = select(UserSubscription.id).order_by(UserSubscription.id).limit(500)
+            if cursor is not None:
+                statement = statement.where(UserSubscription.id > cursor)
+            async with async_session() as db:
+                ids = tuple((await db.execute(statement)).scalars())
+                if not ids:
+                    break
+                expected_docs = await SearchService(db)._build_membership_documents(ids)
+            def read_member_hashes():
+                page = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS).index(MEMBERSHIPS_INDEX).get_documents(
+                    filter=_meili_document_ids_filter(map(str, ids)), limit=len(ids),
+                    fields=["id", "projection_hash"],
+                )
+                docs, _ = _page_results(page)
+                return {doc["id"]: doc.get("projection_hash") for doc in docs}
+            actual = await asyncio.to_thread(read_member_hashes)
+            drift = [doc["id"] for doc in expected_docs if actual.get(doc["id"]) != doc["projection_hash"]]
+            member_audited += len(expected_docs)
+            member_drift_count += len(drift)
+            member_drift.extend(drift[:max(0, drift_id_limit - len(member_drift))])
+            cursor = ids[-1]
+        indexes["subscription_memberships"].update(
+            field_audit_count=member_audited, field_drift_count=member_drift_count,
+            field_drift_ids=member_drift, field_drift_ids_truncated=member_drift_count > len(member_drift),
+        )
+        if member_drift_count:
+            has_drift = True
+            indexes["subscription_memberships"]["status"] = "drift"
         return {"status": "drift" if has_drift else "ok", "indexes": indexes}
 
     async def reindex(self, *, resource_owner: str | None = None) -> dict:
@@ -5817,6 +5948,7 @@ class SearchService:
                 TAGS_INDEX,
                 REPOSITORIES_INDEX,
                 SUBSCRIPTIONS_INDEX,
+                MEMBERSHIPS_INDEX,
             ), resource_owner=resource_owner)
         except Exception as exc:
             logger.exception("Search reindex failed")

@@ -589,6 +589,15 @@ class HierarchicalDeletionService:
             await self.db.commit()
 
     async def _delete_domain_rows(self, scope: DeletionScope) -> None:
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        if scope.entity_type in {"subscription", "creator"}:
+            # Chunk predicates as well as results, before cascades erase IDs.
+            ids = tuple(scope.subscription_ids)
+            for start in range(0, len(ids), 500):
+                await request_membership_projection_where(
+                    self.db, UserSubscription.subscription_id.in_(ids[start:start + 500]), deleting=True,
+                )
         download_filters = []
         if scope.repository_ids:
             download_filters.append(DownloadJob.subscription_source_id.in_(scope.repository_ids))

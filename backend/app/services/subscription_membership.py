@@ -262,6 +262,8 @@ async def recompute_subscription_membership_cache(
         )
         source.auth_healthy = bool(bindings)
     await db.flush()
+    from app.services.search_projection_outbox import request_search_projection
+    await request_search_projection(db, subscription_ids=[subscription_id])
 
 
 async def apply_binding_enable_transition(
@@ -344,6 +346,8 @@ class SubscriptionMembershipService:
         )
         self.db.add(member)
         await self.db.flush()
+        from app.services.search_projection_outbox import request_search_projection
+        await request_search_projection(self.db, membership_ids=[member.id])
         return member
 
     async def create_or_join(self, data: dict[str, Any]) -> SubscriptionRead:
@@ -747,6 +751,8 @@ class SubscriptionMembershipService:
         else:
             await recompute_subscription_membership_cache(self.db, subscription_id)
         await self.db.flush()
+        from app.services.search_projection_outbox import request_search_projection
+        await request_search_projection(self.db, membership_ids=[member.id])
         return await self.get(subscription_id)
 
     async def list_sources(self, subscription_id: UUID) -> list[SubscriptionSourceRead]:
@@ -864,6 +870,8 @@ class SubscriptionMembershipService:
         await self.db.execute(
             delete(UserSubscriptionSource).where(UserSubscriptionSource.user_subscription_id == member.id)
         )
+        from app.services.search_projection_outbox import request_search_projection
+        await request_search_projection(self.db, deleted_membership_ids=[member.id])
         await self.db.delete(member)
         await self.db.flush()
         await recompute_subscription_membership_cache(self.db, subscription_id)
