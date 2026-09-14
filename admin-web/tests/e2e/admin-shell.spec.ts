@@ -1875,7 +1875,7 @@ test("subscription creator picker pages with bounded retries and preserves input
   });
 
   await page.goto("/admin/subscriptions");
-  await page.getByRole("button", { name: "New Subscription", exact: true }).click();
+  await page.getByRole("button", { name: "+ New", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "New Subscription" });
   await expect(dialog.getByRole("status")).toHaveText("Loading creators...");
   await expect.poll(() => creatorRequests).toBe(1);
@@ -1899,6 +1899,11 @@ test("subscription creator picker pages with bounded retries and preserves input
   await expect(creatorSelect.locator(`option[value="${laterCreator.id}"]`)).toHaveText(laterCreator.display_name);
   await expect(dialog.getByRole("button", { name: "Load more", exact: true })).toHaveCount(0);
   await creatorSelect.selectOption(laterCreator.id);
+  expect({ creatorRequests, firstPageRequests, laterPageRequests }).toEqual({
+    creatorRequests: 4,
+    firstPageRequests: 2,
+    laterPageRequests: 2,
+  });
 
   await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
   await expect(dialog).toContainText("subscription fixture failure");
@@ -1907,11 +1912,7 @@ test("subscription creator picker pages with bounded retries and preserves input
   await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect(submittedBody).toEqual({ creator_id: laterCreator.id, name: "Retained fixture label" });
-  expect({ firstPageRequests, laterPageRequests, createRequests }).toEqual({
-    firstPageRequests: 2,
-    laterPageRequests: 2,
-    createRequests: 2,
-  });
+  expect(createRequests).toBe(2);
 });
 
 test("subscription detail resolves its creator by exact ID instead of the first creator page", async ({ page }) => {
@@ -1938,6 +1939,21 @@ test("subscription detail resolves its creator by exact ID instead of the first 
     },
   }));
   await page.route("**/api/v1/subscriptions/subscription-later-page/sources", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/system/scheduler-decisions?*", (route) => route.fulfill({
+    json: {
+      updated_at: "2026-09-14T00:00:00Z",
+      scheduler_enabled: true,
+      timezone: "UTC",
+      view: "all",
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      suppressed_count: 0,
+      summary: { blocked_count: 0, overdue_count: 0, oldest_overdue_at: null },
+      items: [],
+    },
+  }));
   await page.route("**/api/v1/creators/creator-outside-first-page", async (route) => {
     exactCreatorRequests += 1;
     await route.fulfill({
@@ -2005,11 +2021,19 @@ test("Danbooru link import can target a creator from a later bounded page", asyn
   await expect(creatorSelect).toBeEnabled();
   await page.getByRole("button", { name: "Load more", exact: true }).click();
   await creatorSelect.selectOption(laterCreator.id);
+  expect(creatorOffsets).toEqual([0, 50]);
+  const creatorRefresh = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/v1/creators" && url.searchParams.get("offset") === "0";
+  });
   await page.getByRole("button", { name: "Import 1 Links", exact: true }).click();
 
+  await creatorRefresh;
   await expect.poll(() => importBody).not.toBeUndefined();
   expect(importBody).toEqual({ creator_id: laterCreator.id, name: "ask" });
-  expect(creatorOffsets).toEqual([0, 50]);
+  await expect(creatorSelect).toHaveValue(laterCreator.id);
+  expect(creatorOffsets[2]).toBe(0);
+  expect(creatorOffsets.every((offset) => offset === 0 || offset === 50)).toBe(true);
 });
 
 test("source URL checker accepts every supported Pixiv format with localized results", async ({ page }) => {
