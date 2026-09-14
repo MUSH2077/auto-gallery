@@ -94,7 +94,11 @@ export default function SubscriptionDetailPage() {
     refetchInterval: 15000,
   });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
+  const creator = useQuery({
+    queryKey: queryKeys.creators.detail(sub.data?.creator_id || ""),
+    queryFn: () => api.getCreator(sub.data!.creator_id),
+    enabled: !!sub.data?.creator_id,
+  });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
   const [editMode, setEditMode] = useState<"inherit" | "interval" | "calendar" | "manual">("inherit"); const [editInterval, setEditInterval] = useState(0);
@@ -211,8 +215,8 @@ export default function SubscriptionDetailPage() {
   }, [authoritativeBlocked, decisionBySource, jobs.data, sources.data]);
 
   const getCreatorName = (creatorId: string) => {
-    const c = creators.data?.items.find((c) => c.id === creatorId);
-    return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
+    const value = creator.data?.id === creatorId ? creator.data : null;
+    return value ? (value.display_name || value.name) : creatorId.slice(0, 8);
   };
 
   if (sub.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;

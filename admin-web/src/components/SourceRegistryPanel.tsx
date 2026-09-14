@@ -209,7 +209,7 @@ export default function SourceRegistryPanel({
     );
   }
 
-  if (error) return <ErrorState message={error.message} onRetry={onRetry} />;
+  if (error) return <ErrorState error={error} onRetry={onRetry} />;
 
   if (!items.length) {
     return <EmptyState title={t("sources.no_providers")} description={t("sources.no_providers_desc")} />;

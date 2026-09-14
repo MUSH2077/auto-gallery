@@ -10,6 +10,7 @@ import { usePermissions } from "@/lib/usePermissions";
 import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
 import { Check, Copy } from "lucide-react";
 import { writeClipboardText } from "@/lib/clipboard";
+import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
 
 function CopyButton({ text }: { text: string }) {
   const t = useT();
@@ -52,7 +53,6 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 }) {
   const t = useT();
   const toast = useToast();
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const qc = useQueryClient();
 
   const [subscribingUrl, setSubscribingUrl] = useState<string | null>(null);
@@ -179,11 +179,14 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                       className="text-accent hover:underline truncate max-w-md">{u.normalized_url}</a>
                   </div>
                   <div className="flex items-center gap-2">
-                    <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                      className="select px-2 py-1 text-xs">
-                      <option value="">{t("danbooru.select_creator")}</option>
-                      {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
-                    </select>
+                    <PaginatedCreatorSelect
+                      id={`danbooru-subscribe-creator-${i}`}
+                      ariaLabel={t("danbooru.select_creator")}
+                      value={selectedCreator}
+                      onChange={setSelectedCreator}
+                      placeholder={t("danbooru.select_creator")}
+                      selectClassName="select px-2 py-1 text-xs"
+                    />
                     <button
                       onClick={() => {
                         if (!selectedCreator) return;
@@ -244,12 +247,13 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
           </div>
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium mb-1">{t("danbooru.target_creator")}</label>
-              <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                className="select w-full">
-                <option value="">{t("danbooru.select_creator")}</option>
-                {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
-              </select>
+              <PaginatedCreatorSelect
+                id="danbooru-import-target-creator"
+                label={t("danbooru.target_creator")}
+                value={selectedCreator}
+                onChange={setSelectedCreator}
+                placeholder={t("danbooru.select_creator")}
+              />
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
               className="btn-primary shrink-0">

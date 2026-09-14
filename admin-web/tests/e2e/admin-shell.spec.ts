@@ -1773,6 +1773,245 @@ test("system and source tabs fetch only their active data and retain provider to
   await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
 });
 
+test("source registry localizes network failures and recovers on retry in English and Chinese", async ({ page }) => {
+  test.setTimeout(90_000);
+  const locales = [
+    { locale: "en", error: "Network error", retry: "Retry" },
+    { locale: "zh", error: "网络错误", retry: "重试" },
+  ] as const;
+
+  let recover = false;
+  await page.route("**/api/v1/sources", async (route) => {
+    if (!recover) {
+      await route.abort("failed");
+      return;
+    }
+    await route.fulfill({ json: { sources: providerFixtures } });
+  });
+
+  await page.goto("/admin");
+  for (const locale of locales) {
+    await page.evaluate((language) => {
+      window.localStorage.setItem("auto-gallery-lang", language);
+    }, locale.locale);
+    recover = false;
+    await page.goto("/admin/system?tab=sources");
+
+    const errorText = page.getByText(locale.error, { exact: true });
+    const errorState = errorText.locator("..");
+    await expect(errorText).toBeVisible();
+    if (locale.locale === "zh") await expect(page.getByText("Network error", { exact: true })).toHaveCount(0);
+    recover = true;
+    await errorState.getByRole("button", { name: locale.retry, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+    await expect(errorText).toHaveCount(0);
+  }
+});
+
+test("subscription creator picker pages with bounded retries and preserves inputs through failures", async ({ page }) => {
+  test.setTimeout(60_000);
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `creator-${String(index).padStart(3, "0")}`,
+    name: `creator_${String(index).padStart(3, "0")}`,
+    display_name: `Creator ${String(index).padStart(3, "0")}`,
+  }));
+  const laterCreator = { id: "creator-050", name: "creator_050", display_name: "Later Page Creator" };
+  let creatorRequests = 0;
+  let firstPageRequests = 0;
+  let laterPageRequests = 0;
+  let releaseInitialRequest: (() => void) | undefined;
+  const initialRequestHeld = new Promise<void>((resolve) => { releaseInitialRequest = resolve; });
+
+  await page.route("**/api/v1/creators?*", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset"));
+    expect(url.searchParams.get("limit")).toBe("50");
+    creatorRequests += 1;
+    if (offset === 0) {
+      firstPageRequests += 1;
+      if (firstPageRequests === 1) {
+        await initialRequestHeld;
+        await route.fulfill({ status: 503, json: { detail: "initial creator fixture failure" } });
+        return;
+      }
+      await route.fulfill({ json: { items: firstPage, total: 51 } });
+      return;
+    }
+    expect(offset).toBe(50);
+    laterPageRequests += 1;
+    if (laterPageRequests === 1) {
+      await route.fulfill({ status: 503, json: { detail: "later creator fixture failure" } });
+      return;
+    }
+    await route.fulfill({ json: { items: [laterCreator], total: 51 } });
+  });
+
+  let createRequests = 0;
+  let submittedBody: unknown;
+  await page.route("**/api/v1/subscriptions", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    createRequests += 1;
+    submittedBody = route.request().postDataJSON();
+    if (createRequests === 1) {
+      await route.fulfill({ status: 503, json: { detail: "subscription fixture failure" } });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      json: {
+        id: "subscription-later-page",
+        creator_id: laterCreator.id,
+        name: "Retained fixture label",
+        is_active: true,
+        sync_enabled: true,
+        sync_interval_hours: 24,
+        created_at: "2026-09-14T00:00:00Z",
+        updated_at: "2026-09-14T00:00:00Z",
+      },
+    });
+  });
+
+  await page.goto("/admin/subscriptions");
+  await page.getByRole("button", { name: "New Subscription", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New Subscription" });
+  await expect(dialog.getByRole("status")).toHaveText("Loading creators...");
+  await expect.poll(() => creatorRequests).toBe(1);
+  await page.waitForTimeout(100);
+  expect(creatorRequests).toBe(1);
+  releaseInitialRequest?.();
+
+  await expect(dialog.getByRole("alert")).toContainText("Could not load creators.");
+  await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+  const creatorSelect = dialog.getByLabel("Creator *");
+  await expect(creatorSelect).toBeEnabled();
+  await creatorSelect.selectOption(firstPage[0].id);
+  const labelInput = dialog.getByLabel("Label");
+  await labelInput.fill("Retained fixture label");
+
+  await dialog.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Could not load more creators.");
+  await expect(creatorSelect).toHaveValue(firstPage[0].id);
+  await expect(labelInput).toHaveValue("Retained fixture label");
+  await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(creatorSelect.locator(`option[value="${laterCreator.id}"]`)).toHaveText(laterCreator.display_name);
+  await expect(dialog.getByRole("button", { name: "Load more", exact: true })).toHaveCount(0);
+  await creatorSelect.selectOption(laterCreator.id);
+
+  await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
+  await expect(dialog).toContainText("subscription fixture failure");
+  await expect(creatorSelect).toHaveValue(laterCreator.id);
+  await expect(labelInput).toHaveValue("Retained fixture label");
+  await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(submittedBody).toEqual({ creator_id: laterCreator.id, name: "Retained fixture label" });
+  expect({ firstPageRequests, laterPageRequests, createRequests }).toEqual({
+    firstPageRequests: 2,
+    laterPageRequests: 2,
+    createRequests: 2,
+  });
+});
+
+test("subscription detail resolves its creator by exact ID instead of the first creator page", async ({ page }) => {
+  let exactCreatorRequests = 0;
+  let creatorListRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/creators") creatorListRequests += 1;
+  });
+  await page.route("**/api/v1/subscriptions/subscription-later-page", (route) => route.fulfill({
+    json: {
+      id: "subscription-later-page",
+      creator_id: "creator-outside-first-page",
+      name: null,
+      is_active: true,
+      sync_enabled: true,
+      sync_interval_hours: 24,
+      source_count: 0,
+      enabled_source_count: 0,
+      running_job_count: 0,
+      failed_job_count: 0,
+      created_at: "2026-09-14T00:00:00Z",
+      updated_at: "2026-09-14T00:00:00Z",
+    },
+  }));
+  await page.route("**/api/v1/subscriptions/subscription-later-page/sources", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/creators/creator-outside-first-page", async (route) => {
+    exactCreatorRequests += 1;
+    await route.fulfill({
+      json: {
+        id: "creator-outside-first-page",
+        name: "outside_first_page",
+        display_name: "Creator Outside First Page",
+        is_active: true,
+      },
+    });
+  });
+
+  await page.goto("/admin/subscriptions/subscription-later-page");
+  await expect(page.getByRole("heading", { level: 1, name: "Creator Outside First Page" })).toBeVisible();
+  expect(exactCreatorRequests).toBe(1);
+  expect(creatorListRequests).toBe(0);
+});
+
+test("Danbooru link import can target a creator from a later bounded page", async ({ page }) => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `danbooru-creator-${String(index).padStart(3, "0")}`,
+    name: `danbooru_creator_${String(index).padStart(3, "0")}`,
+  }));
+  const laterCreator = { id: "danbooru-creator-050", name: "danbooru_creator_050", display_name: "Danbooru Later Creator" };
+  const creatorOffsets: number[] = [];
+  await page.route("**/api/v1/creators?*", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset"));
+    expect(url.searchParams.get("limit")).toBe("50");
+    creatorOffsets.push(offset);
+    await route.fulfill({
+      json: offset === 0
+        ? { items: firstPage, total: 51 }
+        : { items: [laterCreator], total: 51 },
+    });
+  });
+  await page.route("**/api/v1/reference/danbooru/artist/preview", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ name: "ask" });
+    await route.fulfill({
+      json: {
+        status: "ok",
+        found: true,
+        artist: { id: 100, name: "ask", other_names: [], urls: [] },
+        suggested_links: [{
+          url: "https://example.test/ask",
+          link_type: "website",
+          source: "danbooru",
+          confidence: 1,
+          is_verified: true,
+        }],
+      },
+    });
+  });
+  let importBody: unknown;
+  await page.route("**/api/v1/reference/danbooru/artist/import", async (route) => {
+    importBody = route.request().postDataJSON();
+    await route.fulfill({ json: { status: "ok", imported: 1, artist_name: "ask" } });
+  });
+
+  await page.goto("/admin/upload/danbooru");
+  const nameSearch = page.getByRole("heading", { name: "Search by Artist Name" }).locator("..");
+  await nameSearch.getByPlaceholder("ask (askzy)").fill("ask");
+  await nameSearch.getByRole("button", { name: "Search Danbooru" }).click();
+  const creatorSelect = page.getByLabel("Target Creator");
+  await expect(creatorSelect).toBeEnabled();
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await creatorSelect.selectOption(laterCreator.id);
+  await page.getByRole("button", { name: "Import 1 Links", exact: true }).click();
+
+  await expect.poll(() => importBody).not.toBeUndefined();
+  expect(importBody).toEqual({ creator_id: laterCreator.id, name: "ask" });
+  expect(creatorOffsets).toEqual([0, 50]);
+});
+
 test("source URL checker accepts every supported Pixiv format with localized results", async ({ page }) => {
   await page.route("**/api/v1/sources", (route) => route.fulfill({
     json: { sources: providerFixtures },

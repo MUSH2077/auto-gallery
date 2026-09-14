@@ -10,6 +10,7 @@ import { useNotifications } from "@/components/NotificationCenter";
 import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
 import {
   createReferenceListSession,
   legacyPageInitialIndex,
@@ -53,18 +54,16 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
 }) {
   const [creatorId, setCreatorId] = useState(""); const [name, setName] = useState("");
   const t = useT();
-  const toast = useToast();
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   return (
     <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium mb-1">{t("subscriptions.creator_label")}</label>
-        <select value={creatorId} onChange={(e) => setCreatorId(e.target.value)} className="select w-full">
-          <option value="">{t("subscriptions.select_creator")}</option>
-          {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
-        </select>
-      </div>
-      <div><label className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("subscriptions.label_placeholder")} /></div>
+      <PaginatedCreatorSelect
+        id="new-subscription-creator"
+        label={t("subscriptions.creator_label")}
+        value={creatorId}
+        onChange={setCreatorId}
+        placeholder={t("subscriptions.select_creator")}
+      />
+      <div><label htmlFor="new-subscription-label" className="block text-sm font-medium mb-1">{t("subscriptions.label_field")}</label><input id="new-subscription-label" value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("subscriptions.label_placeholder")} /></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("subscriptions.cancel")}</button>
         <button onClick={() => onSubmit({ creator_id: creatorId, name: name || undefined })} disabled={!creatorId || isPending}
