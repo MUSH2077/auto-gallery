@@ -561,7 +561,7 @@ export default function RepositoryDetailPage() {
               <h2 className="mb-3 text-base font-semibold">{t("repo_detail.curation_graph")}</h2>
               <RepositoryGraph repositoryId={id} />
             </section>
-            <GitlleryRepositoryHistory repositoryId={id} />
+            {has("curation") && <GitlleryRepositoryHistory repositoryId={id} />}
           </div>
         )}
         {tab === "content" && (

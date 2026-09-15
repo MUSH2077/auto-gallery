@@ -1094,6 +1094,7 @@ function JobsContent() {
   const workbench = useQuery({
     queryKey: queryKeys.workbench,
     queryFn: api.workbench,
+    enabled: has("system"),
     refetchInterval: (query) => {
       const active = (query.state.data?.queue.active_download_count || 0) + (query.state.data?.queue.active_import_count || 0);
       return active > 0 ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS;
