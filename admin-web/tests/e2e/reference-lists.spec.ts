@@ -418,7 +418,9 @@ for (const query of ["new search", ""]) {
     }
     await expect(input).toHaveValue(query);
     await expect.poll(() => new URL(page.url()).searchParams.get("q") ?? "").toBe(query);
-    await expect.poll(() => observations.searches.at(-1)?.q).toBe(query);
+    // Returning to the empty query can reuse the fresh virtual-list cache.
+    await expect.poll(() => observations.searches.some((request) => request.q === query)).toBe(true);
+    await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
     await expect(input).toHaveValue(query);
 
     // Native same-document navigation is supported by Next's router. Verify
@@ -430,7 +432,7 @@ for (const query of ["new search", ""]) {
     await expect(input).toHaveValue(query);
     await page.goForward();
     await expect(input).toHaveValue("external-query");
-    await expect.poll(() => observations.searches.at(-1)?.q).toBe("external-query");
+    await expect.poll(() => observations.searches.some((request) => request.q === "external-query")).toBe(true);
   });
 }
 
