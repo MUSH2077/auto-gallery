@@ -391,6 +391,31 @@ test("creator and subscription lists share virtual batches, sorting, and name an
   }
 });
 
+test("starting to edit supersedes a pending subscription filter before the first keystroke", async ({ context, page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  await installRoutes(context, {
+    searches: [], summaryBatches: [],
+    holdCompose: async () => { held = true; await pending; },
+  });
+  await page.goto("/admin/subscriptions?q=original");
+  const input = page.getByRole("combobox");
+  await expect(input).toHaveValue("original");
+  try {
+    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await expect.poll(() => held).toBe(true);
+    await input.focus();
+    await input.press("ControlOrMeta+A");
+  } finally {
+    release();
+  }
+  await page.waitForTimeout(650);
+  await page.keyboard.insertText("newer search");
+  await expect(input).toHaveValue("newer search");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
+});
+
 test("subscription typing supersedes a pending filter composition", async ({ context, page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });

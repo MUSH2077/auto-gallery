@@ -168,6 +168,7 @@ function SearchContent() {
 
         <SmartSearchInput
           value={query}
+          onEditStart={composer.discardPendingResult}
           onChange={(value) => {
             cancelPendingUrlSync();
             latestQuery.current = value;

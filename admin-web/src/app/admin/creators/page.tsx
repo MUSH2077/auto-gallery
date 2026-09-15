@@ -426,6 +426,7 @@ function CreatorsContent() {
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
+          onEditStart={filterComposer.discardPendingResult}
           scope="creators"
           placeholder={t("creators.search")}
           ariaLabel={t("creators.search")}

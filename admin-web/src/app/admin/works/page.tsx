@@ -659,6 +659,7 @@ function WorksContent() {
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
+          onEditStart={composer.discardPendingResult}
           scope="works"
           ariaLabel={t("works.search_title")}
           placeholder={t("works.search_title")}

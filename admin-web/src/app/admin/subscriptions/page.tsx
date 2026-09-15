@@ -479,6 +479,7 @@ function SubscriptionsContent() {
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
+          onEditStart={filterComposer.discardPendingResult}
           scope="subscriptions"
           placeholder={t("subscriptions.search")}
           ariaLabel={t("subscriptions.search")}

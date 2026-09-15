@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  useCallback,
   useDeferredValue,
   useEffect,
   useId,
@@ -95,9 +96,10 @@ function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
     inputRef.current = { value, scope };
   }
   changeRef.current = onChange;
-  useEffect(() => () => { requestRef.current += 1; }, []);
+  const discardPendingResult = useCallback(() => { requestRef.current += 1; }, []);
+  useEffect(() => discardPendingResult, [discardPendingResult]);
 
-  return useMutation({
+  const mutation = useMutation({
     mutationFn: async (compose: T) => {
       const input = inputRef.current;
       const request = ++requestRef.current;
@@ -114,6 +116,7 @@ function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
       return result;
     },
   });
+  return { ...mutation, discardPendingResult };
 }
 
 export function useSearchComposer(options: SearchComposerOptions) {
@@ -137,6 +140,7 @@ export interface SmartSearchInputProps {
   showTokens?: boolean;
   showHelp?: boolean;
   onFocus?: () => void;
+  onEditStart?: () => void;
   onSubmit?: (canonicalQuery: string) => void;
   keyboardNavigation?: boolean;
 }
@@ -154,6 +158,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   showTokens = true,
   showHelp = false,
   onFocus,
+  onEditStart,
   onSubmit,
   keyboardNavigation = true,
 }, forwardedRef) {
@@ -180,6 +185,10 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   });
 
   const compose = useSearchComposer({ value, scope, onChange });
+  const startEditing = () => {
+    compose.discardPendingResult();
+    onEditStart?.();
+  };
   const currentAssist = deferredValue === value && !assist.isPlaceholderData ? assist.data : undefined;
   const suggestions = currentAssist?.suggestions || [];
   const qualifiers = (currentAssist?.parsed?.tokens || []).filter(
@@ -256,10 +265,13 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
             setOpen(true);
           }}
           onFocus={() => {
+            startEditing();
             setFocused(true);
             setOpen(true);
             onFocus?.();
           }}
+          onPointerDown={startEditing}
+          onSelect={startEditing}
           onBlur={() => setFocused(false)}
           onKeyDown={handleKeyDown}
           autoFocus={autoFocus}
