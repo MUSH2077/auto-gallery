@@ -77,42 +77,51 @@ type ComposeRequest = {
   replace_values?: string[];
 };
 
-export function useSearchComposer({
-  value,
-  scope,
-  onChange,
-}: {
+type SearchComposerOptions = {
   value: string;
   scope: SearchScope;
   onChange: (value: string) => void;
-}) {
+};
+
+function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
+  value,
+  scope,
+  onChange,
+}: SearchComposerOptions) {
+  const inputRef = useRef({ value, scope });
+  const changeRef = useRef(onChange);
+  const requestRef = useRef(0);
+  if (inputRef.current.value !== value || inputRef.current.scope !== scope) {
+    inputRef.current = { value, scope };
+  }
+  changeRef.current = onChange;
+  useEffect(() => () => { requestRef.current += 1; }, []);
+
   return useMutation({
-    mutationFn: (compose: ComposeRequest) => api.assistSearch({
-      before_cursor: value,
-      scope,
-      compose,
-    }),
-    onSuccess: (result) => onChange(result.canonical_query || result.query),
+    mutationFn: async (compose: T) => {
+      const input = inputRef.current;
+      const request = ++requestRef.current;
+      const result = await api.assistSearch({
+        before_cursor: input.value,
+        scope: input.scope,
+        ...(Array.isArray(compose) ? { composes: compose } : { compose }),
+      });
+      // Typing, navigation or a newer composition supersedes this request.
+      // Object identity also detects editing away and back to the same text.
+      if (request === requestRef.current && input === inputRef.current) {
+        changeRef.current(result.canonical_query || result.query);
+      }
+      return result;
+    },
   });
 }
 
-export function useSearchBatchComposer({
-  value,
-  scope,
-  onChange,
-}: {
-  value: string;
-  scope: SearchScope;
-  onChange: (value: string) => void;
-}) {
-  return useMutation({
-    mutationFn: (composes: ComposeRequest[]) => api.assistSearch({
-      before_cursor: value,
-      scope,
-      composes,
-    }),
-    onSuccess: (result) => onChange(result.canonical_query || result.query),
-  });
+export function useSearchComposer(options: SearchComposerOptions) {
+  return useSearchComposition<ComposeRequest>(options);
+}
+
+export function useSearchBatchComposer(options: SearchComposerOptions) {
+  return useSearchComposition<ComposeRequest[]>(options);
 }
 
 export interface SmartSearchInputProps {

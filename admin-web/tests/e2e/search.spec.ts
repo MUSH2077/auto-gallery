@@ -397,6 +397,32 @@ test.beforeEach(async ({ context }) => {
   await installSearchFixtures(context);
 });
 
+test("typing supersedes a pending search token removal", async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  await page.route("**/api/v1/search/assist", async (route) => {
+    if (route.request().postDataJSON()?.compose) {
+      held = true;
+      await pending;
+    }
+    await route.fallback();
+  });
+  await page.goto("/admin/search?q=tag%3Aaurora");
+  const input = page.getByRole("combobox", { name: "Search works..." });
+  try {
+    await page.getByRole("button", { name: "Remove search condition: tag:aurora" }).click();
+    await expect.poll(() => held).toBe(true);
+    await input.fill("newer search");
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
+  } finally {
+    release();
+  }
+  await page.waitForTimeout(650);
+  await expect(input).toHaveValue("newer search");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
+});
+
 test("global search groups five entity types and supports keyboard suggestions and token removal", async ({ page }) => {
   await page.goto("/admin/search?q=tag%3Aaurora");
   const input = page.getByRole("combobox", { name: "Search works..." });

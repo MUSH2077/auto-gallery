@@ -118,6 +118,7 @@ async function installRoutes(
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
     summaryBatches: string[][];
     failSearchOnce?: Set<string>;
+    holdCompose?: () => Promise<void>;
   },
   theme: "dark" | "light" = "dark",
 ) {
@@ -148,6 +149,7 @@ async function installRoutes(
       };
       const composes = body.composes || (body.compose ? [body.compose] : []);
       const query = composeQuery(body.before_cursor || "", composes);
+      if (composes.length) await observations.holdCompose?.();
       await route.fulfill({ json: {
         query,
         canonical_query: query,
@@ -387,6 +389,34 @@ test("creator and subscription lists share virtual batches, sorting, and name an
     await page.getByRole("button", { name: /Updated/ }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("sort:updated-asc");
   }
+});
+
+test("subscription typing supersedes a pending filter composition", async ({ context, page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  const observations = {
+    searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>,
+    summaryBatches: [] as string[][],
+    holdCompose: async () => { held = true; await pending; },
+  };
+  await installRoutes(context, observations);
+  await page.goto("/admin/subscriptions");
+  const input = page.getByRole("combobox");
+  await expect(input).toBeVisible();
+  try {
+    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await expect.poll(() => held).toBe(true);
+    await input.fill("newer search");
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
+  } finally {
+    release();
+  }
+  // Let the released response and any incorrectly scheduled debounce finish.
+  await page.waitForTimeout(650);
+  await expect(input).toHaveValue("newer search");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
+  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
 });
 
 for (const query of ["new search", ""]) {
