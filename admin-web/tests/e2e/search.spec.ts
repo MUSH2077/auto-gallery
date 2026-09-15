@@ -346,7 +346,14 @@ async function installSearchFixtures(context: BrowserContext) {
       return;
     }
     if (path === "/api/v1/system/scheduler-decisions") {
-      await route.fulfill({ json: { updated_at: "2026-07-28T10:00:00Z", scheduler_enabled: true, timezone: "UTC", items: [] } });
+      await route.fulfill({ json: {
+        updated_at: "2026-07-28T10:00:00Z", scheduler_enabled: true, timezone: "UTC",
+        view: url.searchParams.get("view") || "all", total: 0,
+        offset: Number(url.searchParams.get("offset") || 0),
+        limit: Number(url.searchParams.get("limit") || 25), next_offset: null,
+        summary: { blocked_count: 0, overdue_count: 0, oldest_overdue_at: null },
+        suppressed_count: 0, items: [],
+      } });
       return;
     }
     if (path === "/api/v1/system/workbench") {

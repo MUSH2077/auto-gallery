@@ -491,11 +491,17 @@ test("selection only covers loaded rows and subscription summaries stay page-siz
 
   const checkbox = page.getByRole("checkbox", { name: "Select all" });
   const inputBox = await checkbox.boundingBox();
-  const hitbox = await checkbox.locator("xpath=..").boundingBox();
-  expect(inputBox?.width).toBe(16);
-  expect(inputBox?.height).toBe(16);
+  const wrapper = checkbox.locator("xpath=..");
+  const hitbox = await wrapper.boundingBox();
+  const visual = await wrapper.locator(".compact-selection-visual").boundingBox();
+  expect(visual?.width).toBe(16);
+  expect(visual?.height).toBe(16);
+  expect(inputBox?.width).toBeGreaterThanOrEqual(24);
+  expect(inputBox?.height).toBeGreaterThanOrEqual(24);
   expect(hitbox?.width).toBeGreaterThanOrEqual(24);
   expect(hitbox?.height).toBeGreaterThanOrEqual(24);
+  await checkbox.click({ position: { x: 1, y: 1 } });
+  await expect(checkbox).toBeChecked();
 });
 
 test("only the visible subscription batch keeps polling summaries", async ({ context, page }) => {
