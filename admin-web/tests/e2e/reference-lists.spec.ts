@@ -389,6 +389,51 @@ test("creator and subscription lists share virtual batches, sorting, and name an
   }
 });
 
+for (const query of ["new search", ""]) {
+  test(`subscription input survives an earlier filter navigation: ${query || "clear search"}`, async ({ context, page }) => {
+    const observations = { searches: [], summaryBatches: [] } as {
+      searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+      summaryBatches: string[][];
+    };
+    await installRoutes(context, observations);
+    await page.goto("/admin/subscriptions");
+    const input = page.getByRole("combobox");
+    await expect(input).toBeVisible();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let held = false;
+    await page.route((url) => url.pathname === "/admin/subscriptions"
+      && url.searchParams.has("_rsc") && url.searchParams.get("q") === "is:active", async (route) => {
+      const response = await route.fetch();
+      held = true;
+      await pending;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: "Active", exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      await input.fill(query);
+    } finally {
+      release();
+    }
+    await expect(input).toHaveValue(query);
+    await expect.poll(() => new URL(page.url()).searchParams.get("q") ?? "").toBe(query);
+    await expect.poll(() => observations.searches.at(-1)?.q).toBe(query);
+    await expect(input).toHaveValue(query);
+
+    // Native same-document navigation is supported by Next's router. Verify
+    // it still restores the input, including a back action before debounce.
+    await page.evaluate(() => history.pushState(null, "", "?q=external-query"));
+    await expect(input).toHaveValue("external-query");
+    await input.fill("unsubmitted draft");
+    await page.goBack();
+    await expect(input).toHaveValue(query);
+    await page.goForward();
+    await expect(input).toHaveValue("external-query");
+    await expect.poll(() => observations.searches.at(-1)?.q).toBe("external-query");
+  });
+}
+
 test("selection only covers loaded rows and subscription summaries stay page-sized", async ({ context, page }) => {
   const observations = { searches: [], summaryBatches: [] } as {
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;

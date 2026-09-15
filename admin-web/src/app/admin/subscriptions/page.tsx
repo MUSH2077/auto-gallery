@@ -160,28 +160,56 @@ function SubscriptionsContent() {
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
-  useEffect(() => { setInputVal(search); }, [search]);
-  useEffect(() => {
-    if (inputVal === search) return;
-    const timer = setTimeout(() => {
-      setSelected(new Set());
-      window.scrollTo({ top: 0 });
-      const p = new URLSearchParams(sp.toString());
-      if (inputVal) p.set("q", inputVal); else p.delete("q");
-      p.delete("p");
-      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paramsString = sp.toString();
+  const navigationParamsRef = useRef(paramsString);
+  const committedParamsRef = useRef(paramsString);
+  const pendingParamsRef = useRef(new Set<string>());
 
-  function updateParams(updates: Record<string, string | null>, resetPage = true) {
-    const p = new URLSearchParams(sp.toString());
+  useEffect(() => {
+    if (committedParamsRef.current === paramsString) return;
+    committedParamsRef.current = paramsString;
+    if (pendingParamsRef.current.delete(paramsString)) {
+      // An earlier replace can finish after the user has typed a new query.
+      // Acknowledging our navigation must not replace that newer input.
+      return;
+    }
+    pendingParamsRef.current.clear();
+    navigationParamsRef.current = paramsString;
+    setInputVal(search);
+  }, [paramsString, search]);
+
+  useEffect(() => {
+    const restoreHistoryQuery = () => {
+      const params = new URLSearchParams(window.location.search);
+      pendingParamsRef.current.clear();
+      navigationParamsRef.current = params.toString();
+      setInputVal(params.get("q") ?? "");
+    };
+    window.addEventListener("popstate", restoreHistoryQuery);
+    return () => window.removeEventListener("popstate", restoreHistoryQuery);
+  }, []);
+
+  const updateParams = useCallback((updates: Record<string, string | null>, resetPage = true) => {
+    const p = new URLSearchParams(navigationParamsRef.current);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
     if (resetPage) p.delete("p");
-    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-  }
+    const next = p.toString();
+    navigationParamsRef.current = next;
+    pendingParamsRef.current.add(next);
+    router.replace(`${pathname}?${next}`, { scroll: false });
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (inputVal === search && (new URLSearchParams(navigationParamsRef.current).get("q") ?? "") === search) return;
+    const timer = setTimeout(() => {
+      setSelected(new Set());
+      window.scrollTo({ top: 0 });
+      updateParams({ q: inputVal || null });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [inputVal, search, updateParams]);
 
   const FILTERS: { key: FilterMode; label: string }[] = [
     { key: "all", label: t("subscriptions.filter_all") },
