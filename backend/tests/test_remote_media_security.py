@@ -39,8 +39,10 @@ def test_media_ticket_is_opaque_bound_and_expires():
         "variant": "thumbnail",
     }
 
+    replacement = "A" if token[20] != "A" else "B"
+    tampered = f"{token[:20]}{replacement}{token[21:]}"
     with pytest.raises(RemoteAccessTokenError, match="invalid"):
-        service.verify_media(f"{token[:-1]}x")
+        service.verify_media(tampered)
 
     now[0] += 601
     with pytest.raises(RemoteAccessTokenError, match="expired"):

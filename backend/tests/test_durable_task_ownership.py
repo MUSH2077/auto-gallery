@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 
 
 OWNER_REVISION = "0d7e8f9a1b2c"
-CURRENT_HEAD_REVISION = "f9e1a3b5c7d9"
+CURRENT_HEAD_REVISION = "fd35e7f9ab13"
 
 
 def test_download_and_task_owners_are_durable_indexed_audit_identifiers():
@@ -73,7 +73,11 @@ async def test_private_task_mutations_fail_closed_without_authenticated_user(
 
     from app.api import tasks as tasks_api
 
-    task = type("PrivateTask", (), {"owner_user_id": 42})()
+    task = type(
+        "PrivateTask",
+        (),
+        {"owner_user_id": 42, "kind": "download", "meta": {}},
+    )()
 
     class StubTaskService:
         def __init__(self, _db):

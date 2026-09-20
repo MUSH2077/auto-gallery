@@ -1,7 +1,7 @@
 """Tests for /api/v1/users CRUD API and its admin-only guards."""
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 
 PREFIX = "api_test_"
 
@@ -9,6 +9,38 @@ PREFIX = "api_test_"
 async def _clear(db):
     await db.execute(text(f"DELETE FROM users WHERE username LIKE '{PREFIX}%'"))
     await db.commit()
+
+
+async def _suspend_other_active_admins(db):
+    from app.models.user import User
+
+    admin_ids = list(
+        (
+            await db.execute(
+                select(User.id).where(
+                    User.is_admin.is_(True),
+                    User.is_active.is_(True),
+                    ~User.username.startswith(PREFIX),
+                )
+            )
+        ).scalars()
+    )
+    if admin_ids:
+        await db.execute(
+            update(User).where(User.id.in_(admin_ids)).values(is_admin=False)
+        )
+        await db.commit()
+    return admin_ids
+
+
+async def _restore_admins(db, admin_ids):
+    from app.models.user import User
+
+    if admin_ids:
+        await db.execute(
+            update(User).where(User.id.in_(admin_ids)).values(is_admin=True)
+        )
+        await db.commit()
 
 
 async def _seed_user(db, username, *, is_admin=False, is_active=True, permissions=None, password="hunter22"):
@@ -195,9 +227,11 @@ async def test_demote_last_admin_returns_400():
     from app.main import app
 
     transport = ASGITransport(app=app)
+    suspended_admin_ids = []
     try:
         async with async_session() as db:
             await _clear(db)
+            suspended_admin_ids = await _suspend_other_active_admins(db)
             admin = await _seed_user(db, f"{PREFIX}last_admin", is_admin=True)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -209,6 +243,7 @@ async def test_demote_last_admin_returns_400():
     finally:
         async with async_session() as db:
             await _clear(db)
+            await _restore_admins(db, suspended_admin_ids)
         await engine.dispose()
 
 

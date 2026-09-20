@@ -12,7 +12,9 @@ app.main.app (not a probe app) so the actual router-level dependency swap
 
 For each module-scoped user (permissions=[<module>]), the representative
 endpoint of their own module must return 200, and every other module's
-endpoint must return 403. The admin user must get 200 on all five.
+endpoint must return 403. The one intentional overlap is ``system`` access to
+the task list, which exposes only global scheduler batches. The admin user
+must get 200 on all five.
 """
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -80,7 +82,12 @@ async def test_module_user_gets_own_module_and_403_on_others():
                 headers = _headers(f"{PREFIX}{own_module}")
                 for module, path in MODULE_ENDPOINTS.items():
                     r = await client.get(path, headers=headers)
-                    expected = 200 if module == own_module else 403
+                    expected = (
+                        200
+                        if module == own_module
+                        or (own_module == "system" and module == "tasks")
+                        else 403
+                    )
                     assert r.status_code == expected, (
                         f"user with permissions=[{own_module}] -> {path}: "
                         f"expected {expected}, got {r.status_code} ({r.text})"

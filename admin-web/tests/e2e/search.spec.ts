@@ -115,30 +115,86 @@ const TARGETS = ["works", "creators", "tags", "repositories", "subscriptions"] a
 
 function parseQuery(raw: string, scope: string) {
   const tokens: FixtureToken[] = [];
-  const matcher = /(-?)([a-z][a-z-]*)[:：](?:"((?:\\.|[^"])*)"|([^\s]+))|("(?:\\.|[^"])*"|[^\s]+)/giu;
-  for (const match of raw.matchAll(matcher)) {
-    const start = match.index || 0;
-    if (match[2]) {
-      const value = (match[3] ?? match[4] ?? "").replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
-      tokens.push({
-        kind: "qualifier",
-        key: match[2].toLowerCase(),
-        value,
-        negated: match[1] === "-",
-        quoted: match[3] !== undefined,
-        start,
-        end: start + match[0].length,
-      });
-    } else {
-      const quoted = match[5].startsWith("\"");
-      tokens.push({
-        kind: "text",
-        value: quoted ? match[5].slice(1, -1) : match[5],
-        quoted,
-        start,
-        end: start + match[0].length,
-      });
+  const isSpace = (value: string) => /\s/u.test(value);
+  const isKeyStart = (value: string) => /[a-z]/iu.test(value);
+  const isKeyPart = (value: string) => /[a-z-]/iu.test(value);
+  const quotedEnd = (start: number) => {
+    if (raw[start] !== "\"") return -1;
+    for (let cursor = start + 1; cursor < raw.length; cursor += 1) {
+      if (raw[cursor] === "\\") {
+        cursor += 1;
+      } else if (raw[cursor] === "\"") {
+        return cursor + 1;
+      }
     }
+    return -1;
+  };
+  const unescapeQuoted = (value: string) => value.replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
+
+  let cursor = 0;
+  while (cursor < raw.length) {
+    if (isSpace(raw[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    const start = cursor;
+    let keyStart = cursor;
+    let negated = false;
+    if (raw[keyStart] === "-") {
+      negated = true;
+      keyStart += 1;
+    }
+    let keyEnd = keyStart;
+    if (isKeyStart(raw[keyEnd] || "")) {
+      keyEnd += 1;
+      while (keyEnd < raw.length && isKeyPart(raw[keyEnd])) keyEnd += 1;
+    }
+    const hasQualifier = keyEnd > keyStart && (raw[keyEnd] === ":" || raw[keyEnd] === "：");
+    if (hasQualifier) {
+      const valueStart = keyEnd + 1;
+      const closingQuote = quotedEnd(valueStart);
+      const quoted = closingQuote !== -1;
+      let end = closingQuote;
+      if (!quoted) {
+        end = valueStart;
+        while (end < raw.length && !isSpace(raw[end])) end += 1;
+      }
+      if (end > valueStart) {
+        const encodedValue = quoted
+          ? raw.slice(valueStart + 1, end - 1)
+          : raw.slice(valueStart, end);
+        const value = unescapeQuoted(encodedValue);
+        const key = raw.slice(keyStart, keyEnd).toLowerCase();
+        tokens.push({
+          kind: "qualifier",
+          key,
+          value,
+          negated,
+          quoted,
+          start,
+          end,
+        });
+        cursor = end;
+        continue;
+      }
+    }
+
+    const closingQuote = quotedEnd(start);
+    const quoted = closingQuote !== -1;
+    let end = closingQuote;
+    if (!quoted) {
+      end = start;
+      while (end < raw.length && !isSpace(raw[end])) end += 1;
+    }
+    const value = quoted ? raw.slice(start + 1, end - 1) : raw.slice(start, end);
+    tokens.push({
+      kind: "text",
+      value,
+      quoted,
+      start,
+      end,
+    });
+    cursor = end;
   }
   const canonical = tokens.map((token) => {
     const escaped = token.value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");

@@ -249,22 +249,23 @@ async def _authorized_task(db, task_id, user):
     task = await svc.get(task_id)
     if task is None:
         raise HTTPException(404, detail="Task not found")
-    if (not getattr(user, "is_admin", False) and "tasks" not in (getattr(user, "permissions", None) or [])
-            and not is_global_subscription_batch(task)):
-        raise HTTPException(403, detail="Missing permission: tasks")
+    global_batch = is_global_subscription_batch(task)
     # Historical member aggregates share the registered global operation name.
     # Their durable provenance, not that name, determines the permission boundary.
     private_batch = (task.kind == "admin" and task.operation_type == "subscription-sync-batch"
-                     and not is_global_subscription_batch(task))
+                     and not global_batch)
     if task.owner_user_id is not None:
         if user is None or not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(404, detail="Task not found")
-    elif is_global_subscription_batch(task):
+    elif global_batch:
         if not can_access_global_subscription_batch(user):
             raise HTTPException(403, detail="Missing permission: system")
     elif private_batch or task.kind != "admin" or not admin_operation_required_permission(task.operation_type):
         if user is None or not await svc.is_visible_to_user(task, user.id):
             raise HTTPException(404, detail="Task not found")
+    if (not getattr(user, "is_admin", False) and "tasks" not in (getattr(user, "permissions", None) or [])
+            and not global_batch):
+        raise HTTPException(403, detail="Missing permission: tasks")
     if task.kind == "admin" and not private_batch and admin_operation_required_permission(task.operation_type):
         require_admin_operation_access(user, task.operation_type)
     return task

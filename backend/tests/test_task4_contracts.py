@@ -1,5 +1,7 @@
 """Real HTTP/PostgreSQL contracts for task policy and complete bounded reads."""
 
+import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -7,6 +9,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+EVIDENCE_ROOT = Path(
+    os.environ.get("TEST_EVIDENCE_ROOT", "/tmp/auto-gallery-test-evidence")
+) / "backend-task4"
 
 
 @pytest.fixture
@@ -116,7 +122,6 @@ async def test_tags_pages_are_complete_bounded_and_count_queries_are_grouped(db,
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", observed)
     import json
-    from pathlib import Path
 
     conn = await db.connection()
     explained = []
@@ -124,8 +129,9 @@ async def test_tags_pages_are_complete_bounded_and_count_queries_are_grouped(db,
         plan = (await conn.exec_driver_sql("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + statement, params)).scalar_one()
         assert "SubPlan" not in json.dumps(plan), "New tag pages must not execute per-tag correlated subplans"
         explained.append({"sql": statement, "plan": plan})
-    Path("/evidence/backend-task4/tag-query-plans.json").write_text(json.dumps(explained, indent=2))
-    Path("/evidence/backend-task4/tag-http-bounds.json").write_text(json.dumps(measurements, indent=2))
+    EVIDENCE_ROOT.mkdir(parents=True, exist_ok=True)
+    (EVIDENCE_ROOT / "tag-query-plans.json").write_text(json.dumps(explained, indent=2))
+    (EVIDENCE_ROOT / "tag-http-bounds.json").write_text(json.dumps(measurements, indent=2))
 
 
 async def test_scheduler_decision_pages_reach_tail_and_search_literal_before_limit(db, client):
@@ -173,9 +179,9 @@ async def test_scheduler_decision_pages_reach_tail_and_search_literal_before_lim
     due = (await client.get("/api/v1/system/scheduler-decisions", params={"state": "due", "offset": 500, "limit": 100})).json()
     assert due["total"] == sum(row["due"] for row in all_items)
     import json
-    from pathlib import Path
 
-    Path("/evidence/backend-task4/scheduler-http-bounds.json").write_text(json.dumps(measurements, indent=2))
+    EVIDENCE_ROOT.mkdir(parents=True, exist_ok=True)
+    (EVIDENCE_ROOT / "scheduler-http-bounds.json").write_text(json.dumps(measurements, indent=2))
 
 
 async def owned_download(db, actor_id, status="complete"):
@@ -340,7 +346,7 @@ async def test_workbench_recent_and_registered_capabilities_respect_actor(db, cl
     assert "retry" not in response.json()["available_actions"]
     assert (await client.post(f"/api/v1/tasks/{legacy_id}/retry")).json()["detail"]["reason"] == "legacy_operation_read_only"
     headers = {"Authorization": f"Bearer {create_access_token(limited.username, must_change_password=False)}"}
-    assert (await client.get(f"/api/v1/tasks/{task_id}", headers=headers)).status_code == 403
+    assert (await client.get(f"/api/v1/tasks/{task_id}", headers=headers)).status_code == 404
     limited_response = await client.get("/api/v1/system/workbench", headers=headers)
     assert limited_response.json()["recent"]["download_jobs"] == [], "Cached global admin jobs must not cross actor visibility"
 

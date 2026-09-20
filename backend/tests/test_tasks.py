@@ -1860,6 +1860,7 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
     records = []
     task_ids = []
     published = []
+    system_user = SimpleNamespace(id=1, is_admin=True, permissions=["system"])
 
     class EventRedis:
         def publish(self, channel, payload):
@@ -1939,7 +1940,8 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
                 "failed_detail": task_payload(failed_task, failed_events),
                 "failed_cache": operations.get_operation_status(str(failed_id)),
                 "failed_operation_api": await data_api.get_admin_operation(
-                    str(failed_id)
+                    str(failed_id),
+                    user=system_user,
                 ),
                 "successful_response": successful_response,
                 "successful_detail": task_payload(
@@ -1950,7 +1952,8 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
                     str(successful_id)
                 ),
                 "successful_operation_api": await data_api.get_admin_operation(
-                    str(successful_id)
+                    str(successful_id),
+                    user=system_user,
                 ),
                 "events": published,
             }

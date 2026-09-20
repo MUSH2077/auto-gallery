@@ -71,7 +71,6 @@ async def test_name_anchor_route_forwards_private_reference_context(monkeypatch)
         "scope": "subscriptions",
         "query": "is:inactive sort:name-desc",
         "permissions": {"subscriptions"},
-        "allowed_subscription_ids": set(),
         "user_id": 17,
     }
 
