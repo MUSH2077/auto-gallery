@@ -799,3 +799,59 @@ async def test_reference_mapping_refresh_preserves_kind_and_visibility_failures(
         with pytest.raises(HTTPException) as exc:
             await reference.get_danbooru_mapping_refresh("private-or-denied", user=user)
         assert exc.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_danbooru_url_batch_submit_deduplicates_without_preview(monkeypatch):
+    from app.api import reference
+    from app.services import operations
+
+    seen = {}
+
+    async def _enqueue(**kwargs):
+        seen.update(kwargs)
+        return {
+            "task_id": "11111111-1111-4111-8111-111111111111",
+            "job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+            "status": "enqueued",
+            "operation_type": kwargs["operation_type"],
+        }
+
+    monkeypatch.setattr(operations, "enqueue_admin_operation", _enqueue)
+    monkeypatch.setattr(reference, "enqueue_admin_operation", _enqueue)
+    first = "https://www.pixiv.net/users/116121"
+    second = "https://www.iwara.tv/profile/a116"
+    result = await reference.url_batch_import_danbooru(
+        {"urls": [first, first, " ", second]}
+    )
+
+    assert seen["options"] == {"urls": [first, second]}
+    assert result["total"] == 2
+    assert result["duplicates_removed"] == 1
+    assert "1 duplicates removed" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_danbooru_batch_status_hides_placeholder_result_until_complete(monkeypatch):
+    from app.api import reference
+    from app.api.admin import data as data_api
+
+    async def _get(_job_id, user=None):
+        assert user is not None
+        return {
+            "task_id": "11111111-1111-4111-8111-111111111111",
+            "job_id": "11111111-1111-4111-8111-111111111111",
+            "rq_job_id": "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+            "status": "enqueued",
+            "operation_type": "admin-danbooru-url-batch-import",
+            "progress": {"phase": "enqueued"},
+            "result": {},
+        }
+
+    monkeypatch.setattr(data_api, "get_admin_operation", _get)
+    result = await reference.get_batch_import_status(
+        "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+        user=SimpleNamespace(id=1, is_admin=True, permissions=[]),
+    )
+    assert result["status"] == "enqueued"
+    assert result["result"] is None

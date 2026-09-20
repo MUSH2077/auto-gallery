@@ -214,6 +214,53 @@ async def test_denied_background_admission_returns_without_transaction_or_progre
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_curation_backfill_scans_existing_groups_in_one_slice():
+    from app.services.curation import CurationService
+
+    class StubDB:
+        commits = 0
+
+        async def commit(self):
+            self.commits += 1
+
+    db = StubDB()
+    service = CurationService(db)
+
+    async def groups(_cursor):
+        for index in range(3):
+            yield {
+                "base_dedupe_key": f"source:test:creator:works:2026-09-0{index + 1}",
+                "dedupe_key": f"source:test:creator:works:2026-09-0{index + 1}",
+                "chunk_index": 0,
+                "cursor": {"work_id": str(index)},
+            }
+
+    async def existing_commit(_dedupe_key):
+        return SimpleNamespace(extra_metadata={"baseline_chunked": True})
+
+    async def complete_status():
+        return {"expected": {"creators": 1, "repositories": 1, "work_groups": 3}}
+
+    service._iter_baseline_work_groups = groups
+    service._commit_for_key = existing_commit
+    service.backfill_status = complete_status
+
+    result = await service._run_backfill_slice(
+        {"phase": "works"},
+        1,
+        deadline=None,
+    )
+
+    assert result == {
+        "status": "ok",
+        "created": {"creators": 0, "repositories": 0, "work_groups": 0},
+        "skipped": {"creators": 0, "repositories": 0, "work_groups": 3},
+        "expected": {"creators": 1, "repositories": 1, "work_groups": 3},
+    }
+    assert db.commits == 1
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_curation_group_successors_keep_chunk_keys_and_skip_crash_replays(bounded_capacity):
@@ -239,14 +286,12 @@ async def test_curation_group_successors_keep_chunk_keys_and_skip_crash_replays(
             assert first_cursor["chunk_index"] == 0
             assert len((await db.execute(select(CurationChange))).scalars().all()) == 25
         # Crash before handoff: the first group is already durable, so a fresh
-        # invocation skips it; its successor writes only the second chunk.
+        # invocation skips it and writes only the second chunk in the same
+        # bounded slice.
         async with async_session() as db:
             replay = await CurationService(db).run_backfill()
-            assert replay["created"]["work_groups"] == 0
-            assert replay["skipped"]["work_groups"] == 1
-            assert replay["continuation"]["work_cursor"]["chunk_index"] == 0
-            replay = await CurationService(db).run_backfill(continuation=replay["continuation"])
             assert replay["created"]["work_groups"] == 1
+            assert replay["skipped"]["work_groups"] == 1
             assert replay["continuation"]["work_cursor"]["chunk_index"] == 1
             commits = (await db.execute(select(CurationCommit).order_by(CurationCommit.created_at))).scalars().all()
             assert len(commits) == 2
@@ -255,10 +300,8 @@ async def test_curation_group_successors_keep_chunk_keys_and_skip_crash_replays(
             assert len(original_changes) == 26
         async with async_session() as db:
             resumed = await CurationService(db).run_backfill(continuation=first["continuation"])
-            assert resumed["status"] == "pending"
-            assert resumed["created"]["work_groups"] == 0
-            resumed = await CurationService(db).run_backfill(continuation=resumed["continuation"])
             assert resumed["status"] == "ok"
+            assert resumed["created"]["work_groups"] == 0
             assert set((await db.execute(select(CurationChange.id))).scalars()) == set(original_changes)
     finally:
         async with async_session() as db:

@@ -1309,7 +1309,7 @@ function JobsContent() {
     mutationFn: () => api.compactTasks(true),
   });
   const compactTasks = useMutation({
-    mutationFn: () => api.compactTasks(false),
+    mutationFn: (previewToken: string) => api.compactTasks(false, 1000, previewToken),
     onSuccess: (result) => {
       toast.info(t("jobs.compaction_result", { count: result.deleted_tasks }));
       compactPreview.reset();
@@ -1759,7 +1759,9 @@ function JobsContent() {
                   type="button"
                   className="inline-flex min-h-11 items-center justify-center rounded-md border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10"
                   onClick={() => {
-                    if (confirm(t("jobs.compaction_confirm", { count: compactPreview.data?.matched || 0 }))) compactTasks.mutate();
+                    if (confirm(t("jobs.compaction_confirm", { count: compactPreview.data?.matched || 0 }))) {
+                      compactTasks.mutate(compactPreview.data.preview_token);
+                    }
                   }}
                   disabled={compactTasks.isPending || compactPreview.data.matched === 0}
                 >
@@ -1768,6 +1770,11 @@ function JobsContent() {
               </>
             )}
           </div>
+          {compactPreview.error && (
+            <p role="alert" className="mt-3 text-sm text-danger">
+              {actionErrorReason(compactPreview.error)}
+            </p>
+          )}
         </div>
       </details>}
 

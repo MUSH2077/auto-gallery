@@ -10,4 +10,10 @@ for (const token of ["canonical", "staged", "zoom", "overflow-auto", "rollbackDo
 }
 assert.ok(drawer.includes("<DownloadConflictDialog"));
 assert.ok(api.includes("resolveDownloadConflicts"));
-assert.ok(api.includes("downloadConflictMediaUrl"));
+assert.ok(api.includes("downloadConflictMedia"));
+assert.ok(api.includes("requestBlob"));
+assert.ok(dialog.includes("api.downloadConflictMedia"));
+assert.ok(dialog.includes("URL.createObjectURL"));
+assert.ok(!dialog.includes("downloadConflictMediaUrl"));
+assert.ok(dialog.includes('addEventListener("wheel"'));
+assert.ok(dialog.includes("passive: false"));

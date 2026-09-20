@@ -94,13 +94,21 @@ for (const action of dataActions) {
       if (url.pathname === "/api/v1/admin/system-info" && method === "GET") return json(route, { version: "fixture", downloads_size_mb: 0, library_size_mb: 0, downloads_free_gb: 1, archives_kb: {}, db_stats: {} }).then(() => true);
       if (url.pathname === "/api/v1/admin/storage-breakdown" && method === "GET") return json(route, { sources: {}, creator_tree: [], unlinked_repositories: [], db_stats: {} }).then(() => true);
       if (url.pathname === "/api/v1/admin/backup/list" && method === "GET") return json(route, { backups: [] }).then(() => true);
-      if ((url.pathname === "/api/v1/admin/backup/latest" || url.pathname === "/api/v1/admin/integrity-check/latest") && method === "GET") return json(route, { current: null, snapshot: null }).then(() => true);
+      if ([
+        "/api/v1/admin/backup/latest",
+        "/api/v1/admin/integrity-check/latest",
+        "/api/v1/admin/cleanup-metadata-jsons/latest",
+        "/api/v1/admin/library/rebuild/latest",
+        "/api/v1/admin/library/import-from-disk/latest",
+        "/api/v1/admin/creators/re-enrich/latest",
+        "/api/v1/admin/operations/clear/latest",
+      ].includes(url.pathname) && method === "GET") return json(route, { current: null, snapshot: null }).then(() => true);
       if (url.pathname === action.endpoint && method === "POST") {
         await json(route, { task_id: TASK_ID, job_id: RQ_JOB_ID, status: "enqueued", operation_type: action.operationType, message: `${action.section} queued` }, 202);
         return true;
       }
-      if (url.pathname === `/api/v1/admin/operations/${RQ_JOB_ID}` && method === "GET") {
-        operationPollIds.push(RQ_JOB_ID);
+      if ((url.pathname === `/api/v1/admin/operations/${RQ_JOB_ID}` || url.pathname === `/api/v1/admin/operations/${TASK_ID}`) && method === "GET") {
+        operationPollIds.push(url.pathname.slice("/api/v1/admin/operations/".length));
         await json(route, { task_id: TASK_ID, job_id: TASK_ID, rq_job_id: RQ_JOB_ID, status: "running", operation_type: action.operationType });
         return true;
       }
@@ -108,10 +116,10 @@ for (const action of dataActions) {
     });
     try {
       await opened.page.getByRole("button", { name: action.button, exact: true }).click();
+      await expect.poll(() => new Set(operationPollIds).size).toBe(2);
       await opened.page.getByRole("button", { name: "Task detail", exact: true }).click();
       await expectCanonicalTask(opened.page, opened.taskDetailIds);
-      await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);
-      expect(new Set(operationPollIds)).toEqual(new Set([RQ_JOB_ID]));
+      expect(new Set(operationPollIds)).toEqual(new Set([TASK_ID, RQ_JOB_ID]));
       expect(opened.unhandled).toEqual([]);
     } finally {
       await opened.context.close();
@@ -135,6 +143,48 @@ test("Danbooru mapping refresh exposes a canonical task action while polling its
   });
   try {
     await opened.page.getByRole("button", { name: "Refresh all mappings", exact: true }).click();
+    await opened.page.getByRole("button", { name: "View task", exact: true }).click();
+    await expectCanonicalTask(opened.page, opened.taskDetailIds);
+    await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);
+    expect(new Set(operationPollIds)).toEqual(new Set([RQ_JOB_ID]));
+    expect(opened.unhandled).toEqual([]);
+  } finally {
+    await opened.context.close();
+  }
+});
+
+test("Danbooru import-all preserves its canonical task action", async ({ browser }) => {
+  const operationPollIds: string[] = [];
+  const opened = await openFixture(browser, "/admin/upload/danbooru", async (route, url, method) => {
+    if (url.pathname === "/api/v1/creators" && method === "GET") {
+      await json(route, { items: [], total: 0 });
+      return true;
+    }
+    if (url.pathname === "/api/v1/reference/danbooru/artist/preview" && method === "POST") {
+      await json(route, {
+        status: "ok",
+        found: true,
+        artist: { id: 39, name: "d39_artist", other_names: [], urls: [] },
+        suggested_links: [],
+      });
+      return true;
+    }
+    if (url.pathname === "/api/v1/reference/danbooru/artist/import-all/async" && method === "POST") {
+      await json(route, { task_id: TASK_ID, job_id: RQ_JOB_ID, status: "enqueued" }, 202);
+      return true;
+    }
+    if (url.pathname === `/api/v1/admin/operations/${RQ_JOB_ID}` && method === "GET") {
+      operationPollIds.push(RQ_JOB_ID);
+      await json(route, { task_id: TASK_ID, job_id: TASK_ID, rq_job_id: RQ_JOB_ID, status: "running", operation_type: "danbooru-import-all" });
+      return true;
+    }
+    return false;
+  });
+  try {
+    const search = opened.page.getByRole("heading", { name: "Search by Artist Name" }).locator("..");
+    await search.getByRole("textbox").fill("d39_artist");
+    await search.getByRole("button", { name: "Search Danbooru" }).click();
+    await opened.page.getByRole("button", { name: "Import All & Subscribe", exact: true }).click();
     await opened.page.getByRole("button", { name: "View task", exact: true }).click();
     await expectCanonicalTask(opened.page, opened.taskDetailIds);
     await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);

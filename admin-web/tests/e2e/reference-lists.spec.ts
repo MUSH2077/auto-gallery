@@ -529,6 +529,94 @@ test("selection only covers loaded rows and subscription summaries stay page-siz
   await expect(checkbox).toBeChecked();
 });
 
+test("creator filter and sort cancel stale search debounce before selection", async ({ context, page }) => {
+  test.setTimeout(60_000);
+  const observations = { searches: [], summaryBatches: [] } as {
+    searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+    summaryBatches: string[][];
+  };
+  await installRoutes(context, observations);
+  await context.addInitScript(() => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      nativeSetTimeout(handler, timeout === 300 ? 5_000 : timeout, ...args)) as typeof window.setTimeout;
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/creators?q=selection-race");
+  await expect(page.locator("[data-virtual-reference-list]")).toBeVisible();
+
+  const activeSearch = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/v1/search"
+      && url.searchParams.get("scope") === "creators"
+      && (url.searchParams.get("q") || "").includes("is:active");
+  });
+  await page.getByRole("button", { name: "Active", exact: true }).click();
+  await activeSearch;
+  const sortAssist = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === "/api/v1/search/assist",
+  );
+  await page.getByRole("button", { name: "Name · Ascending", exact: true }).click();
+  await sortAssist;
+  await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:name-desc");
+
+  const rowSelection = page.getByRole("checkbox", { name: "Select Creator 000" });
+  await rowSelection.click({ force: true });
+  await expect(rowSelection).toBeChecked();
+  await page.waitForTimeout(5_500);
+  await expect(rowSelection).toBeChecked();
+  await expect(page.getByText(/1 selected \/ \d+ loaded/)).toBeVisible();
+});
+
+test("creator create dispatches once when the pending button is double-clicked", async ({ context, page }) => {
+  test.setTimeout(60_000);
+  const observations = { searches: [], summaryBatches: [] } as {
+    searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+    summaryBatches: string[][];
+  };
+  await installRoutes(context, observations);
+  let createRequests = 0;
+  let releaseCreate: (() => void) | undefined;
+  const heldCreate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  await context.route("**/api/v1/creators", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    createRequests += 1;
+    await heldCreate;
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "creator-created-once",
+        name: "double-click-creator",
+        display_name: "Double Click Creator",
+        description: "",
+        is_active: true,
+        is_favorite: false,
+        danbooru_artist_id: null,
+        repository_count: 0,
+        source_count: 0,
+        subscription_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/admin/creators");
+  await page.getByRole("button", { name: "+ New", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New Creator", exact: true });
+  await dialog.getByPlaceholder("Creator name", { exact: true }).fill("double-click-creator");
+  await dialog.getByPlaceholder("Optional display name", { exact: true }).fill("Double Click Creator");
+  const create = dialog.getByRole("button", { name: "Create", exact: true });
+  const doubleClick = create.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect.poll(() => createRequests).toBeGreaterThan(0);
+  await page.waitForTimeout(150);
+  expect(createRequests).toBe(1);
+  releaseCreate?.();
+  await doubleClick;
+});
+
 test("only the visible subscription batch keeps polling summaries", async ({ context, page }) => {
   const observations = { searches: [], summaryBatches: [] } as {
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;

@@ -116,6 +116,22 @@ function WorkCard({
     hoverTimer.current = null;
   };
 
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || !hasMultiple) return;
+    const onWheel = (event: WheelEvent) => {
+      wheelDelta.current += event.deltaY;
+      if (Math.abs(wheelDelta.current) < wheelThreshold) return;
+      event.preventDefault();
+      const normalized = (pageIdx + (wheelDelta.current > 0 ? 1 : -1) + assetIds.length) % assetIds.length;
+      setPageIdx(normalized);
+      onPreviewPage(w.id, normalized);
+      wheelDelta.current = 0;
+    };
+    card.addEventListener("wheel", onWheel, { passive: false });
+    return () => card.removeEventListener("wheel", onWheel);
+  }, [assetIds.length, hasMultiple, onPreviewPage, pageIdx, wheelThreshold, w.id]);
+
   return (
     <article
       ref={cardRef}
@@ -129,14 +145,6 @@ function WorkCard({
       onMouseLeave={() => {
         clearHoverTimer();
         onScheduleClosePreview();
-      }}
-      onWheel={(event) => {
-        if (!hasMultiple) return;
-        wheelDelta.current += event.deltaY;
-        if (Math.abs(wheelDelta.current) < wheelThreshold) return;
-        event.preventDefault();
-        updatePage(pageIdx + (wheelDelta.current > 0 ? 1 : -1));
-        wheelDelta.current = 0;
       }}
     >
       <Link

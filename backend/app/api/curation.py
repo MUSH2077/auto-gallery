@@ -7,7 +7,6 @@ from app.auth import RequireAdminUser, RequirePermission
 from app.config import settings
 from app.database import get_db
 from app.schemas.curation import (
-    CurationBackfillRunResponse,
     CurationBackfillStatusResponse,
     CurationCommitListResponse,
     CurationCommitRead,
@@ -16,6 +15,10 @@ from app.schemas.curation import (
     PurgePreviewResponse,
     PurgeRequest,
     RuleSuggestionRead,
+)
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationSnapshotResponse,
 )
 from app.schemas.gitllery import (
     GitlleryCommandRequest,
@@ -125,7 +128,11 @@ async def curation_backfill_status(db: AsyncSession = Depends(get_db)):
     return await svc.backfill_status()
 
 
-@router.post("/backfill", status_code=202)
+@router.post(
+    "/backfill",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def run_curation_backfill():
     """Enqueue the baseline backfill — it replays the whole library and must
     run in a worker, never inline in the backend process."""
@@ -138,6 +145,21 @@ async def run_curation_backfill():
         func="app.jobs.admin_operations.run_curation_backfill_operation",
         job_timeout=7 * 24 * 60 * 60,
         queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/backfill/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_curation_backfill(db: AsyncSession = Depends(get_db)):
+    """Return the durable backfill task so page reloads retain its state."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-curation-backfill",
+        scope_key="library:curation-backfill:active",
     )
 
 

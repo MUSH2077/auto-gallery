@@ -116,6 +116,7 @@ function VirtualReferenceListInner<
   const [requestedOffsets, setRequestedOffsets] = useState<number[]>(() =>
     alignedInitialOffsets(initialIndex, initialOffsets),
   );
+  const [pendingScrollIndex, setPendingScrollIndex] = useState<number | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
   const pageQueries = useQueries({
@@ -264,11 +265,31 @@ function VirtualReferenceListInner<
     if (!total) return;
     const index = Math.min(total - 1, Math.max(0, Math.floor(rawIndex)));
     const offset = referenceBatchOffset(index);
+    setPendingScrollIndex(index);
     setRequestedOffsets((current) => current.includes(offset)
       ? current
       : [...current, offset].sort((left, right) => left - right));
     virtualizer.scrollToIndex(index, { align: "start", behavior: "auto" });
   };
+
+  useEffect(() => {
+    if (pendingScrollIndex === null) return;
+    const offset = referenceBatchOffset(pendingScrollIndex);
+    if (!queryByOffset.get(offset)?.data) return;
+    let settleFrame = 0;
+    const measureFrame = window.requestAnimationFrame(() => {
+      virtualizer.measure();
+      virtualizer.scrollToIndex(pendingScrollIndex, { align: "start", behavior: "auto" });
+      settleFrame = window.requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(pendingScrollIndex, { align: "start", behavior: "auto" });
+        setPendingScrollIndex(null);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(measureFrame);
+      if (settleFrame) window.cancelAnimationFrame(settleFrame);
+    };
+  }, [pendingScrollIndex, queryByOffset, virtualizer]);
 
   useImperativeHandle(ref, () => ({
     scrollToIndex: requestAndScroll,

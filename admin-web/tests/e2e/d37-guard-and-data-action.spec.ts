@@ -82,6 +82,11 @@ const guardedRoutes = [
       "/api/v1/admin/backup/list",
       "/api/v1/admin/integrity-check/latest",
       "/api/v1/admin/backup/latest",
+      "/api/v1/admin/cleanup-metadata-jsons/latest",
+      "/api/v1/admin/library/rebuild/latest",
+      "/api/v1/admin/library/import-from-disk/latest",
+      "/api/v1/admin/creators/re-enrich/latest",
+      "/api/v1/admin/operations/clear/latest",
     ].includes(url.pathname),
   },
   { name: "tags", pathname: "/admin/tags", protectedRequest: (url: URL) => url.pathname === "/api/v1/tags/page" },
@@ -297,7 +302,15 @@ test("library rebuild describes its real scope and retains confirmation until a 
       return true;
     }
     if (url.pathname === "/api/v1/admin/backup/list") { await json(route, { backups: [] }); return true; }
-    if (url.pathname === "/api/v1/admin/backup/latest" || url.pathname === "/api/v1/admin/integrity-check/latest") {
+    if ([
+      "/api/v1/admin/backup/latest",
+      "/api/v1/admin/integrity-check/latest",
+      "/api/v1/admin/cleanup-metadata-jsons/latest",
+      "/api/v1/admin/library/rebuild/latest",
+      "/api/v1/admin/library/import-from-disk/latest",
+      "/api/v1/admin/creators/re-enrich/latest",
+      "/api/v1/admin/operations/clear/latest",
+    ].includes(url.pathname)) {
       await json(route, { current: null, snapshot: null });
       return true;
     }
@@ -373,7 +386,10 @@ test("library rebuild describes its real scope and retains confirmation until a 
     await expect(opened.page).toHaveURL(/\/admin\/jobs\?tab=admin&task=22222222-2222-4222-8222-222222222222$/, { timeout: 30_000 });
     await expect(opened.page.getByText("Library rebuild fixture", { exact: true })).toBeVisible();
     await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);
-    expect(new Set(operationPollIds)).toEqual(new Set(["22222222-2222-4222-8222-222222222222"]));
+    expect(new Set(operationPollIds)).toEqual(new Set([
+      "22222222-2222-4222-8222-222222222222",
+      "admin-22222222-2222-4222-8222-222222222222-attempt-1",
+    ]));
     expect(new Set(taskDetailIds)).toEqual(new Set(["22222222-2222-4222-8222-222222222222"]));
     expect(rebuildAttempts).toBe(2);
     expect(rebuildBodies).toEqual(["{}", "{}"]);

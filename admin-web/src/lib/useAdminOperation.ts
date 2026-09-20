@@ -31,6 +31,7 @@ export interface AdminOperationController<TResult, TVariables = void> {
   start: (variables: TVariables) => void;
   retry: () => void;
   retryLatest: () => void;
+  resetStart: () => void;
 }
 
 export function useAdminOperation<TResult, TVariables = void>({
@@ -60,8 +61,14 @@ export function useAdminOperation<TResult, TVariables = void>({
       ? { [identity]: initialAccepted.task_id }
       : {},
   );
-  const pendingStartIdentity = useRef<string | null>(null);
-  const pendingRetryIdentity = useRef<string | null>(null);
+  const pendingStartTarget = useRef<{
+    identity: string;
+    snapshotKey: readonly [string, string, string];
+  } | null>(null);
+  const pendingRetryTarget = useRef<{
+    identity: string;
+    snapshotKey: readonly [string, string, string];
+  } | null>(null);
   const notifiedCompletion = useRef<string | null>(null);
   const reconciledTerminal = useRef<string | null>(null);
   const snapshotKey = useMemo(
@@ -105,12 +112,26 @@ export function useAdminOperation<TResult, TVariables = void>({
   const startMutation = useMutation({
     mutationFn: startOperation,
     onSuccess: (accepted) => {
-      const acceptedIdentity = pendingStartIdentity.current ?? identity;
-      pendingStartIdentity.current = null;
+      const target = pendingStartTarget.current ?? { identity, snapshotKey };
+      const acceptedIdentity = target.identity;
+      pendingStartTarget.current = null;
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
       setStartedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
       setDisplayedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
+      queryClient.setQueryData<AdminOperationSnapshotResponse<TResult>>(
+        target.snapshotKey,
+        (previous) => ({
+          snapshot: previous?.snapshot ?? null,
+          current: {
+            task_id: accepted.task_id,
+            job_id: accepted.job_id,
+            status: accepted.status,
+            operation_type: accepted.operation_type,
+            progress: { phase: "enqueued", label: "" },
+          },
+        }),
+      );
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -122,24 +143,43 @@ export function useAdminOperation<TResult, TVariables = void>({
       );
     },
     onError: () => {
-      pendingStartIdentity.current = null;
-      void latestQuery.refetch();
+      const target = pendingStartTarget.current;
+      pendingStartTarget.current = null;
+      if (target) {
+        void queryClient.invalidateQueries({ queryKey: target.snapshotKey });
+      } else {
+        void latestQuery.refetch();
+      }
     },
   });
 
   const retryMutation = useMutation({
     mutationFn: () => {
       if (!taskId) throw new Error("Missing TaskRun id");
-      pendingRetryIdentity.current = identity;
+      pendingRetryTarget.current = { identity, snapshotKey };
       return retryTask(taskId);
     },
     onSuccess: (accepted) => {
-      const acceptedIdentity = pendingRetryIdentity.current ?? identity;
-      pendingRetryIdentity.current = null;
+      const target = pendingRetryTarget.current ?? { identity, snapshotKey };
+      const acceptedIdentity = target.identity;
+      pendingRetryTarget.current = null;
       notifiedCompletion.current = null;
       reconciledTerminal.current = null;
       setStartedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
       setDisplayedTasks((tasks) => ({ ...tasks, [acceptedIdentity]: accepted.task_id }));
+      queryClient.setQueryData<AdminOperationSnapshotResponse<TResult>>(
+        target.snapshotKey,
+        (previous) => ({
+          snapshot: previous?.snapshot ?? null,
+          current: {
+            task_id: accepted.task_id,
+            job_id: accepted.job_id,
+            status: accepted.status,
+            operation_type: accepted.operation_type,
+            progress: { phase: "enqueued", label: "" },
+          },
+        }),
+      );
       queryClient.setQueryData<AdminOperationStatus<TResult>>(
         ["admin-operation-task", accepted.task_id],
         {
@@ -154,8 +194,13 @@ export function useAdminOperation<TResult, TVariables = void>({
       });
     },
     onError: () => {
-      pendingRetryIdentity.current = null;
-      void latestQuery.refetch();
+      const target = pendingRetryTarget.current;
+      pendingRetryTarget.current = null;
+      if (target) {
+        void queryClient.invalidateQueries({ queryKey: target.snapshotKey });
+      } else {
+        void latestQuery.refetch();
+      }
     },
   });
 
@@ -224,6 +269,13 @@ export function useAdminOperation<TResult, TVariables = void>({
         }
       : null;
   const snapshot = completedTaskSnapshot ?? latestQuery.data?.snapshot ?? null;
+  useEffect(() => {
+    if (!snapshot?.result) return;
+    const completionIdentity = `${identity}:${snapshot.task_id}`;
+    if (notifiedCompletion.current === completionIdentity) return;
+    notifiedCompletion.current = completionIdentity;
+    onCompleted?.(snapshot.result);
+  }, [identity, onCompleted, snapshot]);
   const isActive = !!task && ACTIVE_STATUSES.has(task.status);
   const hasRetryableFailure = !!task && RETRYABLE_STATUSES.has(task.status);
   const canStart = !latestQuery.isLoading
@@ -256,7 +308,7 @@ export function useAdminOperation<TResult, TVariables = void>({
     latestError: latestQuery.error,
     start: (variables) => {
       if (canStart) {
-        pendingStartIdentity.current = identity;
+        pendingStartTarget.current = { identity, snapshotKey };
         startMutation.mutate(variables);
       }
     },
@@ -264,6 +316,7 @@ export function useAdminOperation<TResult, TVariables = void>({
       if (canRetry) retryMutation.mutate();
     },
     retryLatest: () => { void latestQuery.refetch(); },
+    resetStart: () => startMutation.reset(),
   };
 }
 

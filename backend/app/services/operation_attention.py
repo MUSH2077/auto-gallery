@@ -40,6 +40,14 @@ RESOLVED_RETENTION = timedelta(days=7)
 USER_OPERATION_RETENTION = timedelta(hours=24)
 
 
+class CompactionPreviewChanged(Exception):
+    """The compactable scope no longer matches the operator-reviewed preview."""
+
+    def __init__(self, actual_preview_token: str):
+        super().__init__("Task compaction scope changed after preview")
+        self.actual_preview_token = actual_preview_token
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -695,6 +703,7 @@ async def compact_terminal_tasks(
     *,
     dry_run: bool = True,
     limit: int = 200,
+    expected_preview_token: str | None = None,
 ) -> dict[str, Any]:
     """Delete compactable operational rows only after their domain receipt exists."""
 
@@ -950,9 +959,24 @@ async def compact_terminal_tasks(
         )
     all_task_ids = locked_task_ids
     compacted_ids = [str(task_id) for task_id in sorted(all_task_ids, key=str)]
+    preview_token = hashlib.sha256(
+        json.dumps(
+            {
+                "task_ids": compacted_ids,
+                "download_job_ids": sorted(str(job_id) for job_id in download_ids),
+                "import_job_ids": sorted(str(job_id) for job_id in import_ids),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    report["preview_token"] = preview_token
     report["deleted_tasks"] = len(all_task_ids)
     report["deleted_import_jobs"] = len(import_ids)
     report["deleted_download_jobs"] = len(download_ids)
+    if not dry_run and expected_preview_token is not None and preview_token != expected_preview_token:
+        await db.rollback()
+        raise CompactionPreviewChanged(preview_token)
     if not dry_run:
         from app.services.metadata_cleanup_proof import capture_compaction_proofs
         await capture_compaction_proofs(db, download_ids)

@@ -407,6 +407,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/cleanup-metadata-jsons/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Cleanup Metadata Jsons
+         * @description Restore the latest completed or retryable metadata cleanup.
+         */
+        get: operations["get_api_v1_admin_cleanup_metadata_jsons_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/clear/preview/{entity}": {
         parameters: {
             query?: never;
@@ -461,6 +481,26 @@ export interface paths {
          * @description Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment.
          */
         post: operations["post_api_v1_admin_creators_re_enrich"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/creators/re-enrich/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Reenrich Creators
+         * @description Restore the latest completed or retryable creator re-enrichment.
+         */
+        get: operations["get_api_v1_admin_creators_re_enrich_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -603,6 +643,26 @@ export interface paths {
          * @description See the request, response, permission, and risk metadata for this operation.
          */
         post: operations["post_api_v1_admin_dedup_scans"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/dedup/scans/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Asset Dedup Scan
+         * @description Return the durable scan task so refreshes retain its progress.
+         */
+        get: operations["get_api_v1_admin_dedup_scans_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -817,6 +877,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/library/import-from-disk/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Import From Disk
+         * @description Restore the latest completed or retryable disk import.
+         */
+        get: operations["get_api_v1_admin_library_import_from_disk_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/library/rebuild": {
         parameters: {
             query?: never;
@@ -831,6 +911,26 @@ export interface paths {
          * @description Enqueue a library rebuild operation and return immediately.
          */
         post: operations["post_api_v1_admin_library_rebuild"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/library/rebuild/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Library Rebuild
+         * @description Restore the latest completed or retryable library rebuild.
+         */
+        get: operations["get_api_v1_admin_library_rebuild_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -912,6 +1012,26 @@ export interface paths {
          * @description Enqueue a data-management clear operation and return immediately.
          */
         post: operations["post_api_v1_admin_operations_clear"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/operations/clear/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Clear Operation
+         * @description Restore the latest completed or retryable clear for one domain.
+         */
+        get: operations["get_api_v1_admin_operations_clear_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1669,6 +1789,26 @@ export interface paths {
          *     run in a worker, never inline in the backend process.
          */
         post: operations["post_api_v1_curation_backfill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/backfill/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Curation Backfill
+         * @description Return the durable backfill task so page reloads retain its state.
+         */
+        get: operations["get_api_v1_curation_backfill_latest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4744,6 +4884,26 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** AdminOperationAcceptedMessage */
+        AdminOperationAcceptedMessage: {
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+            /** Operation Type */
+            operation_type: string;
+            /** Options */
+            options?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+        };
         /** AdminOperationCurrent */
         AdminOperationCurrent: {
             /** Job Id */
@@ -4758,7 +4918,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "enqueued" | "running" | "recovering" | "paused";
+            status: "enqueued" | "running" | "recovering" | "paused" | "failed" | "stale" | "cancelled";
             /** Task Id */
             task_id: string;
         };
@@ -5000,6 +5160,25 @@ export interface components {
             /** Visual Score */
             visual_score: number;
         };
+        /** AssetDedupScanAccepted */
+        AssetDedupScanAccepted: {
+            /** Job Id */
+            job_id: string;
+            /** Operation Type */
+            operation_type: string;
+            /**
+             * Scan Id
+             * Format: uuid
+             */
+            scan_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+        };
         /** AssetDedupScanRead */
         AssetDedupScanRead: {
             /**
@@ -5139,6 +5318,8 @@ export interface components {
              * @default 200
              */
             limit: number;
+            /** Preview Token */
+            preview_token?: string | null;
         };
         /** ConflictDecision */
         ConflictDecision: {
@@ -10394,7 +10575,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_cleanup_metadata_jsons_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -10496,7 +10724,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -10543,7 +10771,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_creators_re_enrich_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -10888,7 +11163,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AssetDedupScanAccepted"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -10916,6 +11191,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_dedup_scans_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
                 };
             };
         };
@@ -11428,7 +11750,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -11460,6 +11782,53 @@ export interface operations {
             };
         };
     };
+    get_api_v1_admin_library_import_from_disk_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
     post_api_v1_admin_library_rebuild: {
         parameters: {
             query?: never;
@@ -11479,7 +11848,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -11507,6 +11876,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_library_rebuild_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
                 };
             };
         };
@@ -11673,7 +12089,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_operations_clear_latest: {
+        parameters: {
+            query: {
+                entity: "works" | "creators" | "subscriptions" | "tags" | "jobs" | "settings" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -13808,7 +14273,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["AdminOperationAccepted"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_curation_backfill_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */

@@ -294,7 +294,7 @@ export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
 export interface AdminOperationCurrent {
   task_id: string;
   job_id?: string | null;
-  status: "enqueued" | "running" | "recovering" | "paused";
+  status: "enqueued" | "running" | "recovering" | "paused" | "failed" | "stale" | "cancelled";
   operation_type: string;
   progress?: AdminOperationStatus["progress"];
 }

@@ -10,6 +10,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
 import { useAuth } from "@/lib/auth";
+import { taskRunDestination } from "@/lib/taskRoutes";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -118,9 +119,11 @@ function operationResultMessage(operation: OperationJobState, t: TFunction): str
 const TASK_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function operationDestination(operation: OperationJobState): string | null {
+  if (operation.taskId && TASK_RUN_ID.test(operation.taskId)) {
+    return `${adminRoutes.jobs}?tab=admin&task=${operation.taskId}`;
+  }
   if (operation.kind === "danbooru-import-all") return adminRoutes.danbooru;
-  if (!operation.taskId || !TASK_RUN_ID.test(operation.taskId)) return null;
-  return `${adminRoutes.jobs}?tab=admin&task=${operation.taskId}`;
+  return null;
 }
 
 function refetchCreatorSubscriptionQueries(qc: QueryClient) {
@@ -534,13 +537,6 @@ function taskActivityStatus(status?: string | null): ActivityStatus {
   return "pending";
 }
 
-function bellTaskLink(task: { kind?: string; id?: string }): string | null {
-  if ((task.kind === "download" || task.kind === "import") && task.id) {
-    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
-  }
-  return null;
-}
-
 export function NotificationBell() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -740,7 +736,7 @@ export function NotificationBell() {
                 )}
                 {serverItems.map((task, index) => {
                   const st = taskActivityStatus(task.status);
-                  const link = bellTaskLink(task);
+                  const link = taskRunDestination(task);
                   const entrance = itemEntrance(task.id, index);
                   return (
                     <div key={task.id}

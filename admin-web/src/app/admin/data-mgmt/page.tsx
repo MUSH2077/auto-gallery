@@ -1,8 +1,8 @@
 "use client";
 import { useCallback, useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, type ClearEntity } from "@/lib/api";
-import { PageHeader, ConfirmDialog, Modal, PageShell, StatusBadge, PermissionGuard } from "@/components";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys, type AdminOperationAccepted, type ClearEntity, type ImportFromDiskRequest } from "@/lib/api";
+import { PageHeader, ConfirmDialog, Modal, PageShell, PermissionGuard } from "@/components";
 import ChartFrame from "@/components/charts/ChartFrame";
 import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
 import TickDonut from "@/components/charts/TickDonut";
@@ -33,6 +33,18 @@ type BackupResult = {
   component_sizes: Record<string, number>;
   message?: string;
 };
+type MetadataCleanupResult = {
+  status: string;
+  removed: number;
+  skipped: number;
+  failed: number;
+  skipped_by_reason?: Record<string, number>;
+  errors?: { path?: string; reason?: string }[];
+  message?: string;
+};
+type MessageResult = { message?: string };
+type ClearResult = { status: string; message?: string; deleted?: Record<string, number> };
+type ClearVariables = { entity: ClearEntity; confirmation: string; title: string };
 
 function formatSize(mb: number): string {
   if (!Number.isFinite(mb)) return "-";
@@ -67,11 +79,9 @@ function DataManagementContent() {
   const qc = useQueryClient();
   const notify = useNotifications();
   const toast = useToast();
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [resetLedger, setResetLedger] = useState(false);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ClearEntity | null>(null);
-  const [activeAction, setActiveAction] = useState<ClearEntity | null>(null);
   const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
 
   // ── Data queries ──
@@ -90,81 +100,128 @@ function DataManagementContent() {
   const refreshBackups = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["backups"] });
   }, [qc]);
+  const refreshDataViews = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    void qc.invalidateQueries({ queryKey: ["system-info"] });
+    void qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+  }, [qc]);
+  const refreshClearedDataViews = useCallback(() => {
+    refreshDataViews();
+    void qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.sources });
+    void qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.tags.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    void qc.invalidateQueries({ queryKey: ["search"] });
+    void qc.invalidateQueries({ queryKey: ["reference-name-anchors"] });
+  }, [qc, refreshDataViews]);
+  const announceAccepted = useCallback((
+    accepted: AdminOperationAccepted,
+    title: string,
+    message: string,
+    meta?: Record<string, unknown>,
+  ) => {
+    toast.info({
+      title,
+      message,
+      persistent: true,
+      action: {
+        label: t("jobs.task_detail"),
+        onClick: () => router.push(`/admin/jobs?tab=admin&task=${accepted.task_id}`),
+      },
+    });
+    notify.startOperationJob(
+      accepted.job_id,
+      accepted.operation_type,
+      title,
+      meta,
+      accepted.task_id,
+    );
+    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+  }, [notify, qc, router, t, toast]);
   const integrity = useAdminOperation<IntegrityResult>({
     operationType: "admin-integrity-scan",
     scope: "global",
-    startOperation: () => api.startIntegrityCheck(),
+    startOperation: async () => {
+      const accepted = await api.startIntegrityCheck();
+      announceAccepted(
+        accepted,
+        t("datamgmt.integrity_title"),
+        t("datamgmt.operation_submitted", { operation: t("datamgmt.integrity_title") }),
+      );
+      return accepted;
+    },
     loadLatest: () => api.getLatestIntegrityCheck(),
   });
   const backupOperation = useAdminOperation<BackupResult>({
     operationType: "admin-backup-create",
     scope: "global",
-    startOperation: () => api.createBackup(),
+    startOperation: async () => {
+      const accepted = await api.createBackup();
+      announceAccepted(
+        accepted,
+        t("datamgmt.backup_create"),
+        t("datamgmt.operation_submitted", { operation: t("datamgmt.backup_create") }),
+      );
+      return accepted;
+    },
     loadLatest: () => api.getLatestBackup(),
     onCompleted: refreshBackups,
   });
-
-  // ── Mutations ──
-  const cleanupJSON = useMutation({
-    mutationFn: () => api.cleanupMetadataJSONs(),
-    onSuccess: (accepted) => {
-      setResult({ ok: true, msg: t("datamgmt.cleanup_json_accepted") });
-      toast.success({ title: t("datamgmt.cleanup_json"), message: t("datamgmt.cleanup_json_accepted"), action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${accepted.task_id}`) } });
-      notify.startOperationJob(accepted.job_id, accepted.operation_type, t("datamgmt.cleanup_json"), undefined, accepted.task_id);
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+  const cleanupJSON = useAdminOperation<MetadataCleanupResult>({
+    operationType: "admin-cleanup-metadata-jsons",
+    scope: "global",
+    startOperation: async () => {
+      const accepted = await api.cleanupMetadataJSONs();
+      announceAccepted(accepted, t("datamgmt.cleanup_json"), t("datamgmt.cleanup_json_accepted"));
+      return accepted;
     },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+    loadLatest: () => api.getLatestMetadataJSONCleanup(),
+    onCompleted: refreshDataViews,
   });
-
-  const importFromDisk = useMutation({
-    mutationFn: () => api.importFromDisk(resetLedger ? { reset_ledger: true } : {}),
-    onMutate: () => setResult(null),
-    onSuccess: (d) => {
-      const title = t("datamgmt.disk_import");
-      toast.success({
-        title,
-        message: d.message,
-        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
-      });
-      notify.startOperationJob(d.job_id, "admin-disk-import", title, undefined, d.task_id);
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    },
-    onError: (e) => toast.error({ title: t("datamgmt.disk_import"), message: (e as Error).message }),
-  });
-
-  const reenrichCreators = useMutation({
-    mutationFn: () => api.reenrichCreators(),
-    onMutate: () => setResult(null),
-    onSuccess: (d) => {
-      const title = t("datamgmt.reenrich");
-      toast.success({
-        title,
-        message: d.message,
-        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
-      });
-      notify.startOperationJob(d.job_id, "admin-creator-reenrich", title, undefined, d.task_id);
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    },
-    onError: (e) => toast.error({ title: t("datamgmt.reenrich"), message: (e as Error).message }),
-  });
-
-  const rebuildLibrary = useMutation({
-    mutationFn: () => api.rebuildLibrary(),
-    onMutate: () => setResult(null),
-    onSuccess: (d) => {
-      const title = t("datamgmt.cleanup_reindex");
-      setResult({ ok: true, msg: t("datamgmt.cleanup_reindex_accepted") });
-      notify.startOperationJob(d.task_id, "admin-rebuild", title, undefined, d.task_id);
-      toast.success({
-        title,
-        message: t("datamgmt.cleanup_reindex_accepted"),
-        persistent: true,
-        action: { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${d.task_id}`) },
-      });
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+  const rebuildLibrary = useAdminOperation<MessageResult>({
+    operationType: "admin-rebuild",
+    scope: "global",
+    startOperation: async () => {
+      const accepted = await api.rebuildLibrary();
+      announceAccepted(accepted, t("datamgmt.cleanup_reindex"), t("datamgmt.cleanup_reindex_accepted"));
       setConfirmRebuild(false);
+      return accepted;
     },
-    onError: (e) => setResult({ ok: false, msg: (e as Error).message }),
+    loadLatest: () => api.getLatestLibraryRebuild(),
+    onCompleted: refreshDataViews,
+  });
+  const importFromDisk = useAdminOperation<MessageResult, ImportFromDiskRequest>({
+    operationType: "admin-disk-import",
+    scope: "global",
+    startOperation: async (options) => {
+      const accepted = await api.importFromDisk(options);
+      announceAccepted(
+        accepted,
+        t("datamgmt.disk_import"),
+        t("datamgmt.operation_submitted", { operation: t("datamgmt.disk_import") }),
+      );
+      return accepted;
+    },
+    loadLatest: () => api.getLatestImportFromDisk(),
+    onCompleted: refreshDataViews,
+  });
+  const reenrichCreators = useAdminOperation<MessageResult>({
+    operationType: "admin-creator-reenrich",
+    scope: "global",
+    startOperation: async () => {
+      const accepted = await api.reenrichCreators();
+      announceAccepted(
+        accepted,
+        t("datamgmt.reenrich"),
+        t("datamgmt.operation_submitted", { operation: t("datamgmt.reenrich") }),
+      );
+      return accepted;
+    },
+    loadLatest: () => api.getLatestCreatorReenrichment(),
+    onCompleted: refreshDataViews,
   });
 
   const dangerActions = [
@@ -175,28 +232,25 @@ function DataManagementContent() {
     queryKey: ["clear-impact-preview", confirmAction],
     queryFn: () => api.previewClearEntity(confirmAction!),
     enabled: !!confirmAction,
-    staleTime: 30_000,
+    staleTime: 0,
   });
-
-  const clearOperationMutation = useMutation({
-    mutationFn: ({ entity, confirmation }: { entity: ClearEntity; confirmation: string; title: string }) => api.startClearOperation(entity, confirmation),
-    onMutate: (vars) => {
-      setActiveAction(vars.entity);
-    },
-    onSuccess: (data, vars) => {
-      setResult({ ok: true, msg: t("datamgmt.action_queued", { action: vars.title }) });
-      notify.startOperationJob(data.job_id, "admin-clear", vars.title, { entity: vars.entity });
+  const clearOperation = useAdminOperation<ClearResult, ClearVariables>({
+    operationType: "admin-clear",
+    scope: "all",
+    startOperation: async ({ entity, confirmation, title }) => {
+      const accepted = await api.startClearOperation(entity, confirmation);
+      announceAccepted(
+        accepted,
+        title,
+        t("datamgmt.action_queued", { action: title }),
+        { entity },
+      );
       setConfirmAction(null);
+      return accepted;
     },
-    onError: (e) => {
-      setResult({ ok: false, msg: (e as Error).message });
-    },
-    onSettled: () => {
-      setActiveAction(null);
-    },
+    loadLatest: () => api.getLatestClearOperation("all"),
+    onCompleted: refreshClearedDataViews,
   });
-
-  const clearOperation = notify.operationJob?.kind === "admin-clear" ? notify.operationJob : null;
 
   // Computed
   const info = systemInfo.data;
@@ -263,31 +317,6 @@ function DataManagementContent() {
   return (
     <PageShell>
       <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
-
-      {result && (
-        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${result.ok ? "bg-success-subtle border border-success/30 text-success" : "bg-danger-subtle border border-danger/30 text-danger"}`}>
-          <span>{result.msg}</span>
-          <button onClick={() => setResult(null)} className="ml-3 text-xs underline">{t("datamgmt.dismiss")}</button>
-        </div>
-      )}
-
-      {clearOperation && (
-        <div className={`mb-4 rounded-md border p-3 text-sm ${
-          clearOperation.status === "error"
-            ? "border-danger/30 bg-danger-subtle text-danger"
-            : clearOperation.status === "completed"
-              ? "border-success/30 bg-success-subtle text-success"
-              : "border-accent/30 bg-accent-subtle text-accent"
-        }`}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-medium">{clearOperation.title}</span>
-            <StatusBadge status={clearOperation.status} className="uppercase" />
-          </div>
-          <div className="mt-1 text-xs opacity-80">
-            {clearOperation.error || clearOperation.result?.message || clearOperation.progress?.label || t("datamgmt.queued_background")}
-          </div>
-        </div>
-      )}
 
       <section
         data-page-primary-content
@@ -550,58 +579,82 @@ function DataManagementContent() {
         <div className="card p-4">
           <h3 className="font-medium text-sm mb-3">{t("datamgmt.cleanup_title")}</h3>
           <div className="space-y-3">
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="text-sm font-medium">{t("datamgmt.cleanup_json")}</p>
-                <p className="text-xs text-muted">{t("datamgmt.cleanup_json_desc")}</p>
+            <div className="p-3 border rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{t("datamgmt.cleanup_json")}</p>
+                  <p className="text-xs text-muted">{t("datamgmt.cleanup_json_desc")}</p>
+                </div>
+                <button onClick={() => cleanupJSON.start(undefined)} disabled={!cleanupJSON.canStart}
+                  className="btn-ghost ml-3 min-h-11 shrink-0 text-xs text-warning">
+                  {cleanupJSON.isStarting || cleanupJSON.isActive ? "..." : t("datamgmt.cleanup_json_btn")}
+                </button>
               </div>
-              <button onClick={() => cleanupJSON.mutate()} disabled={cleanupJSON.isPending}
-                className="btn-ghost ml-3 min-h-11 shrink-0 text-xs text-warning">
-                {cleanupJSON.isPending ? "..." : t("datamgmt.cleanup_json_btn")}
-              </button>
+              <AdminOperationStatus controller={cleanupJSON} />
+              {cleanupJSON.result ? (
+                <p className={`mt-2 text-xs ${cleanupJSON.result.failed > 0 ? "text-warning" : "text-success"}`}>
+                  {t("datamgmt.cleanup_json_result", {
+                    removed: cleanupJSON.result.removed,
+                    skipped: cleanupJSON.result.skipped,
+                    failed: cleanupJSON.result.failed,
+                  })}
+                </p>
+              ) : null}
             </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
-                <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
+            <div className="p-3 border rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{t("datamgmt.cleanup_reindex")}</p>
+                  <p className="text-xs text-muted">{t("datamgmt.cleanup_reindex_desc")}</p>
+                </div>
+                <button onClick={() => {
+                  rebuildLibrary.resetStart();
+                  setConfirmRebuild(true);
+                }} disabled={!rebuildLibrary.canStart}
+                  className="btn-primary ml-3 shrink-0 text-xs">
+                  {rebuildLibrary.isStarting || rebuildLibrary.isActive ? "..." : t("datamgmt.cleanup_reindex_btn")}
+                </button>
               </div>
-              <button onClick={() => setConfirmRebuild(true)} disabled={rebuildLibrary.isPending}
-                className="btn-primary ml-3 shrink-0 text-xs">
-                {rebuildLibrary.isPending ? "..." : t("datamgmt.cleanup_reindex_btn")}
-              </button>
+              <AdminOperationStatus controller={rebuildLibrary} />
             </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="text-sm font-medium">{t("datamgmt.disk_import")}</p>
-                <p className="text-xs text-muted">{t("datamgmt.disk_import_desc")}</p>
-                <label className="mt-1.5 flex items-center gap-1.5 text-xs text-muted cursor-pointer">
-                  <input type="checkbox" checked={resetLedger} onChange={(e) => setResetLedger(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-border" />
-                  {t("datamgmt.disk_import_reset_ledger")}
-                </label>
-                {breakdown?.pipeline_stats ? (
-                  <div className="mt-2 rounded border border-border bg-subtle px-2 py-1.5 text-xs text-muted">
-                    <span className="font-medium text-fg">{t("datamgmt.import_backlog")}</span>
-                    <span className="ml-2">{t("datamgmt.pending_import_works")}: {breakdown.pipeline_stats.pending_import_works}</span>
-                    <span className="ml-2">{t("datamgmt.orphan_pending_artifacts")}: {breakdown.pipeline_stats.orphan_pending_artifacts}</span>
-                    <span className="ml-2">{t("datamgmt.failed_artifacts")}: {breakdown.pipeline_stats.failed_artifacts}</span>
-                  </div>
-                ) : null}
+            <div className="p-3 border rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{t("datamgmt.disk_import")}</p>
+                  <p className="text-xs text-muted">{t("datamgmt.disk_import_desc")}</p>
+                  <label className="mt-1.5 flex items-center gap-1.5 text-xs text-muted cursor-pointer">
+                    <input type="checkbox" checked={resetLedger} onChange={(e) => setResetLedger(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-border" />
+                    {t("datamgmt.disk_import_reset_ledger")}
+                  </label>
+                  {breakdown?.pipeline_stats ? (
+                    <div className="mt-2 rounded border border-border bg-subtle px-2 py-1.5 text-xs text-muted">
+                      <span className="font-medium text-fg">{t("datamgmt.import_backlog")}</span>
+                      <span className="ml-2">{t("datamgmt.pending_import_works")}: {breakdown.pipeline_stats.pending_import_works}</span>
+                      <span className="ml-2">{t("datamgmt.orphan_pending_artifacts")}: {breakdown.pipeline_stats.orphan_pending_artifacts}</span>
+                      <span className="ml-2">{t("datamgmt.failed_artifacts")}: {breakdown.pipeline_stats.failed_artifacts}</span>
+                    </div>
+                  ) : null}
+                </div>
+                <button onClick={() => importFromDisk.start(resetLedger ? { reset_ledger: true } : {})} disabled={!importFromDisk.canStart}
+                  className="btn-primary shrink-0 ml-3 text-xs">
+                  {importFromDisk.isStarting || importFromDisk.isActive ? "..." : t("datamgmt.disk_import_btn")}
+                </button>
               </div>
-              <button onClick={() => importFromDisk.mutate()} disabled={importFromDisk.isPending}
-                className="btn-primary shrink-0 ml-3 text-xs">
-                {importFromDisk.isPending ? "..." : t("datamgmt.disk_import_btn")}
-              </button>
+              <AdminOperationStatus controller={importFromDisk} />
             </div>
-            <div className="flex items-center justify-between p-3 border rounded-lg">
-              <div>
-                <p className="text-sm font-medium">{t("datamgmt.reenrich")}</p>
-                <p className="text-xs text-muted">{t("datamgmt.reenrich_desc")}</p>
+            <div className="p-3 border rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">{t("datamgmt.reenrich")}</p>
+                  <p className="text-xs text-muted">{t("datamgmt.reenrich_desc")}</p>
+                </div>
+                <button onClick={() => reenrichCreators.start(undefined)} disabled={!reenrichCreators.canStart}
+                  className="btn-primary shrink-0 ml-3 text-xs">
+                  {reenrichCreators.isStarting || reenrichCreators.isActive ? "..." : t("datamgmt.reenrich_btn")}
+                </button>
               </div>
-              <button onClick={() => reenrichCreators.mutate()} disabled={reenrichCreators.isPending}
-                className="btn-primary shrink-0 ml-3 text-xs">
-                {reenrichCreators.isPending ? "..." : t("datamgmt.reenrich_btn")}
-              </button>
+              <AdminOperationStatus controller={reenrichCreators} />
             </div>
           </div>
         </div>
@@ -664,8 +717,7 @@ function DataManagementContent() {
 
         <div className="space-y-2">
           {dangerActions.map((a) => {
-            const isCurrentOperation = clearOperation?.status === "running" && clearOperation.meta?.entity === a.key;
-            const isPending = (clearOperationMutation.isPending && activeAction === a.key) || isCurrentOperation;
+            const isPending = clearOperation.isStarting || clearOperation.isActive;
             return (
               <div key={a.key} className={`flex min-w-0 flex-col items-stretch gap-3 rounded-md border-l-4 p-3 sm:flex-row sm:items-center sm:justify-between ${
                 a.color === "red" ? "border-l-danger bg-danger-subtle/30" :
@@ -677,7 +729,10 @@ function DataManagementContent() {
                   <p className="text-xs text-muted">{a.desc}</p>
                 </div>
                 <button
-                  onClick={() => setConfirmAction(a.key)}
+                  onClick={() => {
+                    clearOperation.resetStart();
+                    setConfirmAction(a.key);
+                  }}
                   disabled={isPending}
                   className={`min-h-11 w-full shrink-0 rounded-md px-4 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-30 sm:ml-3 sm:w-auto ${
                     a.color === "red" ? "border border-danger/40 bg-danger-subtle text-danger hover:bg-danger/20" :
@@ -691,6 +746,7 @@ function DataManagementContent() {
             );
           })}
         </div>
+        <AdminOperationStatus controller={clearOperation} />
       </div>
 
       {/* Global confirm dialog */}
@@ -698,13 +754,13 @@ function DataManagementContent() {
         open={confirmRebuild}
         title={t("datamgmt.cleanup_reindex_confirm_title")}
         message={t("datamgmt.cleanup_reindex_confirm_msg")}
-        onConfirm={() => rebuildLibrary.mutate()}
+        onConfirm={() => rebuildLibrary.start(undefined)}
         onCancel={() => {
           setConfirmRebuild(false);
-          rebuildLibrary.reset();
+          rebuildLibrary.resetStart();
         }}
-        isPending={rebuildLibrary.isPending}
-        error={(rebuildLibrary.error as Error)?.message}
+        isPending={rebuildLibrary.isStarting}
+        error={rebuildLibrary.startError?.message}
       />
       {confirmAction && (
         <ConfirmDialog
@@ -715,15 +771,20 @@ function DataManagementContent() {
           onConfirm={() => {
             const action = dangerActions.find((a) => a.key === confirmAction);
             if (action && clearPreview.data) {
-              clearOperationMutation.mutate({
+              clearOperation.start({
                 entity: action.key,
                 confirmation: clearPreview.data.confirmation_phrase,
                 title: action.title,
               });
             }
           }}
-          onCancel={() => setConfirmAction(null)}
-          isPending={clearOperationMutation.isPending && activeAction === confirmAction}
+          onCancel={() => {
+            setConfirmAction(null);
+            clearOperation.resetStart();
+          }}
+          isPending={clearOperation.isStarting}
+          error={clearOperation.startError?.message || (clearPreview.error as Error | null)?.message}
+          confirmDisabled={clearPreview.isLoading || clearPreview.isError || !clearPreview.data}
         />
       )}
     </PageShell>

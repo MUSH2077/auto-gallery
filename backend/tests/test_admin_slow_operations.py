@@ -604,6 +604,61 @@ async def test_integrity_scan_rolls_back_and_raises_an_essential_query_failure()
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_integrity_scan_finds_missing_thumbnails_through_asset_sources(
+    tmp_path,
+    monkeypatch,
+):
+    """The scan follows the current asset_sources relationship, not removed assets.work_id."""
+    from app.api.admin import settings as settings_api
+    from app.database import async_session, engine
+    from app.models import Asset, AssetSource, Work, WorkSource
+
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    media = downloads / "missing-thumbnail.jpg"
+    media.write_bytes(b"acceptance fixture")
+    monkeypatch.setattr(settings_api.settings, "download_root", str(downloads))
+    try:
+        async with async_session() as db:
+            work = Work(title="Integrity relationship regression")
+            db.add(work)
+            await db.flush()
+            source = WorkSource(
+                work_id=work.id,
+                source="pixiv",
+                source_work_id=f"integrity-{work.id}",
+            )
+            asset = Asset(file_path=media.name, file_name=media.name)
+            db.add_all((source, asset))
+            await db.flush()
+            db.add(AssetSource(
+                asset_id=asset.id,
+                work_source_id=source.id,
+                source="pixiv",
+                source_asset_id=f"integrity-{asset.id}",
+                role="page",
+            ))
+            await db.flush()
+
+            result = await settings_api._run_integrity_check(db)
+            issue = next(item for item in result["issues"] if item["type"] == "missing_thumbnails")
+            assert any(item["asset_id"] == str(asset.id) for item in issue["items"])
+            assert any(
+                item["source"] == "pixiv" and item["source_work_id"] == source.source_work_id
+                for item in issue["items"]
+            )
+            assert not any(
+                item["type"] == "dead_links"
+                and any(dead["asset_id"] == str(asset.id) for dead in item["items"])
+                for item in result["issues"]
+            )
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_integrity_aborted_transaction_fails_task_and_remains_retryable(monkeypatch):
     """Worker failure recording uses a fresh transaction after the scan aborts."""
     from sqlalchemy import text as sql_text
@@ -698,6 +753,103 @@ async def test_latest_endpoint_returns_database_backed_current_operation(monkeyp
                     "progress": {"phase": "enqueued", "label": "Integrity scan queued"},
                 },
             }
+    finally:
+        async with async_session() as db:
+            await _clear_rows(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_data_management_latest_endpoints_restore_retryable_operations(monkeypatch):
+    """A remounted data-center page keeps each failed TaskRun available to retry."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services import operations
+    from app.services.tasks import TaskService
+
+    _stub_rq_transport(monkeypatch)
+    specs = (
+        (
+            "admin-integrity-scan",
+            "diagnostics:integrity:active",
+            "/api/v1/admin/integrity-check/latest",
+        ),
+        (
+            "admin-cleanup-metadata-jsons",
+            "library:cleanup-metadata-jsons:active",
+            "/api/v1/admin/cleanup-metadata-jsons/latest",
+        ),
+        (
+            "admin-rebuild",
+            "library:rebuild:active",
+            "/api/v1/admin/library/rebuild/latest",
+        ),
+        (
+            "admin-disk-import",
+            "library:disk-import:active",
+            "/api/v1/admin/library/import-from-disk/latest",
+        ),
+        (
+            "admin-creator-reenrich",
+            "library:creator-reenrich:active",
+            "/api/v1/admin/creators/re-enrich/latest",
+        ),
+        (
+            "admin-backup-create",
+            "backup:create:active",
+            "/api/v1/admin/backup/latest",
+        ),
+        (
+            "admin-clear",
+            "library:clear:all",
+            "/api/v1/admin/operations/clear/latest?entity=all",
+        ),
+    )
+    expected: dict[str, UUID] = {}
+    transport = ASGITransport(app=app)
+    try:
+        async with async_session() as db:
+            await _clear_rows(db)
+            await _seed_user(db, f"{PREFIX}data_retry", permissions=["system"])
+            service = TaskService(db)
+            for operation_type, scope_key, endpoint in specs:
+                prepared = await operations.prepare_admin_operation(
+                    db,
+                    operation_type=operation_type,
+                    scope_key=scope_key,
+                    title=f"Failed {operation_type}",
+                    entity="all" if operation_type == "admin-clear" else operation_type,
+                    options={"entity": "all"} if operation_type == "admin-clear" else {},
+                )
+                await service.update_task(
+                    prepared.task,
+                    status="failed",
+                    progress={"phase": "failed", "label": "Operation failed"},
+                    error=f"{operation_type} fixture failure",
+                )
+                expected[endpoint] = prepared.task.id
+            await db.commit()
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            for endpoint, task_id in expected.items():
+                response = await client.get(
+                    endpoint,
+                    headers=_headers(f"{PREFIX}data_retry"),
+                )
+                assert response.status_code == 200, (endpoint, response.text)
+                payload = response.json()
+                assert payload["current"] == {
+                    "task_id": str(task_id),
+                    "job_id": f"admin-{task_id}-attempt-1",
+                    "status": "failed",
+                    "operation_type": next(
+                        operation_type
+                        for operation_type, _scope_key, spec_endpoint in specs
+                        if spec_endpoint == endpoint
+                    ),
+                    "progress": {"phase": "failed", "label": "Operation failed"},
+                }
     finally:
         async with async_session() as db:
             await _clear_rows(db)

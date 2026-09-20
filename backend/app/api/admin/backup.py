@@ -265,6 +265,7 @@ async def latest_backup(db: AsyncSession = Depends(get_db)):
         db,
         operation_type="admin-backup-create",
         scope_key="backup:create:active",
+        include_retryable=True,
     )
 
 

@@ -16,6 +16,11 @@ class AdminOperationAccepted(BaseModel):
     operation_type: str
 
 
+class AdminOperationAcceptedMessage(AdminOperationAccepted):
+    message: str
+    options: dict[str, Any] | None = None
+
+
 class AdminOperationSnapshot(BaseModel):
     task_id: str
     job_id: str | None = None
@@ -29,7 +34,15 @@ class AdminOperationSnapshot(BaseModel):
 class AdminOperationCurrent(BaseModel):
     task_id: str
     job_id: str | None = None
-    status: Literal["enqueued", "running", "recovering", "paused"]
+    status: Literal[
+        "enqueued",
+        "running",
+        "recovering",
+        "paused",
+        "failed",
+        "stale",
+        "cancelled",
+    ]
     operation_type: str
     progress: dict[str, Any] | None = None
 

@@ -89,7 +89,12 @@ const GENERATED_VIDEO = Buffer.from(
   "base64",
 );
 
-async function installMediaRoutes(context: BrowserContext, calls: string[]) {
+async function installMediaRoutes(
+  context: BrowserContext,
+  calls: string[],
+  options: { failFirstImageAsset?: boolean } = {},
+) {
+  let imageAssetAttempts = 0;
   await context.addCookies([{
     name: "ag_token",
     value: "media-test-token",
@@ -203,6 +208,10 @@ async function installMediaRoutes(context: BrowserContext, calls: string[]) {
       return route.fulfill({ json: [VIDEO_ASSET, IMAGE_ASSET] });
     }
     if (path === "/api/v1/works/image-work/assets") {
+      imageAssetAttempts += 1;
+      if (options.failFirstImageAsset && imageAssetAttempts === 1) {
+        return route.fulfill({ status: 503, json: { detail: "temporary fixture failure" } });
+      }
       return route.fulfill({ json: [IMAGE_ASSET] });
     }
     if (/^\/api\/v1\/works\/video-work\/(sources|tags)$/.test(path)) {
@@ -259,6 +268,21 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(page.locator("video")).toHaveCount(0);
   await expect.poll(() => calls.some((call) => call.includes("playback-ticket"))).toBe(false);
 
+  const videoCard = page.locator("article").filter({ hasText: WORK.title }).first();
+  await videoCard.hover();
+  const preview = page.locator(".popover").filter({ hasText: WORK.title });
+  await expect(preview).toBeVisible();
+  const cardBox = await videoCard.boundingBox();
+  expect(cardBox).not.toBeNull();
+  await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+  await page.mouse.wheel(0, 100);
+  await expect(preview.getByText("2 / 2", { exact: true })).toBeVisible();
+  const previewBox = await preview.boundingBox();
+  expect(previewBox).not.toBeNull();
+  await page.mouse.move(previewBox!.x + previewBox!.width / 2, previewBox!.y + previewBox!.height / 2);
+  await page.mouse.wheel(0, 100);
+  await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
+
   await page.goto("/admin/works/video-work");
   await expect(page.getByRole("heading", { level: 1, name: "Synthetic motion study" })).toBeVisible();
   const video = page.locator("video");
@@ -299,9 +323,9 @@ test("mobile video player is keyboard reachable without horizontal overflow", as
   await page.screenshot({ path: "/tmp/auto-gallery-media-mobile.png", fullPage: false });
 });
 
-test("slideshow keeps a complete foreground image over a softened canvas and exposes a thumbnail rail", async ({ context, page }) => {
+test("slideshow retries the exact failed thumbnail and keeps a complete foreground image over a softened canvas", async ({ context, page }) => {
   const calls: string[] = [];
-  await installMediaRoutes(context, calls);
+  await installMediaRoutes(context, calls, { failFirstImageAsset: true });
   await page.goto("/admin/works");
 
   await page.getByRole("button", { name: "Slideshow" }).click();
@@ -318,6 +342,9 @@ test("slideshow keeps a complete foreground image over a softened canvas and exp
   await page.screenshot({ path: "/tmp/auto-gallery-slideshow-canvas.png", fullPage: false });
 
   await thumbnails.getByRole("button").nth(1).click();
+  await expect(dialog.getByRole("button", { name: "Retry" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => calls.filter((call) => call === "GET /api/v1/works/image-work/assets").length).toBe(2);
   await expect(thumbnails.getByRole("button").nth(1)).toHaveAttribute("aria-current", "true");
   await expect(dialog).toContainText("2 / 2");
   await page.keyboard.press("Escape");

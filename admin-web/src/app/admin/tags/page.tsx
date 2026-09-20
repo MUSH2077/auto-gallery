@@ -59,6 +59,7 @@ function TagsContent() {
         ) : undefined}
       />
 
+      <div data-page-primary-content>
       <div className="mb-4 grid gap-2 sm:grid-cols-3">
         <SmartSearchInput value={q} onChange={(value) => updateParams({ q: value, page: null })} placeholder={t("common.search")} />
         <select aria-label={t("tags.category_label")} className="select" value={category} onChange={(event) => updateParams({ category: event.target.value, page: null })}>
@@ -69,7 +70,6 @@ function TagsContent() {
         </select>
       </div>
 
-      <div data-page-primary-content>
       {tags.isFetching && !tags.isLoading && <div role="status" className="mb-2 text-xs text-muted">{t("common.refreshing")}</div>}
       {tags.isLoading && (
         <div className="flex min-h-80 flex-wrap items-center justify-center gap-3">

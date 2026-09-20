@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.admin_operations import AdminOperationAccepted
+
 
 class AssetDedupAssetRead(BaseModel):
     id: UUID
@@ -87,6 +89,10 @@ class AssetDedupDecisionRead(BaseModel):
 class AssetDedupScanRequest(BaseModel):
     auto_apply: bool = True
     batch_size: int = Field(default=100, ge=10, le=500)
+
+
+class AssetDedupScanAccepted(AdminOperationAccepted):
+    scan_id: UUID
 
 
 class AssetDedupScanRead(BaseModel):

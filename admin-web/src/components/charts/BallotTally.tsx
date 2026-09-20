@@ -13,9 +13,11 @@ import { useChartTheme } from "./useChartTheme";
 export default function BallotTally({
   data,
   total,
+  onSelect,
 }: {
   data: ChartDatum[];
   total: number;
+  onSelect?: (item: ChartDatum) => void;
 }) {
   const fmt = useI18nFormat();
   const theme = useChartTheme();
@@ -65,7 +67,17 @@ export default function BallotTally({
           </>
         );
         const className = "grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-2 py-1 transition-colors hover:bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
-        return item.href ? (
+        return onSelect ? (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelect(item)}
+            className={className}
+            aria-label={item.description || `${item.label}: ${fmt.number(item.value)}, ${fmt.number(percent, { maximumFractionDigits: 1 })}%`}
+          >
+            {row}
+          </button>
+        ) : item.href ? (
           <Link
             key={item.id}
             href={item.href}

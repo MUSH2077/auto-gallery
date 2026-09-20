@@ -176,6 +176,10 @@ class ManualUploadService:
                 "tags": tag_list,
                 "is_nsfw": is_nsfw,
                 "uploaded_by": user.username,
+                # Keep the immutable database identity as well as the readable
+                # username. Purge can then return quota to the original
+                # uploader even if the account is renamed later.
+                "uploaded_by_user_id": user.id,
                 "target_creator_id": target_creator_id,
                 "files": file_records,
                 "date": datetime.now(timezone.utc).isoformat(),

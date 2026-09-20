@@ -816,6 +816,7 @@ async def latest_integrity_check(db: AsyncSession = Depends(get_db)):
         db,
         operation_type="admin-integrity-scan",
         scope_key="diagnostics:integrity:active",
+        include_retryable=True,
     )
 
 
@@ -871,9 +872,12 @@ async def _run_integrity_check(db: AsyncSession):
     # 2. Missing thumbnails (works with asset but no thumbnail)
     try:
         result = await db.execute(text(
-            "SELECT a.id, a.file_name, ws.source, ws.source_work_id FROM assets a "
-            "JOIN work_sources ws ON a.work_id = ws.work_id "
-            "WHERE a.thumb_sm_path IS NULL OR a.thumb_sm_path = ''"
+            "SELECT DISTINCT ON (a.id) "
+            "a.id, a.file_name, ws.source, ws.source_work_id FROM assets a "
+            "JOIN asset_sources ars ON ars.asset_id = a.id "
+            "JOIN work_sources ws ON ws.id = ars.work_source_id "
+            "WHERE a.thumb_sm_path IS NULL OR a.thumb_sm_path = '' "
+            "ORDER BY a.id, ws.source, ws.source_work_id"
         ))
         missing_thumbs = []
         for row in result.fetchall():
@@ -896,14 +900,15 @@ async def _run_integrity_check(db: AsyncSession):
         logger.exception("Integrity check failed while scanning missing thumbnails")
         raise
 
-    # 3. Orphaned creators (no works, no subscriptions, no source_creators)
+    # 3. Orphaned creators (no subscriptions and no source identities). Works
+    # are linked to creators through source_creators -> work_sources in the
+    # current schema, so a creator without a source identity cannot own one.
     try:
         result = await db.execute(text(
             "SELECT c.id, c.name FROM creators c "
-            "LEFT JOIN works w ON w.creator_id = c.id "
             "LEFT JOIN subscriptions s ON s.creator_id = c.id "
             "LEFT JOIN source_creators sc ON sc.creator_id = c.id "
-            "WHERE w.id IS NULL AND s.id IS NULL AND sc.id IS NULL"
+            "WHERE s.id IS NULL AND sc.id IS NULL"
         ))
         orphaned_creators = [{"id": str(row[0]), "name": row[1]} for row in result.fetchall()]
         if orphaned_creators:
@@ -966,7 +971,10 @@ async def _run_integrity_check(db: AsyncSession):
                 found = []
                 for row in rows:
                     fpath = row[1]
-                    if fpath and not os.path.exists(fpath):
+                    candidate = Path(fpath) if fpath else None
+                    if candidate is not None and not candidate.is_absolute():
+                        candidate = Path(settings.download_root) / candidate
+                    if candidate is not None and not candidate.exists():
                         found.append({
                             "asset_id": str(row[0]),
                             "file_path": fpath,

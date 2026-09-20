@@ -639,6 +639,10 @@ async def test_publication_pressure_keeps_bound_identity_waiting_then_resumes(db
     async def no_pressure(*args, **kwargs):
         return None
 
+    # This case supplies its own synthetic saturation on the first publish.
+    # Keep the real retry independent from RQ records left by earlier tests in
+    # the session so it verifies the durable identity transition itself.
+    monkeypatch.setattr(backpressure, "_download_queue_limit", lambda: 10_000)
     real_enqueue = download_dispatch.enqueue_download_rq
 
     def saturated(*args, **kwargs):

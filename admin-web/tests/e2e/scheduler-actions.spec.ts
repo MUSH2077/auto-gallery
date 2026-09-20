@@ -179,7 +179,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
   };
 }
 
-test("scheduler accepts a stable intent and restores durable partial progress after reload", async ({ context, page }) => {
+test("scheduler accepts a stable intent and restores durable partial progress after reload", async ({ context, page }, testInfo) => {
   const consoleErrors: Array<{ text: string; url: string }> = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push({ text: message.text(), url: message.location().url });
@@ -208,11 +208,11 @@ test("scheduler accepts a stable intent and restores durable partial progress af
   await expect(page.getByText("Main import failed")).toBeVisible();
   await expect(page.getByText("All sources synced successfully")).toHaveCount(0);
   await expect(page.getByText("Something went wrong")).toHaveCount(0);
-  await page.screenshot({ path: "/evidence/frontend-task2/scheduler-partial-result.png", fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath("scheduler-partial-result.png"), fullPage: false });
   const unexpectedConsoleErrors = consoleErrors.filter((message) => {
     const expectedFixtureFailure = message.url.includes("/api/v1/ws")
       || message.url.includes("/api/v1/auth/ws-ticket")
-      || message.text.includes("WebSocket connection to 'ws://127.0.0.1:13000/api/v1/ws'");
+      || (message.text.includes("WebSocket connection to") && message.text.includes("/api/v1/ws"));
     return !expectedFixtureFailure;
   });
   expect(unexpectedConsoleErrors).toEqual([]);
@@ -319,7 +319,7 @@ test("scheduler creates and replays a stable UUID when randomUUID is unavailable
   expect(fixture.posts[1].request_id).toBe(fixture.posts[0].request_id);
 });
 
-test("scheduler resolves the active batch mode from its task after an actual 409", async ({ context, page }) => {
+test("scheduler resolves the active batch mode from its task after an actual 409", async ({ context, page }, testInfo) => {
   const fixture = await installSchedulerFixtures(context, {
     post: "conflict",
     taskReadDelayMs: 8_000,
@@ -348,11 +348,11 @@ test("scheduler resolves the active batch mode from its task after an actual 409
   expect(stored.requestId).toBe(fixture.posts[0].request_id);
   await page.reload();
   await expect(batch).toContainText("Due scan", { timeout: 15_000 });
-  await page.screenshot({ path: "/evidence/frontend-task3/scheduler-conflict-mode.png", fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath("scheduler-conflict-mode.png"), fullPage: false });
   expect(fixture.posts).toHaveLength(1);
 });
 
-test("terminal settlement refreshes every loaded item page before polling stops", async ({ context, page }) => {
+test("terminal settlement refreshes every loaded item page before polling stops", async ({ context, page }, testInfo) => {
   const readsByOffset = new Map<number, number>();
   const fixture = await installSchedulerFixtures(context, {
     taskReadDelayMs: 3_000,
@@ -392,7 +392,7 @@ test("terminal settlement refreshes every loaded item page before polling stops"
   expect(readsByOffset.get(0)).toBeGreaterThanOrEqual(3);
   expect(readsByOffset.get(50)).toBeGreaterThanOrEqual(3);
   expect(fixture.wsTicketReads()).toBeGreaterThan(0);
-  await page.screenshot({ path: "/evidence/frontend-task3/scheduler-final-item-refresh.png", fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath("scheduler-final-item-refresh.png"), fullPage: false });
 });
 
 test("cancelled batch remains tracked and refreshes final details after cleanup", async ({ context, page }) => {

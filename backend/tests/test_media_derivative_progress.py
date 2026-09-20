@@ -152,3 +152,13 @@ def test_media_derivative_progress_route_is_static_and_typed():
     )
     assert "created_at" in schema["components"]["schemas"]["WorkAssetRead"]["required"]
     assert "created_at" not in schema["components"]["schemas"]["MediaDerivativeProgressRead"]["properties"]
+
+
+def test_work_asset_public_derivative_status_hides_internal_terminal_states():
+    from app.api.works import _public_work_asset_derivative_status
+
+    assert _public_work_asset_derivative_status(None, storage_state="available") == "ready"
+    assert _public_work_asset_derivative_status("complete", storage_state="available") == "ready"
+    assert _public_work_asset_derivative_status("pending", storage_state="available") == "pending"
+    assert _public_work_asset_derivative_status("cancelled", storage_state="available") == "failed"
+    assert _public_work_asset_derivative_status(None, storage_state="purged") == "failed"

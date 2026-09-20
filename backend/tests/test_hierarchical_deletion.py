@@ -343,6 +343,237 @@ async def test_repository_permanent_delete_removes_domain_jobs_but_keeps_audit_r
         assert await db.get(Subscription, subscription.id) is not None
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_creator_permanent_delete_removes_private_memberships_before_canonical_rows():
+    from app.models import (
+        Creator,
+        DiscoveryCandidate,
+        RemoteAccount,
+        Subscription,
+        SubscriptionSource,
+        User,
+        UserSubscription,
+        UserSubscriptionSource,
+    )
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    async with _test_session() as db:
+        creator = Creator(name=f"membership-delete-{uuid4().hex}")
+        user = User(
+            username=f"membership-delete-{uuid4().hex}",
+            password_hash="test-only",
+        )
+        db.add_all([creator, user])
+        await db.flush()
+        subscription = Subscription(creator_id=creator.id, name="Membership target")
+        account = RemoteAccount(
+            user_id=user.id,
+            source="pixiv",
+            remote_user_id=f"remote-{uuid4().hex}",
+        )
+        db.add_all([subscription, account])
+        await db.flush()
+        repository = SubscriptionSource(
+            subscription_id=subscription.id,
+            source="pixiv",
+            source_creator_id="membership-target",
+            source_url="https://www.pixiv.net/users/membership-target",
+        )
+        membership = UserSubscription(
+            user_id=user.id,
+            subscription_id=subscription.id,
+            name="Private membership",
+        )
+        db.add_all([repository, membership])
+        await db.flush()
+        binding = UserSubscriptionSource(
+            user_id=user.id,
+            subscription_id=subscription.id,
+            user_subscription_id=membership.id,
+            subscription_source_id=repository.id,
+        )
+        candidate = DiscoveryCandidate(
+            remote_account_id=account.id,
+            user_id=user.id,
+            source_creator_id=f"candidate-{uuid4().hex}",
+            confidence="high",
+            state="imported",
+            subscription_id=subscription.id,
+            user_subscription_id=membership.id,
+        )
+        db.add_all([binding, candidate])
+        await db.flush()
+        ids = {
+            "creator": creator.id,
+            "subscription": subscription.id,
+            "repository": repository.id,
+            "membership": membership.id,
+            "binding": binding.id,
+            "candidate": candidate.id,
+            "account": account.id,
+        }
+
+        scope = await HierarchicalDeletionService(db).scope("creator", [creator.id])
+        result = await HierarchicalDeletionService(db).permanent_delete(
+            scope,
+            delete_files=False,
+        )
+
+        assert result["status"] == "complete"
+        assert await db.get(UserSubscriptionSource, ids["binding"]) is None
+        assert await db.get(UserSubscription, ids["membership"]) is None
+        assert await db.get(SubscriptionSource, ids["repository"]) is None
+        assert await db.get(Subscription, ids["subscription"]) is None
+        assert await db.get(Creator, ids["creator"]) is None
+        preserved_candidate = await db.get(DiscoveryCandidate, ids["candidate"])
+        assert preserved_candidate is not None
+        assert preserved_candidate.subscription_id is None
+        assert preserved_candidate.user_subscription_id is None
+        assert await db.get(RemoteAccount, ids["account"]) is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_creator_permanent_delete_releases_manual_upload_quota_once_after_retry():
+    from app.models import (
+        Asset,
+        AssetSource,
+        Creator,
+        MediaDerivativeOutbox,
+        SourceCreator,
+        Subscription,
+        SubscriptionSource,
+        User,
+        Work,
+        WorkCurationState,
+        WorkSource,
+    )
+    from app.services.hierarchical_deletion import HierarchicalDeletionService
+
+    class FailAfterPurgeOnce(HierarchicalDeletionService):
+        async def _delete_domain_rows(self, scope):
+            raise RuntimeError("simulated failure after purge commit")
+
+    async with _test_session() as db:
+        asset_token = uuid4().hex
+        user = User(
+            username=f"quota-delete-{uuid4().hex}",
+            password_hash="test-only",
+            upload_used_bytes=150,
+        )
+        creator = Creator(name=f"quota-delete-{uuid4().hex}")
+        db.add_all([user, creator])
+        await db.flush()
+        identity = f"creator:{creator.id}"
+        db.add(SourceCreator(
+            creator_id=creator.id,
+            source="manual",
+            source_creator_id=identity,
+        ))
+        subscription = Subscription(creator_id=creator.id)
+        db.add(subscription)
+        await db.flush()
+        db.add(SubscriptionSource(
+            subscription_id=subscription.id,
+            source="manual",
+            source_creator_id=identity,
+            source_url=f"manual://{identity}",
+            is_enabled=True,
+        ))
+        work = Work(title="manual quota target")
+        db.add(work)
+        await db.flush()
+        work_source = WorkSource(
+            work_id=work.id,
+            source="manual",
+            source_work_id=f"manual-{uuid4().hex}",
+            source_creator_id=identity,
+            raw_metadata={
+                "uploaded_by": user.username,
+                "uploaded_by_user_id": user.id,
+                "files": [
+                    {"name": f"{asset_token}-first.png", "size": 40},
+                    {"name": f"{asset_token}-second.png", "size": 60},
+                ],
+            },
+        )
+        db.add(work_source)
+        await db.flush()
+        first_asset = Asset(
+            file_path=f"manual/quota/{asset_token}-first.png",
+            file_name=f"{asset_token}-first.png",
+            file_size=40,
+        )
+        second_asset = Asset(
+            file_path=f"manual/quota/{asset_token}-second.png",
+            file_name=f"{asset_token}-second.png",
+            file_size=60,
+        )
+        db.add_all([first_asset, second_asset])
+        await db.flush()
+        db.add_all([
+            AssetSource(
+                asset_id=first_asset.id,
+                work_source_id=work_source.id,
+                source="manual",
+                source_asset_id=f"{asset_token}-first",
+                ordinal=0,
+            ),
+            AssetSource(
+                asset_id=second_asset.id,
+                work_source_id=work_source.id,
+                source="manual",
+                source_asset_id=f"{asset_token}-second",
+                ordinal=1,
+            ),
+            WorkCurationState(
+                work_id=work.id,
+                visibility="trashed",
+                trashed_at=datetime.now(timezone.utc),
+            ),
+            MediaDerivativeOutbox(
+                asset_id=first_asset.id,
+                requested={"thumbnail": True},
+                state="pending",
+            ),
+        ])
+        await db.commit()
+
+        initial_scope = await FailAfterPurgeOnce(db).scope("creator", [creator.id])
+        with pytest.raises(RuntimeError, match="simulated failure after purge"):
+            await FailAfterPurgeOnce(db).permanent_delete(
+                initial_scope,
+                delete_files=True,
+            )
+
+        await db.refresh(user)
+        assert user.upload_used_bytes == 50
+        derivative = (await db.execute(
+            select(MediaDerivativeOutbox).where(
+                MediaDerivativeOutbox.asset_id == first_asset.id
+            )
+        )).scalar_one()
+        assert derivative.state == "cancelled"
+        assert derivative.completed_at is not None
+        assert derivative.last_error is None
+
+        retry_scope = await HierarchicalDeletionService(db).scope(
+            "creator",
+            [creator.id],
+        )
+        result = await HierarchicalDeletionService(db).permanent_delete(
+            retry_scope,
+            delete_files=True,
+        )
+
+        assert result["status"] == "complete"
+        await db.refresh(user)
+        assert user.upload_used_bytes == 50
+        await db.refresh(derivative)
+        assert derivative.state == "cancelled"
+
+
 def test_non_admin_cannot_request_hierarchy_file_deletion():
     import asyncio
 

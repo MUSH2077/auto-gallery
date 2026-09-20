@@ -1884,8 +1884,9 @@ async def latest_successful_admin_operation(
     *,
     operation_type: str,
     scope_key: str,
+    include_retryable: bool = False,
 ) -> dict[str, Any]:
-    """Return the latest completed TaskRun result for one registered scope."""
+    """Return the durable result and current/retryable task for one scope."""
 
     from app.models.task_run import TaskRun
 
@@ -1909,13 +1910,16 @@ async def latest_successful_admin_operation(
             .limit(1)
         )
     ).scalar_one_or_none()
+    current_statuses = set(_ACTIVE_ADMIN_STATUSES)
+    if include_retryable:
+        current_statuses.update({"failed", "stale", "cancelled"})
     current_task = (
         await db.execute(
             select(TaskRun)
             .where(
                 TaskRun.kind == "admin",
                 TaskRun.operation_type == operation_type,
-                TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
+                TaskRun.status.in_(current_statuses),
                 scope_text == scope_key,
             )
             .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())

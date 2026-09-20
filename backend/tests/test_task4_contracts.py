@@ -707,6 +707,84 @@ async def test_history_delete_keeps_existing_receipt_statistics_after_detail_com
     assert receipt.finished_at == finished_at
 
 
+async def test_http_compaction_requires_and_rechecks_the_exact_preview(db, client):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import TaskRun
+
+    compactable_at = datetime.now(timezone.utc) - timedelta(days=2)
+    first = TaskRun(
+        kind="admin",
+        operation_type="fixture-compaction-first",
+        status="complete",
+        title="First compactable task",
+        attention_state="resolved",
+        compactable_at=compactable_at,
+    )
+    db.add(first)
+    await db.commit()
+    first_id = first.id
+
+    preview = await client.post(
+        "/api/v1/tasks/compact",
+        json={"dry_run": True, "limit": 100},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["matched"] == 1
+    preview_token = preview.json()["preview_token"]
+    assert len(preview_token) == 64
+
+    missing_token = await client.post(
+        "/api/v1/tasks/compact",
+        json={"dry_run": False, "limit": 100},
+    )
+    assert missing_token.status_code == 409
+    assert missing_token.json()["detail"]["code"] == "compaction_preview_required"
+
+    second = TaskRun(
+        kind="admin",
+        operation_type="fixture-compaction-second",
+        status="complete",
+        title="Second compactable task",
+        attention_state="resolved",
+        compactable_at=compactable_at,
+    )
+    db.add(second)
+    await db.commit()
+    second_id = second.id
+
+    changed = await client.post(
+        "/api/v1/tasks/compact",
+        json={
+            "dry_run": False,
+            "limit": 100,
+            "preview_token": preview_token,
+        },
+    )
+    assert changed.status_code == 409, changed.text
+    assert changed.json()["detail"]["code"] == "compaction_preview_changed"
+    assert await db.get(TaskRun, first_id, populate_existing=True) is not None
+    assert await db.get(TaskRun, second_id, populate_existing=True) is not None
+
+    refreshed = await client.post(
+        "/api/v1/tasks/compact",
+        json={"dry_run": True, "limit": 100},
+    )
+    applied = await client.post(
+        "/api/v1/tasks/compact",
+        json={
+            "dry_run": False,
+            "limit": 100,
+            "preview_token": refreshed.json()["preview_token"],
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["deleted_tasks"] == 2
+    await db.rollback()
+    assert await db.get(TaskRun, first_id, populate_existing=True) is None
+    assert await db.get(TaskRun, second_id, populate_existing=True) is None
+
+
 async def test_visible_orphan_can_acknowledge_without_inventing_execution_actions(db, client):
     from app.models import TaskRun
     task = TaskRun(kind="download", subject_type="download_job", subject_id=uuid4(), owner_user_id=client.actor_id,
@@ -718,6 +796,51 @@ async def test_visible_orphan_can_acknowledge_without_inventing_execution_action
     assert response.status_code == 200 and response.json()["available_actions"] == ["acknowledge"], response.text
     assert (await client.post(f"/api/v1/tasks/{task_id}/acknowledge")).status_code == 200
     assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["attention_state"] == "acknowledged"
+
+
+async def test_subjectless_legacy_pipeline_task_does_not_break_notification_feed(db, client):
+    from app.models import TaskRun
+
+    task = TaskRun(
+        kind="download",
+        status="failed",
+        owner_user_id=client.actor_id,
+        title="Legacy pipeline notification",
+        attention_state="open",
+        reason_code="orphaned_subject",
+    )
+    db.add(task)
+    await db.commit()
+
+    response = await client.get("/api/v1/tasks", params={"include_account": "true"})
+    assert response.status_code == 200, response.text
+    row = next(item for item in response.json()["items"] if item["id"] == str(task.id))
+    assert row["available_actions"] == ["acknowledge"]
+    assert row["disabled_reasons"]["retry"] == "subject_missing"
+
+
+async def test_registered_batch_import_status_reuses_authenticated_subscription_user(db, client):
+    from app.models import TaskRun
+
+    task = TaskRun(
+        kind="admin",
+        operation_type="admin-danbooru-batch-import",
+        status="complete",
+        owner_user_id=client.actor_id,
+        title="Completed current import",
+        result_data={"total": 1, "imported_count": 1},
+    )
+    db.add(task)
+    await db.commit()
+
+    response = await client.get(
+        "/api/v1/reference/danbooru/artist/batch-import/status",
+        params={"job_id": str(task.id)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["task_id"] == str(task.id)
+    assert response.json()["status"] == "complete"
+    assert response.json()["result"]["imported_count"] == 1
 
 
 @pytest.mark.parametrize("attention", ["open", "resolved"])

@@ -65,6 +65,52 @@
         "title": "AdminOperationAccepted",
         "type": "object"
       },
+      "AdminOperationAcceptedMessage": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "status": {
+            "const": "enqueued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "status",
+          "operation_type",
+          "message"
+        ],
+        "title": "AdminOperationAcceptedMessage",
+        "type": "object"
+      },
       "AdminOperationCurrent": {
         "properties": {
           "job_id": {
@@ -99,7 +145,10 @@
               "enqueued",
               "running",
               "recovering",
-              "paused"
+              "paused",
+              "failed",
+              "stale",
+              "cancelled"
             ],
             "title": "Status",
             "type": "string"
@@ -905,6 +954,41 @@
         "title": "AssetDedupEvidenceRead",
         "type": "object"
       },
+      "AssetDedupScanAccepted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "operation_type": {
+            "title": "Operation Type",
+            "type": "string"
+          },
+          "scan_id": {
+            "format": "uuid",
+            "title": "Scan Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "enqueued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "job_id",
+          "status",
+          "operation_type",
+          "scan_id"
+        ],
+        "title": "AssetDedupScanAccepted",
+        "type": "object"
+      },
       "AssetDedupScanRead": {
         "properties": {
           "assets_grouped": {
@@ -1241,6 +1325,20 @@
             "minimum": 1.0,
             "title": "Limit",
             "type": "integer"
+          },
+          "preview_token": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Token"
           }
         },
         "title": "CompactTasksRequest",
@@ -15258,7 +15356,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -15311,8 +15409,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/cleanup-metadata-jsons/latest": {
+      "get": {
+        "description": "Restore the latest completed or retryable metadata cleanup.",
+        "operationId": "get_api_v1_admin_cleanup_metadata_jsons_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Cleanup Metadata Jsons",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": false,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/clear/preview/{entity}": {
@@ -15440,7 +15602,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -15493,8 +15655,7 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
-        ],
-        "x-response-schema-status": "generic"
+        ]
       }
     },
     "/api/v1/admin/creators/re-enrich": {
@@ -15506,7 +15667,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAcceptedMessage"
                 }
               }
             },
@@ -15559,8 +15720,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/creators/re-enrich/latest": {
+      "get": {
+        "description": "Restore the latest completed or retryable creator re-enrichment.",
+        "operationId": "get_api_v1_admin_creators_re_enrich_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Reenrich Creators",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/data/creator-aliases/backfill": {
@@ -16048,7 +16273,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AssetDedupScanAccepted"
                 }
               }
             },
@@ -16101,8 +16326,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "curation"
+        ]
+      }
+    },
+    "/api/v1/admin/dedup/scans/latest": {
+      "get": {
+        "description": "Return the durable scan task so refreshes retain its progress.",
+        "operationId": "get_api_v1_admin_dedup_scans_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Asset Dedup Scan",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
       }
     },
     "/api/v1/admin/dedup/scans/{scan_id}": {
@@ -16873,7 +17162,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAcceptedMessage"
                 }
               }
             },
@@ -16926,8 +17215,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/library/import-from-disk/latest": {
+      "get": {
+        "description": "Restore the latest completed or retryable disk import.",
+        "operationId": "get_api_v1_admin_library_import_from_disk_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Import From Disk",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/library/rebuild": {
@@ -16956,7 +17309,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAcceptedMessage"
                 }
               }
             },
@@ -17009,8 +17362,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/library/rebuild/latest": {
+      "get": {
+        "description": "Restore the latest completed or retryable library rebuild.",
+        "operationId": "get_api_v1_admin_library_rebuild_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Library Rebuild",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/memory": {
@@ -17243,7 +17660,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -17296,8 +17713,92 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/admin/operations/clear/latest": {
+      "get": {
+        "description": "Restore the latest completed or retryable clear for one domain.",
+        "operationId": "get_api_v1_admin_operations_clear_latest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "entity",
+            "required": true,
+            "schema": {
+              "enum": [
+                "works",
+                "creators",
+                "subscriptions",
+                "tags",
+                "jobs",
+                "settings",
+                "all"
+              ],
+              "title": "Entity",
+              "type": "string"
+            }
+          }
         ],
-        "x-response-schema-status": "generic"
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Latest Clear Operation",
+        "tags": [
+          "admin"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": true,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "system"
+        ]
       }
     },
     "/api/v1/admin/operations/{job_id}": {
@@ -20543,7 +21044,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AdminOperationAccepted"
                 }
               }
             },
@@ -20596,8 +21097,72 @@
         "x-permission-mode": "allOf",
         "x-required-permissions": [
           "curation"
+        ]
+      }
+    },
+    "/api/v1/curation/backfill/latest": {
+      "get": {
+        "description": "Return the durable backfill task so page reloads retain its state.",
+        "operationId": "get_api_v1_curation_backfill_latest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, invalid, or expired JWT."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authenticated but not permitted."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            },
+            "description": "Request or search-language validation failed."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
         ],
-        "x-response-schema-status": "generic"
+        "summary": "Latest Curation Backfill",
+        "tags": [
+          "curation"
+        ],
+        "x-admin-only": false,
+        "x-authentication": "bearer",
+        "x-background-task": true,
+        "x-dangerous": false,
+        "x-permission-mode": "allOf",
+        "x-required-permissions": [
+          "curation"
+        ]
       }
     },
     "/api/v1/curation/backfill/status": {

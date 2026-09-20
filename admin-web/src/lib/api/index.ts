@@ -102,8 +102,8 @@ export const api = {
   getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
   getDownloadConflicts: (id: string) =>
     request<T.DownloadConflictCase>(`/api/v1/tasks/${id}/conflicts`),
-  downloadConflictMediaUrl: (id: string, relativePath: string, side: "canonical" | "staged") =>
-    `/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`,
+  downloadConflictMedia: (id: string, relativePath: string, side: "canonical" | "staged") =>
+    requestBlob(`/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`),
   resolveDownloadConflicts: (
     id: string,
     decisions: Array<{ relative_path: string; winner: T.DownloadConflictWinner }>,
@@ -129,10 +129,17 @@ export const api = {
   resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
   acknowledgeTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}/acknowledge`, { method: "POST" }),
   deleteTask: (id: string) => request<{ status: string }>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
-  compactTasks: (dryRun = true, limit = 1000) =>
-    request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number }>(
+  compactTasks: (dryRun = true, limit = 1000, previewToken?: string) =>
+    request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number; preview_token: string }>(
       "/api/v1/tasks/compact",
-      { method: "POST", body: JSON.stringify({ dry_run: dryRun, limit }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          dry_run: dryRun,
+          limit,
+          ...(previewToken ? { preview_token: previewToken } : {}),
+        }),
+      },
     ),
   operationsOverview: (view: T.OperationsView, signal?: AbortSignal) =>
     request<T.OperationsOverviewResponse>(
@@ -206,14 +213,17 @@ export const api = {
     request<{ duplicates: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }[]; total: number }>("/api/v1/creators/duplicates"),
 
   mergeCreators: (targetId: string, sourceIds: string[]) =>
-    request<{ status: string; results: { source_id: string; status: string; links_moved?: number; source_creators_moved?: number; subscriptions_moved?: number; error?: string }[] }>(
+    request<{ status: string; results: { source_id: string; status: string; aliases_moved?: number; links_moved?: number; source_creators_moved?: number; subscriptions_moved?: number; error?: string }[] }>(
       "/api/v1/creators/merge", { method: "POST", body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }) }),
 
   listCreatorLinks: (creatorId: string) =>
     request<T.CreatorLink[]>(`/api/v1/creators/${creatorId}/links`),
 
   createCreatorLink: (creatorId: string, data: { url: string; link_type: string; source?: string; confidence?: number }) =>
-    request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links`, { method: "POST", body: JSON.stringify(data) }),
+    request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links`, {
+      method: "POST",
+      body: JSON.stringify({ ...data, creator_id: creatorId }),
+    }),
 
   updateCreatorLink: (creatorId: string, linkId: string, data: Record<string, unknown>) =>
     request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links/${linkId}`, { method: "PATCH", body: JSON.stringify(data) }),
@@ -437,7 +447,10 @@ export const api = {
     request<T.CurationBackfillStatus>("/api/v1/curation/backfill/status"),
 
   runCurationBackfill: () =>
-    request<{ status: string; job_id: string }>("/api/v1/curation/backfill", { method: "POST" }),
+    request<T.AdminOperationAccepted>("/api/v1/curation/backfill", { method: "POST" }),
+
+  getLatestCurationBackfill: <TResult = Record<string, unknown>>() =>
+    request<T.AdminOperationSnapshotResponse<TResult>>("/api/v1/curation/backfill/latest"),
 
   // Gitllery (on-disk curation history projection)
   getGitllerySettings: () =>
@@ -627,7 +640,7 @@ export const api = {
   }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
-  reindexSearch: () => request<{ status: string; job_id: string; message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
+  reindexSearch: () => request<T.AdminOperationAccepted & { message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 
@@ -644,6 +657,15 @@ export const api = {
   getSystemInfo: () => request<T.SystemInfoResponse>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
   cleanupMetadataJSONs: () => request<T.AdminOperationAccepted>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
+  getLatestMetadataJSONCleanup: () => request<T.AdminOperationSnapshotResponse<{
+    status: string;
+    removed: number;
+    skipped: number;
+    failed: number;
+    skipped_by_reason?: Record<string, number>;
+    errors?: { path?: string; reason?: string }[];
+    message?: string;
+  }>>("/api/v1/admin/cleanup-metadata-jsons/latest"),
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
@@ -662,21 +684,30 @@ export const api = {
     request<T.ClearImpactPreview>(`/api/v1/admin/clear/preview/${entity}`),
 
   rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
-    request<{ task_id: string; job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/library/rebuild", {
       method: "POST",
       body: JSON.stringify(options),
     }),
+  getLatestLibraryRebuild: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/library/rebuild/latest",
+  ),
 
   importFromDisk: (options: T.ImportFromDiskRequest = {}) =>
     request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/library/import-from-disk", {
       method: "POST",
       body: JSON.stringify(options),
     }),
+  getLatestImportFromDisk: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/library/import-from-disk/latest",
+  ),
 
   reenrichCreators: () =>
     request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/creators/re-enrich", {
       method: "POST",
     }),
+  getLatestCreatorReenrichment: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/creators/re-enrich/latest",
+  ),
 
   enrichCreator: (creatorId: string) =>
     request<{ status: string; artist_id?: number; artist_name?: string }>(`/api/v1/creators/${creatorId}/enrich`, {
@@ -687,10 +718,14 @@ export const api = {
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 
   startClearOperation: (entity: T.ClearEntity, confirmation: string) =>
-    request<{ job_id: string; status: "queued" | "enqueued" }>("/api/v1/admin/operations/clear", {
+    request<T.AdminOperationAccepted>("/api/v1/admin/operations/clear", {
       method: "POST",
       body: JSON.stringify({ entity, confirmation }),
     }),
+  getLatestClearOperation: (entity: T.ClearEntity) =>
+    request<T.AdminOperationSnapshotResponse<{ status: string; message?: string; deleted?: Record<string, number> }>>(
+      `/api/v1/admin/operations/clear/latest?entity=${encodeURIComponent(entity)}`,
+    ),
 
   getAdminOperationStatus: (jobId: string) =>
     request<{
@@ -750,10 +785,12 @@ export const api = {
       body: JSON.stringify(data),
     }),
   startAssetDedupScan: (autoApply = true) =>
-    request<{ scan_id: string; job_id: string; status: string }>("/api/v1/admin/dedup/scans", {
+    request<T.AdminOperationAccepted & { scan_id: string }>("/api/v1/admin/dedup/scans", {
       method: "POST",
       body: JSON.stringify({ auto_apply: autoApply, batch_size: 100 }),
     }),
+  getLatestAssetDedupScan: <TResult = Record<string, unknown>>() =>
+    request<T.AdminOperationSnapshotResponse<TResult>>("/api/v1/admin/dedup/scans/latest"),
   getAssetDedupScan: (id: string) =>
     request<{
       scan_id: string;
@@ -816,7 +853,7 @@ export const api = {
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   importAllDanbooruAsync: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
-    request<{ job_id: string; status: "queued" }>("/api/v1/reference/danbooru/artist/import-all/async", { method: "POST", body: JSON.stringify(params) }),
+    request<{ task_id: string; job_id: string; status: "queued" | "enqueued" }>("/api/v1/reference/danbooru/artist/import-all/async", { method: "POST", body: JSON.stringify(params) }),
 
   previewBatchImport: (pixivIds: string[]) =>
     request<{
@@ -847,6 +884,7 @@ export const api = {
   urlBatchImportDanbooru: (urls: string[]) =>
     request<{
       status: string; message: string; job_id: string; batch_id: string; total: number;
+      duplicates_removed?: number;
     }>(
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),

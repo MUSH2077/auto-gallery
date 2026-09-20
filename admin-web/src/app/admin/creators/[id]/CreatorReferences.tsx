@@ -13,7 +13,7 @@ export default function CreatorReferences({
 }: {
   creatorId: string;
   currentDisplay?: string;
-  onSelectAlias: (alias: string) => void;
+  onSelectAlias?: (alias: string) => void;
 }) {
   const t = useT();
   const query = useQuery({
@@ -63,15 +63,17 @@ export default function CreatorReferences({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => onSelectAlias(identity.display_name)}
-                          title={t("creator_detail.set_display_name_as", { name: identity.display_name })}
-                          className={`block max-w-full truncate text-left text-sm font-medium hover:text-accent hover:underline ${currentDisplay === identity.display_name ? "text-accent" : "text-fg"}`}
-                        >
-                          {identity.display_name}
-                        </button>
-                        {identity.username ? (
+                        {onSelectAlias ? (
+                          <button
+                            type="button"
+                            onClick={() => onSelectAlias(identity.display_name)}
+                            title={t("creator_detail.set_display_name_as", { name: identity.display_name })}
+                            className={`block max-w-full truncate text-left text-sm font-medium hover:text-accent hover:underline ${currentDisplay === identity.display_name ? "text-accent" : "text-fg"}`}
+                          >
+                            {identity.display_name}
+                          </button>
+                        ) : <p className="truncate text-sm font-medium text-fg">{identity.display_name}</p>}
+                        {identity.username && onSelectAlias ? (
                           <button
                             type="button"
                             onClick={() => onSelectAlias(identity.username!)}
@@ -80,6 +82,8 @@ export default function CreatorReferences({
                           >
                             @{identity.username}
                           </button>
+                        ) : identity.username ? (
+                          <p className="mt-0.5 truncate text-xs text-muted">@{identity.username}</p>
                         ) : (
                           <p className="mt-0.5 text-xs text-muted">{t("creator_detail.pixiv_identity", { id: identity.source_creator_id })}</p>
                         )}
@@ -116,7 +120,7 @@ export default function CreatorReferences({
             </div>
             {references.danbooru.other_names.length ? (
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {references.danbooru.other_names.map((alias) => (
+                {references.danbooru.other_names.map((alias) => onSelectAlias ? (
                   <button
                     key={alias}
                     type="button"
@@ -126,6 +130,10 @@ export default function CreatorReferences({
                   >
                     {alias}
                   </button>
+                ) : (
+                  <span key={alias} className="rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">
+                    {alias}
+                  </span>
                 ))}
               </div>
             ) : null}

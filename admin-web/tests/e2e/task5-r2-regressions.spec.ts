@@ -121,17 +121,33 @@ test("accepted admin clear retains current data until terminal completion and ke
     if (path === "/api/v1/admin/storage-breakdown") { await json(route, { sources: {}, creator_tree: [], unlinked_repositories: [], db_stats: { works: 0, assets: 0, creators: 1, subscriptions: 0, tags: 0 } }); return true; }
     if (path === "/api/v1/admin/backup/list") { await json(route, { backups: [] }); return true; }
     if (path === "/api/v1/admin/backup/latest" || path === "/api/v1/admin/integrity-check/latest") { await json(route, { current: null, snapshot: null }); return true; }
+    if (path === "/api/v1/admin/operations/clear/latest") {
+      const terminal = { task_id: "clear-task-1", job_id: "clear-job-1", status: "complete", operation_type: "admin-clear", result: { message: "Clear completed" }, completed_at: "2026-09-12T00:01:00Z" };
+      const current = { task_id: "clear-task-1", job_id: "clear-job-1", status: "running", operation_type: "admin-clear", progress: { phase: "clearing", label: "Clearing data" } };
+      await json(route, clearAttempts < 2
+        ? { current: null, snapshot: null }
+        : operationComplete
+          ? { current: null, snapshot: terminal }
+          : { current, snapshot: null });
+      return true;
+    }
+    if (new Set([
+      "/api/v1/admin/cleanup-metadata-jsons/latest",
+      "/api/v1/admin/library/rebuild/latest",
+      "/api/v1/admin/library/import-from-disk/latest",
+      "/api/v1/admin/creators/re-enrich/latest",
+    ]).has(path)) { await json(route, { current: null, snapshot: null }); return true; }
     if (path === "/api/v1/admin/clear/preview/all") { await json(route, { entity: "all", confirmation_phrase: "DELETE-ALL-DATA", counts: { creators: 1 }, preserves_repository_sync_receipts: true, deletes_media_files: true }); return true; }
     if (path === "/api/v1/admin/operations/clear") {
       clearAttempts += 1;
       if (clearAttempts === 1) await json(route, { detail: "clear queue unavailable" }, 503);
-      else await json(route, { job_id: "clear-job-1", status: "enqueued" }, 202);
+      else await json(route, { task_id: "clear-task-1", job_id: "clear-job-1", status: "enqueued", operation_type: "admin-clear" }, 202);
       return true;
     }
-    if (path === "/api/v1/admin/operations/clear-job-1") {
+    if (path === "/api/v1/admin/operations/clear-task-1" || path === "/api/v1/admin/operations/clear-job-1") {
       await json(route, operationComplete
-        ? { job_id: "clear-job-1", status: "complete", operation_type: "admin-clear", result: { message: "Clear completed" } }
-        : { job_id: "clear-job-1", status: "running", operation_type: "admin-clear", progress: { phase: "clearing", label: "Clearing data" } });
+        ? { task_id: "clear-task-1", job_id: "clear-job-1", status: "complete", operation_type: "admin-clear", result: { message: "Clear completed" } }
+        : { task_id: "clear-task-1", job_id: "clear-job-1", status: "running", operation_type: "admin-clear", progress: { phase: "clearing", label: "Clearing data" } });
       return true;
     }
     return false;
@@ -147,7 +163,7 @@ test("accepted admin clear retains current data until terminal completion and ke
   await dialog.getByRole("button", { name: "Confirm" }).click();
   await expect(dialog).toBeVisible();
   await expect(confirmation).toHaveValue("DELETE-ALL-DATA");
-  await expect(page.getByText("clear queue unavailable", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveText("clear queue unavailable");
   await dialog.getByRole("button", { name: "Confirm" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText("Delete All Data queued", { exact: true })).toBeVisible();
@@ -156,7 +172,7 @@ test("accepted admin clear retains current data until terminal completion and ke
   await expect(page.getByText("Clear Sentinel", { exact: true })).toBeVisible();
   operationComplete = true;
   await page.getByRole("link", { name: "Data Mgmt" }).click();
-  await expect(page.getByText("Clear completed", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('[data-admin-operation="admin-clear"]')).toContainText("Operation complete", { timeout: 10_000 });
   await page.getByRole("link", { name: "Creators" }).click();
   await expect(page.getByText("No creators", { exact: true })).toBeVisible();
   expect(clearAttempts).toBe(2);
@@ -180,3 +196,58 @@ for (const role of [
     expect(unhandled).toEqual([]);
   });
 }
+
+test("compaction reports preview failure and applies only the reviewed preview", async ({ context, page }) => {
+  let previewCalls = 0;
+  let applyBody: Record<string, unknown> | null = null;
+  const unhandled = await installJobsFixture(context, principal(["system"]), async (route, path) => {
+    if (path !== "/api/v1/tasks/compact") return false;
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.dry_run === true) {
+      previewCalls += 1;
+      if (previewCalls === 1) {
+        await json(route, { detail: "preview database unavailable" }, 503);
+      } else {
+        await json(route, {
+          dry_run: true,
+          matched: 1,
+          deleted_tasks: 0,
+          deleted_download_jobs: 0,
+          deleted_import_jobs: 0,
+          skipped_without_receipt: 0,
+          preview_token: "a".repeat(64),
+        });
+      }
+      return true;
+    }
+    applyBody = body;
+    await json(route, {
+      dry_run: false,
+      matched: 1,
+      deleted_tasks: 1,
+      deleted_download_jobs: 0,
+      deleted_import_jobs: 0,
+      skipped_without_receipt: 0,
+      preview_token: "a".repeat(64),
+    });
+    return true;
+  });
+
+  await page.goto("/admin/jobs");
+  const dangerZone = page.locator("details").filter({ hasText: "Danger zone" });
+  await dangerZone.locator("summary").click();
+  await dangerZone.getByRole("button", { name: "Preview compaction" }).click();
+  await expect(dangerZone.getByRole("alert")).toContainText("preview database unavailable");
+
+  await dangerZone.getByRole("button", { name: "Preview compaction" }).click();
+  await expect(dangerZone.getByText(/1 task details can be compacted/)).toBeVisible();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await dangerZone.getByRole("button", { name: "Compact task details" }).click();
+  await expect.poll(() => applyBody).not.toBeNull();
+  expect(applyBody).toMatchObject({
+    dry_run: false,
+    limit: 1000,
+    preview_token: "a".repeat(64),
+  });
+  expect(unhandled).toEqual([]);
+});

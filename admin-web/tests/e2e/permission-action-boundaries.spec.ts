@@ -78,7 +78,8 @@ type ApiHandler = (route: Route, path: string, method: string) => Promise<boolea
 
 async function openFixture(browser: Browser, pathname: string, me: Principal, handler: ApiHandler, init?: (context: BrowserContext) => Promise<void>) {
   const context = await browser.newContext();
-  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+  const fixtureOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").origin;
+  await context.addCookies([{ name: "ag_token", value: "fixture", url: fixtureOrigin }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   await init?.(context);
   const unhandled: string[] = [];
@@ -107,6 +108,55 @@ async function creatorsFixture(route: Route, path: string, method: string, write
   if (path === "/api/v1/creators/creator-1/links" && method === "GET") { await json(route, links); return true; }
   if (path.startsWith("/api/v1/creators/creator-1/links/") && method === "PATCH") { writes.push(`${method} ${path}`); await json(route, { ...links[0], is_verified: true, confidence: 1 }); return true; }
   if (path === "/api/v1/subscriptions" || path.includes("/sources")) { writes.push(`${method} ${path}`); await json(route, []); return true; }
+  return false;
+}
+
+async function creatorDetailFixture(route: Route, path: string, method: string, writes: string[]) {
+  if (await creatorsFixture(route, path, method, writes)) return true;
+  if (path === "/api/v1/creators/creator-1/stats" && method === "GET") {
+    await json(route, {
+      creator_id: "creator-1", total_works: 0, total_assets: 0, total_tags: 0,
+      source_breakdown: [], tag_distribution: [], monthly_frequency: [{ month: "2026-09", count: 0 }],
+    });
+    return true;
+  }
+  if (path === "/api/v1/creators/creator-1/timeline" && method === "GET") {
+    await json(route, { creator_id: "creator-1", sources: [], days: [], total: 0 });
+    return true;
+  }
+  if (path === "/api/v1/creators/creator-1/subscription-overview" && method === "GET") {
+    await json(route, {
+      creator_id: "creator-1",
+      subscriptions: [repositoryDetail.subscription],
+      repositories: [repositoryDetail.repository],
+      summary: { subscription_count: 1, repository_count: 1, enabled_repository_count: 1, running_job_count: 0 },
+    });
+    return true;
+  }
+  if (path === "/api/v1/creators/creator-1/references" && method === "GET") {
+    await json(route, {
+      pixiv: [{
+        source_creator_id: "7", display_name: "Reference Alias", username: "reference_alias",
+        profile_url: "https://www.pixiv.net/users/7", avatar_url: null, status: "remote",
+      }],
+      danbooru: null,
+    });
+    return true;
+  }
+  if (path === "/api/v1/search" && method === "GET") {
+    await json(route, { groups: { works: { total: 0, items: [] } } });
+    return true;
+  }
+  if (path === "/api/v1/repositories/repo-1/sync-now" && method === "POST") {
+    writes.push(`${method} ${path}`);
+    await json(route, { status: "enqueued", job_id: "job-1" });
+    return true;
+  }
+  if (path === "/api/v1/download-jobs" && method === "POST") {
+    writes.push(`${method} ${path}`);
+    await json(route, { id: "job-1", status: "pending" }, 201);
+    return true;
+  }
   return false;
 }
 
@@ -148,6 +198,30 @@ test("creator read pages stop denied hooks and library-only users cannot mount c
     expect(duplicateWrites).toEqual([]);
     expect(duplicates.unhandled).toEqual([]);
   } finally { await duplicates.context.close(); }
+});
+
+test("system logs stop the protected query behind the permission guard", async ({ browser }) => {
+  const protectedRequests: string[] = [];
+  const denied = await openFixture(
+    browser,
+    "/admin/settings/logs",
+    principal([]),
+    async (route, path, method) => {
+      if (path === "/api/v1/system/logs") {
+        protectedRequests.push(`${method} ${path}`);
+        await json(route, { detail: "System permission required" }, 403);
+        return true;
+      }
+      return false;
+    },
+  );
+  try {
+    await expect(denied.page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
+    expect(protectedRequests).toEqual([]);
+    expect(denied.unhandled).toEqual([]);
+  } finally {
+    await denied.context.close();
+  }
 });
 
 test("curation actions remain available while repository setup requires subscriptions permission", async ({ browser }) => {
@@ -220,6 +294,81 @@ test("creator merge and repository enable remain available only to their write r
       expect(repository.unhandled).toEqual([]);
     } finally { await repository.context.close(); }
   }
+});
+
+test("creator detail exposes each action only to the permission accepted by its backend", async ({ browser }) => {
+  for (const role of [
+    { permissions: ["library"], canCurate: false, canManageRepositories: false },
+    { permissions: ["library", "curation"], canCurate: true, canManageRepositories: false },
+    { permissions: ["library", "subscriptions"], canCurate: false, canManageRepositories: true },
+  ]) {
+    const writes: string[] = [];
+    const opened = await openFixture(
+      browser,
+      "/admin/creators/creator-1",
+      principal(role.permissions),
+      (route, path, method) => creatorDetailFixture(route, path, method, writes),
+    );
+    try {
+      await expect(opened.page.getByRole("heading", { level: 1, name: "Creator One" })).toBeVisible();
+      await expect(opened.page.getByRole("button", { name: "Star", exact: true })).toHaveCount(role.canCurate ? 1 : 0);
+      await expect(opened.page.getByRole("button", { name: "Edit profile", exact: true })).toHaveCount(role.canCurate ? 1 : 0);
+      await expect(opened.page.getByRole("button", { name: "Add", exact: true })).toHaveCount(role.canCurate ? 1 : 0);
+      await expect(opened.page.getByRole("button", { name: "Reference Alias", exact: true })).toHaveCount(role.canCurate ? 1 : 0);
+      await expect(opened.page.getByRole("link", { name: "Open the Pixiv profile for Reference Alias" })).toBeVisible();
+      await expect(opened.page.getByRole("link", { name: "Subscription", exact: true })).toHaveCount(role.canManageRepositories ? 1 : 0);
+
+      await opened.page.getByRole("button", { name: /Repositories/ }).click();
+      const sync = opened.page.getByRole("button", { name: "Sync now", exact: true });
+      await expect(sync).toBeVisible();
+      await expect(opened.page.getByRole("button", { name: "Disable", exact: true })).toHaveCount(role.canManageRepositories ? 1 : 0);
+      await expect(opened.page.getByRole("link", { name: "Manage subscription", exact: true })).toHaveCount(role.canManageRepositories ? 1 : 0);
+
+      if (role.permissions.length === 1) {
+        await sync.click();
+        await expect.poll(() => writes).toEqual(["POST /api/v1/repositories/repo-1/sync-now"]);
+      } else {
+        expect(writes).toEqual([]);
+      }
+      expect(opened.unhandled).toEqual([]);
+    } finally { await opened.context.close(); }
+  }
+});
+
+test("creator detail link creation sends the creator required by the API contract", async ({ browser }) => {
+  let submittedBody: Record<string, unknown> | undefined;
+  const writes: string[] = [];
+  const opened = await openFixture(
+    browser,
+    "/admin/creators/creator-1",
+    principal(["library", "curation"]),
+    async (route, path, method) => {
+      if (path === "/api/v1/creators/creator-1/links" && method === "POST") {
+        submittedBody = route.request().postDataJSON() as Record<string, unknown>;
+        const valid = submittedBody.creator_id === "creator-1";
+        await json(route, valid
+          ? { id: "new-link", ...submittedBody, confidence: 1, is_verified: false, source: "manual" }
+          : { detail: [{ loc: ["body", "creator_id"], msg: "Field required" }] }, valid ? 201 : 422);
+        return true;
+      }
+      return creatorDetailFixture(route, path, method, writes);
+    },
+  );
+  try {
+    await expect(opened.page.getByRole("heading", { level: 1, name: "Creator One" })).toBeVisible();
+    await opened.page.getByRole("button", { name: /^Links/ }).click();
+    await opened.page.getByRole("button", { name: "Add link", exact: true }).click();
+    const dialog = opened.page.getByRole("dialog");
+    await dialog.locator("input").fill("https://new.example/profile");
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await expect.poll(() => submittedBody).toEqual({
+      creator_id: "creator-1",
+      url: "https://new.example/profile",
+      link_type: "website",
+    });
+    await expect(dialog).toBeHidden();
+    expect(opened.unhandled).toEqual([]);
+  } finally { await opened.context.close(); }
 });
 
 test("Gitllery verify is admin-only while system readers retain the settings page", async ({ browser }) => {

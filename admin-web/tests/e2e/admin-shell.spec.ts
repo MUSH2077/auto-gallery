@@ -597,6 +597,16 @@ async function installFixtureRoutes(context: BrowserContext) {
           db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
         },
       });
+    } else if ([
+      "/api/v1/admin/integrity-check/latest",
+      "/api/v1/admin/cleanup-metadata-jsons/latest",
+      "/api/v1/admin/library/rebuild/latest",
+      "/api/v1/admin/library/import-from-disk/latest",
+      "/api/v1/admin/creators/re-enrich/latest",
+      "/api/v1/admin/backup/latest",
+      "/api/v1/admin/operations/clear/latest",
+    ].includes(path)) {
+      await route.fulfill({ json: { current: null, snapshot: null } });
     } else if (path === "/api/v1/admin/integrity-check") {
       await route.fulfill({
         json: { issues: [], db_stats: {}, checked_at: "2026-07-27T12:00:00Z" },
@@ -763,6 +773,8 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { backups: [] } });
     } else if (path === "/api/v1/admin/backup/estimate") {
       await route.fulfill({ json: { components: {} } });
+    } else if (path === "/api/v1/tags/page") {
+      await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 100 } });
     } else if (path === "/api/v1/tags") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/sources") {
@@ -775,6 +787,26 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: {} });
     }
   });
+}
+
+async function installAuthenticatedShellRoutes(page: Page) {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention",
+    total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+  await page.route("**/api/v1/tasks**", (route) => route.fulfill({
+    json: { items: [], total: 0, offset: 0, limit: 50 },
+  }));
+  await page.route("**/api/v1/system/scheduler-decisions**", (route) => route.fulfill({ json: {
+    updated_at: "2026-07-27T12:00:00Z",
+    scheduler_enabled: true,
+    timezone: "UTC",
+    items: [],
+  } }));
 }
 
 async function expectNoPageOverflow(page: Page) {
@@ -1202,6 +1234,7 @@ for (const viewport of [
 }
 
 test("creator activity calendar aligns real month spans and its year listbox supports keyboard selection", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/creators/fixture-creator");
 
@@ -1210,7 +1243,15 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByTestId("creator-tag-chart")).toBeVisible();
   await expect(page.getByTestId("creator-monthly-chart")).toBeVisible();
   await expect(page.locator('[data-chart-kind="tick-rows"]')).toHaveAttribute("data-chart-unit", "5");
-  await expect(page.locator('[data-chart-kind="ballot-tally"] a')).toHaveCount(6);
+  const tagRows = page.locator('[data-chart-kind="ballot-tally"] button');
+  await expect(tagRows).toHaveCount(6);
+  await tagRows.first().click();
+  await expect(page.getByRole("heading", { name: "Works", exact: true })).toBeVisible();
+  const clearTag = page.getByTitle("Clear tag filter: architectural-light");
+  await expect(clearTag).toBeVisible();
+  await clearTag.click();
+  await expect(clearTag).toHaveCount(0);
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
 
   const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
@@ -1584,6 +1625,12 @@ test("data management charts preserve 100 ticks, exact values, hierarchy, and di
   await expect(page.locator('[data-chart-kind="tick-donut"] svg line')).toHaveCount(100);
   await expect(page.getByTestId("storage-source-chart")).toContainText("Other");
   await expect(page.getByRole("heading", { name: "Unlinked repositories" })).toBeVisible();
+
+  const sourceSegment = page.getByTestId("storage-source-chart").locator('button[aria-pressed]').first();
+  await sourceSegment.click();
+  await expect(sourceSegment).toHaveAttribute("aria-pressed", "true");
+  await sourceSegment.click();
+  await expect(sourceSegment).toHaveAttribute("aria-pressed", "false");
 
   await page.getByRole("button", { name: "Expand Fixture Creator" }).click();
   await expect(page.getByRole("button", { name: "Collapse Fixture Creator" })).toBeVisible();
@@ -3025,6 +3072,10 @@ test("slow administrator proxy failure exposes structured retry and the successf
   let postPending = false;
   let proxyStarts = 0;
   let taskPolls = 0;
+  let releaseInitialStart!: () => void;
+  const initialStartGate = new Promise<void>((resolve) => {
+    releaseInitialStart = resolve;
+  });
   await page.route("**/api/v1/admin/proxy/test/latest", (route) => route.fulfill({
     json: { snapshot: null },
   }));
@@ -3032,7 +3083,9 @@ test("slow administrator proxy failure exposes structured retry and the successf
     expect(route.request().method()).toBe("POST");
     proxyStarts += 1;
     postPending = true;
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (proxyStarts === 1) {
+      await initialStartGate;
+    }
     await route.fulfill({
       status: 202,
       json: {
@@ -3103,6 +3156,7 @@ test("slow administrator proxy failure exposes structured retry and the successf
   await start.click();
   await expect.poll(() => postPending).toBe(true);
   await expect(page.getByRole("button", { name: "Starting…" })).toBeDisabled();
+  releaseInitialStart();
   await expect(page.locator("[data-admin-operation='admin-proxy-test']").getByRole("alert"))
     .toContainText("Proxy probe worker exited unexpectedly");
   await expect(page.getByText("worker_crash")).toBeVisible();
@@ -3708,13 +3762,7 @@ test("proxy operation discovery starts with settings and reattaches across reloa
   let operationState: "running" | "failed" | "complete" = "running";
 
   await page.context().unroute("**/api/v1/**");
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
-  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
-  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
-    view: "attention", total: 0,
-    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
-    items: [],
-  } }));
+  await installAuthenticatedShellRoutes(page);
 
   await page.route("**/api/v1/admin/settings**", async (route) => {
     if (route.request().method() !== "GET") {
@@ -3811,13 +3859,7 @@ test("gallery-dl operation discovery is concurrent with its config request", asy
   let latestRequestedAt = 0;
   let configFulfilledAt = 0;
   await page.context().unroute("**/api/v1/**");
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
-  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
-  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
-    view: "attention", total: 0,
-    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
-    items: [],
-  } }));
+  await installAuthenticatedShellRoutes(page);
   await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", async (route) => {
     latestRequestedAt = Date.now();
     await route.fulfill({ json: { snapshot: null, current: null } });
@@ -3939,7 +3981,7 @@ test("pathname navigation resets the viewport without hiding the page heading", 
   await page.screenshot({ path: "/tmp/auto-gallery-upload-top-fixed.png", fullPage: false });
 });
 
-test("tag map loads every tag and supports ctrl-wheel zoom without pagination", async ({ page }) => {
+test("tag map keeps every tag reachable through bounded pages and supports ctrl-wheel zoom", async ({ page }) => {
   const consoleIssues: string[] = [];
   page.on("console", (message) => {
     const text = message.text();
@@ -3998,11 +4040,18 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
       : [{ source: "pixiv", work_count: 1 }],
     created_at: "2026-08-14T00:00:00Z",
   }));
-  let includeAll = false;
-  await page.route("**/api/v1/tags?*", async (route) => {
+  const pageRequests: Array<{ offset: number; limit: number }> = [];
+  await page.route("**/api/v1/tags/page?*", async (route) => {
     const url = new URL(route.request().url());
-    includeAll = url.searchParams.get("include_all") === "true";
-    await route.fulfill({ json: tagFixtures });
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number(url.searchParams.get("limit") || 100);
+    pageRequests.push({ offset, limit });
+    await route.fulfill({ json: {
+      items: tagFixtures.slice(offset, offset + limit),
+      total: tagFixtures.length,
+      offset,
+      limit,
+    } });
   });
 
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -4014,8 +4063,8 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expect(page).toHaveTitle(/auto-gallery/i);
   await expect(page.getByRole("heading", { level: 1, name: "Tags" })).toBeVisible();
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
-  await expect(chart).toHaveAttribute("data-tag-count", String(fixtureCount));
-  expect(includeAll).toBe(true);
+  await expect(chart).toHaveAttribute("data-tag-count", String(Math.min(fixtureCount, 100)));
+  expect(pageRequests[0]).toEqual({ offset: 0, limit: 100 });
   await expect(page.getByText("Ctrl + wheel to zoom · Drag to pan")).toBeVisible();
   if (fixtureCount <= 1_000) {
     const metaBubble = page.getByRole("link", { name: /map_tag_000, meta, 999, pixiv 3, iwara 1/i });
@@ -4079,6 +4128,14 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expectNoPageOverflow(page);
   expect(consoleIssues).toEqual([]);
   await page.screenshot({ path: "/tmp/auto-gallery-tag-map-zoomed.png", fullPage: false });
+
+  if (fixtureCount > 100) {
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect(page).toHaveURL(/(?:\?|&)page=2(?:&|$)/);
+    await expect(chart).toHaveAttribute("data-tag-count", String(Math.min(fixtureCount - 100, 100)));
+    await expect(page.getByRole("link", { name: /map_tag_100/i })).toBeVisible();
+    expect(pageRequests.at(-1)).toEqual({ offset: 100, limit: 100 });
+  }
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(chart).toBeVisible();

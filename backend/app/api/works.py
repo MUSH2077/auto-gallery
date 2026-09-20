@@ -17,6 +17,7 @@ from app.schemas.curation import BatchCurateRequest, CurationCommitRead
 from app.repositories.work import WorkRepository
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
+from app.models.curation import AssetStorageState
 from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.models.tag import Tag
@@ -56,6 +57,21 @@ router = APIRouter(dependencies=[_require_library])
 # batch-tag are curation operations, not library browsing). Included with
 # the same "/works" prefix in app/api/__init__.py, so URLs are unchanged.
 curation_router = APIRouter(dependencies=[_require_curation])
+
+
+def _public_work_asset_derivative_status(
+    internal_state: str | None,
+    *,
+    storage_state: str | None,
+) -> str:
+    """Keep internal outbox terminal states out of the public media contract."""
+    if storage_state == "purged":
+        return "failed"
+    if internal_state in {None, "complete"}:
+        return "ready"
+    if internal_state in {"pending", "processing", "failed"}:
+        return internal_state
+    return "failed"
 
 
 @router.get("", response_model=WorkListResponse)
@@ -319,6 +335,11 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
     derivative_states = await media_derivative_status(
         db, [asset.id for asset in assets]
     )
+    storage_states = dict((await db.execute(
+        select(AssetStorageState.asset_id, AssetStorageState.storage_state).where(
+            AssetStorageState.asset_id.in_([asset.id for asset in assets])
+        )
+    )).all()) if assets else {}
     lazy_requests = []
     for asset in assets:
         kind = media_kind(asset.mime_type, asset.file_name)
@@ -350,22 +371,37 @@ async def get_work_assets(work_id: UUID, user: User = _require_library, db: Asyn
         "media_kind": media_kind(a.mime_type, a.file_name),
         "thumb_sm_path": a.thumb_sm_path, "thumb_md_path": a.thumb_md_path,
         "thumb_lg_path": a.thumb_lg_path,
-        "thumb_url": f"/media/thumb/{a.id}" if a.thumb_sm_path else None,
+        "thumb_url": (
+            f"/media/thumb/{a.id}"
+            if a.thumb_sm_path and storage_states.get(a.id) != "purged"
+            else None
+        ),
         "poster_url": (
             signed_media_url(
                 str(a.id),
                 "poster",
                 settings.media_playback_ttl_seconds,
             )
-            if a.thumb_lg_path and media_kind(a.mime_type, a.file_name) == "video"
+            if (
+                a.thumb_lg_path
+                and media_kind(a.mime_type, a.file_name) == "video"
+                and storage_states.get(a.id) != "purged"
+            )
             else None
         ),
-        "preview_url": signed_media_url(str(a.id), "preview"),
-        "original_url": signed_media_url(str(a.id), "original"),
-        "derivative_status": (
-            "ready"
-            if derivative_states.get(a.id) in {None, "complete"}
-            else derivative_states[a.id]
+        "preview_url": (
+            signed_media_url(str(a.id), "preview")
+            if storage_states.get(a.id) != "purged"
+            else None
+        ),
+        "original_url": (
+            signed_media_url(str(a.id), "original")
+            if storage_states.get(a.id) != "purged"
+            else None
+        ),
+        "derivative_status": _public_work_asset_derivative_status(
+            derivative_states.get(a.id),
+            storage_state=storage_states.get(a.id),
         ),
         "created_at": a.created_at.isoformat(),
     } for a in assets]

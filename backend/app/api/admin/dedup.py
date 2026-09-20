@@ -33,9 +33,11 @@ from app.schemas.asset_dedup import (
     AssetDedupCaseRead,
     AssetDedupDecisionRead,
     AssetDedupDecisionRequest,
+    AssetDedupScanAccepted,
     AssetDedupScanRead,
     AssetDedupScanRequest,
 )
+from app.schemas.admin_operations import AdminOperationSnapshotResponse
 from app.services.asset_reconciliation import (
     AssetReconciliation,
     DedupIdempotencyConflict,
@@ -124,7 +126,11 @@ async def decide_asset_dedup_case(
     return result
 
 
-@curation_ops_router.post("/dedup/scans", status_code=202)
+@curation_ops_router.post(
+    "/dedup/scans",
+    status_code=202,
+    response_model=AssetDedupScanAccepted,
+)
 async def start_asset_dedup_scan(
     data: AssetDedupScanRequest,
     db: AsyncSession = Depends(get_db),
@@ -167,6 +173,22 @@ async def start_asset_dedup_scan(
         "status": "enqueued",
         "operation_type": "asset-dedup-scan",
     }
+
+
+@curation_ops_router.get(
+    "/dedup/scans/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_asset_dedup_scan(db: AsyncSession = Depends(get_db)):
+    """Return the durable scan task so refreshes retain its progress."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="asset-dedup-scan",
+        scope_key="lock:admin:asset-dedup-scan",
+        include_retryable=True,
+    )
 
 
 @curation_ops_router.get("/dedup/scans/{scan_id}", response_model=AssetDedupScanRead)

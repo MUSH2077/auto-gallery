@@ -38,6 +38,7 @@ from app.services.tasks import (
     task_payload,
 )
 from app.services.operation_attention import (
+    CompactionPreviewChanged,
     compact_terminal_tasks,
     operations_overview,
     reconcile_task_truth,
@@ -66,6 +67,12 @@ class ReconcileTasksRequest(BaseModel):
 class CompactTasksRequest(BaseModel):
     dry_run: bool = True
     limit: int = Field(200, ge=1, le=1000)
+    preview_token: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
 
 class RestoreSubscriptionSlotRequest(BaseModel):
@@ -198,7 +205,30 @@ async def compact_tasks(
     data: CompactTasksRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    return await compact_terminal_tasks(db, dry_run=data.dry_run, limit=data.limit)
+    if not data.dry_run and data.preview_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "compaction_preview_required",
+                "message": "Preview task compaction before applying it.",
+            },
+        )
+    try:
+        return await compact_terminal_tasks(
+            db,
+            dry_run=data.dry_run,
+            limit=data.limit,
+            expected_preview_token=data.preview_token,
+        )
+    except CompactionPreviewChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "compaction_preview_changed",
+                "message": "Task compaction scope changed. Run the preview again.",
+                "preview_token": exc.actual_preview_token,
+            },
+        ) from exc
 
 
 @router.post("/reconcile-subscription-slot", dependencies=[RequirePermission("system")])

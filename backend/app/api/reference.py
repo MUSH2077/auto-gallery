@@ -251,7 +251,10 @@ async def batch_import_danbooru_artists(data: dict):
 
 
 @router.get("/danbooru/artist/batch-import/status")
-async def get_batch_import_status(job_id: str | None = None):
+async def get_batch_import_status(
+    job_id: str | None = None,
+    user=RequirePermission("subscriptions"),
+):
     """Get progress or results of a batch import job.
 
     Without job_id: returns the most recent batch result from Redis.
@@ -261,7 +264,7 @@ async def get_batch_import_status(job_id: str | None = None):
         from app.api.admin.data import get_admin_operation
 
         try:
-            operation = await get_admin_operation(job_id)
+            operation = await get_admin_operation(job_id, user=user)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
@@ -270,11 +273,14 @@ async def get_batch_import_status(job_id: str | None = None):
                 "admin-danbooru-batch-import",
                 "admin-danbooru-url-batch-import",
             }:
+                operation_status = operation["status"]
                 return {
-                    "status": operation["status"],
+                    "status": operation_status,
                     "progress": operation.get("progress"),
-                    "result": operation.get("result"),
-                    "job_status": operation["status"],
+                    # TaskRun initializes result_data to an empty object. It is
+                    # not a batch result until the durable operation completes.
+                    "result": operation.get("result") if operation_status == "complete" else None,
+                    "job_status": operation_status,
                     "task_id": operation.get("task_id") or operation.get("job_id"),
                     "job_id": operation.get("rq_job_id") or operation.get("job_id"),
                 }
@@ -380,6 +386,12 @@ async def url_batch_import_danbooru(data: dict):
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
+    # Match the preview contract at execution time as well. The preview is
+    # advisory and may be skipped, so the enqueue endpoint must own deduping.
+    input_count = len(urls)
+    urls = list(dict.fromkeys(urls))
+    duplicates_removed = input_count - len(urls)
+
     operation_id = uuid.uuid4()
     operation = await enqueue_admin_operation(
         lock_key=f"danbooru:url-batch-import:{operation_id}",
@@ -399,6 +411,11 @@ async def url_batch_import_danbooru(data: dict):
     )
     return {
         **operation,
-        "message": f"URL batch import enqueued ({len(urls)} URLs)",
+        "message": (
+            f"URL batch import enqueued ({len(urls)} unique URLs"
+            + (f", {duplicates_removed} duplicates removed" if duplicates_removed else "")
+            + ")"
+        ),
         "total": len(urls),
+        "duplicates_removed": duplicates_removed,
     }

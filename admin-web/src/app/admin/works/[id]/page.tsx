@@ -58,12 +58,28 @@ function WorkViewerShell({ workId }: { workId: string }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [fullAsset, setFullAsset] = useState<AssetData | null>(null);
   const wheelDelta = useRef(0);
+  const viewerRef = useRef<HTMLDivElement | null>(null);
 
   const totalPages = assets.data?.length || 0;
   const changePage = (delta: number) => {
     if (!totalPages) return;
     setActiveIndex((current) => (current + delta + totalPages) % totalPages);
   };
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || totalPages <= 1) return;
+    const onWheel = (event: WheelEvent) => {
+      if ((event.target as HTMLElement).closest("video")) return;
+      wheelDelta.current += event.deltaY;
+      if (Math.abs(wheelDelta.current) < 80) return;
+      event.preventDefault();
+      setActiveIndex((current) => (current + (wheelDelta.current > 0 ? 1 : -1) + totalPages) % totalPages);
+      wheelDelta.current = 0;
+    };
+    viewer.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewer.removeEventListener("wheel", onWheel);
+  }, [totalPages]);
 
   useEffect(() => {
     if (!totalPages) return;
@@ -86,16 +102,8 @@ function WorkViewerShell({ workId }: { workId: string }) {
   return (
     <section className="card overflow-hidden">
       <div
+        ref={viewerRef}
         className="relative flex min-h-[58vh] items-center justify-center bg-canvas"
-        onWheel={(event) => {
-          if ((event.target as HTMLElement).closest("video")) return;
-          if (totalPages <= 1) return;
-          wheelDelta.current += event.deltaY;
-          if (Math.abs(wheelDelta.current) < 80) return;
-          event.preventDefault();
-          changePage(wheelDelta.current > 0 ? 1 : -1);
-          wheelDelta.current = 0;
-        }}
       >
         <AssetViewer
           key={current.id}

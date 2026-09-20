@@ -135,6 +135,7 @@ async def test_save_upload_happy_path(tmp_path, monkeypatch):
             assert metadata["category"] == "manual"
             assert metadata["id"] == result.work_id
             assert metadata["uploaded_by"] == user.username
+            assert metadata["uploaded_by_user_id"] == user.id
             assert metadata["target_creator_id"] is None
             assert metadata["tags"] == ["a", "b"]
             assert len(metadata["files"]) == 1

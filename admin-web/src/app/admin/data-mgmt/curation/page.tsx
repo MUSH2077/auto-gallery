@@ -1,16 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CurationCommit, queryKeys } from "@/lib/api";
-import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard, WorkMediaThumbnail } from "@/components";
+import { ConfirmDialog, EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard, WorkMediaThumbnail } from "@/components";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 import { usePermissions } from "@/lib/usePermissions";
+
+type BackfillResult = {
+  status: string;
+  created?: Record<string, number>;
+  skipped?: Record<string, number>;
+  expected?: Record<string, number>;
+};
+
+type ActionNotice = {
+  kind: "success" | "partial";
+  message: string;
+};
 
 function formatBytes(bytes: number) {
   if (!bytes) return "0 B";
@@ -125,7 +139,7 @@ function CommitCard({ commit, onRevert, reverting }: { commit: CurationCommit; o
                 )}
               </div>
             ))}
-            {commit.changes.length > 5 && <div className="text-xs text-muted">{t("curation.more_changes", { count: commit.changes.length - 5 })}</div>}
+            {!expanded && commit.changes.length > 5 && <div className="text-xs text-muted">{t("curation.more_changes", { count: commit.changes.length - 5 })}</div>}
           </div>
         )}
       </div>
@@ -140,6 +154,9 @@ function CurationContent() {
   const router = useRouter();
   const pathname = usePathname();
   const { isAdmin } = usePermissions();
+  const [revertTargetId, setRevertTargetId] = useState<string | null>(null);
+  const [purgeSelection, setPurgeSelection] = useState<string[] | null>(null);
+  const [notice, setNotice] = useState<ActionNotice | null>(null);
   const trigger = sp.get("trigger") || "";
   const includeBaseline = sp.get("include_baseline") !== "false";
   const subjectType = sp.get("subject_type") || undefined;
@@ -165,43 +182,59 @@ function CurationContent() {
   const suggestionItems = suggestions.data ?? [];
   const commitEntrance = useStaggeredEntrance(commitItems.map((commit) => commit.id));
   const suggestionEntrance = useStaggeredEntrance(suggestionItems.map((item) => item.id));
+  const revertTarget = commitItems.find((commit) => commit.id === revertTargetId) ?? null;
+
+  const refreshAfterBackfill = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.curation.backfillStatus });
+    void qc.invalidateQueries({ queryKey: ["repositories"] });
+    void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+  }, [qc]);
+
+  const backfill = useAdminOperation<BackfillResult>({
+    operationType: "admin-curation-backfill",
+    scope: "global",
+    startOperation: () => api.runCurationBackfill(),
+    loadLatest: () => api.getLatestCurationBackfill<BackfillResult>(),
+    onCompleted: refreshAfterBackfill,
+  });
 
   const revert = useMutation({
     mutationFn: (id: string) => api.revertCurationCommit(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-      qc.invalidateQueries({ queryKey: queryKeys.works.all });
-      qc.invalidateQueries({ queryKey: ["repositories"] });
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
+    onMutate: () => setNotice(null),
+    onSuccess: (result) => {
+      setRevertTargetId(null);
+      const isPartial = result.status === "partial" || result.skipped > 0 || result.conflicts.length > 0;
+      setNotice({
+        kind: isPartial ? "partial" : "success",
+        message: isPartial
+          ? t("curation.revert_partial", { reverted: result.reverted, skipped: result.skipped })
+          : t("curation.revert_complete", { count: result.reverted }),
+      });
+      void qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.works.all });
+      void qc.invalidateQueries({ queryKey: ["repositories"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
     },
   });
 
   const purge = useMutation({
     mutationFn: async () => {
-      const ids = (purgePreview.data?.works ?? []).map((work) => work.id);
-      for (let start = 0; start < ids.length; start += 25) {
-        await api.purgeWorks(
-          ids.slice(start, start + 25),
-          "Purge currently eligible trashed works",
-        );
-      }
+      const ids = purgeSelection ?? [];
+      if (ids.length === 0) throw new Error(t("curation.purge_empty"));
+      await api.purgeWorks(ids, "Purge current preview batch");
+      return ids.length;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-      qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    onMutate: () => setNotice(null),
+    onSuccess: (count) => {
+      setPurgeSelection(null);
+      setNotice({ kind: "success", message: t("curation.purge_complete", { count }) });
     },
-  });
-
-  const backfill = useMutation({
-    mutationFn: api.runCurationBackfill,
-    onSuccess: () => {
-      // Queued: the replay runs in the governed maintenance listener.
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-      qc.invalidateQueries({ queryKey: queryKeys.curation.backfillStatus });
-      qc.invalidateQueries({ queryKey: ["repositories"] });
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.works.all });
     },
   });
 
@@ -225,6 +258,14 @@ function CurationContent() {
   return (
     <PageShell>
       <PageHeader title={t("curation.title")} description={t("curation.desc")} />
+      {notice && (
+        <div
+          role="status"
+          className={`mb-4 rounded-md border p-3 text-sm ${notice.kind === "partial" ? "border-warning/30 bg-warning-subtle text-warning" : "border-success/25 bg-success-subtle text-success"}`}
+        >
+          {notice.message}
+        </div>
+      )}
       {(subjectType || subjectId) && (
         <div className="mb-4 rounded-md border border-border bg-white px-3 py-2 text-sm dark:border-border dark:bg-surface">
           {t("curation.filtered_by")} <span className="font-mono">{subjectType}:{subjectId}</span>
@@ -259,7 +300,7 @@ function CurationContent() {
             const entrance = commitEntrance(commit.id, index);
             return (
               <div key={commit.id} className={entrance.className} style={entrance.style}>
-                <CommitCard commit={commit} onRevert={(id) => revert.mutate(id)} reverting={revert.isPending} />
+                <CommitCard commit={commit} onRevert={(id) => { revert.reset(); setRevertTargetId(id); }} reverting={revert.isPending} />
               </div>
             );
           })}
@@ -289,12 +330,20 @@ function CurationContent() {
               <p className="mt-3 text-xs text-success dark:text-success">{t("curation.baseline_graph_hint")}</p>
             )}
             <button
-              onClick={() => backfill.mutate()}
-              disabled={backfill.isPending || backfillStatus.data?.is_complete}
+              type="button"
+              onClick={() => backfill.start()}
+              disabled={!backfill.canStart || backfillStatus.data?.is_complete}
               className="btn-primary mt-3 min-h-11 w-full text-xs"
             >
-              {backfillStatus.data?.is_complete ? t("curation.baseline_complete") : backfill.isPending ? t("curation.backfilling") : t("curation.run_backfill")}
+              {backfillStatus.data?.is_complete
+                ? t("curation.baseline_complete")
+                : backfill.isStarting || backfill.isActive
+                  ? t("curation.backfilling")
+                  : t("curation.run_backfill")}
             </button>
+            {(backfill.taskId || backfill.snapshot || backfill.isStarting || backfill.isLatestLoading || backfill.latestError) && (
+              <AdminOperationStatus controller={backfill} />
+            )}
           </div>
 
           <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
@@ -312,15 +361,22 @@ function CurationContent() {
             <div className="mt-3 flex gap-2">
               <Link href="/admin/works?curation=trashed" className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("curation.open_trash")}</Link>
               {isAdmin && <button
+                type="button"
                 onClick={() => {
-                  if (window.confirm(t("curation.purge_confirm"))) purge.mutate();
+                  purge.reset();
+                  setPurgeSelection((purgePreview.data?.works ?? []).map((work) => work.id));
                 }}
                 disabled={!purgePreview.data?.work_count || purge.isPending}
                 className="rounded-md bg-danger px-3 py-1.5 text-xs font-medium text-white hover:bg-danger disabled:opacity-50"
               >
-                {t("curation.purge")}
+                {t("curation.purge_batch", { count: purgePreview.data?.work_count ?? 0 })}
               </button>}
             </div>
+            {purgePreview.error && (
+              <div className="mt-3">
+                <ErrorState message={(purgePreview.error as Error).message} onRetry={() => purgePreview.refetch()} />
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
@@ -339,6 +395,28 @@ function CurationContent() {
           </div>
         </aside>
       </div>
+      {revertTarget && (
+        <ConfirmDialog
+          open
+          title={t("curation.revert_confirm_title")}
+          message={t("curation.revert_confirm", { message: revertTarget.message })}
+          onConfirm={() => revert.mutate(revertTarget.id)}
+          onCancel={() => { revert.reset(); setRevertTargetId(null); }}
+          isPending={revert.isPending}
+          error={(revert.error as Error | null)?.message}
+        />
+      )}
+      {purgeSelection && (
+        <ConfirmDialog
+          open
+          title={t("curation.purge_confirm_title")}
+          message={t("curation.purge_confirm", { count: purgeSelection.length })}
+          onConfirm={() => purge.mutate()}
+          onCancel={() => { purge.reset(); setPurgeSelection(null); }}
+          isPending={purge.isPending}
+          error={(purge.error as Error | null)?.message}
+        />
+      )}
     </PageShell>
   );
 }

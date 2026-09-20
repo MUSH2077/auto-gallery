@@ -15,13 +15,25 @@ import {
   PermissionGuard,
   SourceBadge,
 } from "@/components";
+import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { secureRandomUuid } from "@/lib/random";
+import { useAdminOperation } from "@/lib/useAdminOperation";
 
 const PAGE_SIZE = 25;
 const DEDUP_STATUSES = ["pending", "merged", "separate", "deferred"] as const;
 type DedupStatus = typeof DEDUP_STATUSES[number];
+
+type AssetScanResult = {
+  scan_id: string;
+  status: string;
+  assets_scanned: number;
+  candidates_evaluated: number;
+  cases_created: number;
+  assets_grouped: number;
+  bytes_reclaimable: number;
+};
 
 function Metric({
   label,
@@ -209,10 +221,11 @@ function DedupContent() {
   const [page, setPage] = useState(0);
   const [confirm, setConfirm] = useState<{
     item: AssetDedupCase;
-    representativeId: string;
+    action: "merge" | "separate";
+    representativeId?: string;
     requestId: string;
   } | null>(null);
-  const [scanId, setScanId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!requestedStatus || requestedStatus === status) return;
@@ -235,18 +248,15 @@ function DedupContent() {
     queryKey: queryKeys.dedup.cases(status, page),
     queryFn: () => api.listAssetDedupCases(status, page * PAGE_SIZE, PAGE_SIZE),
   });
-  const scanStatus = useQuery({
-    queryKey: queryKeys.dedup.scan(scanId || ""),
-    queryFn: () => api.getAssetDedupScan(scanId!),
-    enabled: !!scanId,
-    refetchInterval: (query) => {
-      const current = query.state.data?.status;
-      return current && ["complete", "failed"].includes(current) ? false : 2000;
+  const scan = useAdminOperation<AssetScanResult>({
+    operationType: "asset-dedup-scan",
+    scope: "global",
+    startOperation: () => api.startAssetDedupScan(true),
+    loadLatest: () => api.getLatestAssetDedupScan<AssetScanResult>(),
+    onCompleted: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dedup", "cases"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
-  });
-  const scan = useMutation({
-    mutationFn: () => api.startAssetDedupScan(true),
-    onSuccess: (result) => setScanId(result.scan_id),
   });
   const decide = useMutation({
     mutationFn: ({
@@ -266,9 +276,11 @@ function DedupContent() {
         representative_asset_id: representativeId,
         idempotency_key: requestId,
       }),
-    onSuccess: () => {
+    onMutate: () => setNotice(null),
+    onSuccess: (result) => {
       setConfirm(null);
-      queryClient.invalidateQueries({ queryKey: ["dedup", "cases"] });
+      setNotice(t(`asset_dedup.${result.action}_complete`));
+      void queryClient.invalidateQueries({ queryKey: ["dedup"] });
     },
   });
 
@@ -279,16 +291,15 @@ function DedupContent() {
     Math.ceil((cases.data?.total || 0) / PAGE_SIZE),
   );
   const scanLabel = useMemo(() => {
-    if (scan.isPending) return t("asset_dedup.scan_starting");
-    if (!scanStatus.data) return t("asset_dedup.scan");
-    if (scanStatus.data.status === "complete")
-      return t("asset_dedup.scan_again");
-    if (scanStatus.data.status === "failed")
-      return t("asset_dedup.scan_retry");
-    return t("asset_dedup.scanning", {
-      count: scanStatus.data.assets_scanned,
-    });
-  }, [scan.isPending, scanStatus.data, t]);
+    if (scan.isStarting || scan.isRetrying) return t("asset_dedup.scan_starting");
+    if (scan.canRetry) return t("asset_dedup.scan_retry");
+    if (scan.isActive)
+      return t("asset_dedup.scanning", {
+        count: scan.task?.progress?.current ?? 0,
+      });
+    if (scan.snapshot) return t("asset_dedup.scan_again");
+    return t("asset_dedup.scan");
+  }, [scan.canRetry, scan.isActive, scan.isRetrying, scan.isStarting, scan.snapshot, scan.task?.progress?.current, t]);
 
   return (
       <PageShell>
@@ -299,17 +310,23 @@ function DedupContent() {
         >
           <button
             type="button"
-            onClick={() => scan.mutate()}
-            disabled={
-              scan.isPending ||
-              (!!scanStatus.data &&
-                !["complete", "failed"].includes(scanStatus.data.status))
-            }
+            onClick={() => scan.canRetry ? scan.retry() : scan.start()}
+            disabled={!scan.canStart && !scan.canRetry}
             className="btn-primary min-h-11"
           >
             {scanLabel}
           </button>
         </PageHeader>
+
+        {(scan.taskId || scan.snapshot || scan.isStarting || scan.isLatestLoading || scan.latestError) && (
+          <AdminOperationStatus controller={scan} />
+        )}
+
+        {notice && (
+          <div role="status" className="mb-5 rounded-md border border-success/25 bg-success-subtle p-3 text-sm text-success">
+            {notice}
+          </div>
+        )}
 
         <div className="mb-5 rounded-md border border-border bg-subtle/40 p-4 text-sm leading-6 text-muted">
           {t("asset_dedup.policy")}
@@ -348,12 +365,12 @@ function DedupContent() {
           role="tabpanel"
           aria-labelledby={`dedup-tab-${status}`}
         >
-        {(cases.error || scan.error || scanStatus.error) && (
+        {(cases.error || decide.error) && (
           <ErrorState
             message={
-              ((cases.error || scan.error || scanStatus.error) as Error).message
+              ((cases.error || decide.error) as Error).message
             }
-            onRetry={() => cases.refetch()}
+            onRetry={cases.error ? () => cases.refetch() : undefined}
           />
         )}
 
@@ -394,13 +411,15 @@ function DedupContent() {
                     }
                     pending={decide.isPending}
                     actionable={actionable}
-                    onMerge={() =>
+                    onMerge={() => {
+                      decide.reset();
                       setConfirm({
                         item,
+                        action: "merge",
                         representativeId: item.left.id,
                         requestId: secureRandomUuid(),
-                      })
-                    }
+                      });
+                    }}
                   />
                   <AssetPanel
                     asset={item.right}
@@ -409,13 +428,15 @@ function DedupContent() {
                     }
                     pending={decide.isPending}
                     actionable={actionable}
-                    onMerge={() =>
+                    onMerge={() => {
+                      decide.reset();
                       setConfirm({
                         item,
+                        action: "merge",
                         representativeId: item.right.id,
                         requestId: secureRandomUuid(),
-                      })
-                    }
+                      });
+                    }}
                   />
                 </div>
                 <EvidencePanel item={item} />
@@ -437,9 +458,14 @@ function DedupContent() {
                       type="button"
                       className="btn-ghost min-h-11 text-danger"
                       disabled={decide.isPending}
-                      onClick={() =>
-                        decide.mutate({ item, action: "separate", requestId: secureRandomUuid() })
-                      }
+                      onClick={() => {
+                        decide.reset();
+                        setConfirm({
+                          item,
+                          action: "separate",
+                          requestId: secureRandomUuid(),
+                        });
+                      }}
                     >
                       {t("asset_dedup.separate")}
                     </button>
@@ -477,16 +503,16 @@ function DedupContent() {
 
         <ConfirmDialog
           open={!!confirm}
-          title={t("asset_dedup.confirm_title")}
-          message={t("asset_dedup.confirm_message")}
+          title={t(confirm?.action === "separate" ? "asset_dedup.separate_confirm_title" : "asset_dedup.confirm_title")}
+          message={t(confirm?.action === "separate" ? "asset_dedup.separate_confirm_message" : "asset_dedup.confirm_message")}
           isPending={decide.isPending}
           error={(decide.error as Error)?.message}
-          onCancel={() => setConfirm(null)}
+          onCancel={() => { decide.reset(); setConfirm(null); }}
           onConfirm={() => {
             if (!confirm) return;
             decide.mutate({
               item: confirm.item,
-              action: "merge",
+              action: confirm.action,
               representativeId: confirm.representativeId,
               requestId: confirm.requestId,
             });

@@ -198,7 +198,7 @@ export default function SubscriptionDetailPage() {
   );
   const decisionTotal = decisions.data?.pages[0]?.total || 0;
   const decisionsComplete = !!decisions.data && !decisions.hasNextPage && decisionBySource.size >= decisionTotal;
-  const authoritativeBlocked = decisions.data?.pages[0]?.summary.blocked_count;
+  const authoritativeBlocked = decisions.data?.pages[0]?.summary?.blocked_count;
   const detailStats = useMemo(() => {
     const sourceRows = sources.data || [];
     const decisionRows = [...decisionBySource.values()];

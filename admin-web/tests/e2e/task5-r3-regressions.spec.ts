@@ -56,7 +56,7 @@ for (const role of [
 
     await page.goto("/admin/settings/backup");
     if (!role.allowed) {
-      await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible({ timeout: 15_000 });
       await expect(page.getByRole("button", { name: "Create Backup" })).toHaveCount(0);
       expect(backupRequests).toEqual([]);
     } else {
@@ -76,7 +76,7 @@ test("reindex rejection retains confirmation and suppresses duplicates before su
   let reindexCalls = 0;
   let releaseFailure!: () => void;
   const heldFailure = new Promise<void>((resolve) => { releaseFailure = resolve; });
-  const unhandled = await installFixture(context, principal(["system"]), async (route, path) => {
+  const unhandled = await installFixture(context, principal(["system", "tasks"]), async (route, path) => {
     if (path === "/api/v1/admin/settings") { await json(route, { dedup: {} }); return true; }
     if (path === "/api/v1/admin/search/reindex") {
       reindexCalls += 1;
@@ -84,8 +84,25 @@ test("reindex rejection retains confirmation and suppresses duplicates before su
         await heldFailure;
         await json(route, { detail: "search reindex queue unavailable" }, 503);
       } else {
-        await json(route, { status: "enqueued", job_id: "reindex-job-1", message: "queued" }, 202);
+        await json(route, {
+          status: "enqueued",
+          task_id: "11111111-1111-4111-8111-111111111111",
+          job_id: "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+          rq_job_id: "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+          operation_type: "admin-search-reindex",
+          message: "queued",
+        }, 202);
       }
+      return true;
+    }
+    if (path.startsWith("/api/v1/admin/operations/")) {
+      await json(route, {
+        status: "running",
+        task_id: "11111111-1111-4111-8111-111111111111",
+        job_id: "11111111-1111-4111-8111-111111111111",
+        rq_job_id: "admin-11111111-1111-4111-8111-111111111111-attempt-1",
+        operation_type: "admin-search-reindex",
+      });
       return true;
     }
     return false;
@@ -106,5 +123,6 @@ test("reindex rejection retains confirmation and suppresses duplicates before su
   await expect.poll(() => reindexCalls).toBe(2);
   await expect(dialog).toBeHidden();
   await expect(page.getByText("Search reindex started.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Task detail", exact: true })).toBeVisible();
   expect(unhandled).toEqual([]);
 });

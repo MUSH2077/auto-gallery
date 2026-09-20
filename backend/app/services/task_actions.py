@@ -213,7 +213,13 @@ async def enrich_actions(db, rows, *, user=None, user_id=None, domain_kind=None,
             if row.subject_type == "download_job"
             else imports.get(row.subject_id)
             if row.subject_type == "import_job"
+            # Administrator and account rows are their own durable subject.
+            # A legacy pipeline TaskRun without a typed subject is an orphan;
+            # treating it as a DownloadJob/ImportJob crashes capability
+            # enrichment and takes down the entire notifications feed.
             else row
+            if row.kind in {"admin", "account"}
+            else None
         )
         if task and task.subject_type in {"download_job", "import_job"}:
             kind = "download" if task.subject_type == "download_job" else "import"

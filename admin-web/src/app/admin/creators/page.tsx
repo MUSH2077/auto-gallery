@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
 import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
@@ -33,6 +33,17 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
   const [urlInput, setUrlInput] = useState("");
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    if (!isPending) submittingRef.current = false;
+  }, [isPending]);
+
+  const submit = () => {
+    if (!name || isPending || submittingRef.current) return;
+    submittingRef.current = true;
+    onSubmit({ name, display_name: displayName || undefined, description: description || undefined });
+  };
 
   // Auto-detect name from pasted URL
   const handleUrlPaste = (val: string) => {
@@ -73,7 +84,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
       <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
-        <button onClick={() => onSubmit({ name, display_name: displayName || undefined, description: description || undefined })} disabled={!name || isPending}
+        <button onClick={submit} disabled={!name || isPending}
           className="btn-primary">
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
@@ -126,7 +137,7 @@ function CreatorsContent() {
   const sessionReady = storedSession?.key === sessionKey;
   const previousQueryFingerprintRef = useRef(queryFingerprint);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const queryChanged = previousQueryFingerprintRef.current !== queryFingerprint;
     previousQueryFingerprintRef.current = queryFingerprint;
     const saved = queryChanged
@@ -169,28 +180,52 @@ function CreatorsContent() {
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
-  useEffect(() => { setInputVal(search); }, [search]);
-  useEffect(() => {
-    if (inputVal === search) return;
-    const timer = setTimeout(() => {
-      setSelected(new Set());
-      window.scrollTo({ top: 0 });
-      const p = new URLSearchParams(sp.toString());
-      if (inputVal) p.set("q", inputVal); else p.delete("q");
-      p.delete("p");
-      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+  const paramsString = sp.toString();
+  const navigationParamsRef = useRef(paramsString);
+  const committedParamsRef = useRef(paramsString);
+  const pendingParamsRef = useRef(new Set<string>());
 
-  function updateParams(updates: Record<string, string | null>, resetPage = true) {
-    const p = new URLSearchParams(sp.toString());
+  useEffect(() => {
+    if (committedParamsRef.current === paramsString) return;
+    committedParamsRef.current = paramsString;
+    if (pendingParamsRef.current.delete(paramsString)) return;
+    pendingParamsRef.current.clear();
+    navigationParamsRef.current = paramsString;
+    setInputVal(search);
+  }, [paramsString, search]);
+
+  useEffect(() => {
+    const restoreHistoryQuery = () => {
+      const params = new URLSearchParams(window.location.search);
+      pendingParamsRef.current.clear();
+      navigationParamsRef.current = params.toString();
+      setInputVal(params.get("q") ?? "");
+    };
+    window.addEventListener("popstate", restoreHistoryQuery);
+    return () => window.removeEventListener("popstate", restoreHistoryQuery);
+  }, []);
+
+  const updateParams = useCallback((updates: Record<string, string | null>, resetPage = true) => {
+    const p = new URLSearchParams(navigationParamsRef.current);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
     if (resetPage) p.delete("p");
-    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-  }
+    const next = p.toString();
+    navigationParamsRef.current = next;
+    pendingParamsRef.current.add(next);
+    router.replace(`${pathname}?${next}`, { scroll: false });
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (inputVal === search && (new URLSearchParams(navigationParamsRef.current).get("q") ?? "") === search) return;
+    const timer = setTimeout(() => {
+      setSelected(new Set());
+      window.scrollTo({ top: 0 });
+      updateParams({ q: inputVal || null });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [inputVal, search, updateParams]);
 
   const FILTERS: { key: FilterMode; label: string }[] = useMemo(() => [
     { key: "all", label: t("creators.filter_all") },

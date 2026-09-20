@@ -5,7 +5,7 @@ from typing import Awaitable, Callable, Literal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, delete as sql_delete, func, or_, select
+from sqlalchemy import and_, delete as sql_delete, func, or_, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -13,6 +13,7 @@ from app.models import (
     Creator,
     CreatorCurationState,
     CreatorLink,
+    DiscoveryCandidate,
     DownloadJob,
     ImportJob,
     RepositorySyncReceipt,
@@ -20,6 +21,8 @@ from app.models import (
     Subscription,
     SubscriptionSource,
     TaskRun,
+    UserSubscription,
+    UserSubscriptionSource,
     Work,
     WorkCurationState,
     WorkSource,
@@ -589,7 +592,6 @@ class HierarchicalDeletionService:
             await self.db.commit()
 
     async def _delete_domain_rows(self, scope: DeletionScope) -> None:
-        from app.models import UserSubscription
         from app.services.search_projection_outbox import request_membership_projection_where
         if scope.entity_type in {"subscription", "creator"}:
             # Chunk predicates as well as results, before cascades erase IDs.
@@ -597,6 +599,16 @@ class HierarchicalDeletionService:
             for start in range(0, len(ids), 500):
                 await request_membership_projection_where(
                     self.db, UserSubscription.subscription_id.in_(ids[start:start + 500]), deleting=True,
+                )
+        elif scope.repository_ids and scope.subscription_ids:
+            # Repository removal changes the surviving membership document.
+            # Capture the memberships before the canonical source disappears,
+            # then let the outbox rebuild them after this transaction commits.
+            ids = tuple(scope.subscription_ids)
+            for start in range(0, len(ids), 500):
+                await request_membership_projection_where(
+                    self.db,
+                    UserSubscription.subscription_id.in_(ids[start:start + 500]),
                 )
         download_filters = []
         if scope.repository_ids:
@@ -614,6 +626,32 @@ class HierarchicalDeletionService:
             )
             await self.db.execute(
                 sql_delete(DownloadJob).where(DownloadJob.id.in_(download_ids))
+            )
+
+        if scope.repository_ids:
+            await self.db.execute(
+                sql_delete(UserSubscriptionSource).where(
+                    UserSubscriptionSource.subscription_source_id.in_(scope.repository_ids)
+                )
+            )
+        if scope.entity_type in {"subscription", "creator"} and scope.subscription_ids:
+            # Discovery candidates belong to the remote account and survive a
+            # canonical deletion. Detach their imported membership before the
+            # private membership and global subscription are removed.
+            await self.db.execute(
+                sql_update(DiscoveryCandidate)
+                .where(DiscoveryCandidate.subscription_id.in_(scope.subscription_ids))
+                .values(subscription_id=None, user_subscription_id=None)
+            )
+            await self.db.execute(
+                sql_delete(UserSubscriptionSource).where(
+                    UserSubscriptionSource.subscription_id.in_(scope.subscription_ids)
+                )
+            )
+            await self.db.execute(
+                sql_delete(UserSubscription).where(
+                    UserSubscription.subscription_id.in_(scope.subscription_ids)
+                )
             )
 
         if scope.repository_ids:

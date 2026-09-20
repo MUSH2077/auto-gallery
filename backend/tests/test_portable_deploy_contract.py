@@ -168,6 +168,15 @@ def test_frontend_build_separates_and_requires_typechecking():
     assert "ADMIN_BUILD_NODE_HEAP_MB: ${ADMIN_BUILD_NODE_HEAP_MB:-640}" in compose
 
 
+def test_backend_candidate_resets_pythonpath_to_the_replaced_source_tree():
+    dockerfile = (ROOT / "backend/Dockerfile.candidate").read_text(encoding="utf-8")
+
+    # Thin production images deliberately import from /candidate-app.  The
+    # layered candidate replaces the application beneath /app, so it must also
+    # replace the inherited import root or workers keep executing stale code.
+    assert "PYTHONPATH=/app" in dockerfile
+
+
 def test_source_digest_and_snapshot_skip_tracked_deletions():
     deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
     acceptance = (ROOT / "scripts/test-env.sh").read_text(encoding="utf-8")

@@ -626,9 +626,9 @@ function SchedulerContent() {
 
   const loop = queue.data?.scheduler_loop;
   const attentionItems = attention.data?.items || [];
-  const blockedCount = attention.data?.summary.blocked_count || 0;
-  const overdueCount = attention.data?.summary.overdue_count || 0;
-  const oldestOverdueAt = attention.data?.summary.oldest_overdue_at || null;
+  const blockedCount = attention.data?.summary?.blocked_count || 0;
+  const overdueCount = attention.data?.summary?.overdue_count || 0;
+  const oldestOverdueAt = attention.data?.summary?.oldest_overdue_at || null;
   const visibleAttention = attentionItems;
   const planPage = plans.data?.items || [];
   useEffect(() => {

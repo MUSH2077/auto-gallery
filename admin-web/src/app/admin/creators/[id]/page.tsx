@@ -194,6 +194,8 @@ export default function CreatorDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const { isAdmin, has } = usePermissions();
+  const canCurate = has("curation");
+  const canManageSubscriptions = has("subscriptions");
   const notify = useNotifications();
   const id = params.id as string;
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
@@ -336,12 +338,7 @@ export default function CreatorDetailPage() {
   });
 
   const syncRepo = useMutation({
-    mutationFn: (repo: CreatorRepository) => api.createDownloadJob({
-      subscription_id: repo.subscription_id,
-      subscription_source_id: repo.id,
-      source: repo.source,
-      source_url: repo.source_url || "",
-    }),
+    mutationFn: (repo: CreatorRepository) => api.syncRepository(repo.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["creator-subscription-overview", id] });
       qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
@@ -501,9 +498,11 @@ export default function CreatorDetailPage() {
           className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex flex-wrap gap-2`}
           style={{ "--chart-delay": "90ms" } as CSSProperties}
         >
-          <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
-            {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
-          </button>
+          {canCurate && (
+            <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
+              {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
+            </button>
+          )}
           {(isAdmin || creatorVisibility === "visible") && has("curation") ? (
             <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
               {isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
@@ -511,10 +510,12 @@ export default function CreatorDetailPage() {
           ) : (
             has("curation") ? <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button> : null
           )}
-          <Link href={subscriptionHref} className="btn-ghost">
-            {t("creator_detail.subscription")}
-          </Link>
-          <button onClick={openEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>
+          {canManageSubscriptions && (
+            <Link href={subscriptionHref} className="btn-ghost">
+              {t("creator_detail.subscription")}
+            </Link>
+          )}
+          {canCurate && <button onClick={openEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>}
         </div>
       </div>
 
@@ -562,7 +563,9 @@ export default function CreatorDetailPage() {
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{t("creator_detail.external_links")}</h2>
-              <button onClick={() => setShowAddLink(true)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.add")}</button>
+              {canCurate && (
+                <button onClick={() => setShowAddLink(true)} className="text-sm text-accent hover:underline dark:text-accent">{t("creator_detail.add")}</button>
+              )}
             </div>
             {links.data?.length ? (
               <div className="space-y-2">
@@ -580,7 +583,9 @@ export default function CreatorDetailPage() {
           <CreatorReferences
             creatorId={id}
             currentDisplay={c.display_name}
-            onSelectAlias={(alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }}
+            onSelectAlias={canCurate
+              ? (alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }
+              : undefined}
           />
         </aside>
 
@@ -689,7 +694,14 @@ export default function CreatorDetailPage() {
                     footer={t("charts.creator_stats_footer")}
                     testId="creator-tag-chart"
                   >
-                    <BallotTally data={tagChartData} total={st?.total_works || 0} />
+                    <BallotTally
+                      data={tagChartData}
+                      total={st?.total_works || 0}
+                      onSelect={(item) => {
+                        setWorksTag(item.label);
+                        setActiveTab("works");
+                      }}
+                    />
                   </ChartFrame>
                 ) : null}
               </div>
@@ -732,7 +744,9 @@ export default function CreatorDetailPage() {
                   <h2 className="text-base font-semibold">{t("creator_detail.repositories_title")}</h2>
                   <p className="text-sm text-muted">{t("creator_detail.repositories_desc")}</p>
                 </div>
-                <Link href={subscriptionHref} className="btn-primary">{t("creator_detail.manage_subscription")}</Link>
+                {canManageSubscriptions && (
+                  <Link href={subscriptionHref} className="btn-primary">{t("creator_detail.manage_subscription")}</Link>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                 {[
@@ -750,7 +764,7 @@ export default function CreatorDetailPage() {
                 ))}
               </div>
               {repos.length ? repos.map((repo) => (
-                <RepositoryCard key={repo.id} repo={repo} decision={decisionBySource.get(repo.id)} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={(r) => toggleRepo.mutate(r as CreatorRepository)}
+                <RepositoryCard key={repo.id} repo={repo} decision={decisionBySource.get(repo.id)} onSync={(r) => syncRepo.mutate(r as CreatorRepository)} onToggle={canManageSubscriptions ? (r) => toggleRepo.mutate(r as CreatorRepository) : undefined}
                   syncPending={syncRepo.isPending} togglePending={toggleRepo.isPending} />
               )) : (
                 <div className="card p-8 text-center text-sm text-muted">
@@ -771,7 +785,9 @@ export default function CreatorDetailPage() {
                   <h2 className="text-base font-semibold">{t("creator_detail.external_links")}</h2>
                   <p className="text-sm text-muted">{t("creator_detail.links_desc")}</p>
                 </div>
-                <button onClick={() => setShowAddLink(true)} className="btn-primary">{t("creator_detail.add_link_short")}</button>
+                {canCurate && (
+                  <button onClick={() => setShowAddLink(true)} className="btn-primary">{t("creator_detail.add_link_short")}</button>
+                )}
               </div>
               {links.data?.length ? links.data.map((l: CreatorLinkType) => (
                 <div key={l.id} className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">

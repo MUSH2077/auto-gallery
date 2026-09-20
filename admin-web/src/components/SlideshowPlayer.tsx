@@ -133,6 +133,8 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
     if (sequence !== requestSequence.current) return;
     setLoading(false);
     if (!resolved) {
+      indexRef.current = nextIndex;
+      setIndex(nextIndex);
       setBroken(true);
       return;
     }
@@ -224,9 +226,9 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
         }
       }
     };
-    element.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
-      element.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown);
       previousFocusRef.current?.focus();
     };
   }, [armControls, containerEl, open]);
