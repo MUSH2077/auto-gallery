@@ -2,7 +2,7 @@
 
 ## Visual target and implementation
 
-- Selected visual target: `/home/MU-SH/.codex/generated_images/01a0562d-f7c6-7ae3-9b62-daab5585705d/exec-59cee9ef-9716-4c05-9a1d-0e7d7b331895.png`
+- Selected visual target: generated design reference retained outside the repository.
 - Deployed implementation capture: `/tmp/auto-gallery-dashboard-hero.png`
 - Same-frame comparison: `/tmp/auto-gallery-design-comparison-final.png`
 - Comparison viewport: 1440 × 1024 for both source and implementation
