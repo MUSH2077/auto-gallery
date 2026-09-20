@@ -93,10 +93,14 @@ def test_import_controller_has_no_job_wide_heavy_io_decorator():
     assert not hasattr(run_import_job, "__wrapped__")
 
 
-def test_import_execution_claim_is_one_skip_locked_transaction():
+def test_import_execution_claim_uses_canonical_lock_order_in_one_transaction():
     source = inspect.getsource(_claim_import_execution)
 
-    assert ".with_for_update(skip_locked=True)" in source
+    parent_lock = source.index(".with_for_update(of=DownloadJob)")
+    import_lock = source.index(".with_for_update()")
+    task_lock = source.index(".with_for_update(of=TaskRun)")
+    assert parent_lock < import_lock < task_lock
+    assert "skip_locked=True" not in source
     assert "execution_token = execution_token" in source
     assert "execution_attempt" in source
 
