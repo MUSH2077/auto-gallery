@@ -141,11 +141,9 @@ async def test_unauthenticated_is_401_on_every_module():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_moved_endpoints_pinned_to_curation_and_tasks():
-    """Regression pin (Task 6 fix round 1): dedup/merge-candidates were moved
-    from `system` to `curation`, and scheduler/queue-stats operations from
-    `system` to `tasks`, per spec §A2. Verify the new module boundary holds
-    and the old `system` permission no longer grants access.
+async def test_moved_endpoints_follow_current_curation_and_scheduler_boundaries():
+    """Curation writes stay with curation while the scheduler surface stays
+    internally consistent for system-only users.
     """
     from app.database import async_session, engine
     from app.main import app
@@ -168,10 +166,15 @@ async def test_moved_endpoints_pinned_to_curation_and_tasks():
             r = await client.get("/api/v1/admin/dedup/duplicates", headers=system_headers)
             assert r.status_code == 403, f"system -> dedup/duplicates: {r.status_code} {r.text}"
 
-            r = await client.get("/api/v1/system/queue-stats", headers=tasks_headers)
-            assert r.status_code == 200, f"tasks -> queue-stats: {r.status_code} {r.text}"
             r = await client.get("/api/v1/system/queue-stats", headers=system_headers)
-            assert r.status_code == 403, f"system -> queue-stats: {r.status_code} {r.text}"
+            assert r.status_code == 200, f"system -> queue-stats: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/system/queue-stats", headers=tasks_headers)
+            assert r.status_code == 403, f"tasks -> queue-stats: {r.status_code} {r.text}"
+
+            r = await client.get("/api/v1/system/scheduler-decisions", headers=system_headers)
+            assert r.status_code == 200, f"system -> scheduler-decisions: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/system/scheduler-decisions", headers=tasks_headers)
+            assert r.status_code == 403, f"tasks -> scheduler-decisions: {r.status_code} {r.text}"
     finally:
         async with async_session() as db:
             await _clear(db)

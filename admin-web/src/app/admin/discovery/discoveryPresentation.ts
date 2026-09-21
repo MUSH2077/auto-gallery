@@ -22,20 +22,7 @@ export function candidateUsername(candidate: DiscoveryCandidate) {
 }
 
 export function candidateAvatar(candidate: DiscoveryCandidate) {
-  if (candidate.avatar_url) return candidate.avatar_url;
-  const metadata = candidateMetadata(candidate);
-  const profileImages = metadata.profile_image_urls;
-  if (profileImages && typeof profileImages === "object") {
-    for (const key of ["medium", "square_medium", "large"] as const) {
-      const value = (profileImages as Record<string, unknown>)[key];
-      if (typeof value === "string" && value.startsWith("https://")) return value;
-    }
-  }
-  for (const key of ["profile_image_url", "face"] as const) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.startsWith("https://")) return value;
-  }
-  return null;
+  return candidate.avatar_url || null;
 }
 
 export function localCreatorIds(candidate: DiscoveryCandidate) {

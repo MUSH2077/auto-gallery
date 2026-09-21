@@ -262,7 +262,7 @@ async def storage_stats():
     return result
 
 
-@tasks_ops_router.get("/system/queue-stats")
+@router.get("/system/queue-stats")
 async def queue_stats():
     try:
         from app.database import async_session
@@ -569,7 +569,7 @@ async def workbench_summary(
     return payload
 
 
-@tasks_ops_router.get("/system/scheduler-decisions", response_model=SchedulerDecisionPage)
+@router.get("/system/scheduler-decisions", response_model=SchedulerDecisionPage)
 async def scheduler_decisions(
     view: Literal["attention", "all"] = "all",
     subscription_ids: str | None = None,

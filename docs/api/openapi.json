@@ -30595,7 +30595,7 @@
         "x-dangerous": false,
         "x-permission-mode": "allOf",
         "x-required-permissions": [
-          "tasks"
+          "system"
         ],
         "x-response-schema-status": "generic"
       }
@@ -30852,7 +30852,7 @@
         "x-dangerous": false,
         "x-permission-mode": "allOf",
         "x-required-permissions": [
-          "tasks"
+          "system"
         ]
       }
     },

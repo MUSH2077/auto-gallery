@@ -838,7 +838,7 @@ test("manual preview rollout hides disabled provider cards at desktop and mobile
   expect(providerRequests).toEqual([]);
 });
 
-test("candidate avatar is requested once across responsive layouts", async ({ context, page }) => {
+test("candidate raw metadata avatar never bypasses the signed media proxy", async ({ context, page }) => {
   const avatarRequests: string[] = [];
   await installFixtures(context, { accounts: [account()], candidates: [candidate("avatar")] });
   await context.route("https://images.example/avatar.png", async (route) => {
@@ -849,7 +849,7 @@ test("candidate avatar is requested once across responsive layouts", async ({ co
   await page.goto("/admin/discovery");
   await expect(page.getByText("Artist avatar", { exact: true }).first()).toBeVisible();
   await expect(page.locator('img[alt="Avatar for Artist avatar"]:visible')).toHaveCount(0);
-  expect(avatarRequests).toEqual(["https://images.example/avatar.png"]);
+  expect(avatarRequests).toEqual([]);
 });
 
 test("opens the enriched Pixiv creator page and restores URL, selection and pagination state", async ({ context, page }) => {
