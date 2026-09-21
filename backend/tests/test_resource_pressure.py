@@ -2677,6 +2677,7 @@ async def test_ready_allows_meili_degradation_but_requires_writable_redis(monkey
     assert json.loads(response.body) == {
         "status": "degraded",
         "services": {"postgres": "up", "redis": "up", "meilisearch": "down"},
+        "build_revision": main.settings.build_revision,
     }
 
     main._readiness_cache = None

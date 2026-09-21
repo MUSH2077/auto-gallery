@@ -95,6 +95,9 @@ async function installMediaRoutes(
   options: { failFirstImageAsset?: boolean } = {},
 ) {
   let imageAssetAttempts = 0;
+  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+    webSocket.send(JSON.stringify({ type: "connected" }));
+  });
   await context.addCookies([{
     name: "ag_token",
     value: "media-test-token",
@@ -127,6 +130,9 @@ async function installMediaRoutes(
     calls.push(`${route.request().method()} ${path}`);
     if (path === "/api/v1/auth/me") {
       return route.fulfill({ json: ADMIN });
+    }
+    if (path === "/api/v1/auth/ws-ticket") {
+      return route.fulfill({ json: { ticket: "media-fixture-ticket", expires_in: 30 } });
     }
     if (path === "/api/v1/system/workbench") {
       return route.fulfill({

@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import RequirePermission
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.scheduler_decisions import SchedulerDecisionPage
@@ -243,6 +243,7 @@ async def _job_status_counts(db: AsyncSession) -> dict[str, int]:
                 imports.c.failed_import_count,
                 imports.c.stale_import_count,
             )
+            .select_from(downloads.join(imports, true()))
         )
     ).one()
     keys = (

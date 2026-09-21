@@ -240,6 +240,56 @@ async def test_library_segment_status_is_database_only_and_reports_rollout_metad
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_library_segment_status_reuses_its_thirty_second_cache(
+    tmp_path, monkeypatch
+):
+    from sqlalchemy import event
+
+    from app.database import async_session, engine
+    from app.services import cache as cache_service
+    from app.services.gitllery import service as gsvc
+    from app.services.gitllery.service import GitlleryService
+
+    _configure_shadow_projection(monkeypatch, gsvc.settings, tmp_path)
+    values = {}
+    monkeypatch.setattr(cache_service, "cache_get", values.get)
+    monkeypatch.setattr(
+        cache_service,
+        "cache_set",
+        lambda key, value, _ttl: values.__setitem__(key, value),
+    )
+    observed: list[str] = []
+
+    def record_query(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            observed.append(statement)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_work(db)
+            service = GitlleryService(db)
+
+            first = await service.status()
+            observed.clear()
+            event.listen(engine.sync_engine, "before_cursor_execute", record_query)
+            try:
+                second = await service.status()
+            finally:
+                event.remove(engine.sync_engine, "before_cursor_execute", record_query)
+
+            assert second == first
+            assert observed == []
+            assert len(values) == 1
+            assert next(iter(values)).startswith("cache:api:gitllery:status:")
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_library_deep_status_requires_async_verification(tmp_path, monkeypatch):
     from fastapi import HTTPException
 

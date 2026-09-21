@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -39,6 +39,14 @@ class RepoResolver:
         self._creator_by_source_creator: dict[tuple[str, str], str | None] = {}
         self._change_repos_cache: dict[tuple[str, str], list[RepoDescriptor]] = {}
         self._work_sources_by_work: dict[str, list[WorkSource]] | None = None
+        self._gallerydl_config: dict | None = None
+
+    def _path_config(self) -> dict:
+        if self._gallerydl_config is None:
+            from app.services.settings import read_gallerydl_config
+
+            self._gallerydl_config = read_gallerydl_config()
+        return self._gallerydl_config
 
     def clear_batch_cache(self) -> None:
         """Release entity-sized caches between bounded projection batches."""
@@ -110,7 +118,12 @@ class RepoResolver:
     async def _descriptor_for_work_source(self, ws: WorkSource) -> RepoDescriptor | None:
         if not ws.source_creator_id:
             return None
-        creator_dir = resolve_creator_directory(ws.source, ws.raw_metadata or {}, ws.source_work_id)
+        creator_dir = resolve_creator_directory(
+            ws.source,
+            ws.raw_metadata or {},
+            ws.source_work_id,
+            config=self._path_config(),
+        )
         lookup = await self._ensure_repo_lookup()
         repo = lookup.get((ws.source, ws.source_creator_id))
         if repo:
@@ -134,8 +147,11 @@ class RepoResolver:
                     WorkSource.source_creator_id == sc.source_creator_id).limit(1))
             ws = ws_row.scalar_one_or_none()
             creator_dir = resolve_creator_directory(
-                sc.source, ws.raw_metadata if ws else {},
-                ws.source_work_id if ws else (sc.source_creator_id or ""))
+                sc.source,
+                ws.raw_metadata if ws else {},
+                ws.source_work_id if ws else (sc.source_creator_id or ""),
+                config=self._path_config(),
+            )
             lookup = await self._ensure_repo_lookup()
             repo = lookup.get((sc.source, sc.source_creator_id))
             repository_id = str(repo.id) if repo else f"{sc.source}:{sc.source_creator_id}"
@@ -178,7 +194,11 @@ class RepoResolver:
             # into a single bogus {source}/unknown/.gitllery.
             return []
         creator_dir = resolve_creator_directory(
-            repo.source, ws.raw_metadata, ws.source_work_id)
+            repo.source,
+            ws.raw_metadata,
+            ws.source_work_id,
+            config=self._path_config(),
+        )
         creator_id = await self._creator_for_subscription(repo.subscription_id)
         return [RepoDescriptor(repository_id=str(repo.id), source=repo.source,
                                source_creator_id=repo.source_creator_id,
@@ -238,7 +258,45 @@ class RepoResolver:
 
         if not keys:
             return []
+        ranked_sources = (
+            select(
+                WorkSource.id.label("work_source_id"),
+                func.row_number().over(
+                    partition_by=(
+                        WorkSource.source,
+                        WorkSource.source_creator_id,
+                    ),
+                    order_by=WorkSource.id,
+                ).label("position"),
+            )
+            .where(
+                WorkSource.source_creator_id.isnot(None),
+                WorkSource.source_creator_id != "",
+                tuple_(WorkSource.source, WorkSource.source_creator_id).in_(keys),
+            )
+            .subquery()
+        )
+        work_sources = (
+            await self.db.execute(
+                select(WorkSource)
+                .join(
+                    ranked_sources,
+                    WorkSource.id == ranked_sources.c.work_source_id,
+                )
+                .where(ranked_sources.c.position == 1)
+            )
+        ).scalars().all()
+        return await self._hydrate_repository_work_sources(keys, work_sources)
 
+    async def _hydrate_repository_work_sources(
+        self,
+        keys: list[tuple[str, str]],
+        work_sources: list[WorkSource],
+    ) -> list[RepoDescriptor]:
+        """Hydrate known representative WorkSources with bounded lookups."""
+
+        if not keys:
+            return []
         repos = (
             await self.db.execute(
                 select(SubscriptionSource)
@@ -260,32 +318,6 @@ class RepoResolver:
                     repo,
                 )
 
-        ranked_sources = (
-            select(
-                WorkSource.id.label("work_source_id"),
-                func.row_number().over(
-                    partition_by=(
-                        WorkSource.source,
-                        WorkSource.source_creator_id,
-                    ),
-                    order_by=WorkSource.id,
-                ).label("position"),
-            )
-            .where(
-                tuple_(WorkSource.source, WorkSource.source_creator_id).in_(keys)
-            )
-            .subquery()
-        )
-        work_sources = (
-            await self.db.execute(
-                select(WorkSource)
-                .join(
-                    ranked_sources,
-                    WorkSource.id == ranked_sources.c.work_source_id,
-                )
-                .where(ranked_sources.c.position == 1)
-            )
-        ).scalars().all()
         work_source_by_key = {
             (work_source.source, work_source.source_creator_id): work_source
             for work_source in work_sources
@@ -360,25 +392,112 @@ class RepoResolver:
         return await self._hydrate_repository_keys(keys)
 
     async def all_repositories(self) -> list[RepoDescriptor]:
-        rows = await self.db.execute(
-            select(WorkSource.source, WorkSource.source_creator_id)
+        representatives = (
+            select(
+                WorkSource.id.label("work_source_id"),
+                WorkSource.source.label("source"),
+                WorkSource.source_creator_id.label("source_creator_id"),
+            )
             .where(
                 WorkSource.source_creator_id.isnot(None),
                 WorkSource.source_creator_id != "",
             )
-            .distinct()
-            .order_by(WorkSource.source, WorkSource.source_creator_id)
+            .distinct(WorkSource.source, WorkSource.source_creator_id)
+            .order_by(
+                WorkSource.source,
+                WorkSource.source_creator_id,
+                WorkSource.work_id,
+                WorkSource.id,
+            )
+            .subquery()
         )
-        keys = list(rows.all())
-        # Hydrate all descriptors with a fixed query count.  The former loop
-        # performed several queries per repository and made the status route
-        # scale linearly with network round trips (804 repositories took
-        # seconds even before filesystem probes began).
-        hydrated = await self._hydrate_repository_keys(keys)
+        repository_identities = (
+            select(
+                SubscriptionSource.source.label("source"),
+                SubscriptionSource.source_creator_id.label("source_creator_id"),
+                SubscriptionSource.id.label("repository_id"),
+                SubscriptionSource.subscription_id.label("subscription_id"),
+            )
+            .where(
+                SubscriptionSource.source_creator_id.isnot(None),
+                SubscriptionSource.source_creator_id != "",
+            )
+            .distinct(
+                SubscriptionSource.source,
+                SubscriptionSource.source_creator_id,
+            )
+            .order_by(
+                SubscriptionSource.source,
+                SubscriptionSource.source_creator_id,
+                SubscriptionSource.created_at,
+                SubscriptionSource.id,
+            )
+            .subquery()
+        )
+        rows = (
+            await self.db.execute(
+                select(
+                    WorkSource.source.label("source"),
+                    WorkSource.source_creator_id.label("source_creator_key"),
+                    WorkSource.source_work_id.label("source_work_id"),
+                    WorkSource.raw_metadata.label("raw_metadata"),
+                    repository_identities.c.repository_id,
+                    Subscription.creator_id.label("subscription_creator_id"),
+                    SourceCreator.creator_id.label("fallback_creator_id"),
+                )
+                .join(
+                    representatives,
+                    WorkSource.id == representatives.c.work_source_id,
+                )
+                .outerjoin(
+                    repository_identities,
+                    and_(
+                        repository_identities.c.source == WorkSource.source,
+                        repository_identities.c.source_creator_id
+                        == WorkSource.source_creator_id,
+                    ),
+                )
+                .outerjoin(
+                    Subscription,
+                    Subscription.id == repository_identities.c.subscription_id,
+                )
+                .outerjoin(
+                    SourceCreator,
+                    and_(
+                        SourceCreator.source == WorkSource.source,
+                        SourceCreator.source_creator_id
+                        == WorkSource.source_creator_id,
+                    ),
+                )
+                .order_by(WorkSource.source, WorkSource.source_creator_id)
+            )
+        ).all()
+
+        config = self._path_config()
         out: list[RepoDescriptor] = []
         seen: set[str] = set()
-        for desc in hydrated:
-            if desc and desc.key() not in seen:
-                seen.add(desc.key())
-                out.append(desc)
+        for row in rows:
+            repository_id = (
+                str(row.repository_id)
+                if row.repository_id is not None
+                else f"{row.source}:{row.source_creator_key}"
+            )
+            if repository_id in seen:
+                continue
+            seen.add(repository_id)
+            creator_id = row.subscription_creator_id or row.fallback_creator_id
+            out.append(
+                RepoDescriptor(
+                    repository_id=repository_id,
+                    source=row.source,
+                    source_creator_id=row.source_creator_key,
+                    creator_id=str(creator_id) if creator_id else None,
+                    creator_dir=resolve_creator_directory(
+                        row.source,
+                        row.raw_metadata or {},
+                        row.source_work_id,
+                        config=config,
+                    ),
+                )
+            )
         return out

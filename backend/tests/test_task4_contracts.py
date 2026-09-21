@@ -913,6 +913,7 @@ async def test_mixed_attention_http_and_discriminated_schema_preserve_navigation
     task.reason_code = "process_failed"
     binding = (await db.execute(select(UserSubscriptionSource).where(UserSubscriptionSource.user_id == client.actor_id))).scalar_one()
     binding.auth_healthy = False
+    binding.auth_status = "unhealthy"
     binding.auth_error_reason = "Fixture credential expired"
     repository_id = str(binding.subscription_source_id)
     await db.commit()

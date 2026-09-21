@@ -947,14 +947,14 @@ class GitlleryService:
 
         from app.services.cache import TTL, cache_get, cache_key, cache_set
 
-        key = cache_key(
+        status_cache_key = cache_key(
             "gitllery:status",
             repository_id=repository_id,
             deep=deep,
             format="segment-v1-db",
         )
         if not deep:
-            cached = cache_get(key)
+            cached = cache_get(status_cache_key)
             if cached is not None:
                 return cached
 
@@ -1125,7 +1125,7 @@ class GitlleryService:
             "last_verified_at": last_verified_at,
         }
         if not deep:
-            cache_set(key, result, TTL["gitllery:status"])
+            cache_set(status_cache_key, result, TTL["gitllery:status"])
         return result
 
     async def reconcile(

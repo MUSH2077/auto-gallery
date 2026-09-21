@@ -1906,7 +1906,7 @@ export interface paths {
         put?: never;
         /**
          * Gitllery Backfill
-         * @description Capture missing historical intents, then wake bounded projection.
+         * @description Compatibility entry: start a full build after a passing canary.
          */
         post: operations["post_api_v1_curation_gitllery_backfill"];
         delete?: never;
@@ -1925,10 +1925,70 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Gitllery Backfill
-         * @description Capture missing historical intents, then wake bounded projection.
+         * Gitllery Build Compatibility
+         * @description Compatibility entry: start the required canary generation.
          */
         post: operations["post_api_v1_curation_gitllery_build"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/builds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Gitllery Build
+         * @description Queue a resumable side-by-side build; active data is never replaced.
+         */
+        post: operations["post_api_v1_curation_gitllery_builds"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/builds/{build_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gitllery Build
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        get: operations["get_api_v1_curation_gitllery_builds_build_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/curation/gitllery/builds/{build_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Gitllery Build
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_curation_gitllery_builds_build_id_verify"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4840,8 +4900,8 @@ export interface paths {
          * Thumb
          * @description Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
          *
-         *     Thumbnails are content-addressed by asset id and never change, so they are
-         *     safe to cache in the browser. preview/original stay uncached (auth-gated).
+         *     Thumbnails are content-addressed by asset id and never change. Keep them in
+         *     the signed-in browser cache, but out of shared intermediary caches.
          */
         get: operations["get_media_thumb_asset_id"];
         put?: never;
@@ -6241,6 +6301,90 @@ export interface components {
             twitter?: components["schemas"]["TwitterSourceConfig"] | null;
             weibo?: components["schemas"]["WeiboSourceConfig"] | null;
         };
+        /** GitlleryBuildCreateRequest */
+        GitlleryBuildCreateRequest: {
+            /** Generation */
+            generation?: string | null;
+            /**
+             * Scope
+             * @default canary
+             * @enum {string}
+             */
+            scope: "canary" | "full";
+        };
+        /** GitlleryBuildOperationResponse */
+        GitlleryBuildOperationResponse: {
+            build: components["schemas"]["GitlleryBuildRead"];
+            /** Job Id */
+            job_id: string;
+            /** Operation Type */
+            operation_type: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+        };
+        /** GitlleryBuildRead */
+        GitlleryBuildRead: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Cursor Commit Id */
+            cursor_commit_id?: string | null;
+            /** Cursor Created At */
+            cursor_created_at?: string | null;
+            /** Generation */
+            generation: string;
+            /** High Water Commit Id */
+            high_water_commit_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "build" | "verify" | "restore";
+            /** Last Error */
+            last_error?: string | null;
+            /** Repository Key */
+            repository_key?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "running" | "staged" | "complete" | "failed" | "cancelled";
+            /** Stats */
+            stats?: {
+                [key: string]: unknown;
+            } | null;
+            /** Summary Hash */
+            summary_hash?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** GitlleryBuildVerifyRequest */
+        GitlleryBuildVerifyRequest: {
+            /**
+             * Deep
+             * @default true
+             */
+            deep: boolean;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            };
+        };
         /** GitlleryCapabilities */
         GitlleryCapabilities: {
             automatic_projection: components["schemas"]["GitlleryCapability"];
@@ -6433,6 +6577,8 @@ export interface components {
             head_segment?: string | null;
             /** Last Complete Commit Id */
             last_complete_commit_id?: string | null;
+            /** Last Verified At */
+            last_verified_at?: string | null;
             /** Object Integrity Ok */
             object_integrity_ok: boolean;
             /**
@@ -6516,6 +6662,13 @@ export interface components {
              * @default 1
              */
             format_revision: number;
+            /** Last Verified At */
+            last_verified_at?: string | null;
+            /**
+             * Legacy Repositories
+             * @default 0
+             */
+            legacy_repositories: number;
             /** Missing Repos */
             missing_repos: number;
             /**
@@ -6528,23 +6681,61 @@ export interface components {
              * @default v1
              */
             product_version: string;
+            /** Projection Error */
+            projection_error?: string | null;
             /**
              * Projection Mode
              * @default shadow
              */
             projection_mode: string;
+            /**
+             * Projection State
+             * @default shadow_unbuilt
+             */
+            projection_state: string;
             /** Repositories */
             repositories: components["schemas"]["GitlleryRepoStatus"][];
+            /**
+             * Segment Repositories
+             * @default 0
+             */
+            segment_repositories: number;
+            /**
+             * Unplanned Intents
+             * @default 0
+             */
+            unplanned_intents: number;
+        };
+        /** GitlleryVerifyOperationResponse */
+        GitlleryVerifyOperationResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Operation Type */
+            operation_type: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "enqueued";
+            /** Task Id */
+            task_id: string;
+            verification: components["schemas"]["GitlleryBuildRead"];
         };
         /** GitlleryVerifyRequest */
         GitlleryVerifyRequest: {
+            /** Build Id */
+            build_id?: string | null;
             /**
              * Deep
              * @default false
              */
             deep: boolean;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            };
             /** Repository Id */
-            repository_id: string;
+            repository_id?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -14646,7 +14837,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14693,7 +14884,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14726,6 +14917,159 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_builds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitlleryBuildCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitlleryBuildOperationResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_curation_gitllery_builds_build_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitlleryBuildRead"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_curation_gitllery_builds_build_id_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitlleryBuildVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitlleryVerifyOperationResponse"];
+                };
+            };
+            /** @description Missing, invalid, or expired JWT. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -15093,7 +15437,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JsonValue"];
+                    "application/json": components["schemas"]["GitlleryVerifyOperationResponse"];
                 };
             };
             /** @description Missing, invalid, or expired JWT. */
@@ -22852,11 +23196,22 @@ export interface operations {
             /** @description WebP thumbnail bytes. */
             200: {
                 headers: {
+                    /** @description Private browser cache policy. */
+                    "Cache-Control"?: string;
+                    /** @description Thumbnail entity tag for conditional requests. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "image/webp": string;
                 };
+            };
+            /** @description Thumbnail has not changed. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

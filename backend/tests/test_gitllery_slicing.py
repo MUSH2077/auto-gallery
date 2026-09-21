@@ -283,6 +283,86 @@ async def test_repository_page_hydrates_a_bounded_page_without_per_key_queries()
 
             assert len(descriptors) == 8
             assert len(observed) <= 5, "Repository page hydration must stay O(1) in page size"
+
+            observed.clear()
+            event.listen(engine.sync_engine, "before_cursor_execute", record_query)
+            try:
+                all_descriptors = await RepoResolver(db).all_repositories()
+            finally:
+                event.remove(engine.sync_engine, "before_cursor_execute", record_query)
+
+            assert len(all_descriptors) == 8
+            assert len(observed) <= 2, (
+                "Full repository discovery must resolve representatives and "
+                "identities in one bounded database read"
+            )
+            representative_queries = [
+                statement
+                for statement in observed
+                if "DISTINCT ON (work_sources.source, work_sources.source_creator_id)"
+                in statement
+            ]
+            assert len(representative_queries) == 1
+            assert not any("row_number() OVER" in statement for statement in observed)
+            assert " IN (" not in representative_queries[0], (
+                "The all-repository path must not compare every WorkSource "
+                "against an expanded repository-key list"
+            )
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_all_repositories_chooses_one_deterministic_work_source_per_identity():
+    from uuid import UUID
+
+    from app.database import async_session, engine
+    from app.models import Work, WorkSource
+    from app.services.gitllery.slicing import RepoResolver
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            work = Work(title="merged-work")
+            db.add(work)
+            await db.flush()
+            # A merge may leave multiple provider works on one canonical work.
+            # Insert the larger id first so heap order cannot masquerade as the
+            # deterministic representative order.
+            db.add_all(
+                [
+                    WorkSource(
+                        id=UUID(int=2),
+                        work_id=work.id,
+                        source="pixiv",
+                        source_work_id="high",
+                        source_creator_id="same-creator",
+                        raw_metadata={"id": "high"},
+                    ),
+                    WorkSource(
+                        id=UUID(int=1),
+                        work_id=work.id,
+                        source="pixiv",
+                        source_work_id="low",
+                        source_creator_id="same-creator",
+                        raw_metadata={"id": "low"},
+                    ),
+                ]
+            )
+            await db.commit()
+
+            resolver = RepoResolver(db)
+            resolver._gallerydl_config = {
+                "extractor": {"pixiv": {"directory": ["pixiv", "{id}"]}}
+            }
+            descriptors = await resolver.all_repositories()
+
+            assert len(descriptors) == 1
+            assert descriptors[0].repository_id == "pixiv:same-creator"
+            assert descriptors[0].creator_dir == "low"
     finally:
         async with async_session() as db:
             await _clear(db)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from io import StringIO
+import threading
 from uuid import uuid4
 
 import pytest
@@ -240,6 +241,54 @@ def test_process_detach_is_fenced_by_expected_pid(monkeypatch):
     assert listener.detach_process(4242) is True
     listener._handle_pause()
     assert signals == [4242]
+
+
+def test_control_listener_stop_closes_blocking_pubsub_and_joins(monkeypatch):
+    """A completed job must return its shared-pool connection immediately."""
+
+    from app.jobs import worker_control
+
+    entered = threading.Event()
+    closed = threading.Event()
+
+    class BlockingPubSub:
+        def subscribe(self, _channel):
+            return None
+
+        def listen(self):
+            entered.set()
+            while not closed.wait(0.01):
+                pass
+            if False:
+                yield None
+
+        def unsubscribe(self, _channel):
+            return None
+
+        def close(self):
+            closed.set()
+
+    pubsub = BlockingPubSub()
+
+    class FakeRedis:
+        def pubsub(self):
+            return pubsub
+
+    monkeypatch.setattr(worker_control, "get_redis", lambda: FakeRedis())
+    listener = worker_control.ControlListener("completed-import")
+    listener.start()
+    assert entered.wait(1)
+
+    try:
+        listener.stop()
+
+        assert closed.is_set()
+        assert listener._thread is not None
+        assert not listener._thread.is_alive()
+    finally:
+        closed.set()
+        if listener._thread is not None:
+            listener._thread.join(timeout=1)
 
 
 async def _clear_download_tables(db) -> None:

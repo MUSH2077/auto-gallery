@@ -15,7 +15,7 @@ import pytest
 
 PREDECESSOR_REVISION = "a6c8e0f2b4d7"
 NULLABLE_REVISION = "b8d0f2a4c6e9"
-CURRENT_HEAD_REVISION = "fe46f80abc24"
+CURRENT_HEAD_REVISION = "ff57a91bcd35"
 
 
 def _database_url(test_database_url: str, marker: str) -> tuple[str, str, str]:

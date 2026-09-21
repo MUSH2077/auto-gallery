@@ -58,6 +58,12 @@ docker compose --env-file .env.ci down -v
 - [ ] Admin login, a small authorized sync, import, search, media preview,
       backup creation, and restore validation were exercised.
 - [ ] Upgrade and rollback were tested when the release contains migrations.
+- [ ] Stability/performance releases completed the disposable 70k-intent /
+      100k-asset benchmark and recorded a production-data read-only sample.
+- [ ] Gitllery remains `shadow` unless the separate 24-hour incremental gate in
+      `stability-performance-rollout.md` has complete reviewed evidence.
+- [ ] The seven-day soak is recorded as pending or complete; it is never
+      inferred from automated tests.
 - [ ] For multi-user discovery schema, application rollback retains additive
       tables and summary caches; no production Alembic downgrade drops them.
 - [ ] Every migration is backward-compatible with the previous application
