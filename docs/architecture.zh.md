@@ -49,17 +49,18 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 （跨用户共享）
 creator ──< source_creator
 creator ──< creator_link
+creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 
-（用户隔离）
-user ──< subscription ──< subscription_source
+（用户隔离意图）
+user ──< user_subscription >── subscription
+user_subscription ──< user_subscription_source >── subscription_source
+user ──< remote_account ──< discovery_candidate
 user ──< album ──< album_work ── work
-user ──< download_job
-import_job（通过 subscription 继承隔离）
 
 （运维 / 横切）
 task_run ──< task_event        # 统一任务信封 —— 见"统一任务系统"
@@ -76,8 +77,11 @@ storage_artifact               # 下载 → 导入账本 —— 见"任务队列
 - **work_source**：来源特定的作品记录，保留原始元数据
 - **asset**：本地文件
 - **asset_source**：来源特定的文件记录
-- **subscription**：用户追踪创作者的意图
-- **subscription_source**：每个订阅的逐来源开关
+- **subscription**：每位创作者唯一、跨用户共享的规范仓库
+- **subscription_source**：跨用户共享的规范来源；启用/到期字段是兼容性汇总缓存
+- **user_subscription**：当前用户对规范订阅的私有名称、启停与调度设置
+- **user_subscription_source**：当前用户的来源启用、到期、认证健康度和可选远端账号绑定
+- **remote_account** / **discovery_candidate**：账号私有的发现配置与扫描候选
 - **album**：用户创建的作品收藏集（Phase 6+）
 - **album_work**：album 与 work 的多对多关联
 
@@ -87,8 +91,12 @@ storage_artifact               # 下载 → 导入账本 —— 见"任务队列
 - `(source, source_work_id)` 在 work_sources 表
 - `(source, source_asset_id)` 在 asset_sources 表
 - `(normalized_name)` 在 tags 表
-- `(user_id, creator_id)` 在 subscriptions 表（多用户可订阅同一创作者）
-- `(subscription_id, source)` 在 subscription_sources 表
+- `(creator_id)` 在 subscriptions 表
+- `(subscription_id, source_url)` 在 subscription_sources 表
+- `(user_id, subscription_id)` 在 user_subscriptions 表
+- `(user_subscription_id, subscription_source_id)` 在 user_subscription_sources 表
+- `(user_id, source)` 在 remote_accounts 表
+- `(remote_account_id, source_creator_id)` 在 discovery_candidates 表
 - `(username)` 在 users 表
 - `(album_id, work_id)` 在 album_works 表
 
@@ -109,6 +117,9 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 
 - **为什么用 RQ**：比 Celery 更简单，使用已有的 Redis。`download_job`/`import_job` 数据库表是真实数据源，队列后端可替换。
 - **逐来源下载队列**：每个来源有独立的 RQ 队列（`downloads:pixiv`、`downloads:danbooru` 等）以隔离——一个慢来源不会阻塞另一个。`worker-download` 容器监听所有来源队列。
+- **远端发现队列**：`worker-discovery` 独占并监督 `discovery` 队列。scheduler
+  只准入到期远端账号；provider 分页与游标 checkpoint 在子 worker 中执行。任务只携带不透明的
+  task/account ID，绝不携带凭据。
 - **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。
 - **任务超时**：所有入队调用使用 `job_timeout=7200`（2 小时），防止 RQ 杀掉长时间运行的下载任务（默认 180s）。
 - **代理预检**：启动 gallery-dl 前，worker 先做 DNS 解析 + 代理连通性检查（非阻塞诊断）。
@@ -125,6 +136,11 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **权威载荷仍在领域表**：`task_run` 是信封；`download_jobs` / `import_jobs` 仍是各自字段的真实数据源。清空任务（数据管理）会同时删除 `task_runs` **和**领域任务表。
 
 ## 数据流
+
+私有意图保存在 `user_subscriptions`、`user_subscription_sources`、
+`remote_accounts` 与 `discovery_candidates`。规范的 `subscription`/
+`subscription_source`、creator、work、asset 与文件继续全局共享去重。规范来源的汇总启用/
+到期字段只是从私有成员需求派生的兼容缓存。
 
 ### 下载流程
 ```
@@ -250,8 +266,9 @@ Worker 取走 import_job
 |---|---|---|
 | `DOWNLOAD_ROOT` | `/downloads` | 原图仓库：长期保存原始文件，按 source/creator/work 组织 |
 | `LIBRARY_ROOT` | `/library` | 索引层：每个作品的元数据 + 缩略图 |
-| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置、cookie、短生命周期任务配置 |
+| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | 持久 gallery-dl 配置/cookie 与不含密钥的任务配置 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用运行时配置 |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | 仅 `worker-download` 使用的 tmpfs，存放权限 0600 的个人认证覆盖文件；永不备份 |
 
 NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 
@@ -277,7 +294,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 │   ├── gallery-dl/                     # GALLERYDL_CONFIG_ROOT
 │   │   ├── config.json                 # gallery-dl 基础配置
 │   │   ├── cookies/                    # 各来源认证 cookie
-│   │   └── jobs/                       # worker 短生命周期任务配置（自动清理）
+│   │   └── jobs/                       # 不含密钥的任务配置；备份时排除
 │   └── app/                            # APP_CONFIG_ROOT — 运行时配置
 │
 ├── docker/                             # 持久化卷
@@ -290,6 +307,9 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
     ├── config/                         # 配置备份
     └── metadata/                       # metadata.json 副本
 ```
+
+个人账号认证覆盖文件不属于 NAS 持久目录。下载 worker 将它们写入专用非持久
+tmpfs `/run/auto-gallery-secrets`，并在使用前验证该边界。
 
 ### 存储规则
 
@@ -323,6 +343,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 | `LIBRARY_ROOT` | `/library` | 元数据 + 缩略图存储路径 |
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl 配置路径 |
 | `APP_CONFIG_ROOT` | `/app-config` | 应用配置路径 |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | 下载 worker 的个人认证覆盖 tmpfs |
 
 ## API 路由分组
 

@@ -287,6 +287,10 @@ def _registered_terminal_outcome(
 ) -> tuple[str, str | None, str | None]:
     """Interpret semantic handler outcomes at the sole terminal writer."""
 
+    if operation_type == "admin-cleanup-metadata-jsons" and result.get("failed", 0):
+        return "failed", str(result["message"]), "metadata_cleanup_partial_failure"
+    if operation_type == "subscription-sync-batch" and result.get("failed_count", 0):
+        return "failed", "Some subscription sources failed", "batch_partial_failure"
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"} and result.get(
         "aborted"
     ):
@@ -357,6 +361,25 @@ async def _heartbeat_registered_admin_operation(
 
 
 async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
+    result = await _run_registered_admin_operation_delivery(task_id, attempt)
+    # A ready successor is already durable. Publish only after the previous
+    # execution lease has been released, so another worker can claim it safely.
+    successor = result.pop("_admin_ready_successor", None)
+    successor_deadline = result.pop("_admin_successor_deadline", None)
+    if successor is not None:
+        import time
+        from app.services.operations import publish_admin_operation
+        from app.services.redis_budget import budget_redis
+        remaining = successor_deadline - time.monotonic() if successor_deadline is not None else 3
+        # The durable outbox owns recovery when the worker has spent its tail
+        # reserve. Never start another Redis wait with no budget remaining.
+        if remaining >= .75:
+            with budget_redis(seconds=min(3, remaining), reserve_seconds=0):
+                await publish_admin_operation(task_id, int(successor))
+    return result
+
+
+async def _run_registered_admin_operation_delivery(task_id: str, attempt: int) -> dict:
     from app.services.operations import (
         AdminOperationAttemptRejected,
         admin_operation_execution_lease,
@@ -412,6 +435,10 @@ async def _run_registered_admin_operation(task_id: str, attempt: int) -> dict:
                 allowed_current_statuses=("enqueued", "running", "paused", "recovering"),
                 status=terminal_status,
                 progress={
+                    **({**{key: value for key, value in result.items() if key.endswith("_count")},
+                        "current": result.get("candidate_count", 0),
+                        "total": result.get("candidate_count", 0)}
+                       if operation_type == "subscription-sync-batch" else {}),
                     "phase": terminal_status,
                     "label": str(
                         result.get("message")
@@ -457,6 +484,12 @@ async def _execute_registered_admin_operation(
 ) -> dict:
     """Dispatch a registered business handler after its durable claim."""
 
+    if operation_type == "subscription-sync-batch-cleanup":
+        from app.services.scheduler_batches import run_batch_cleanup_slice
+        return await run_batch_cleanup_slice(task_id, options)
+    if operation_type == "subscription-sync-batch":
+        from app.services.scheduler_batches import run_batch_slice
+        return await run_batch_slice(task_id, options)
     if operation_type == "admin-clear":
         entity = str(options.get("entity") or "")
         return await _run_clear_operation(entity, task_id)
@@ -464,8 +497,7 @@ async def _execute_registered_admin_operation(
         from app.config import settings
         from app.jobs.import_runner import cleanup_metadata_jsons
 
-        removed = await cleanup_metadata_jsons(settings.download_root)
-        return {"removed": removed, "message": f"Removed {removed} metadata files"}
+        return await cleanup_metadata_jsons(settings.download_root)
     if operation_type == "admin-rebuild":
         return await _run_library_rebuild_operation(task_id, options)
     if operation_type == "admin-disk-import":
@@ -475,6 +507,8 @@ async def _execute_registered_admin_operation(
         )
     if operation_type in {"admin-creator-reenrich", "danbooru-mapping-refresh"}:
         return await _run_creator_reenrich_operation(task_id, options)
+    if operation_type == "admin-creator-alias-backfill":
+        return await _run_creator_alias_backfill_operation(task_id, options)
     if operation_type == "danbooru-import-all":
         from app.services.danbooru_import import import_all_danbooru_artist
 
@@ -624,12 +658,9 @@ def run_cleanup_metadata_jsons_operation(
 ) -> dict:
     """Rolling-upgrade bridge; new deliveries use the registered entrypoint."""
 
-    del job_id, options
-    from app.config import settings
-    from app.jobs.import_runner import cleanup_metadata_jsons
-
-    removed = asyncio.run(cleanup_metadata_jsons(settings.download_root))
-    return {"removed": removed, "message": f"Removed {removed} metadata files"}
+    raise RuntimeError(
+        "Legacy metadata cleanup delivery has no exact registered attempt; submit a new cleanup task"
+    )
 
 
 async def _run_clear_operation(entity: str, job_id: str) -> dict:
@@ -1341,6 +1372,30 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
         )
 
 
+async def _handoff_background_admin_operation(
+    job_id: str, options: dict, result: dict, *, continuation: dict,
+    delay_seconds: float, totals: dict,
+) -> dict:
+    """Commit the successor; the due dispatcher publishes after its cooldown."""
+    from app.services.operations import prepare_admin_operation_handoff
+
+    delivery = current_admin_operation_attempt()
+    if delivery is None:
+        raise RuntimeError("Background continuation requires a registered administrator dispatch")
+    async with async_session() as db:
+        handoff = await prepare_admin_operation_handoff(
+            db, job_id, delivery[1],
+            options={**options, "_background_continuation": continuation,
+                     "_background_totals": totals},
+            delay_seconds=max(2.0, delay_seconds),
+            progress={"phase": "enqueued", "label": "Next background slice queued", **totals},
+        )
+        if handoff is None:
+            raise RuntimeError("Background administrator attempt is no longer current")
+        await db.commit()
+    return {**result, "status": "pending", "_admin_handoff": True}
+
+
 async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
     from app.services.gitllery import GitlleryService
@@ -1376,36 +1431,52 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
     try:
         ordering_lock = gitllery_projection_lock()
         if not ordering_lock.try_acquire():
-            raise RuntimeError("Another Gitllery projection coordinator is active")
+            return await _handoff_background_admin_operation(
+                job_id, options, {}, continuation=options.get("_background_continuation") or {},
+                delay_seconds=2.0, totals=options.get("_background_totals") or {},
+            )
         try:
             async with async_session() as db:
                 svc = GitlleryService(db)
                 if mode == "backfill":
-                    projected = await svc.backfill(resource_owner=job_id)
+                    projected = await svc.backfill(
+                        resource_owner=job_id,
+                        continuation=options.get("_background_continuation"),
+                    )
                 else:
                     projected = await svc.project_pending(
                         repository_id,
                         resource_owner=job_id,
+                        continuation=options.get("_background_continuation"),
                     )
                 # Scoped requests are promoted by project_pending() to one
                 # globally ordered pass, because a commit outbox row can span
                 # multiple repositories. Re-establish the library checkpoint
                 # after either entry point.
-                checkpoint_set = await rebuild_checkpoint(
-                    db,
-                    svc.last_projection_high_water,
-                )
+                continuation = svc.continuation
+                delay_seconds = svc.successor_delay_seconds
+                checkpoint_set = False
+                if continuation is None:
+                    checkpoint_set = await rebuild_checkpoint(db, svc.last_projection_high_water)
         finally:
             ordering_lock.release()
 
+        totals = dict(options.get("_background_totals") or {})
+        for rid, count in projected.items():
+            totals[rid] = totals.get(rid, 0) + count
         result = {
             "mode": mode,
             "repository_id": repository_id,
             "projection_scope": "library",
-            "projected_repos": len(projected),
-            "projected_commits": sum(projected.values()),
+            "projected_repos": len(totals),
+            "projected_commits": sum(totals.values()),
             "checkpoint_rebuilt": checkpoint_set,
         }
+        if continuation is not None:
+            return await _handoff_background_admin_operation(
+                job_id, options, result, continuation=continuation,
+                delay_seconds=delay_seconds, totals=totals,
+            )
         label = f"Projected {result['projected_commits']} commits across {result['projected_repos']} repos"
         if not registered:
             async with async_session() as task_db:
@@ -1455,65 +1526,80 @@ def run_search_reindex_operation(job_id: str, options: dict | None = None) -> di
     return asyncio.run(_run_search_reindex_operation(job_id, options or {}))
 
 
+def run_creator_alias_backfill_operation(
+    job_id: str,
+    options: dict | None = None,
+) -> dict:
+    """Compatibility entry point for the registered creator-alias operation."""
+
+    return asyncio.run(
+        _run_creator_alias_backfill_operation(job_id, options or {})
+    )
+
+
+async def _run_creator_alias_backfill_operation(
+    job_id: str,
+    options: dict,
+) -> dict:
+    from app.services.creator_aliases import backfill_all_creator_aliases
+
+    del job_id, options
+    async with async_session() as db:
+        result = await backfill_all_creator_aliases(
+            db,
+            request_projection=True,
+        )
+    return {**result, "message": "Creator alias backfill complete"}
+
+
 async def _run_search_reindex_operation(job_id: str, options: dict) -> dict:
-    from uuid import UUID
     from app.services.search import SearchService
+    from app.services.search_delivery import run_delivery_slice
+    from app.services.search_rebuild import rebuild_status
+    from app.services.operations import prepare_admin_operation_handoff
     from app.services.tasks import TaskService
 
-    if current_admin_operation_attempt() is None:
-        async with async_session() as task_db:
-            svc = TaskService(task_db)
-            task = await svc.get(UUID(job_id))
-            if task:
-                await svc.update_task(
-                    task,
-                    status="running",
-                    progress={"phase": "running", "label": "Rebuilding search index..."},
-                )
-                await task_db.commit()
-    set_operation_status(job_id, "running", "admin-search-reindex",
-        progress={"phase": "running", "label": "Rebuilding search index..."},
-        meta={"entity": "search-reindex", **options})
-    try:
+    async with async_session() as db:
+        result = await SearchService(db).reindex(resource_owner=job_id)
+    delivery = current_admin_operation_attempt()
+    step = {"successor_delay_seconds": 2}
+    if result["status"] == "busy":
+        result = {**result, "phase": "waiting", "batches": 0}
+    elif result["status"] == "pending":
+        step = await run_delivery_slice()
+        result = await rebuild_status(result["build_id"])
+        if step.get("status") == "ambiguous":
+            step["successor_delay_seconds"] = 15
+            result["message"] = "Search rebuild waiting for remote task reconciliation"
+    if result["status"] in ("pending", "busy") and delivery is not None:
         async with async_session() as db:
-            result = await SearchService(db).reindex(resource_owner=job_id)
-        label = result.get("message") or "Search reindex complete"
-        operation_status = (
-            "complete" if result.get("status") == "ok" else "failed"
-        )
-        if current_admin_operation_attempt() is None:
-            async with async_session() as task_db:
-                svc = TaskService(task_db)
-                task = await svc.get(UUID(job_id))
-                if task:
-                    await svc.update_task(
-                        task,
-                        status=operation_status,
-                        progress={"phase": operation_status, "label": label},
-                        result=result,
-                    )
-                    await task_db.commit()
-        set_operation_status(job_id, operation_status, "admin-search-reindex",
-            progress={"phase": operation_status, "label": label},
-            result=result, meta={"entity": "search-reindex", **options})
-        return result
-    except Exception as exc:
-        logger.exception("Search reindex failed: job_id=%s", job_id)
-        if current_admin_operation_attempt() is None:
-            async with async_session() as task_db:
-                svc = TaskService(task_db)
-                task = await svc.get(UUID(job_id))
-                if task:
-                    await svc.update_task(task, status="failed", progress={"phase": "failed"}, error=str(exc))
-                    await task_db.commit()
-        set_operation_status(job_id, "failed", "admin-search-reindex",
-            progress={"phase": "failed"}, error=str(exc), meta={"entity": "search-reindex", **options})
-        raise
-    finally:
-        release_legacy_operation_lock(
-            "library:search-reindex:active",
-            job_id,
-        )
+            handoff = await prepare_admin_operation_handoff(
+                db, job_id, delivery[1],
+                options={**options, **({"_search_build_id": result["build_id"]} if result.get("build_id") else {})},
+                delay_seconds=max(2, step.get("successor_delay_seconds", 2)),
+                progress={"phase": result["phase"], "label": result["message"], "batches": result["batches"]},
+            )
+            if handoff is None:
+                raise RuntimeError("Search rebuild administrator attempt is no longer current")
+            await db.commit()
+        # The due-dispatch coordinator respects next_retry_at. Calling
+        # publish_admin_operation here would enqueue immediately and erase
+        # the durable delay; the search outbox drives remote polling.
+        return {**result, "_admin_handoff": True}
+    status = "complete" if result["status"] == "ok" else "failed" if result["status"] == "error" else "running"
+    if delivery is None:
+        async with async_session() as db:
+            service = TaskService(db)
+            task = await service.get(UUID(job_id))
+            if task:
+                await service.update_task(task, status=status,
+                    progress={"phase": result.get("phase", status), "label": result.get("message", "Search rebuild")}, result=result)
+                await db.commit()
+        set_operation_status(job_id, status, "admin-search-reindex", result=result,
+                             progress={"phase": result.get("phase", status)}, meta={"entity": "search-reindex", **options})
+    if status in ("complete", "failed"):
+        release_legacy_operation_lock("library:search-reindex:active", job_id)
+    return result
 
 
 def run_curation_backfill_operation(job_id: str, options: dict | None = None) -> dict:
@@ -1551,6 +1637,21 @@ async def _run_curation_backfill_operation(job_id: str, options: dict) -> dict:
         async with async_session() as db:
             result = await CurationService(db).run_backfill(
                 resource_owner=job_id,
+                **({"continuation": options["_background_continuation"]}
+                   if "_background_continuation" in options else {}),
+            )
+        totals = options.get("_background_totals") or {}
+        for field in ("created", "skipped"):
+            if field in result or field in totals:
+                previous = totals.get(field) or {}
+                current = result.get(field) or {}
+                result[field] = {key: previous.get(key, 0) + current.get(key, 0)
+                                 for key in previous.keys() | current.keys()}
+        if result.get("status") == "pending":
+            return await _handoff_background_admin_operation(
+                job_id, options, result, continuation=result["continuation"],
+                delay_seconds=result["successor_delay_seconds"],
+                totals={field: result.get(field, {}) for field in ("created", "skipped")},
             )
         created = result.get("created", {})
         label = (f"Baseline: {created.get('creators', 0)} creators, "
@@ -1736,3 +1837,13 @@ async def _run_hierarchy_delete_operation(job_id: str, options: dict) -> dict:
             "library:hierarchy-delete:active",
             job_id,
         )
+
+
+def run_subscription_sync_batch(task_id: str, options: dict | None = None) -> dict:
+    from app.services.scheduler_batches import run_batch_slice
+    return asyncio.run(run_batch_slice(task_id, options or {}))
+
+
+def run_subscription_sync_batch_cleanup(task_id: str, options: dict | None = None) -> dict:
+    from app.services.scheduler_batches import run_batch_cleanup_slice
+    return asyncio.run(run_batch_cleanup_slice(task_id, options or {}))

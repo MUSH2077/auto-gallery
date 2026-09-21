@@ -18,6 +18,13 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    BusyLoadingError,
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from app.config import settings
 from app.models.storage_artifact import StorageArtifact
@@ -25,6 +32,7 @@ from app.services.queue_admission import (
     REDIS_ENQUEUE_STOP_RATIO,
     QueueAdmissionError,
     ensure_redis_enqueue_capacity,
+    notify_queue_worker,
 )
 from app.services.redis_client import get_redis
 
@@ -48,9 +56,21 @@ DOWNLOAD_ENQUEUE_LOCK_KEY = "lock:download-enqueue-admission"
 # degraded Redis cannot expire the lock while the first producer is still in it.
 DOWNLOAD_ENQUEUE_LOCK_SECONDS = 120
 DOWNLOAD_ENQUEUE_LOCK_WAIT_SECONDS = 5
-RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
 
 logger = logging.getLogger(__name__)
+
+
+class _AdmissionReason(dict[str, Any]):
+    """JSON-compatible reason carrying private exception classification."""
+
+    def __init__(self, *args, transient: bool | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.transient = transient
+
+    def copy(self) -> _AdmissionReason:
+        """Return a defensive copy without discarding private provenance."""
+
+        return type(self)(self, transient=self.transient)
 
 
 class DownloadAdmissionError(RuntimeError):
@@ -63,14 +83,29 @@ class DownloadAdmissionError(RuntimeError):
         *,
         status_code: int = 503,
         details: dict[str, Any] | None = None,
+        transient: bool | None = None,
+        publication_uncertain: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.details = details or {}
+        self.transient = transient
+        self.publication_uncertain = publication_uncertain
 
     def payload(self) -> dict[str, Any]:
         return {"code": self.code, "message": str(self), **self.details}
+
+
+def is_transient_redis_admission_error(exc: Exception) -> bool:
+    """Classify Redis failures without relying on messages or class names."""
+
+    if isinstance(exc, (AuthenticationError, AuthorizationError)):
+        return False
+    return isinstance(
+        exc,
+        (RedisConnectionError, RedisTimeoutError, BusyLoadingError),
+    )
 
 
 @dataclass
@@ -181,11 +216,11 @@ def _redis_capacity_and_queue_state(
             }, waiting, maximum_queued
         return None, waiting, maximum_queued
     except Exception as exc:
-        return {
+        return _AdmissionReason({
             "code": "redis_unwritable",
             "message": "Redis cannot accept download jobs",
             "error_type": type(exc).__name__,
-        }, None, maximum_queued
+        }, transient=is_transient_redis_admission_error(exc)), None, maximum_queued
 
 
 def _redis_capacity_and_queue_reason(
@@ -209,13 +244,6 @@ def _existing_rq_job(redis, rq_job_id: str):
         return Job.fetch(rq_job_id, connection=redis)
     except NoSuchJobError:
         return None
-
-
-def _notify_download_worker(redis) -> None:
-    try:
-        redis.publish(f"{RESOURCE_WORK_CHANNEL_PREFIX}download", "queued")
-    except Exception:
-        logger.debug("Unable to publish download work event", exc_info=True)
 
 
 def _consume_batch_slot() -> None:
@@ -255,6 +283,7 @@ def enqueue_download_rq(
             "redis_unwritable",
             "Redis download admission lock is unavailable",
             details={"error_type": type(exc).__name__},
+            transient=is_transient_redis_admission_error(exc),
         ) from exc
     if not acquired:
         raise DownloadAdmissionError(
@@ -267,8 +296,25 @@ def enqueue_download_rq(
         # An earlier request may have succeeded but lost its Redis response.
         # Treat the durable id as proof of publication before applying current
         # capacity gates, otherwise an idempotent retry could be rejected.
-        existing = _existing_rq_job(redis, rq_job_id)
+        try:
+            existing = _existing_rq_job(redis, rq_job_id)
+        except Exception as exc:
+            raise DownloadAdmissionError(
+                "redis_unwritable",
+                "Unable to confirm an existing download job",
+                details={
+                    "error_type": type(exc).__name__,
+                    "rq_job_id": rq_job_id,
+                },
+                transient=is_transient_redis_admission_error(exc),
+                publication_uncertain=True,
+            ) from exc
         if existing is not None:
+            notify_queue_worker(
+                queue_name,
+                redis,
+                existing_job=existing,
+            )
             return existing
 
         reason = _redis_capacity_and_queue_reason(
@@ -300,9 +346,11 @@ def enqueue_download_rq(
         except Exception as exc:
             # Resolve the ambiguous-response case: Redis may have committed the
             # job even though the client observed a timeout/reset.
+            confirmation_error: Exception | None = None
             try:
                 existing = _existing_rq_job(redis, rq_job_id)
-            except Exception:
+            except Exception as confirmation_exc:
+                confirmation_error = confirmation_exc
                 existing = None
             if existing is not None:
                 logger.warning(
@@ -310,15 +358,34 @@ def enqueue_download_rq(
                     rq_job_id,
                 )
                 _consume_batch_slot()
-                _notify_download_worker(redis)
+                notify_queue_worker(
+                    queue_name,
+                    redis,
+                    existing_job=existing,
+                )
                 return existing
             raise DownloadAdmissionError(
                 "redis_unwritable",
                 "Redis rejected the download job",
-                details={"error_type": type(exc).__name__, "rq_job_id": rq_job_id},
+                details={
+                    "error_type": type(exc).__name__,
+                    "rq_job_id": rq_job_id,
+                    **(
+                        {
+                            "confirmation_error_type": type(
+                                confirmation_error
+                            ).__name__,
+                        }
+                        if confirmation_error is not None
+                        else {}
+                    ),
+                },
+                transient=is_transient_redis_admission_error(exc),
+                publication_uncertain=confirmation_error is not None,
             ) from exc
         _consume_batch_slot()
-        _notify_download_worker(redis)
+        if delay_seconds is None or delay_seconds <= 0:
+            notify_queue_worker(queue_name, redis)
         return rq_job
     finally:
         try:
@@ -507,7 +574,7 @@ async def download_backpressure_reason(
     cached = _download_admission_snapshot.get()
     if cached is not None and cached.automatic == automatic:
         if cached.reason:
-            return dict(cached.reason)
+            return cached.reason.copy()
         if include_queue and cached.remaining_slots <= 0:
             return {
                 "code": "queue_saturated",
@@ -534,5 +601,10 @@ def admission_error(reason: dict[str, Any]) -> DownloadAdmissionError:
         code,
         message,
         status_code=status_code,
-        details={key: value for key, value in reason.items() if key not in {"code", "message"}},
+        details={
+            key: value
+            for key, value in reason.items()
+            if key not in {"code", "message"}
+        },
+        transient=getattr(reason, "transient", None),
     )

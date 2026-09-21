@@ -10,8 +10,8 @@ import { api, queryKeys } from "@/lib/api";
  * Admins implicitly have every module; non-admins are gated by
  * `me.permissions` (a subset of the module keys in `me.modules`).
  */
-export function usePermissions() {
-  const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
+export function usePermissions({ enabled = true }: { enabled?: boolean } = {}) {
+  const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe, enabled });
 
   const isAdmin = !!me.data?.is_admin;
   const permissions = me.data?.permissions || [];
@@ -21,5 +21,12 @@ export function usePermissions() {
     return permissions.includes(module);
   }
 
-  return { isAdmin, has, isLoading: me.isLoading };
+  return {
+    isAdmin,
+    has,
+    isLoading: me.isLoading,
+    error: me.error,
+    refetch: me.refetch,
+    user: me.data,
+  };
 }

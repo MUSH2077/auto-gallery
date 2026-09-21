@@ -46,6 +46,10 @@ def get_redis() -> redis_lib.Redis:
     In the rare case a caller needs a completely fresh connection
     (e.g. after a fork), call ``reset_redis()`` first.
     """
+    from app.services.redis_budget import current_budget_client
+    bounded = current_budget_client()
+    if bounded is not None:
+        return bounded
     global _client
     if _client is None:
         _client = redis_lib.Redis(connection_pool=_get_pool())

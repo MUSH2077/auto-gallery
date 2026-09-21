@@ -71,7 +71,7 @@ _SPECS = {
 }
 
 
-async def outbox_counts(db: AsyncSession) -> dict[str, int]:
+async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[str, int]:
     """Count only work that is ready to run or whose processing lease expired.
 
     Active rows must not generate another RQ coordinator every 15 seconds.  A
@@ -161,6 +161,43 @@ async def outbox_counts(db: AsyncSession) -> dict[str, int]:
         ~target_has_earlier,
         leased_ready(GitlleryProjectionTarget),
     )
+    if ready_only:
+        from app.models.search_delivery_receipt import SearchDeliveryReceipt
+        from app.models.repository_sync_receipt import SearchIndexState
+        from app.services.search_delivery import checkpoint_due_condition
+        active_delivery = exists().where(SearchDeliveryReceipt.state.not_in(("complete", "failed")))
+        from app.models.search_rebuild import SearchRebuild
+        from app.services.search_rebuild import membership_bootstrap_due_condition
+        search_due = or_(
+            and_(~active_delivery, membership_bootstrap_due_condition()),
+            exists().where(SearchRebuild.state.not_in(("complete", "failed"))),
+            and_(~active_delivery, exists().where(
+                SearchProjectionOutbox.completed_at.is_(None),
+                SearchProjectionOutbox.available_at <= now,
+            )),
+            and_(~active_delivery, exists().where(checkpoint_due_condition(SearchIndexState))),
+            exists().where(
+                SearchDeliveryReceipt.state.not_in(("complete", "failed", "ambiguous")),
+                SearchDeliveryReceipt.available_at <= now,
+                or_(SearchDeliveryReceipt.lease_until.is_(None), SearchDeliveryReceipt.lease_until <= now),
+            ),
+        )
+        stmt = select(
+            exists().where(import_ready).label("import_projection"),
+            exists().where(leased_ready(MediaDerivativeOutbox)).label("media"),
+            or_(exists(select(1).select_from(git_head).where(git_head_ready)),
+                exists().where(git_target_ready)).label("gitllery"),
+            exists().where(or_(
+                and_(AssetDedupOutbox.state.in_(("pending", "failed")), AssetDedupOutbox.available_at <= now),
+                and_(AssetDedupOutbox.state == "processing", AssetDedupOutbox.updated_at <= now - timedelta(minutes=15)),
+            )).label("dedup"),
+            search_due.label("search"),
+        )
+        row = (await db.execute(stmt)).one()
+        values = {key: int(bool(getattr(row, key))) for key in _SPECS}
+        if settings.gitllery_projection_mode.strip().lower() != "active":
+            values["gitllery"] = 0
+        return values
     stmt = select(
         select(func.count(ImportCurationOutbox.id))
         .where(import_ready)
@@ -307,6 +344,7 @@ def _wake_job_is_active(redis_client, job_id: str) -> bool:
 
     from rq.exceptions import NoSuchJobError
     from rq.job import Job
+    from rq.registry import ScheduledJobRegistry
 
     try:
         job = Job.fetch(job_id, connection=redis_client)
@@ -317,6 +355,18 @@ def _wake_job_is_active(redis_client, job_id: str) -> bool:
         return True
     status = get_status(refresh=True)
     normalized = str(getattr(status, "value", status)).lower()
+    if normalized == "scheduled":
+        origin = str(getattr(job, "origin", "") or "")
+        if not origin:
+            return False
+        registry = ScheduledJobRegistry(origin, connection=redis_client)
+        if str(job_id) not in {str(item) for item in registry.get_job_ids()}:
+            # RQ persists the status in the job hash separately from the
+            # scheduled-registry zset.  A Redis restore or registry cleanup can
+            # therefore leave a job that says ``scheduled`` but can never be
+            # promoted to its queue.  Treat that split-brain record as stale so
+            # the compare-delete/re-enqueue path can recover the durable outbox.
+            return False
     return normalized in {"queued", "started", "deferred", "scheduled"}
 
 
@@ -480,6 +530,19 @@ async def outbox_health(db: AsyncSession) -> dict[str, dict]:
             else None
         ),
     }
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    active_receipt = (await db.execute(
+        select(SearchDeliveryReceipt).where(SearchDeliveryReceipt.state.not_in(("complete", "failed")))
+    )).scalar_one_or_none()
+    if active_receipt:
+        result["search"]["remote_delivery"] = {
+            "receipt_id": str(active_receipt.id), "state": active_receipt.state,
+            "index_uid": active_receipt.index_uid, "action": active_receipt.action,
+            "task_uid": active_receipt.task_uid, "available_at": active_receipt.available_at.isoformat(),
+            "last_error": active_receipt.last_error,
+            "recovery": "python -m app.services.search_delivery reconcile --receipt <receipt_id> --task-uid <verified_task_uid>"
+                        if active_receipt.state in ("ambiguous", "submitting") else None,
+        }
     return result
 
 

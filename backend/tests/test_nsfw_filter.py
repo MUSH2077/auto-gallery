@@ -204,7 +204,11 @@ async def test_search_service_adds_nsfw_filter_when_force_sfw(monkeypatch):
     monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
-    await svc.search("cat", kind="works", force_sfw=True)
+    # Exercise parsed Meili filter composition without unrelated SQL alias
+    # resolution or backend routing, which have their own integration tests.
+    await svc._search_meili(
+        search_module.parse_search_query("cat", "works"), ["works"], {}, 0, 20, True,
+    )
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
@@ -220,7 +224,9 @@ async def test_search_service_omits_nsfw_filter_by_default(monkeypatch):
     monkeypatch.setattr(search_module, "_client", lambda **_kwargs: fake)
 
     svc = search_module.SearchService(db=None)
-    await svc.search("cat", kind="works")
+    await svc._search_meili(
+        search_module.parse_search_query("cat", "works"), ["works"], {}, 0, 20, False,
+    )
 
     works_calls = fake.calls_by_index.get(search_module.WORKS_INDEX)
     assert works_calls, "expected the works index to be searched"
@@ -332,4 +338,68 @@ async def test_restricted_curation_user_gets_404_favoriting_nsfw_work():
     finally:
         async with async_session() as db:
             await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restricted_user_gets_404_on_nsfw_work_remote_state_before_account_lookup():
+    """The remote-state path shares detail visibility and never reaches its provider boundary."""
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Work, WorkSource
+    from app.remote_discovery import registry
+
+    class Adapter:
+        source = "pixiv"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_work_state(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AssertionError("hidden work must not query remote state")
+
+    adapter = Adapter()
+    old_adapter = registry._adapters.get("pixiv")
+    registry.register(adapter)
+    transport = ASGITransport(app=app)
+
+    async def clear_remote_state_fixture(db):
+        await db.execute(text("DELETE FROM work_sources WHERE source_work_id = 'nsfw-remote-state'"))
+        await db.execute(text("DELETE FROM works WHERE title = 'nsfw_filter_remote_state'"))
+        await db.execute(text("DELETE FROM users WHERE username = :username"), {
+            "username": f"{PREFIX}restricted_remote_state",
+        })
+        await db.commit()
+
+    try:
+        async with async_session() as db:
+            await clear_remote_state_fixture(db)
+            await _seed_user(db, f"{PREFIX}restricted_remote_state", nsfw_visible=False)
+            nsfw = Work(title="nsfw_filter_remote_state", is_nsfw=True)
+            db.add(nsfw)
+            await db.flush()
+            db.add(WorkSource(
+                work_id=nsfw.id,
+                source="pixiv",
+                source_work_id="nsfw-remote-state",
+                raw_metadata={"total_view": 999},
+            ))
+            await db.commit()
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                f"/api/v1/works/{nsfw.id}/remote-state",
+                headers=_headers(f"{PREFIX}restricted_remote_state"),
+            )
+            assert response.status_code == 404, response.text
+            assert adapter.calls == 0
+    finally:
+        if old_adapter is None:
+            registry._adapters.pop("pixiv", None)
+        else:
+            registry.register(old_adapter)
+        async with async_session() as db:
+            await clear_remote_state_fixture(db)
         await engine.dispose()

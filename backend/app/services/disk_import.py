@@ -530,7 +530,7 @@ async def _drain_pending_ledger(
                             if row.source_work_id in existing_ids
                         }),
                     )
-                    .values(
+                    .values(metadata_completion_proof=None,
                         state="done",
                         import_job_id=None,
                         lease_token=None,
@@ -562,7 +562,7 @@ async def _drain_pending_ledger(
                             if row.source_work_id in missing_ids
                         }),
                     )
-                    .values(
+                    .values(metadata_completion_proof=None,
                         state="failed",
                         import_job_id=None,
                         lease_token=None,
@@ -613,7 +613,7 @@ async def _drain_pending_ledger(
                     downloads_artifact_predicate(),
                     StorageArtifact.id.in_(importable_row_ids),
                 )
-                .values(
+                .values(metadata_completion_proof=None,
                     download_job_id=recovery_job.id,
                     state="new",
                     import_job_id=None,
@@ -1075,7 +1075,7 @@ async def reconcile_downloads_to_db(
                             [row["file_path"] for row in rows]
                         ),
                     )
-                    .values(
+                    .values(metadata_completion_proof=None,
                         download_job_id=job.id,
                         import_job_id=None,
                         lease_token=None,

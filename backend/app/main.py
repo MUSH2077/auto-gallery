@@ -84,6 +84,67 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+_VALIDATION_REDACTED = "***REDACTED***"
+_VALIDATION_SENSITIVE_SUBSTRINGS = (
+    "password",
+    "token",
+    "secret",
+    "key",
+    "credential",
+    "cookie",
+)
+_X_OAUTH_CALLBACK_PATH = "/api/v1/remote-accounts/x/oauth/callback"
+
+
+def _validation_field_is_sensitive(field: object, *, oauth_callback: bool) -> bool:
+    name = str(field).casefold()
+    if any(marker in name for marker in _VALIDATION_SENSITIVE_SUBSTRINGS):
+        return True
+    return oauth_callback and name in {"state", "code"}
+
+
+def _redact_validation_value(value, *, oauth_callback: bool):
+    """Recursively redact secret-bearing fields without removing their location."""
+
+    if isinstance(value, dict):
+        return {
+            key: (
+                _VALIDATION_REDACTED
+                if _validation_field_is_sensitive(key, oauth_callback=oauth_callback)
+                else _redact_validation_value(item, oauth_callback=oauth_callback)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_validation_value(item, oauth_callback=oauth_callback)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_validation_value(item, oauth_callback=oauth_callback)
+            for item in value
+        )
+    return value
+
+
+def _redact_validation_errors(errors, *, oauth_callback: bool):
+    redacted = []
+    for error in errors:
+        safe_error = _redact_validation_value(error, oauth_callback=oauth_callback)
+        location = error.get("loc", ()) if isinstance(error, dict) else ()
+        if isinstance(safe_error, dict) and (
+            oauth_callback
+            or any(
+                _validation_field_is_sensitive(field, oauth_callback=oauth_callback)
+                for field in location
+            )
+        ):
+            safe_error["input"] = _VALIDATION_REDACTED
+        redacted.append(safe_error)
+    return redacted
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Critical service secrets are validated at config load time; the admin
@@ -269,7 +330,7 @@ async def lifespan(app: FastAPI):
                 )
 
                 async with async_session() as db:
-                    counts = await outbox_counts(db)
+                    counts = await outbox_counts(db, ready_only=True)
                 if any(counts.values()):
                     result = wake_pending_outboxes(counts)
                     logger.info("Pipeline outbox coordinator", counts=counts, **result)
@@ -455,44 +516,57 @@ async def foreground_latency_feedback(request: Request, call_next):
     """
 
     started = time.perf_counter()
-    try:
-        return await call_next(request)
-    finally:
-        if request.method == "GET":
-            try:
-                from app.services.resource_pressure import (
-                    record_foreground_latency,
-                )
+    response = await call_next(request)
+    path = request.url.path
+    if (
+        request.method == "GET"
+        and 200 <= response.status_code < 300
+        and (
+            path.startswith("/api/v1/search")
+            or (
+                path.startswith("/api/v1/works")
+                and path != "/api/v1/works/derivative-progress"
+            )
+        )
+    ):
+        try:
+            from app.services.resource_pressure import record_foreground_latency
 
-                record_foreground_latency(
-                    request.url.path,
-                    (time.perf_counter() - started) * 1000,
-                )
-            except Exception:
-                logger.debug("Unable to record foreground latency", exc_info=True)
+            record_foreground_latency(path, (time.perf_counter() - started) * 1000)
+        except Exception:
+            logger.debug("Unable to record foreground latency", exc_info=True)
+    return response
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     safe_body = "<redacted>"
     raw = b""
+    oauth_callback = request.url.path.rstrip("/") == _X_OAUTH_CALLBACK_PATH
     try:
         raw = await request.body()
         import json as _json
+
         data = _json.loads(raw[:2000])
-        # Redact any key whose name contains a sensitive substring
-        _sensitive_substrings = (
-            "password", "token", "secret", "key", "credential", "cookie",
-        )
-        for key in list(data.keys()):
-            if any(ss in key.lower() for ss in _sensitive_substrings):
-                data[key] = "***REDACTED***"
-        safe_body = str(data)
+        if oauth_callback and not isinstance(data, dict):
+            safe_body = "<redacted>"
+        else:
+            safe_body = str(
+                _redact_validation_value(data, oauth_callback=oauth_callback)
+            )
     except Exception:
         safe_body = f"<{len(raw)} bytes, parse error>"
-    logger.warning("Validation error on %s %s: %s | body: %s",
-                   request.method, request.url.path, exc.errors(), safe_body)
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    safe_errors = _redact_validation_errors(
+        exc.errors(), oauth_callback=oauth_callback
+    )
+    logger.warning(
+        "Validation error on %s %s: %s | body: %s",
+        request.method,
+        request.url.path,
+        safe_errors,
+        safe_body,
+    )
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 
 @app.exception_handler(DanbooruUnavailableError)
@@ -577,6 +651,21 @@ async def _resource_pressure_health() -> dict:
         pressure = {
             "status": "paused",
             "reasons": ["resource_health_unavailable"],
+            "trigger_reasons": ["resource_health_unavailable"],
+            "recovery_remaining_seconds": 0.0,
+            "signal_scopes": {
+                "memory": "host",
+                "swap": "host",
+                "psi": "host",
+                "foreground": "backend_process",
+                "cgroup_memory_events": "current_cgroup",
+            },
+            "local_cgroup_warnings": {
+                "scope": "current_cgroup",
+                "reasons": [],
+                "max_delta": None,
+                "oom_delta": None,
+            },
             "sampled_at": None,
             "memory": {"available_bytes": None, "total_bytes": None, "available_ratio": None},
             "swap": {"free_bytes": None, "total_bytes": None, "free_ratio": None},
@@ -602,6 +691,35 @@ async def _resource_pressure_health() -> dict:
     workers = dict(workers)
     queue_activity = workers.pop("queue_activity", {})
     pressure = dict(pressure)
+    pressure.setdefault("trigger_reasons", [])
+    pressure.setdefault("recovery_remaining_seconds", 0.0)
+    pressure.setdefault(
+        "signal_scopes",
+        {
+            "memory": "host",
+            "swap": "host",
+            "psi": "host",
+            "foreground": "backend_process",
+            "cgroup_memory_events": "current_cgroup",
+        },
+    )
+    cgroup_events = pressure.get("cgroup_memory_events") or {}
+    pressure.setdefault(
+        "local_cgroup_warnings",
+        {
+            "scope": cgroup_events.get("scope") or "current_cgroup",
+            "reasons": [
+                reason
+                for reason, delta in (
+                    ("cgroup_memory_max", cgroup_events.get("max_delta")),
+                    ("cgroup_memory_oom", cgroup_events.get("oom_delta")),
+                )
+                if delta
+            ],
+            "max_delta": cgroup_events.get("max_delta"),
+            "oom_delta": cgroup_events.get("oom_delta"),
+        },
+    )
     pressure["project_cgroup_contribution"] = {
         "scope": "auto_gallery_project_only",
         "backend": backend_cgroup,
@@ -768,8 +886,23 @@ def _starting_health_snapshot() -> dict:
             "status": "paused",
             "controller_mode": "critical",
             "reasons": ["health_snapshot_starting"],
+            "trigger_reasons": ["health_snapshot_starting"],
             "hard_reasons": ["health_snapshot_starting"],
             "soft_reasons": [],
+            "recovery_remaining_seconds": 0.0,
+            "signal_scopes": {
+                "memory": "host",
+                "swap": "host",
+                "psi": "host",
+                "foreground": "backend_process",
+                "cgroup_memory_events": "current_cgroup",
+            },
+            "local_cgroup_warnings": {
+                "scope": "current_cgroup",
+                "reasons": [],
+                "max_delta": None,
+                "oom_delta": None,
+            },
         },
     }
 

@@ -7,6 +7,7 @@ import type { TaskRun } from "@/lib/api/types";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { PageHeader, PageShell, EmptyState, ErrorState, StatusBadge, SourceBadge, PermissionGuard } from "@/components";
 import { useI18nFormat } from "@/lib/i18n-format";
+import { taskRunDestination } from "@/lib/taskRoutes";
 import Link from "next/link";
 
 type Filter = "all" | "tasks" | "account";
@@ -15,14 +16,7 @@ const PAGE_SIZE = 50;
 // "tasks" = the long-running pipeline kinds; "account" = audit events.
 const TASK_KINDS = ["download", "import", "admin"];
 
-function taskLink(task: TaskRun): string | null {
-  if (task.kind === "download" || task.kind === "import") {
-    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
-  }
-  return null;
-}
-
-export default function NotificationsPage() {
+function NotificationsContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const [filter, setFilter] = useState<Filter>("all");
@@ -34,7 +28,12 @@ export default function NotificationsPage() {
   const query = useInfiniteQuery({
     queryKey: [...queryKeys.tasks.all, "feed", filter],
     queryFn: ({ pageParam = 0 }) =>
-      api.listTasks({ kind: kindParam, include_account: true, offset: pageParam as number, limit: PAGE_SIZE }),
+      api.listTasks({
+        kind: kindParam,
+        include_account: filter !== "tasks",
+        offset: pageParam as number,
+        limit: PAGE_SIZE,
+      }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -56,7 +55,6 @@ export default function NotificationsPage() {
   ];
 
   return (
-    <PermissionGuard module="tasks">
     <PageShell>
       <PageHeader title={t("notifications.title")} description={t("notifications.desc")} />
 
@@ -89,7 +87,7 @@ export default function NotificationsPage() {
       ) : (
         <div className="space-y-3">
           {items.map((task, index) => {
-            const link = taskLink(task);
+            const link = taskRunDestination(task);
             const entrance = itemEntrance(task.id, index);
             const pct =
               task.progress_total && task.progress_current !== undefined && task.progress_total > 0
@@ -147,6 +145,13 @@ export default function NotificationsPage() {
         </div>
       )}
     </PageShell>
+  );
+}
+
+export default function NotificationsPage() {
+  return (
+    <PermissionGuard module="tasks">
+      <NotificationsContent />
     </PermissionGuard>
   );
 }

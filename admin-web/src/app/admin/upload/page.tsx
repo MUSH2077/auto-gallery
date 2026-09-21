@@ -22,7 +22,7 @@ const ACCEPT_ATTR = [
 ].join(",");
 const MAX_FILE_BYTES = 500 * 1024 * 1024;
 
-type RowStatus = "queued" | "uploading" | "done" | "error" | "cancelled";
+type RowStatus = "queued" | "uploading" | "accepted" | "error" | "cancelled";
 
 interface FileRow {
   id: string;
@@ -30,7 +30,9 @@ interface FileRow {
   status: RowStatus;
   progress: number;
   error?: string;
-  workId?: string;
+  importJobId?: string | null;
+  downloadJobId?: string;
+  sourceWorkId?: string;
 }
 
 let _rowSeq = 0;
@@ -58,14 +60,14 @@ function StatusPill({ status }: { status: RowStatus }) {
   const toneClasses: Record<RowStatus, string> = {
     queued: "bg-subtle text-muted",
     uploading: "bg-accent-subtle text-accent",
-    done: "bg-success-subtle text-success",
+    accepted: "bg-accent-subtle text-accent",
     error: "bg-danger-subtle text-danger",
     cancelled: "bg-subtle text-muted",
   };
   const labels: Record<RowStatus, string> = {
     queued: t("upload.status_queued"),
     uploading: t("upload.status_uploading"),
-    done: t("upload.status_done"),
+    accepted: t("upload.status_accepted"),
     error: t("upload.status_error"),
     cancelled: t("upload.status_cancelled"),
   };
@@ -156,6 +158,8 @@ function UploadPageContent() {
   const qc = useQueryClient();
   const { has } = usePermissions();
   const canCurate = has("curation");
+  const canReadLibrary = has("library");
+  const canReadTasks = has("tasks");
 
   const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
 
@@ -167,6 +171,22 @@ function UploadPageContent() {
   const [creatorLabel, setCreatorLabel] = useState<string | null>(null);
 
   const [rows, setRows] = useState<FileRow[]>([]);
+  const [resolvingWorkId, setResolvingWorkId] = useState<string | null>(null);
+
+  const openResolvedWork = async (sourceWorkId: string) => {
+    if (resolvingWorkId) return;
+    setResolvingWorkId(sourceWorkId);
+    try {
+      const result = await api.resolveManualUploadWork(sourceWorkId);
+      if (result.total === 1 && result.items[0]?.id) router.push(`/admin/works/${result.items[0].id}`);
+      else if (result.total === 0) toast.info({ message: t("upload.work_unavailable_yet") });
+      else toast.error({ message: t("upload.work_identity_inconsistent") });
+    } catch (error) {
+      toast.error({ message: (error as Error).message });
+    } finally {
+      setResolvingWorkId(null);
+    }
+  };
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -195,14 +215,14 @@ function UploadPageContent() {
   }
 
   function clearCompleted() {
-    setRows((prev) => prev.filter((r) => r.status !== "done"));
+    setRows((prev) => prev.filter((r) => r.status !== "accepted"));
   }
 
   const queuedRows = rows.filter((r) => r.status === "queued");
   const queuedBytes = queuedRows.reduce((sum, r) => sum + r.file.size, 0);
   const remainingQuota = me.data?.upload_quota_bytes != null ? me.data.upload_quota_bytes - me.data.upload_used_bytes : null;
   const overQuota = remainingQuota != null && queuedBytes > remainingQuota;
-  const hasCompleted = rows.some((r) => r.status === "done");
+  const hasAccepted = rows.some((r) => r.status === "accepted");
 
   // Sequential per-work submit: one API call = one work (task-9-brief.md),
   // so each queued file is its own upload, processed one at a time (not in
@@ -232,12 +252,12 @@ function UploadPageContent() {
           const result = await api.uploadWorks(fd, (pct) => {
             setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, progress: pct } : r)));
           });
-          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "done", progress: 100, workId: result.work_id } : r)));
+          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "accepted", progress: 100, sourceWorkId: result.work_id, importJobId: result.import_job_id, downloadJobId: result.download_job_id } : r)));
           qc.invalidateQueries({ queryKey: queryKeys.me });
           toast.success({
-            title: t("upload.upload_success"),
+            title: t("upload.upload_accepted"),
             message: t("dashboard.file_count", { count: toUpload.length }),
-            action: { label: t("upload.view_work"), onClick: () => router.push(`/admin/works/${result.work_id}`) },
+            action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?tab=${result.import_job_id ? "imports" : "downloads"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
           });
         } catch (e) {
           const err = e as ApiError;
@@ -263,12 +283,12 @@ function UploadPageContent() {
         const result = await api.uploadWorks(fd, (pct) => {
           setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, progress: pct } : r)));
         });
-        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "done", progress: 100, workId: result.work_id } : r)));
+        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "accepted", progress: 100, sourceWorkId: result.work_id, importJobId: result.import_job_id, downloadJobId: result.download_job_id } : r)));
         qc.invalidateQueries({ queryKey: queryKeys.me });
         toast.success({
-          title: t("upload.upload_success"),
+          title: t("upload.upload_accepted"),
           message: row.file.name,
-          action: { label: t("upload.view_work"), onClick: () => router.push(`/admin/works/${result.work_id}`) },
+          action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?tab=${result.import_job_id ? "imports" : "downloads"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
         });
       } catch (e) {
         const err = e as ApiError;
@@ -374,7 +394,7 @@ function UploadPageContent() {
 
         <SectionPanel
           title={t("upload.file_list_title", { count: rows.length })}
-          actions={hasCompleted ? <button onClick={clearCompleted} className="btn-ghost">{t("upload.clear_completed")}</button> : undefined}
+          actions={hasAccepted ? <button onClick={clearCompleted} className="btn-ghost">{t("upload.clear_accepted")}</button> : undefined}
         >
           {rows.length === 0 ? (
             <EmptyState title={t("upload.no_files")} />
@@ -388,11 +408,12 @@ function UploadPageContent() {
                   <span className="shrink-0 font-mono text-xs text-muted">{formatBytes(r.file.size)}</span>
                   {r.status === "uploading" && <MiniProgressBar pct={r.progress} />}
                   <StatusPill status={r.status} />
-                  {r.status === "done" && r.workId && (
-                    <Link href={`/admin/works/${r.workId}`} className="shrink-0 text-xs text-accent hover:underline">
-                      {t("upload.view_work")}
+                  {r.status === "accepted" && canReadTasks && (r.importJobId || r.downloadJobId) && (
+                    <Link href={`/admin/jobs?tab=${r.importJobId ? "imports" : "downloads"}&${r.importJobId ? `import_job=${r.importJobId}` : `job=${r.downloadJobId}`}`} className="shrink-0 text-xs text-accent hover:underline">
+                      {t("upload.track_import")}
                     </Link>
                   )}
+                  {r.status === "accepted" && canReadLibrary && r.sourceWorkId && <button type="button" disabled={resolvingWorkId === r.sourceWorkId} onClick={() => void openResolvedWork(r.sourceWorkId!)} className="shrink-0 text-xs text-accent hover:underline">{t("upload.view_work")}</button>}
                   {r.status === "error" && r.error && (
                     <span className="max-w-[160px] shrink-0 truncate text-xs text-danger" title={r.error}>{r.error}</span>
                   )}

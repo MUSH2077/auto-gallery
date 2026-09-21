@@ -24,7 +24,12 @@ from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
 from app.services.job_manifest import get_manifest
 from app.services.sync_outcome import download_job_outcome
-from app.services.tasks import TaskService, normalize_task_status, task_payload
+from app.services.tasks import (
+    TaskService,
+    normalize_task_status,
+    task_payload,
+    task_surface_visibility_condition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,14 @@ ATTENTION_TASK_STATUSES = frozenset({"failed", "stale"})
 COMPACTABLE_DOWNLOAD_STATUSES = frozenset({"complete", "failed", "stale", "cancelled"})
 RESOLVED_RETENTION = timedelta(days=7)
 USER_OPERATION_RETENTION = timedelta(hours=24)
+
+
+class CompactionPreviewChanged(Exception):
+    """The compactable scope no longer matches the operator-reviewed preview."""
+
+    def __init__(self, actual_preview_token: str):
+        super().__init__("Task compaction scope changed after preview")
+        self.actual_preview_token = actual_preview_token
 
 
 def _now() -> datetime:
@@ -690,6 +703,7 @@ async def compact_terminal_tasks(
     *,
     dry_run: bool = True,
     limit: int = 200,
+    expected_preview_token: str | None = None,
 ) -> dict[str, Any]:
     """Delete compactable operational rows only after their domain receipt exists."""
 
@@ -773,6 +787,8 @@ async def compact_terminal_tasks(
             )
         ).scalars()
     )
+    from app.models.scheduler_batch import SchedulerBatch
+    durable_batch_parent = exists().where(SchedulerBatch.task_id == TaskRun.id)
     tasks = list(
         (
             await db.execute(
@@ -784,6 +800,7 @@ async def compact_terminal_tasks(
                     TaskRun.id.not_in(protected_snapshot_ids)
                     if protected_snapshot_ids
                     else True,
+                    ~durable_batch_parent,
                     ~open_child_attention,
                     or_(TaskRun.subject_type.is_(None), TaskRun.subject_type != "import_job"),
                     or_(
@@ -942,10 +959,27 @@ async def compact_terminal_tasks(
         )
     all_task_ids = locked_task_ids
     compacted_ids = [str(task_id) for task_id in sorted(all_task_ids, key=str)]
+    preview_token = hashlib.sha256(
+        json.dumps(
+            {
+                "task_ids": compacted_ids,
+                "download_job_ids": sorted(str(job_id) for job_id in download_ids),
+                "import_job_ids": sorted(str(job_id) for job_id in import_ids),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    report["preview_token"] = preview_token
     report["deleted_tasks"] = len(all_task_ids)
     report["deleted_import_jobs"] = len(import_ids)
     report["deleted_download_jobs"] = len(download_ids)
+    if not dry_run and expected_preview_token is not None and preview_token != expected_preview_token:
+        await db.rollback()
+        raise CompactionPreviewChanged(preview_token)
     if not dry_run:
+        from app.services.metadata_cleanup_proof import capture_compaction_proofs
+        await capture_compaction_proofs(db, download_ids)
         # Set-based deletes avoid one FK/index scan per historical download.
         # SKIP LOCKED above also lets the periodic compactor and an operator
         # repair run safely make progress on disjoint batches.
@@ -1059,6 +1093,8 @@ async def operations_overview(
     offset: int = 0,
     limit: int = 50,
     excluded_admin_operation_types: frozenset[str] = frozenset(),
+    user_id: int | None = None,
+    include_global_system_tasks: bool = False,
 ) -> dict[str, Any]:
     """Return one compact operations feed for desktop and mobile clients."""
 
@@ -1075,29 +1111,61 @@ async def operations_overview(
             int(scheduler_config.get("scheduler_scan_interval_minutes") or 60),
         )
         overdue_cutoff = _now() - timedelta(minutes=scan_minutes * 2)
+        source_stmt = select(SubscriptionSource, Subscription).join(
+            Subscription, Subscription.id == SubscriptionSource.subscription_id
+        )
+        if user_id is None:
+            source_stmt = source_stmt.where(
+                SubscriptionSource.is_enabled.is_(True),
+                Subscription.is_active.is_(True),
+                Subscription.sync_enabled.is_(True),
+            )
+        else:
+            from app.models.remote_discovery import (
+                UserSubscription,
+                UserSubscriptionSource,
+            )
+
+            source_stmt = (
+                source_stmt.add_columns(UserSubscriptionSource, UserSubscription)
+                .join(
+                    UserSubscriptionSource,
+                    UserSubscriptionSource.subscription_source_id
+                    == SubscriptionSource.id,
+                )
+                .join(
+                    UserSubscription,
+                    UserSubscription.id
+                    == UserSubscriptionSource.user_subscription_id,
+                )
+                .where(
+                    UserSubscription.user_id == user_id,
+                    UserSubscription.is_active.is_(True),
+                    UserSubscription.sync_enabled.is_(True),
+                    UserSubscriptionSource.is_enabled.is_(True),
+                )
+            )
         source_rows = (
             await db.execute(
-                select(SubscriptionSource, Subscription)
-                .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
-                .where(
-                    SubscriptionSource.is_enabled.is_(True),
-                    Subscription.is_active.is_(True),
-                    Subscription.sync_enabled.is_(True),
-                )
-                .order_by(SubscriptionSource.updated_at.desc(), SubscriptionSource.id.desc())
-                .limit(500)
+                source_stmt.order_by(
+                    SubscriptionSource.updated_at.desc(),
+                    SubscriptionSource.id.desc(),
+                ).limit(500)
             )
         ).all()
-        for repository, subscription in source_rows:
+        for row in source_rows:
+            repository, subscription = row[:2]
+            source_policy = row[2] if user_id is not None else repository
+            member = row[3] if user_id is not None else subscription
             reason_code = None
             severity = "warning"
             summary = None
-            occurred_at = repository.updated_at or repository.created_at or _now()
-            if repository.auth_healthy is False:
+            occurred_at = source_policy.updated_at or repository.created_at or _now()
+            if source_policy.auth_healthy is False:
                 reason_code = "auth_unhealthy"
                 severity = "critical"
-                summary = repository.auth_error_reason or "Repository authentication is unhealthy"
-                occurred_at = repository.last_auth_checked_at or occurred_at
+                summary = source_policy.auth_error_reason or "Repository authentication is unhealthy"
+                occurred_at = source_policy.last_auth_checked_at or occurred_at
             else:
                 try:
                     provider = registry.get(repository.source)
@@ -1119,12 +1187,12 @@ async def operations_overview(
             if (
                 reason_code is None
                 and scheduler_config.get("scheduler_enabled", True)
-                and repository.next_sync_at is not None
-                and repository.next_sync_at < overdue_cutoff
+                and source_policy.next_sync_at is not None
+                and source_policy.next_sync_at < overdue_cutoff
             ):
                 reason_code = "scheduler_overdue"
                 summary = "Repository synchronization is overdue"
-                occurred_at = repository.next_sync_at
+                occurred_at = source_policy.next_sync_at
             if reason_code is None:
                 continue
             source_anomalies.append({
@@ -1133,7 +1201,7 @@ async def operations_overview(
                 "severity": severity,
                 "status": "open",
                 "reason_code": reason_code,
-                "title": subscription.name or repository.source,
+                "title": member.name or repository.source,
                 "summary": summary,
                 "repository_id": str(repository.id),
                 "task_id": None,
@@ -1151,7 +1219,15 @@ async def operations_overview(
         if excluded_admin_operation_types
         else True
     )
-    filters = [TaskRun.kind != "account", visible_task]
+    ownership = (
+        task_surface_visibility_condition(
+            user_id,
+            include_global_system_tasks=include_global_system_tasks,
+        )
+        if user_id is not None
+        else True
+    )
+    filters = [TaskRun.kind != "account", visible_task, ownership]
     if view == "attention":
         filters.append(TaskRun.attention_state == "open")
     elif view == "resolved":
@@ -1182,7 +1258,7 @@ async def operations_overview(
         (
             await db.execute(
                 select(TaskRun.attention_state, func.count(TaskRun.id))
-                .where(TaskRun.kind != "account", visible_task)
+                .where(TaskRun.kind != "account", visible_task, ownership)
                 .group_by(TaskRun.attention_state)
             )
         ).all()
@@ -1193,6 +1269,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                 )
             )
@@ -1210,6 +1287,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.attention_state == "open",
                     TaskRun.reason_code.in_(severe_reason_codes),
                 )
@@ -1222,6 +1300,7 @@ async def operations_overview(
                 select(func.count(TaskRun.id)).where(
                     TaskRun.kind != "account",
                     visible_task,
+                    ownership,
                     TaskRun.status.in_(ACTIVE_TASK_STATUSES),
                     TaskRun.resource_state == "waiting",
                     TaskRun.resource_reason.is_not(None),
@@ -1230,6 +1309,8 @@ async def operations_overview(
         ).scalar_one()
     )
 
+    from app.services.task_actions import enrich_actions
+    await enrich_actions(db, tasks, user_id=user_id)
     items = []
     for task in tasks:
         payload = task_payload(task)
@@ -1246,16 +1327,9 @@ async def operations_overview(
             "task_id": str(task.id),
             "occurred_at": (task.updated_at or task.created_at).isoformat(),
             "source": task.source,
-            "available_actions": (
-                ["acknowledge", "open_repository", "copy_diagnostics"]
-                if task.attention_state == "open" and task.reason_code in {
-                    "download_staging_conflict",
-                    "download_staging_manifest_error",
-                }
-                else ["retry", "acknowledge", "open_repository", "copy_diagnostics"]
-                if task.attention_state == "open"
-                else ["pause", "resume", "open_repository"]
-            ),
+            "available_actions": payload["available_actions"],
+            "navigation_actions": ["open_repository", "copy_diagnostics"],
+            "disabled_reasons": payload["disabled_reasons"],
             "task": payload,
         })
     if view == "attention":

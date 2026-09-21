@@ -64,11 +64,65 @@ class ProviderCapabilities:
     supports_gallerydl: bool
     supports_tags: bool
     is_reference_only: bool
+    supports_download_cursor: bool
+    supports_remote_discovery: bool
+    discovery_auth_methods: tuple[str, ...]
+    supports_collection_selectors: bool
 ```
+
+Provider API 响应中的 rollout 对象是后端计算的有效能力覆盖层，并非静态
+`ProviderCapabilities` dataclass 字段。
 
 所有 8 个可下载 provider（Pixiv、X、Iwara、Danbooru、微博、Bilibili、Pinterest、Lofter）均已完整实现 `build_gallerydl_config()`。
 
 `auto_enable_on_import` 标志按来源在 gallery-dl 设置页面中配置。每个来源都有开关，控制新导入的订阅来源是否默认启用。仅 Pixiv 默认自动启用；其余来源均默认禁用。
+
+## 远端关注发现
+
+Pixiv、X 与 Bilibili 使用独立的 `RemoteDiscoveryAdapter` 契约：
+`validate_account()`、`list_collections()`、`fetch_page()` 与
+`build_download_auth()`。来源能力响应同时公开
+`supports_remote_discovery`、`discovery_auth_methods`、
+`supports_collection_selectors` 以及后端计算后的 rollout 能力；管理端不自行推导部署开关。
+
+| 来源 | 状态 | 认证 | 集合 selectors |
+|---|---|---|---|
+| Pixiv | 实验性 | App API refresh token | 公开/私密关注 |
+| X | 配置 X Developer App 后支持；Cookie 回退为尽力而为 | 首选 OAuth 2.0 PKCE；Cookie 回退 | following 与 Lists |
+| Bilibili | 实验性 | `SESSDATA` | 全部关注与关注分组 |
+
+X OAuth 精确申请 `users.read`、`follows.read`、`list.read` 与
+`offline.access`。Provider redirect 必须注册为管理端 `/admin/discovery` URL；管理端先
+同步清理外部 callback URL，再通过不带 query 的后端 POST 完成交换。除非另有下载
+Cookie，OAuth token 仅用于发现；X 修改私有 Web API
+后 Cookie 回退可能失效。Pixiv 与 Bilibili 依赖未正式承诺或逆向 API，必须持续标记为
+实验性。Bilibili 创作者 URL 归一化支持 `/dynamic` 与 `/upload/opus`，使发现账号可订阅
+动态图片。
+
+候选置信度可解释：唯一本地身份、已验证 Danbooru/跨站链接或 Pixiv 插画预览为高；
+X/Bilibili 在“艺术简介、近期视觉内容、受支持站点链接”三项中满足两项为高，仅一项为
+中，无证据为低。多个本地身份同时命中时为 `conflict`，永不自动导入。手动导入默认不
+立即同步，只有显式勾选才同步。自动导入按账号独立开启，保留已忽略候选，默认仅高置信度、
+每次 25 个，可配置 1–200；只有完整扫描才执行。远端取关只更新候选状态，绝不禁用或删除
+本地订阅。
+
+### Pixiv 作品实时状态
+
+Pixiv 作品详情页可显示**实时**总浏览数、总收藏数以及当前浏览用户是否已收藏该插画。
+每次页面 mount 都会使用该浏览用户已启用且健康的 Pixiv 账号，向 Pixiv App API 发起一次
+新的详情请求；响应为 `private, no-store`，不会在窗口重新获得焦点时刷新，也没有服务端或
+客户端缓存。绝不以本地 `raw_metadata` 作为回退，因此实时请求不可用时只显示不可用状态，
+本地作品页面仍可正常浏览。
+
+该端点只读，绝不会创建或移除 Pixiv 收藏。当前 rollout **仅允许 Pixiv 手动预览**；保持
+Pixiv 自动导入、X 发现/自动导入，以及 Bilibili 发现/自动导入关闭。不要以真实 provider
+执行 smoke test；自动化验证应使用 fixture transport 与注入的 adapter。实时状态同时依赖
+private-members 基础开关和 Pixiv preview 开关；任一关闭都会返回 `503`，但本地作品页仍可
+访问。`REMOTE_CREDENTIAL_KEY` 缺失或无效，或配置的 vault 无法验证已有密文时，也会返回同一
+个经过清理的 `503`；此时不会请求 Pixiv，也不会改变账号或绑定健康状态。应恢复加密现有账号
+时使用的受保护密钥，而不是生成新密钥；若只有某一账号的存储密文损坏，只重新连接该账号。
+切勿把密钥、密文或解密器诊断复制到日志或工单。rollout 恢复时只恢复已获批准的一个或两个
+开关，并保持自动导入以及 X/B 开关关闭。
 
 ## Provider 注册表
 
@@ -90,6 +144,7 @@ downloadable = registry.list_downloadable()
 - `capabilities.supports_gallerydl`：True
 - URL 模式：`pixiv.net/artworks/<id>`、`pixiv.net/users/<id>`（可选 `/en/` 语言前缀）
 - 通过 cookie 认证使用 gallery-dl 的 Pixiv 提取器
+- 实时作品状态使用为浏览用户选择的 App API refresh-token 账号；它与 gallery-dl 下载认证分离。
 
 ### X / Twitter (`x.py`)
 - **状态**：可下载

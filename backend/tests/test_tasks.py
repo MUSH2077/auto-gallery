@@ -1551,6 +1551,10 @@ async def test_pause_failed_task_is_rejected_as_a_structured_conflict(monkeypatc
     try:
         async with async_session() as db:
             await _clear_task_test_tables(db)
+            from app.models import User
+            actor = User(username=f"pause-failed-{uuid4()}", password_hash="test", permissions=["tasks"], is_active=True)
+            db.add(actor)
+            await db.flush()
             creator = Creator(name="pause-failed")
             db.add(creator)
             await db.flush()
@@ -1559,6 +1563,7 @@ async def test_pause_failed_task_is_rejected_as_a_structured_conflict(monkeypatc
             await db.flush()
             download = DownloadJob(
                 subscription_id=subscription.id,
+                owner_user_id=actor.id,
                 source="pixiv",
                 source_url="https://www.pixiv.net/users/123",
                 status="failed",
@@ -1569,7 +1574,7 @@ async def test_pause_failed_task_is_rejected_as_a_structured_conflict(monkeypatc
             await db.commit()
 
             with pytest.raises(HTTPException) as error:
-                await tasks_api._control_task(task.id, "pause", db, "operator")
+                await tasks_api._control_task(task.id, "pause", db, "operator", user=actor)
 
             assert error.value.status_code == 409
             assert error.value.detail["code"] == "invalid_task_action"
@@ -1855,6 +1860,7 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
     records = []
     task_ids = []
     published = []
+    system_user = SimpleNamespace(id=1, is_admin=True, permissions=["system"])
 
     class EventRedis:
         def publish(self, channel, payload):
@@ -1934,7 +1940,8 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
                 "failed_detail": task_payload(failed_task, failed_events),
                 "failed_cache": operations.get_operation_status(str(failed_id)),
                 "failed_operation_api": await data_api.get_admin_operation(
-                    str(failed_id)
+                    str(failed_id),
+                    user=system_user,
                 ),
                 "successful_response": successful_response,
                 "successful_detail": task_payload(
@@ -1945,7 +1952,8 @@ async def test_publisher_success_and_failure_public_projections_are_consistent(
                     str(successful_id)
                 ),
                 "successful_operation_api": await data_api.get_admin_operation(
-                    str(successful_id)
+                    str(successful_id),
+                    user=system_user,
                 ),
                 "events": published,
             }

@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from app.auth import RequirePermission
-from sqlalchemy import select, func, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -22,6 +22,7 @@ from app.schemas.deletion import (
     DeletionResultResponse,
 )
 from app.services.subscription import SubscriptionService, SubscriptionValidationError
+from app.services.subscription_membership import SubscriptionMembershipService
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
 from app.services.cache import (
@@ -35,10 +36,12 @@ router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
 @router.get("/count")
-async def count_subscriptions(db: AsyncSession = Depends(get_db)):
+async def count_subscriptions(
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
     """Return total number of subscriptions."""
-    result = await db.execute(select(func.count()).select_from(Subscription))
-    return {"count": result.scalar() or 0}
+    return {"count": await SubscriptionMembershipService(db, user.id).count()}
 
 
 @router.get("", response_model=list[SubscriptionRead])
@@ -46,7 +49,9 @@ async def list_subscriptions(
     offset: int = 0, limit: int = 50,
     q: str = "",
     db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
 ):
+    membership_service = SubscriptionMembershipService(db, user.id)
     try:
         result = await SearchService(db).search(
             q,
@@ -54,6 +59,7 @@ async def list_subscriptions(
             limit,
             scope="subscriptions",
             permissions={"subscriptions"},
+            user_id=user.id,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
@@ -62,10 +68,30 @@ async def list_subscriptions(
             status_code=503,
             detail={"code": "search_unavailable", "message": str(exc)},
         ) from exc
-    return [
-        SubscriptionRead.model_validate(item)
+    candidate_ids = [
+        UUID(str(item.get("id") if isinstance(item, dict) else item.id))
         for item in result["groups"]["subscriptions"]["items"]
+        if (item.get("id") if isinstance(item, dict) else getattr(item, "id", None))
     ]
+    matched_identities = {
+        UUID(str(item["id"])): item.get("matched_identity")
+        for item in result["groups"]["subscriptions"]["items"]
+        if isinstance(item, dict) and item.get("id") and item.get("matched_identity")
+    }
+    owned = []
+    for subscription_id in candidate_ids:
+        try:
+            item = await membership_service.get(subscription_id)
+            if subscription_id in matched_identities:
+                setattr(
+                    item,
+                    "matched_identity",
+                    matched_identities[subscription_id],
+                )
+            owned.append(item)
+        except ValueError:
+            continue
+    return owned[:limit]
 
 
 # ── Batch Operations ──
@@ -76,10 +102,20 @@ async def batch_subscription_deletion_preview(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import HierarchicalDeletionService
-
-    scope = await HierarchicalDeletionService(db).scope("subscription", data.ids)
-    return scope.preview_payload(is_admin=user.is_admin)
+    service = SubscriptionMembershipService(db, user.id)
+    owned = []
+    for subscription_id in data.ids:
+        try:
+            await service.require_membership(subscription_id)
+            owned.append(subscription_id)
+        except ValueError:
+            continue
+    return DeletionPreviewResponse(
+        entity_type="subscription",
+        entity_ids=owned,
+        mode="soft",
+        can_delete_files=False,
+    )
 
 
 @router.post(
@@ -93,33 +129,43 @@ async def batch_delete_subscriptions(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import (
-        HierarchicalDeletionService,
-        enqueue_permanent_deletion,
+    if data.delete_files:
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator access required to delete files",
+            )
+        raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
+    svc = SubscriptionMembershipService(db, user.id)
+    removed = []
+    for subscription_id in data.ids:
+        try:
+            await svc.remove(subscription_id)
+            removed.append(subscription_id)
+        except ValueError:
+            continue
+    await db.commit()
+    result = DeletionResultResponse(
+        status="soft_deleted",
+        mode="soft",
+        entity_type="subscription",
+        entity_ids=removed,
+        delete_files=False,
     )
-
-    if data.delete_files and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
-    svc = HierarchicalDeletionService(db)
-    scope = await svc.scope("subscription", data.ids)
-    svc.ensure_no_active_jobs(scope)
-    if user.is_admin:
-        response.status_code = 202
-        result = await enqueue_permanent_deletion(
-            "subscription", data.ids, delete_files=data.delete_files
-        )
-    else:
-        result = await svc.soft_delete(scope)
     invalidate_creator_subscription_caches()
     return result
 
 
 @router.post("/batch-toggle-sync")
-async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
+async def batch_toggle_sync(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
     """Enable/disable sync for multiple subscriptions."""
     ids = data.get("ids", [])
     enabled = data.get("sync_enabled", True)
-    svc = SubscriptionService(db)
+    svc = SubscriptionMembershipService(db, user.id)
     results = []
     for sid in ids:
         try:
@@ -128,13 +174,14 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
             results.append({"id": sid, "status": "error", "error": "invalid_id"})
             continue
         try:
-            await svc.update_subscription(subscription_id, {"sync_enabled": enabled})
+            await svc.update(subscription_id, {"sync_enabled": enabled})
             results.append({"id": sid, "status": "updated", "sync_enabled": enabled})
         except ValueError:
             results.append({"id": sid, "status": "error", "error": "not_found"})
         except Exception:
             logger.warning("batch subscription update failed for %s", sid, exc_info=True)
             results.append({"id": sid, "status": "error", "error": "internal_error"})
+    await db.commit()
     invalidate_api_caches("subscriptions", "creators")
     return {"status": "ok", "results": results}
 
@@ -143,6 +190,7 @@ async def batch_toggle_sync(data: dict, db: AsyncSession = Depends(get_db)):
 async def get_subscription_summaries(
     ids: str = Query(..., min_length=36, max_length=1900),
     db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
 ):
     """Return authoritative operational and schedule state for one list page."""
 
@@ -155,41 +203,72 @@ async def get_subscription_summaries(
         raise HTTPException(status_code=422, detail="ids contains an invalid UUID") from exc
     from app.services.subscription_summary import subscription_summaries
 
-    return await subscription_summaries(db, subscription_ids)
+    membership_service = SubscriptionMembershipService(db, user.id)
+    owned_ids = []
+    for subscription_id in subscription_ids:
+        try:
+            await membership_service.require_membership(subscription_id)
+            owned_ids.append(subscription_id)
+        except ValueError:
+            continue
+    return await subscription_summaries(db, owned_ids, user_id=user.id)
 
 
 @router.post("/{subscription_id}/sync-now")
-async def trigger_subscription_sync(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
+async def trigger_subscription_sync(
+    subscription_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
     """Manually trigger sync for a single subscription — creates download jobs for all enabled sources."""
     from app.services.subscription import SubscriptionService
     try:
-        return await SubscriptionService(db).trigger_sync(subscription_id)
+        await SubscriptionMembershipService(db, user.id).require_membership(subscription_id)
+        return await SubscriptionService(db).trigger_sync(subscription_id, user_id=user.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionRead)
-async def get_subscription(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
+async def get_subscription(
+    subscription_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    svc = SubscriptionMembershipService(db, user.id)
     try:
-        return await svc.get_subscription(subscription_id)
+        return await svc.get(subscription_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("", response_model=SubscriptionRead, status_code=201)
-async def create_subscription(data: SubscriptionCreate, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
-    result = await svc.create_subscription(data.model_dump())
+async def create_subscription(
+    data: SubscriptionCreate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    svc = SubscriptionMembershipService(db, user.id)
+    try:
+        result = await svc.create_or_join(data.model_dump())
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     invalidate_creator_subscription_caches()
     return result
 
 
 @router.patch("/{subscription_id}", response_model=SubscriptionRead)
-async def update_subscription(subscription_id: UUID, data: SubscriptionUpdate, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
+async def update_subscription(
+    subscription_id: UUID,
+    data: SubscriptionUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    svc = SubscriptionMembershipService(db, user.id)
     try:
-        result = await svc.update_subscription(subscription_id, data.model_dump(exclude_unset=True))
+        result = await svc.update(subscription_id, data.model_dump(exclude_unset=True))
+        await db.commit()
         invalidate_creator_subscription_caches()
         return result
     except SubscriptionValidationError as e:
@@ -204,10 +283,16 @@ async def subscription_deletion_preview(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import HierarchicalDeletionService
-
-    scope = await HierarchicalDeletionService(db).scope("subscription", [subscription_id])
-    return scope.preview_payload(is_admin=user.is_admin)
+    try:
+        await SubscriptionMembershipService(db, user.id).require_membership(subscription_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DeletionPreviewResponse(
+        entity_type="subscription",
+        entity_ids=[subscription_id],
+        mode="soft",
+        can_delete_files=False,
+    )
 
 
 @router.delete(
@@ -222,42 +307,56 @@ async def delete_subscription(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import (
-        HierarchicalDeletionService,
-        enqueue_permanent_deletion,
+    if delete_files:
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator access required to delete files",
+            )
+        raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
+    svc = SubscriptionMembershipService(db, user.id)
+    try:
+        await svc.remove(subscription_id)
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = DeletionResultResponse(
+        status="soft_deleted",
+        mode="soft",
+        entity_type="subscription",
+        entity_ids=[subscription_id],
+        delete_files=False,
     )
-
-    if delete_files and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
-    svc = HierarchicalDeletionService(db)
-    scope = await svc.scope("subscription", [subscription_id])
-    svc.ensure_no_active_jobs(scope)
-    if user.is_admin:
-        response.status_code = 202
-        result = await enqueue_permanent_deletion(
-            "subscription", [subscription_id], delete_files=delete_files
-        )
-    else:
-        result = await svc.soft_delete(scope)
     invalidate_creator_subscription_caches()
     return result
 
 
 @router.get("/{subscription_id}/sources", response_model=list[SubscriptionSourceRead])
-async def list_subscription_sources(subscription_id: UUID, db: AsyncSession = Depends(get_db)):
-    svc = SubscriptionService(db)
-    return await svc.list_sources(subscription_id)
+async def list_subscription_sources(
+    subscription_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    svc = SubscriptionMembershipService(db, user.id)
+    try:
+        return await svc.list_sources(subscription_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{subscription_id}/sources", response_model=SubscriptionSourceRead, status_code=201)
 async def add_subscription_source(
-    subscription_id: UUID, data: SubscriptionSourceCreate, db: AsyncSession = Depends(get_db)
+    subscription_id: UUID,
+    data: SubscriptionSourceCreate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
 ):
-    svc = SubscriptionService(db)
+    svc = SubscriptionMembershipService(db, user.id)
     d = data.model_dump()
     d["subscription_id"] = subscription_id
     try:
-        result = await svc.add_source(d)
+        result = await svc.add_or_bind_source(subscription_id, d)
+        await db.commit()
         invalidate_creator_subscription_caches(include_works=True)
         return result
     except ValueError as e:
@@ -266,11 +365,18 @@ async def add_subscription_source(
 
 @router.patch("/{subscription_id}/sources/{ss_id}", response_model=SubscriptionSourceRead)
 async def update_subscription_source(
-    subscription_id: UUID, ss_id: UUID, data: SubscriptionSourceUpdate, db: AsyncSession = Depends(get_db)
+    subscription_id: UUID,
+    ss_id: UUID,
+    data: SubscriptionSourceUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
 ):
-    svc = SubscriptionService(db)
+    if data.source_creator_id is not None or data.source_url is not None:
+        raise HTTPException(status_code=422, detail="Shared source identity cannot be edited from a membership")
+    svc = SubscriptionMembershipService(db, user.id)
     try:
-        result = await svc.update_source(ss_id, data.model_dump(exclude_none=True))
+        result = await svc.update_source(subscription_id, ss_id, data.model_dump(exclude_unset=True))
+        await db.commit()
         invalidate_creator_subscription_caches(include_works=True)
         return result
     except ValueError as e:
@@ -290,24 +396,25 @@ async def delete_subscription_source(
     user=RequirePermission("subscriptions"),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.hierarchical_deletion import (
-        HierarchicalDeletionService,
-        enqueue_permanent_deletion,
+    if delete_files:
+        if not user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator access required to delete files",
+            )
+        raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
+    svc = SubscriptionMembershipService(db, user.id)
+    try:
+        await svc.remove_source(subscription_id, ss_id)
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = DeletionResultResponse(
+        status="soft_deleted",
+        mode="soft",
+        entity_type="repository",
+        entity_ids=[ss_id],
+        delete_files=False,
     )
-
-    if delete_files and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Administrator access required to delete files")
-    svc = HierarchicalDeletionService(db)
-    scope = await svc.scope("repository", [ss_id])
-    if subscription_id not in scope.subscription_ids:
-        raise HTTPException(status_code=404, detail="Repository not found in subscription")
-    svc.ensure_no_active_jobs(scope)
-    if user.is_admin:
-        response.status_code = 202
-        result = await enqueue_permanent_deletion(
-            "repository", [ss_id], delete_files=delete_files
-        )
-    else:
-        result = await svc.soft_delete(scope)
     invalidate_creator_subscription_caches(include_works=True)
     return result

@@ -37,7 +37,7 @@ const SOURCE_DESCRIPTION_KEYS: Record<string, string> = {
 };
 
 const URL_PATTERNS: Record<string, RegExp> = {
-  pixiv: /pixiv\.net\/(?:en\/)?(artworks|users)\/\d+/,
+  pixiv: /pixiv\.net\/(?:(?:en\/)?(?:artworks|users)\/\d+|stacc\/[A-Za-z0-9_]+)/,
   iwara: /iwara\.tv\/(video|profile)\/[\w-]+/,
   x: /(?:twitter\.com|x\.com)\/\w+(?:\/status\/\d+)?\/?$/,
   danbooru: /danbooru\.donmai\.us\/posts\?tags=.+/,
@@ -209,7 +209,7 @@ export default function SourceRegistryPanel({
     );
   }
 
-  if (error) return <ErrorState message={error.message} onRetry={onRetry} />;
+  if (error) return <ErrorState error={error} onRetry={onRetry} />;
 
   if (!items.length) {
     return <EmptyState title={t("sources.no_providers")} description={t("sources.no_providers_desc")} />;

@@ -1,10 +1,42 @@
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 
 
 async def _clear_test_users(db):
     await db.execute(text("DELETE FROM users WHERE username LIKE 'svc_test_%'"))
     await db.commit()
+
+
+async def _suspend_other_active_admins(db):
+    from app.models.user import User
+
+    admin_ids = list(
+        (
+            await db.execute(
+                select(User.id).where(
+                    User.is_admin.is_(True),
+                    User.is_active.is_(True),
+                    ~User.username.startswith("svc_test_"),
+                )
+            )
+        ).scalars()
+    )
+    if admin_ids:
+        await db.execute(
+            update(User).where(User.id.in_(admin_ids)).values(is_admin=False)
+        )
+        await db.commit()
+    return admin_ids
+
+
+async def _restore_admins(db, admin_ids):
+    from app.models.user import User
+
+    if admin_ids:
+        await db.execute(
+            update(User).where(User.id.in_(admin_ids)).values(is_admin=True)
+        )
+        await db.commit()
 
 
 @pytest.mark.integration
@@ -100,9 +132,11 @@ async def test_last_admin_guard_blocks_demote_disable_delete():
     from app.database import async_session, engine
     from app.services.users import UserService
 
+    suspended_admin_ids = []
     try:
         async with async_session() as db:
             await _clear_test_users(db)
+            suspended_admin_ids = await _suspend_other_active_admins(db)
             svc = UserService(db)
 
             admin = await svc.create(username="svc_test_admin", password="hunter22", is_admin=True)
@@ -123,6 +157,7 @@ async def test_last_admin_guard_blocks_demote_disable_delete():
     finally:
         async with async_session() as db:
             await _clear_test_users(db)
+            await _restore_admins(db, suspended_admin_ids)
         await engine.dispose()
 
 

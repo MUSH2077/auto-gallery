@@ -22,6 +22,44 @@ logger = logging.getLogger(__name__)
 REDIS_ENQUEUE_WARN_RATIO = 0.80
 REDIS_ENQUEUE_STOP_RATIO = 0.90
 QUEUE_REJECTION_COUNTER_KEY = "resource:redis:enqueue_rejections"
+RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
+
+
+def notify_queue_worker(
+    queue_name: str,
+    redis_client,
+    *,
+    existing_job=None,
+) -> None:
+    """Best-effort wake for the idle worker that consumes runnable queue work."""
+
+    name = str(queue_name)
+    if name == "imports":
+        workload = "import_db"
+    elif name == "downloads" or name.startswith("downloads:"):
+        workload = "download_network"
+    elif name in {"operations", "maintenance"}:
+        workload = "light"
+    else:
+        return
+
+    try:
+        if existing_job is not None:
+            get_status = getattr(existing_job, "get_status", None)
+            if get_status is None:
+                return
+            status = get_status(refresh=True)
+            if str(getattr(status, "value", status)).lower() != "queued":
+                return
+        redis_client.publish(f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}", "queued")
+    except Exception:
+        # The queue record is authoritative.  A missed responsiveness hint must
+        # never turn accepted work into a rejection or a replayable ambiguity.
+        logger.debug(
+            "Unable to publish queue work event queue=%s",
+            name,
+            exc_info=True,
+        )
 
 
 class QueueAdmissionError(RuntimeError):
@@ -143,7 +181,9 @@ def _checked_queue_write(queue, operation: Callable[[], Any]) -> Any:
 def checked_enqueue(queue, *args: Any, **kwargs: Any):
     """Capacity-check and call ``Queue.enqueue`` with structured failures."""
 
-    return _checked_queue_write(queue, lambda: queue.enqueue(*args, **kwargs))
+    job = _checked_queue_write(queue, lambda: queue.enqueue(*args, **kwargs))
+    notify_queue_worker(str(getattr(queue, "name", "")), queue.connection)
+    return job
 
 
 def checked_enqueue_in(queue, delay, *args: Any, **kwargs: Any):

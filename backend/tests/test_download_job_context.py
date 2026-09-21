@@ -36,7 +36,9 @@ def test_download_job_context_enrichment_adds_creator_and_subscription_fields():
     assert job.creator_name == "Atlas Ink"
 
 
-def test_download_job_text_filter_matches_enriched_creator_and_subscription_names():
+def test_download_job_text_filter_matches_enriched_creator_and_subscription_names(
+    monkeypatch,
+):
     subscription_id = uuid4()
     creator_id = uuid4()
     repository_id = uuid4()
@@ -68,6 +70,13 @@ def test_download_job_text_filter_matches_enriched_creator_and_subscription_name
                 (subscription_id, "Daily Pixiv", creator_id, "Atlas Ink", "atlas_ink"),
             ])
 
+    async def skip_action_enrichment(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.task_actions.enrich_actions",
+        skip_action_enrichment,
+    )
     service = DownloadService(Session())
     jobs = asyncio.run(service.list_jobs(subscription_source_id=str(repository_id), q="atlas"))
 

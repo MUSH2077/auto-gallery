@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, model_validator
 
 from app.schemas.schedule import CalendarScheduleRule, normalize_legacy_schedule_payload
+from app.schemas.search import MatchedCreatorIdentityRead
 
 
 ScheduleMode = Literal["inherit", "interval", "calendar", "manual"]
@@ -55,6 +56,7 @@ class SubscriptionUpdate(_ScheduleInput):
 
 class SubscriptionRead(BaseModel):
     id: UUID
+    membership_id: UUID | None = None
     creator_id: UUID
     name: str | None = None
     creator_name: str | None = None
@@ -79,6 +81,9 @@ class SubscriptionRead(BaseModel):
     effective_mode: str | None = None
     auto_enabled_source: ActivatedSubscriptionSource | None = None
     next_sync_at: datetime | None = None
+    discovery_candidate_id: UUID | None = None
+    discovered_via: str | None = None
+    matched_identity: MatchedCreatorIdentityRead | None = None
 
     model_config = {"from_attributes": True}
 

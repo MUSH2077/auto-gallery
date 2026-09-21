@@ -1,14 +1,21 @@
+from app.schemas.task_actions import TaskCapabilities
 from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
 
 
-class ImportJobRead(BaseModel):
+class ImportJobRead(TaskCapabilities):
     id: UUID
     download_job_id: UUID
     status: str
     error_log: str | None = None
+    source: str | None = None
+    source_url: str | None = None
+    subscription_id: UUID | None = None
+    subscription_name: str | None = None
+    creator_id: UUID | None = None
+    creator_name: str | None = None
     created_at: datetime
     updated_at: datetime
     # Task Engine fields
@@ -26,3 +33,8 @@ class ImportJobRead(BaseModel):
     progress_data: dict | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ImportJobPage(BaseModel):
+    total: int
+    items: list[ImportJobRead]

@@ -5,11 +5,12 @@ the API layer -- see app/api/upload.py) and feeds them through the SAME
 download_job -> artifact_ledger -> import_job pipeline used by gallery-dl
 downloads and disk-import recovery (app/services/disk_import.py).
 
-DownloadJob.subscription_id/subscription_source_id are NOT NULL (see
-app/models/download_job.py), so -- exactly like disk_import.py's
-reconcile_downloads_to_db() -- a manual upload must provision a
-Subscription/SubscriptionSource/SourceCreator identity chain via
-app/services/disk_identity.py before it can create the DownloadJob row.
+DownloadJob.subscription_id is NOT NULL while subscription_source_id is
+intentionally nullable (see app/models/download_job.py). Exactly like
+disk_import.py's reconcile_downloads_to_db(), a manual upload still provisions
+a Subscription/SubscriptionSource/SourceCreator identity chain via
+app/services/disk_identity.py, then records the job against the Subscription
+without claiming the shared source scheduling slot.
 """
 from __future__ import annotations
 
@@ -175,6 +176,10 @@ class ManualUploadService:
                 "tags": tag_list,
                 "is_nsfw": is_nsfw,
                 "uploaded_by": user.username,
+                # Keep the immutable database identity as well as the readable
+                # username. Purge can then return quota to the original
+                # uploader even if the account is renamed later.
+                "uploaded_by_user_id": user.id,
                 "target_creator_id": target_creator_id,
                 "files": file_records,
                 "date": datetime.now(timezone.utc).isoformat(),
@@ -218,6 +223,7 @@ class ManualUploadService:
                 status="downloaded",
                 subscription_id=provisioned.subscription.id,
                 subscription_source_id=None,
+                owner_user_id=user.id,
             )
             db.add(job)
             await db.flush()

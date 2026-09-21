@@ -9,19 +9,30 @@ import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
 import { Check, Copy } from "lucide-react";
+import { writeClipboardText } from "@/lib/clipboard";
+import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
 
 function CopyButton({ text }: { text: string }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
-    <button
+    <span className="inline-flex flex-col items-start gap-1"><button
       type="button"
-      onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+      disabled={pending}
+      onClick={async () => {
+        if (pending) return;
+        setPending(true); setError(null); setCopied(false);
+        try { await writeClipboardText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+        catch (cause) { setError((cause as Error).message); }
+        finally { setPending(false); }
+      }}
       className="inline-flex min-h-11 items-center gap-1.5 rounded border border-border px-3 py-1 text-xs transition-colors hover:bg-subtle dark:hover:bg-subtle"
     >
       {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
       {copied ? t("common.copied") : t("common.copy")}
-    </button>
+    </button>{error && <span role="alert" className="text-xs text-danger">{t("common.copy_failed")}: {error}</span>}</span>
   );
 }
 
@@ -42,19 +53,15 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
 }) {
   const t = useT();
   const toast = useToast();
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
   const qc = useQueryClient();
 
   const [subscribingUrl, setSubscribingUrl] = useState<string | null>(null);
-  const subs = useQuery({ queryKey: queryKeys.subscriptions.all, queryFn: () => api.listSubscriptions() });
 
   const subscribe = useMutation({
     mutationFn: async (params: { creatorId: string; url: string; source: string; sourceCreatorId?: string }) => {
-      // Find existing subscription for this creator, or create one
-      let sub = subs.data?.find((s) => s.creator_id === params.creatorId);
-      if (!sub) {
-        sub = await api.createSubscription({ creator_id: params.creatorId, name: undefined });
-      }
+      // The backend create-or-join contract resolves the creator's canonical
+      // subscription without relying on a bounded client-side list page.
+      const sub = await api.createSubscription({ creator_id: params.creatorId, name: undefined });
       return api.createSubscriptionSource(sub.id, {
         source: params.source,
         source_url: params.url,
@@ -162,18 +169,21 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
             <h4 className="text-xs font-medium text-muted mb-2">{t("danbooru.downloadable_sources").replace("{count}", String(downloadableUrls.length))}</h4>
             <div className="space-y-2">
               {downloadableUrls.map((u, i) => (
-                <div key={i} className="flex items-center justify-between bg-success-subtle border border-success/30 rounded p-2 text-xs">
-                  <div className="flex items-center gap-2">
+                <div key={i} className="flex flex-col gap-2 bg-success-subtle border border-success/30 rounded p-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-2">
                     <SourceBadge source={classifyUrl(u.normalized_url)} />
                     <a href={u.normalized_url} target="_blank" rel="noopener noreferrer"
                       className="text-accent hover:underline truncate max-w-md">{u.normalized_url}</a>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                      className="select px-2 py-1 text-xs">
-                      <option value="">{t("danbooru.select_creator")}</option>
-                      {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
-                    </select>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                    <PaginatedCreatorSelect
+                      id={`danbooru-subscribe-creator-${i}`}
+                      ariaLabel={t("danbooru.select_creator")}
+                      value={selectedCreator}
+                      onChange={setSelectedCreator}
+                      placeholder={t("danbooru.select_creator")}
+                      selectClassName="select w-full px-2 py-1 text-xs"
+                    />
                     <button
                       onClick={() => {
                         if (!selectedCreator) return;
@@ -186,7 +196,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                         subscribe.mutate({ creatorId: selectedCreator, url: u.normalized_url, source: src, sourceCreatorId: srcCreatorId });
                       }}
                       disabled={!selectedCreator || subscribe.isPending}
-                      className="px-2 py-1 bg-success text-white rounded text-xs hover:bg-success/90 disabled:opacity-50 shrink-0">
+                      className="min-h-11 w-full shrink-0 rounded bg-success px-2 py-1 text-xs text-white hover:bg-success/90 disabled:opacity-50 sm:w-auto">
                       {subscribingUrl === u.normalized_url && subscribe.isPending ? "..." : t("danbooru.subscribe")}
                     </button>
                   </div>
@@ -232,17 +242,18 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
               </div>
             ))}
           </div>
-          <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <label className="block text-xs font-medium mb-1">{t("danbooru.target_creator")}</label>
-              <select value={selectedCreator} onChange={(e) => setSelectedCreator(e.target.value)}
-                className="select w-full">
-                <option value="">{t("danbooru.select_creator")}</option>
-                {creators.data?.items.map((c) => <option key={c.id} value={c.id}>{c.display_name || c.name}</option>)}
-              </select>
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1">
+              <PaginatedCreatorSelect
+                id="danbooru-import-target-creator"
+                label={t("danbooru.target_creator")}
+                value={selectedCreator}
+                onChange={setSelectedCreator}
+                placeholder={t("danbooru.select_creator")}
+              />
             </div>
             <button onClick={() => onImport(selectedCreator)} disabled={!selectedCreator || importPending}
-              className="btn-primary shrink-0">
+              className="btn-primary w-full shrink-0 sm:w-auto">
               {importPending ? t("danbooru.importing") : t("danbooru.import_links_btn").replace("{count}", String(links.length))}
             </button>
           </div>
@@ -296,7 +307,7 @@ function classifyUrl(url: string): string {
 
 const DOWNLOADABLE_SOURCES = ["pixiv", "iwara"];
 
-export default function DanbooruReferencePage() {
+function DanbooruReferenceContent() {
   const t = useT();
   const notify = useNotifications();
   const toast = useToast();
@@ -327,12 +338,13 @@ export default function DanbooruReferencePage() {
         data.operation_type,
         title,
         { entity: "creators", scope: "all" },
+        data.task_id,
       );
       toast.success({
         title,
         message: t("danbooru.refresh_queued"),
         action: has("tasks")
-          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.job_id}`) }
+          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) }
           : undefined,
       });
       qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
@@ -348,6 +360,7 @@ export default function DanbooruReferencePage() {
       toast.success({ message: t("danbooru.imported_links", { count: data.imported, name: data.artist_name }) });
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
     },
+    onError: (error: Error) => toast.error({ message: error.message }),
   });
 
   const importAllMutation = useMutation({
@@ -359,8 +372,14 @@ export default function DanbooruReferencePage() {
       notify.startOperationJob(data.job_id, "danbooru-import-all", t("danbooru.operation_title"), {
         name: searchParams?.name,
         pixiv_id: searchParams?.pixiv_id,
+      }, data.task_id);
+      toast.success({
+        message: t("danbooru.import_queued"),
+        action: has("tasks")
+          ? { label: t("jobs.open_task"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${data.task_id}`) }
+          : undefined,
       });
-      toast.success({ message: t("danbooru.import_queued") });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
     },
   });
 
@@ -397,7 +416,14 @@ export default function DanbooruReferencePage() {
   }, []);
 
   // Merge: prefer context batchJob, fall back to direct mount fetch
-  const displayBatchResult = batchJob?.result || directResult;
+  const candidateBatchResult = batchJob?.result || directResult;
+  const displayBatchResult = candidateBatchResult
+    && Array.isArray(candidateBatchResult.imported)
+    && Array.isArray(candidateBatchResult.low_confidence)
+    && Array.isArray(candidateBatchResult.not_found)
+    && Array.isArray(candidateBatchResult.errors)
+    ? candidateBatchResult
+    : null;
   const displayBatchProgress = batchJob?.progress;
 
   const enqueueBatch = useMutation({
@@ -490,7 +516,6 @@ export default function DanbooruReferencePage() {
   }, [artist]);
 
   return (
-    <PermissionGuard module="subscriptions">
     <PageShell>
       <PageHeader
         title={t("danbooru.title")}
@@ -810,6 +835,13 @@ export default function DanbooruReferencePage() {
           importName={importName} setImportName={setImportName} />
       )}
     </PageShell>
+  );
+}
+
+export default function DanbooruReferencePage() {
+  return (
+    <PermissionGuard module="subscriptions">
+      <DanbooruReferenceContent />
     </PermissionGuard>
   );
 }

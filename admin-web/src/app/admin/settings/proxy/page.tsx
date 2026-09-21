@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState } from "@/components";
+import { PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
@@ -96,7 +96,7 @@ function TestResults({ data, proxyEnabled }: { data: ProxyTestResult | null; pro
   );
 }
 
-export default function ProxySettingsPage() {
+function ProxySettingsContent() {
   const t = useT();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const testProxy = useAdminOperation<ProxyTestResult>({
@@ -109,6 +109,14 @@ export default function ProxySettingsPage() {
   if (!settings.data) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded-md bg-subtle dark:bg-subtle" /><div className="h-48 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
 
   return <ProxySettingsForm initial={settings.data.proxy} testProxy={testProxy} />;
+}
+
+export default function ProxySettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <ProxySettingsContent />
+    </PermissionGuard>
+  );
 }
 
 function ProxySettingsForm({
@@ -195,13 +203,16 @@ function ProxySettingsForm({
           </div>
 
           <div className="mt-4 flex justify-end items-center">
-            
-            
             <button onClick={() => save.mutate(current)} disabled={save.isPending}
               className="btn-primary px-6">
               {save.isPending ? t("common.saving") : t("proxy.save")}
             </button>
           </div>
+          {save.error && (
+            <p role="alert" className="mt-2 text-sm text-danger">
+              {t("proxy.failed")}: {(save.error as Error).message}
+            </p>
+          )}
         </>
     </PageShell>
   );

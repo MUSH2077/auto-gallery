@@ -86,10 +86,10 @@ export default function TagDetailPage() {
         { label: td.normalized_name },
       ]} />
 
-      <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-6">
-        <aside className="space-y-4">
+      <div className="grid min-w-0 grid-cols-1 gap-6 md:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+        <aside className="min-w-0 space-y-4">
           <div className="card p-4">
-            <h1 className="text-2xl font-bold text-fg dark:text-white">#{td.normalized_name}</h1>
+            <h1 className="max-w-full break-words text-2xl font-bold text-fg [overflow-wrap:anywhere] dark:text-white">#{td.normalized_name}</h1>
             {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-accent-subtle text-accent">{td.category}</span>}
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
@@ -131,7 +131,7 @@ export default function TagDetailPage() {
           )}
         </aside>
 
-        <section>
+        <section className="min-w-0">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-semibold">{t("tag_detail.works_with_tag", { count: works.data?.total || 0 })}</h2>
             {slideItems.length > 0 && (
@@ -146,8 +146,8 @@ export default function TagDetailPage() {
             <>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {works.data.items.map((w: any) => (
-                  <Link key={w.id} href={`/admin/works/${w.id}`} className="group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle transition-colors">
-                    <div className="aspect-[4/3] bg-subtle">
+                  <Link key={w.id} href={`/admin/works/${w.id}`} className="media-motion-card group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle">
+                    <div className="media-motion-visual aspect-[4/3] overflow-hidden bg-subtle">
                       {w.thumbnail_asset_id ? (
                         <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" />
                       ) : (

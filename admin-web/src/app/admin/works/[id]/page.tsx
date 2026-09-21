@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "@/lib/api";
+import { api, queryKeys, type RemoteWorkState } from "@/lib/api";
 import { AssetFilmstrip, AssetViewer, WorkMediaThumbnail, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
@@ -27,6 +27,25 @@ interface WorkSourceData {
   raw_metadata?: Record<string, unknown>;
 }
 
+const PIXIV_REMOTE_STATE_METADATA_KEYS = new Set([
+  "total_view",
+  "total_views",
+  "total_bookmarks",
+  "is_bookmarked",
+]);
+
+function sanitizePixivMetadataForDisplay(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizePixivMetadataForDisplay);
+  if (!value || typeof value !== "object") return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (PIXIV_REMOTE_STATE_METADATA_KEYS.has(key)) continue;
+    sanitized[key] = sanitizePixivMetadataForDisplay(nestedValue);
+  }
+  return sanitized;
+}
+
 function WorkViewerShell({ workId }: { workId: string }) {
   const t = useT();
   const assets = useQuery({
@@ -39,12 +58,28 @@ function WorkViewerShell({ workId }: { workId: string }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [fullAsset, setFullAsset] = useState<AssetData | null>(null);
   const wheelDelta = useRef(0);
+  const viewerRef = useRef<HTMLDivElement | null>(null);
 
   const totalPages = assets.data?.length || 0;
   const changePage = (delta: number) => {
     if (!totalPages) return;
     setActiveIndex((current) => (current + delta + totalPages) % totalPages);
   };
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || totalPages <= 1) return;
+    const onWheel = (event: WheelEvent) => {
+      if ((event.target as HTMLElement).closest("video")) return;
+      wheelDelta.current += event.deltaY;
+      if (Math.abs(wheelDelta.current) < 80) return;
+      event.preventDefault();
+      setActiveIndex((current) => (current + (wheelDelta.current > 0 ? 1 : -1) + totalPages) % totalPages);
+      wheelDelta.current = 0;
+    };
+    viewer.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewer.removeEventListener("wheel", onWheel);
+  }, [totalPages]);
 
   useEffect(() => {
     if (!totalPages) return;
@@ -67,16 +102,8 @@ function WorkViewerShell({ workId }: { workId: string }) {
   return (
     <section className="card overflow-hidden">
       <div
+        ref={viewerRef}
         className="relative flex min-h-[58vh] items-center justify-center bg-canvas"
-        onWheel={(event) => {
-          if ((event.target as HTMLElement).closest("video")) return;
-          if (totalPages <= 1) return;
-          wheelDelta.current += event.deltaY;
-          if (Math.abs(wheelDelta.current) < 80) return;
-          event.preventDefault();
-          changePage(wheelDelta.current > 0 ? 1 : -1);
-          wheelDelta.current = 0;
-        }}
       >
         <AssetViewer
           key={current.id}
@@ -158,6 +185,60 @@ function WorkHistory({ workId }: { workId: string }) {
   );
 }
 
+type RemoteStateQuery = {
+  data?: RemoteWorkState;
+  error: Error | null;
+  isError: boolean;
+  isPending: boolean;
+};
+
+function PixivLiveStateCard({ state }: { state: RemoteStateQuery }) {
+  const t = useT();
+  const fmt = useI18nFormat();
+
+  if (state.isPending) {
+    return (
+      <div className="card p-3" aria-label={t("work_detail.pixiv_live_loading")}>
+        <div className="animate-pulse space-y-2">
+          <div className="h-4 w-32 rounded bg-subtle" />
+          <div className="grid grid-cols-2 gap-2"><div className="h-20 rounded-md bg-subtle" /><div className="h-20 rounded-md bg-subtle" /></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.isError || !state.data) {
+    const error = state.error as (Error & { status?: number; code?: string; detail?: unknown }) | null;
+    const detailCode = error?.code
+      || (typeof error?.detail === "string" ? error.detail : undefined)
+      || (error?.detail && typeof error.detail === "object" && "code" in error.detail && typeof error.detail.code === "string" ? error.detail.code : undefined);
+    const message = detailCode === "remote_account_required"
+      ? t("work_detail.pixiv_connect_account")
+      : detailCode === "remote_account_reauthentication_required"
+        ? t("work_detail.pixiv_reconnect_account")
+        : error?.status === 429 || detailCode === "remote_rate_limited"
+          ? t("work_detail.pixiv_rate_limited")
+          : t("work_detail.pixiv_live_unavailable");
+    return <div className="card p-3 text-sm text-muted" role="status">{message}</div>;
+  }
+
+  return (
+    <section className="card p-3" aria-label={t("work_detail.pixiv_live_state")}>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-md bg-accent-subtle p-3 text-center text-accent">
+          <div className="tabular text-xl font-semibold">{fmt.number(state.data.total_views)}</div>
+          <div className="text-xs">{t("work_detail.live_views")}</div>
+        </div>
+        <div className="rounded-md bg-warning-subtle p-3 text-center text-warning">
+          <div className="tabular text-xl font-semibold">{fmt.number(state.data.total_bookmarks)}</div>
+          <div className="text-xs">{t("work_detail.live_bookmarks")}</div>
+        </div>
+      </div>
+      <div className="mt-3 text-center text-sm text-muted">{state.data.is_bookmarked ? t("work_detail.pixiv_bookmarked") : t("work_detail.pixiv_not_bookmarked")}</div>
+    </section>
+  );
+}
+
 export default function WorkDetailPage() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -176,6 +257,17 @@ export default function WorkDetailPage() {
     },
   });
   const sources = useQuery({ queryKey: queryKeys.works.sources(id), queryFn: () => api.getWorkSources(id) });
+  const hasPixivSource = ((sources.data || []) as WorkSourceData[]).some((source) => source.source === "pixiv");
+  const remoteState = useQuery({
+    queryKey: queryKeys.works.remoteState(id),
+    queryFn: () => api.getWorkRemoteState(id),
+    enabled: hasPixivSource,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
   const workTags = useQuery({ queryKey: ["works", id, "tags"], queryFn: () => api.getWorkTags(id) });
   const curateWork = useMutation({
     mutationFn: (action: "trash" | "restore") => api.batchCurateWorks([id], action),
@@ -202,14 +294,11 @@ export default function WorkDetailPage() {
   const rawHeight = raw.height as number | undefined;
   const illustType = raw.type as string | undefined;
   const rating = raw.rating as string | undefined;
-  const totalView = raw.total_view as number | undefined;
-  const totalBookmarks = raw.total_bookmarks as number | undefined;
   const createDate = (raw.create_date as string) || w.posted_at;
   const aiType = raw.illust_ai_type as number | undefined;
   const series = raw.series as string | undefined;
 
   const isAiGenerated = aiType !== undefined && aiType == 2;
-  const hasStats = totalView !== undefined || totalBookmarks !== undefined;
   const visibility = w.curation_state?.visibility || "visible";
 
   return (
@@ -320,8 +409,8 @@ export default function WorkDetailPage() {
               {canCurate && (
                 <button onClick={() => toggleFavorite.mutate(id)}
                   className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md ${work.data?.is_favorite ? "text-warning" : "text-muted hover:bg-subtle hover:text-warning"}`}
-                  title={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}
-                  aria-label={work.data?.is_favorite ? t("common.unfavorite") : t("common.favorite")}>
+                  title={work.data?.is_favorite ? t("work_detail.local_library_unfavorite") : t("work_detail.local_library_favorite")}
+                  aria-label={work.data?.is_favorite ? t("work_detail.local_library_unfavorite") : t("work_detail.local_library_favorite")}>
                   <Star className="h-6 w-6" fill={work.data?.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
                 </button>
               )}
@@ -352,22 +441,7 @@ export default function WorkDetailPage() {
             </div>
           </div>
 
-          {hasStats && (
-            <div className="card grid grid-cols-2 gap-2 p-3">
-              {totalView !== undefined && (
-                <div className="rounded-md bg-accent-subtle p-3 text-center text-accent">
-                  <div className="tabular text-xl font-semibold">{fmt.number(totalView)}</div>
-                  <div className="text-xs">{t("work_detail.views")}</div>
-                </div>
-              )}
-              {totalBookmarks !== undefined && (
-                <div className="rounded-md bg-warning-subtle p-3 text-center text-warning">
-                  <div className="tabular text-xl font-semibold">{fmt.number(totalBookmarks)}</div>
-                  <div className="text-xs">{t("work_detail.bookmarks")}</div>
-                </div>
-              )}
-            </div>
-          )}
+          {hasPixivSource ? <PixivLiveStateCard state={remoteState} /> : null}
 
           {w.creator_id && <MoreFromCreator creatorId={w.creator_id} currentWorkId={id} />}
 
@@ -447,7 +521,7 @@ function SourceRecord({ source: s }: { source: WorkSourceData }) {
           </button>
           {showRaw && (
             <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs">
-              {JSON.stringify(s.raw_metadata, null, 2)}
+              {JSON.stringify(s.source === "pixiv" ? sanitizePixivMetadataForDisplay(s.raw_metadata) : s.raw_metadata, null, 2)}
             </pre>
           )}
         </div>

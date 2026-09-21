@@ -74,6 +74,63 @@ def test_contract_describes_search_enums_and_pagination_limit():
     assert validation_schema.endswith(("/HTTPValidationError", "/ValidationError"))
 
 
+def test_contract_exposes_creator_alias_history_and_matched_identity():
+    from app.main import app
+
+    app.openapi_schema = None
+    schema = app.openapi()
+    alias_operation = schema["paths"]["/api/v1/creators/{creator_id}/aliases"]["get"]
+    alias_parameters = {
+        parameter["name"]: parameter for parameter in alias_operation["parameters"]
+    }
+    assert alias_parameters["include_history"]["schema"]["default"] is True
+    alias_response = alias_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert alias_response["items"]["$ref"].endswith("/CreatorAliasRead")
+
+    matched = schema["components"]["schemas"]["MatchedCreatorIdentityRead"]
+    assert {
+        "creator_id",
+        "value",
+        "source",
+        "kind",
+        "is_current",
+        "match_type",
+    } <= set(matched["properties"])
+    assert set(matched["properties"]["match_type"]["enum"]) == {
+        "exact",
+        "prefix",
+        "fuzzy",
+    }
+    backfill = schema["paths"][
+        "/api/v1/admin/data/creator-aliases/backfill"
+    ]["post"]
+    assert backfill["responses"]["202"]
+
+
+def test_contract_declares_remote_work_state_errors_and_response_headers():
+    from app.main import app
+
+    app.openapi_schema = None
+    operation = app.openapi()["paths"]["/api/v1/works/{work_id}/remote-state"]["get"]
+    responses = operation["responses"]
+
+    assert {"200", "409", "429", "502", "503"} <= set(responses)
+    assert responses["200"]["headers"]["Cache-Control"]["schema"] == {"type": "string"}
+    assert responses["429"]["headers"]["Retry-After"]["schema"] == {"type": "string"}
+    for status_code in ("409", "429", "502", "503"):
+        schema = responses[status_code]["content"]["application/json"]["schema"]
+        assert schema["allOf"][0]["$ref"] == "#/components/schemas/ApiError"
+        specialized = schema["allOf"][1]
+        assert specialized["type"] == "object"
+        assert specialized["additionalProperties"] is False
+        assert specialized["required"] == ["detail"]
+        detail = specialized["properties"]["detail"]
+        assert detail["type"] == "object"
+        assert detail["additionalProperties"] is False
+        assert detail["required"] == ["code"]
+        assert detail["properties"]["code"] == {"type": "string"}
+
+
 def test_contract_exposes_structured_data_center_and_repository_detail_responses():
     from app.main import app
 

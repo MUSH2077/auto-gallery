@@ -19,11 +19,13 @@ import SourceBadge from "@/components/SourceBadge";
 import StatusBadge from "@/components/StatusBadge";
 import { SyncOutcomeBadge } from "@/components/SyncOutcomeBadge";
 import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import ThreeUiArcCanvas from "@/components/ThreeUiArcCanvas";
 import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { useStaggeredEntrance } from "@/lib/motion";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { hasTaskAction } from "@/lib/task-actions";
 
 type DashboardActivity = {
   key: string;
@@ -39,6 +41,7 @@ type DashboardActivity = {
   progressLabel?: string | null;
   outcome?: SyncOutcome | null;
   retryable: boolean;
+  repeatable: boolean;
 };
 
 type StatusTone = "ok" | "info" | "danger" | "warning" | "muted";
@@ -126,13 +129,13 @@ function DashboardStatusLink({
     <Link
       href={href}
       data-testid={testId}
-      className="group flex min-h-[108px] min-w-0 flex-col justify-between border-b border-r border-border p-4 outline-none transition-colors hover:bg-subtle focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 md:min-h-[112px] xl:border-b-0"
+      className="group flex min-h-[108px] min-w-0 flex-col justify-between rounded-lg border border-border bg-surface/90 p-3 outline-none transition-[border-color,background-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:bg-surface hover:shadow-md focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-accent/50 md:min-h-[112px] xl:aspect-square xl:rounded-full xl:p-4"
     >
       <div className="flex min-w-0 items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
         <span>{label}</span>
         <span className={`h-2 w-2 shrink-0 rounded-full ${toneDot(tone)}`} />
       </div>
-      <strong className="mt-3 truncate text-xl font-semibold tabular text-fg">{value}</strong>
+      <strong className="mt-3 text-lg font-semibold leading-tight tabular text-fg">{value}</strong>
       <span className="mt-2 inline-flex min-h-6 items-center gap-1 text-sm font-medium text-accent">
         {t("dashboard.open")}
         <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
@@ -156,62 +159,77 @@ export function DashboardStatusStrip({
   const failedJobs = data.queue.failed_download_count + data.queue.failed_import_count;
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-surface" aria-label={t("dashboard.operational_status")}>
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-        <DashboardStatusLink
-          label={t("dashboard.auto_sync")}
-          value={data.scheduler.enabled ? t("common.on") : t("common.off")}
-          href="/admin/scheduler"
-          tone={data.scheduler.enabled ? "ok" : "danger"}
-          testId="dashboard-status-scheduler"
-        />
-        <DashboardStatusLink
-          label={t("dashboard.queue")}
-          value={t("dashboard.active_count", { count: activeJobs })}
-          href="/admin/jobs"
-          tone={activeJobs > 0 ? "info" : "muted"}
-          testId="dashboard-status-jobs"
-        />
-        <DashboardStatusLink
-          label={t("dashboard.failed")}
-          value={String(failedJobs)}
-          href="/admin/jobs?q=status%3Afailed"
-          tone={failedJobs > 0 ? "danger" : "ok"}
-          testId="dashboard-status-failed"
-        />
-        <DashboardStatusLink
-          label={t("dashboard.stale")}
-          value={String(data.queue.stale_count)}
-          href="/admin/jobs?q=status%3Astale"
-          tone={data.queue.stale_count > 0 ? "warning" : "ok"}
-          testId="dashboard-status-stale"
-        />
-        <DashboardStatusLink
-          label={t("dashboard.disk")}
-          value={data.storage.disk_free_percent == null
-            ? "—"
-            : t("dashboard.disk_free_percent", { percent: data.storage.disk_free_percent })}
-          href="/admin/data-mgmt"
-          tone={data.storage.risk_level === "critical"
-            ? "danger"
-            : data.storage.risk_level === "warning" ? "warning" : "ok"}
-          testId="dashboard-status-storage"
-        />
-        <div className="flex min-h-[108px] min-w-0 flex-col justify-between border-b border-border p-4 md:min-h-[112px] md:border-r xl:border-b-0 xl:border-r-0">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted">{t("dashboard.updated_label")}</span>
-          <time className="mt-3 whitespace-nowrap text-xs tabular text-muted sm:text-sm" dateTime={data.updated_at} aria-live="polite">
-            {fmt.dateTime(data.updated_at)}
-          </time>
-          <button
-            type="button"
-            className="mt-2 inline-flex min-h-8 w-fit items-center gap-2 rounded-md text-sm font-medium text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-wait disabled:opacity-60"
-            onClick={onRefresh}
-            disabled={refreshing}
-            aria-busy={refreshing}
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden />
-            {refreshing ? t("dashboard.refreshing") : t("common.refresh")}
-          </button>
+    <section
+      data-testid="dashboard-hero"
+      className="relative isolate overflow-hidden rounded-xl border border-border bg-surface px-5 py-6 shadow-sm sm:px-7 sm:py-7 xl:min-h-[300px]"
+      aria-label={t("dashboard.operational_status")}
+    >
+      <ThreeUiArcCanvas className="opacity-55 dark:opacity-35" />
+      <div className="relative z-10 grid gap-7 xl:grid-cols-[minmax(260px,.72fr)_minmax(0,1.5fr)] xl:items-center">
+        <div className="max-w-lg">
+          <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.13em] text-accent">
+            <span className={`h-2 w-2 rounded-full ${toneDot(failedJobs ? "warning" : "ok")}`} />
+            {t("dashboard.operational_status")}
+          </div>
+          <h2 className="mt-4 text-2xl font-semibold tracking-tight text-fg sm:text-3xl">{t("dashboard.title")}</h2>
+          <p className="mt-3 max-w-md text-sm leading-6 text-muted">{t("dashboard.workbench_desc")}</p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-busy={refreshing}
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden />
+              {refreshing ? t("dashboard.refreshing") : t("common.refresh")}
+            </button>
+            <time className="text-xs tabular text-muted" dateTime={data.updated_at} aria-live="polite">
+              {t("dashboard.updated_label")} · {fmt.dateTime(data.updated_at)}
+            </time>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5 xl:items-center">
+          <DashboardStatusLink
+            label={t("dashboard.auto_sync")}
+            value={data.scheduler.enabled ? t("common.on") : t("common.off")}
+            href="/admin/scheduler"
+            tone={data.scheduler.enabled ? "ok" : "danger"}
+            testId="dashboard-status-scheduler"
+          />
+          <DashboardStatusLink
+            label={t("dashboard.queue")}
+            value={t("dashboard.active_count", { count: activeJobs })}
+            href="/admin/jobs"
+            tone={activeJobs > 0 ? "info" : "muted"}
+            testId="dashboard-status-jobs"
+          />
+          <DashboardStatusLink
+            label={t("dashboard.failed")}
+            value={String(failedJobs)}
+            href="/admin/jobs?q=status%3Afailed"
+            tone={failedJobs > 0 ? "danger" : "ok"}
+            testId="dashboard-status-failed"
+          />
+          <DashboardStatusLink
+            label={t("dashboard.stale")}
+            value={String(data.queue.stale_count)}
+            href="/admin/jobs?q=status%3Astale"
+            tone={data.queue.stale_count > 0 ? "warning" : "ok"}
+            testId="dashboard-status-stale"
+          />
+          <DashboardStatusLink
+            label={t("dashboard.disk")}
+            value={data.storage.disk_free_percent == null
+              ? "—"
+              : t("dashboard.disk_free_percent", { percent: data.storage.disk_free_percent })}
+            href="/admin/data-mgmt"
+            tone={data.storage.risk_level === "critical"
+              ? "danger"
+              : data.storage.risk_level === "warning" ? "warning" : "ok"}
+            testId="dashboard-status-storage"
+          />
         </div>
       </div>
     </section>
@@ -241,17 +259,17 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
               <Link
                 key={work.id}
                 href={`/admin/works/${work.id}`}
-                className={`${motion.className} group min-w-0 snap-start overflow-hidden rounded-lg border border-border bg-bg outline-none transition-colors hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/50`}
+                className={`${motion.className} media-motion-card group min-w-0 snap-start overflow-hidden rounded-lg border border-border bg-bg outline-none hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/50`}
                 style={motion.style}
                 aria-label={t("common.open_item", { name: title })}
               >
-                <div className="aspect-[4/3] overflow-hidden border-b border-border bg-subtle">
+                <div className="media-motion-visual aspect-[4/3] overflow-hidden border-b border-border bg-subtle">
                   <WorkMediaThumbnail
                     assetId={work.thumbnail_asset_id}
                     hasVideo={work.has_video}
                     alt=""
                     eager
-                    className="h-full w-full object-cover transition-transform duration-slow ease-expo group-hover:scale-[1.025]"
+                    className="h-full w-full object-cover"
                   />
                 </div>
                 <div className="p-3" id={work.thumbnail_asset_id ? `dashboard-work-${work.thumbnail_asset_id}` : undefined}>
@@ -280,7 +298,7 @@ export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
   const downloads = data.recent.download_jobs.filter((job) => {
     const status = job.status.toLowerCase();
-    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status);
+    return ACTIVE_STATUSES.has(status) || FAILED_STATUSES.has(status) || Boolean(job.outcome) || hasTaskAction(job, "repeat_sync");
   }).map((job) => {
     const active = ACTIVE_STATUSES.has(job.status.toLowerCase());
     const progress = active ? progressValue(job.progress_data) : { percent: null, label: null };
@@ -297,7 +315,8 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       progress: progress.percent,
       progressLabel: progress.label,
       outcome: job.outcome,
-      retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
+      retryable: hasTaskAction(job, "retry"),
+      repeatable: hasTaskAction(job, "repeat_sync"),
     };
   });
   const imports = data.recent.import_jobs.filter((job) => {
@@ -317,7 +336,8 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
       progress: progress.percent,
       progressLabel: progress.label,
-      retryable: FAILED_STATUSES.has(job.status.toLowerCase()),
+      retryable: hasTaskAction(job, "retry"),
+      repeatable: false,
     };
   });
   return [...downloads, ...imports]
@@ -334,11 +354,13 @@ function ActivityRow({
   canRetry,
   retrying,
   onRetry,
+  onRepeat,
 }: {
   activity: DashboardActivity;
   canRetry: boolean;
   retrying: boolean;
   onRetry: (activity: DashboardActivity) => void;
+  onRepeat: (activity: DashboardActivity) => void;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -381,6 +403,16 @@ function ActivityRow({
             {retrying ? t("dashboard.retrying") : t("common.retry")}
           </button>
         )}
+        {activity.repeatable && canRetry && (
+          <button
+            type="button"
+            className="btn-ghost min-h-11 px-2 text-xs sm:px-3"
+            disabled={retrying}
+            onClick={() => onRepeat(activity)}
+          >
+            {t("jobs.repeat_sync")}
+          </button>
+        )}
         <Link
           href={activity.href}
           className="btn-icon hidden min-h-11 min-w-11 border border-border sm:inline-flex"
@@ -398,17 +430,20 @@ export function ActivityPanel({
   canRetry,
   retryingKey,
   onRetry,
+  onRepeat,
 }: {
   data: WorkbenchSummary;
   canRetry: boolean;
   retryingKey?: string | null;
   onRetry: (activity: DashboardActivity) => void;
+  onRepeat: (activity: DashboardActivity) => void;
 }) {
   const t = useT();
   const activities = useMemo(() => buildActivities(data, t), [data, t]);
   const grouped = {
     active: activities.filter((activity) => activityGroup(activity.status) === "active"),
     failed: activities.filter((activity) => activityGroup(activity.status) === "failed"),
+    complete: activities.filter((activity) => activityGroup(activity.status) === "complete"),
   };
   const entrance = useStaggeredEntrance(activities.map((activity) => activity.key));
   let entranceIndex = 0;
@@ -423,14 +458,14 @@ export function ActivityPanel({
       </div>
       {activities.length ? (
         <div className="overflow-hidden rounded-lg border border-border">
-          {(["failed", "active"] as const).map((group) => {
+          {(["failed", "active", "complete"] as const).map((group) => {
             const rows = grouped[group];
             if (!rows.length) return null;
             return (
               <div key={group} className="border-t border-border first:border-t-0">
                 <div className="flex items-center gap-2 bg-subtle px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
                   <span className={`h-2 w-2 rounded-full ${
-                    group === "failed" ? "bg-danger" : "bg-accent"
+                    group === "failed" ? "bg-danger" : group === "complete" ? "bg-success" : "bg-accent"
                   }`} />
                   {t(`dashboard.activity_group_${group}`)}
                 </div>
@@ -444,6 +479,7 @@ export function ActivityPanel({
                         canRetry={canRetry}
                         retrying={retryingKey === activity.key}
                         onRetry={onRetry}
+                        onRepeat={onRepeat}
                       />
                     </div>
                   );

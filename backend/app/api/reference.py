@@ -19,7 +19,6 @@ from app.services import danbooru as danbooru_svc
 from app.services.danbooru_import import import_all_danbooru_artist
 from app.services.operations import (
     enqueue_admin_operation,
-    get_operation_status,
     set_operation_status,
 )
 from app.services.queue_admission import checked_enqueue
@@ -33,14 +32,18 @@ router = APIRouter(dependencies=[RequirePermission("subscriptions")])
 
 
 class DanbooruMappingRefreshEnqueueResponse(BaseModel):
+    task_id: str
     status: Literal["enqueued"]
     job_id: str
+    rq_job_id: str
     operation_type: Literal["danbooru-mapping-refresh"]
     message: str
 
 
 class DanbooruMappingRefreshStatusResponse(BaseModel):
+    task_id: str | None = None
     job_id: str
+    rq_job_id: str | None = None
     status: str
     operation_type: Literal["danbooru-mapping-refresh"]
     progress: dict[str, Any] | None = None
@@ -85,6 +88,10 @@ async def refresh_all_danbooru_mappings():
     )
     return {
         **operation,
+        # ``job_id`` remains the legacy transport alias for existing polling
+        # clients. New task navigation uses ``task_id``; the transport's role
+        # is explicit for new clients through ``rq_job_id``.
+        "rq_job_id": operation["job_id"],
         "operation_type": "danbooru-mapping-refresh",
         "message": "Danbooru mapping refresh queued",
     }
@@ -94,20 +101,25 @@ async def refresh_all_danbooru_mappings():
     "/danbooru/mappings/refresh/{job_id}",
     response_model=DanbooruMappingRefreshStatusResponse,
 )
-async def get_danbooru_mapping_refresh(job_id: str):
+async def get_danbooru_mapping_refresh(
+    job_id: str,
+    user=RequirePermission("subscriptions"),
+):
     """Return status only for the subscription-scoped mapping refresh job."""
 
     from app.api.admin.data import get_admin_operation
 
-    try:
-        status = await get_admin_operation(job_id)
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        status = get_operation_status(job_id)
+    status = await get_admin_operation(job_id, user=user)
     if not status or status.get("operation_type") != "danbooru-mapping-refresh":
         raise HTTPException(status_code=404, detail="Danbooru mapping refresh not found")
-    return status
+    rq_job_id = status.get("rq_job_id") or status.get("job_id")
+    return {
+        **status,
+        # Preserve this endpoint's historical pollable ``job_id`` while
+        # exposing the durable task and RQ transport identities separately.
+        "job_id": rq_job_id,
+        "rq_job_id": rq_job_id,
+    }
 
 
 @router.post("/danbooru/artist/preview")
@@ -239,7 +251,10 @@ async def batch_import_danbooru_artists(data: dict):
 
 
 @router.get("/danbooru/artist/batch-import/status")
-async def get_batch_import_status(job_id: str | None = None):
+async def get_batch_import_status(
+    job_id: str | None = None,
+    user=RequirePermission("subscriptions"),
+):
     """Get progress or results of a batch import job.
 
     Without job_id: returns the most recent batch result from Redis.
@@ -249,7 +264,7 @@ async def get_batch_import_status(job_id: str | None = None):
         from app.api.admin.data import get_admin_operation
 
         try:
-            operation = await get_admin_operation(job_id)
+            operation = await get_admin_operation(job_id, user=user)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
@@ -258,11 +273,14 @@ async def get_batch_import_status(job_id: str | None = None):
                 "admin-danbooru-batch-import",
                 "admin-danbooru-url-batch-import",
             }:
+                operation_status = operation["status"]
                 return {
-                    "status": operation["status"],
+                    "status": operation_status,
                     "progress": operation.get("progress"),
-                    "result": operation.get("result"),
-                    "job_status": operation["status"],
+                    # TaskRun initializes result_data to an empty object. It is
+                    # not a batch result until the durable operation completes.
+                    "result": operation.get("result") if operation_status == "complete" else None,
+                    "job_status": operation_status,
                     "task_id": operation.get("task_id") or operation.get("job_id"),
                     "job_id": operation.get("rq_job_id") or operation.get("job_id"),
                 }
@@ -368,6 +386,12 @@ async def url_batch_import_danbooru(data: dict):
     if len(urls) > 100:
         raise HTTPException(status_code=400, detail="Too many URLs (max 100 per request)")
 
+    # Match the preview contract at execution time as well. The preview is
+    # advisory and may be skipped, so the enqueue endpoint must own deduping.
+    input_count = len(urls)
+    urls = list(dict.fromkeys(urls))
+    duplicates_removed = input_count - len(urls)
+
     operation_id = uuid.uuid4()
     operation = await enqueue_admin_operation(
         lock_key=f"danbooru:url-batch-import:{operation_id}",
@@ -387,6 +411,11 @@ async def url_batch_import_danbooru(data: dict):
     )
     return {
         **operation,
-        "message": f"URL batch import enqueued ({len(urls)} URLs)",
+        "message": (
+            f"URL batch import enqueued ({len(urls)} unique URLs"
+            + (f", {duplicates_removed} duplicates removed" if duplicates_removed else "")
+            + ")"
+        ),
         "total": len(urls),
+        "duplicates_removed": duplicates_removed,
     }

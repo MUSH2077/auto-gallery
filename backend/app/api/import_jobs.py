@@ -7,17 +7,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
+from app.schemas.task_bulk import TaskBulkResult
 from app.models.import_job import ImportJob
 from app.models.download_job import DownloadJob
 from app.models.subscription import Subscription
 from app.models.creator import Creator
-from app.schemas.import_job import ImportJobRead
+from app.schemas.import_job import ImportJobRead, ImportJobPage
 from app.models.task_state import transition_import_job
 from app.services.job_progress import import_progress_from_job
 from app.services.progress import ProgressTracker
 from app.services.search import SearchService
 from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.task_engine import TaskEngine, TaskEngineError
+from app.services.task_actions import enrich_actions
+from app.services.tasks import import_job_visibility_condition
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +85,10 @@ async def _enrich_import_context(db: AsyncSession, jobs: list[ImportJob]) -> dic
 
 
 @router.post("/scan")
-async def scan_imports(db: AsyncSession = Depends(get_db)):
+async def scan_imports(
+    db: AsyncSession = Depends(get_db),
+    _system=RequirePermission("system"),
+):
     """Scan for pending import work: check downloads dir for unprocessed JSON metadata files."""
     import os
     from pathlib import Path
@@ -119,7 +125,7 @@ async def scan_imports(db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.get("")
+@router.get("", response_model=ImportJobPage)
 async def list_import_jobs(
     status: str | None = None,
     download_job_id: UUID | None = None,
@@ -128,6 +134,7 @@ async def list_import_jobs(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    user=RequirePermission("tasks"),
 ):
     canonical = q or ""
     if status:
@@ -146,9 +153,11 @@ async def list_import_jobs(
             offset=offset,
             limit=limit,
             visibility=visibility,
+            user_id=user.id,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
+    await enrich_actions(db, jobs, user=user, domain_kind="import")
     ctx = await _enrich_import_context(db, jobs)
     items = []
     for j in jobs:
@@ -158,12 +167,27 @@ async def list_import_jobs(
     return {"total": total, "items": items}
 
 
-@router.get("/{job_id}")
-async def get_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
+async def _owned_import_job(db: AsyncSession, job_id: UUID, user_id: int) -> ImportJob:
+    result = await db.execute(
+        select(ImportJob).where(
+            ImportJob.id == job_id,
+            import_job_visibility_condition(user_id),
+        )
+    )
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Import job not found")
+    return job
+
+
+@router.get("/{job_id}", response_model=ImportJobRead)
+async def get_import_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("tasks"),
+):
+    job = await _owned_import_job(db, job_id, user.id)
+    await enrich_actions(db, [job], user=user, domain_kind="import")
     return _import_job_payload(job)
 
 
@@ -172,9 +196,11 @@ async def retry_import_job(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
+    user=RequirePermission("tasks"),
 ):
     engine = TaskEngine(db)
     try:
+        await _owned_import_job(db, job_id, user.id)
         result = await engine.retry_import(job_id, operator=operator)
         await db.commit()
         return result
@@ -183,9 +209,14 @@ async def retry_import_job(
 
 
 @router.delete("/{job_id}")
-async def delete_import_job(job_id: UUID, db: AsyncSession = Depends(get_db)):
+async def delete_import_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("tasks"),
+):
     engine = TaskEngine(db)
     try:
+        await _owned_import_job(db, job_id, user.id)
         await engine.delete_import(job_id)
         return {"status": "ok"}
     except TaskEngineError as e:
@@ -200,9 +231,11 @@ async def cancel_import_job(
     data: dict | None = None,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
+    user=RequirePermission("tasks"),
 ):
     engine = TaskEngine(db)
     try:
+        await _owned_import_job(db, job_id, user.id)
         note = data.get("note") if data else None
         result = await engine.cancel_import(job_id, note=note, operator=operator)
         await db.commit()
@@ -217,10 +250,12 @@ async def set_import_priority(
     data: dict,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
+    user=RequirePermission("tasks"),
 ):
     priority = data.get("priority", 10)
     engine = TaskEngine(db)
     try:
+        await _owned_import_job(db, job_id, user.id)
         result = await engine.set_priority_import(job_id, priority, operator=operator)
         await db.commit()
         return result
@@ -228,24 +263,38 @@ async def set_import_priority(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/batch-by-filter")
+@router.post("/batch-by-filter", response_model=TaskBulkResult, response_model_exclude_unset=True)
 async def batch_import_by_filter(
     data: dict,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
+    user=RequirePermission("tasks"),
 ):
     filters = data.get("filters", {})
     action = data.get("action", "")
     note = data.get("note")
     engine = TaskEngine(db)
     try:
-        return await engine.batch_by_filter("import", filters, action, operator=operator, note=note)
+        from app.services.task_bulk import owned_batch_ids
+        owned_ids = await owned_batch_ids(db, "import", filters, user.id)
+        return await engine.batch_by_filter(
+            "import",
+            {"ids": [str(item) for item in owned_ids]},
+            action,
+            operator=operator,
+            note=note,
+        )
     except TaskEngineError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{job_id}/progress")
-async def get_import_progress(job_id: UUID):
+async def get_import_progress(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("tasks"),
+):
+    await _owned_import_job(db, job_id, user.id)
     progress = ProgressTracker.get(str(job_id))
     if not progress:
         raise HTTPException(status_code=404, detail="No progress data available")

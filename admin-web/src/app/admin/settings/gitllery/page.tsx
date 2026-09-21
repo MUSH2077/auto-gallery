@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, CircleOff, Copy, RefreshCw, ShieldCheck } from "lucide-react";
 
@@ -7,6 +8,8 @@ import { ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components
 import { useToast } from "@/components/Toast";
 import { api, queryKeys, type GitllerySettings } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { writeClipboardText } from "@/lib/clipboard";
+import { usePermissions } from "@/lib/usePermissions";
 
 type CapabilityName = keyof GitllerySettings["capabilities"];
 
@@ -28,9 +31,11 @@ function shortId(value?: string | null) {
   return value.length > 18 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
 }
 
-export default function GitllerySettingsPage() {
+function GitllerySettingsContent() {
   const t = useT();
   const toast = useToast();
+  const { isAdmin } = usePermissions();
+  const [copyingCommand, setCopyingCommand] = useState<string | null>(null);
   const settings = useQuery({
     queryKey: queryKeys.gitllery.settings,
     queryFn: api.getGitllerySettings,
@@ -44,11 +49,15 @@ export default function GitllerySettingsPage() {
   });
 
   const copyCommand = async (command: string) => {
+    if (copyingCommand) return;
+    setCopyingCommand(command);
     try {
-      await navigator.clipboard.writeText(command);
+      await writeClipboardText(command);
       toast.success({ message: t("common.copied") });
     } catch {
       toast.error({ message: t("gitllery_settings.copy_failed") });
+    } finally {
+      setCopyingCommand(null);
     }
   };
 
@@ -57,7 +66,6 @@ export default function GitllerySettingsPage() {
   const integrityFailures = repositories.filter((repo) => !repo.object_integrity_ok).length;
 
   return (
-    <PermissionGuard module="system">
       <PageShell>
         <PageHeader
           title={t("gitllery_settings.title")}
@@ -167,16 +175,18 @@ export default function GitllerySettingsPage() {
                         <td className="px-4 py-3 font-mono text-xs" title={repo.head_segment ?? undefined}>{shortId(repo.head_segment)}</td>
                         <td className="px-4 py-3 font-mono text-xs" title={repo.last_complete_commit_id ?? undefined}>{shortId(repo.last_complete_commit_id)}</td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => verify.mutate(repo.repository_id)}
-                            disabled={!data.capabilities.verify.enabled || verify.isPending}
-                            className="btn-ghost min-h-10 px-3 text-xs"
-                          >
-                            {verify.isPending && verify.variables === repo.repository_id
-                              ? t("gitllery_settings.queueing")
-                              : t("gitllery_settings.verify")}
-                          </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => verify.mutate(repo.repository_id)}
+                              disabled={!data.capabilities.verify.enabled || verify.isPending}
+                              className="btn-ghost min-h-10 px-3 text-xs"
+                            >
+                              {verify.isPending && verify.variables === repo.repository_id
+                                ? t("gitllery_settings.queueing")
+                                : t("gitllery_settings.verify")}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -248,6 +258,7 @@ export default function GitllerySettingsPage() {
                       <button
                         type="button"
                         onClick={() => copyCommand(command)}
+                        disabled={copyingCommand !== null}
                         className="btn-ghost inline-flex min-h-10 shrink-0 items-center gap-2 px-3 text-xs"
                         aria-label={t("gitllery_settings.copy_command", { command: name })}
                       >
@@ -283,6 +294,13 @@ export default function GitllerySettingsPage() {
           </div>
         )}
       </PageShell>
+  );
+}
+
+export default function GitllerySettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <GitllerySettingsContent />
     </PermissionGuard>
   );
 }

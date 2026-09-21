@@ -117,7 +117,12 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
     monkeypatch.setattr(system, "_get_proxy_health_summary", AsyncMock(return_value={}))
     monkeypatch.setattr(system, "_quick_service_health", AsyncMock(return_value={"backend": "up"}))
 
-    payload = await system.workbench_summary(refresh=True, db=session)
+    actor = SimpleNamespace(id=1, is_admin=True, permissions=[])
+    async def enrich(_db, rows, **kwargs):
+        for row in rows:
+            row.available_actions, row.disabled_reasons = [], {}
+    monkeypatch.setattr(system, "enrich_actions", enrich)
+    payload = await system.workbench_summary(refresh=True, db=session, user=actor)
 
     assert payload["queue"]["active_download_count"] == 1
     assert payload["recent"]["download_jobs"][0]["creator_name"] == "Atlas Ink"
@@ -130,6 +135,6 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
     assert system._workbench_cache is payload
     assert system._WORKBENCH_CACHE_TTL == 10.0
 
-    cached = await system.workbench_summary(refresh=False, db=SimpleNamespace())
+    cached = await system.workbench_summary(refresh=False, db=SimpleNamespace(), user=actor)
     assert cached is payload
     assert session.execute_count == 9

@@ -272,9 +272,19 @@ test("root route sends unauthenticated users to login and login lands on dashboa
   });
 
   await page.goto("/");
-  await expect(page).toHaveURL(/\/admin\/login$/);
+  await expect(page).toHaveURL(/\/admin\/login(?:\?|$)/);
+  await expect(page.getByTestId("login-hero")).toBeVisible();
+  await expect(page.locator('canvas[data-threeui-inspired="predictive-arc"]')).toBeVisible();
+  await page.screenshot({ path: "/tmp/auto-gallery-login-hero.png", fullPage: false });
   await page.getByLabel("Username").fill("admin");
-  await page.getByLabel("Password").fill("test-password");
+  const password = page.getByLabel("Password", { exact: true });
+  await password.fill("test-password");
+  await expect(password).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Show password" }).click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(password).toHaveValue("test-password");
+  await page.getByRole("button", { name: "Hide password" }).click();
+  await expect(password).toHaveAttribute("type", "password");
   await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/admin$/);
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
@@ -293,11 +303,14 @@ test("dashboard links, refresh, job navigation, and retry controls work", async 
   await page.setViewportSize({ width: 1440, height: 1024 });
   await page.goto("/admin");
 
+  await expect(page.getByTestId("dashboard-hero")).toBeVisible();
+  await expect(page.getByTestId("dashboard-hero").locator('canvas[data-threeui-inspired="predictive-arc"]')).toBeVisible();
+  await page.screenshot({ path: "/tmp/auto-gallery-dashboard-hero.png", fullPage: false });
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
   await expect(page.getByTestId("dashboard-status-scheduler")).toHaveAttribute("href", "/admin/scheduler");
   await expect(page.getByTestId("dashboard-status-failed")).toHaveAttribute("href", "/admin/jobs?q=status%3Afailed");
   await expect(page.getByRole("link", { name: "Open Harbor Light Study" })).toHaveAttribute("href", "/admin/works/work-harbor");
-  await expect(page.locator('a[href*="job=download-failed"]').first()).toHaveAttribute("href", /job=download-failed/);
+  await expect(page.locator('a[href*="task=download-failed"]').first()).toHaveAttribute("href", /task=download-failed/);
   await expect(page.getByText("No new works", { exact: true })).toBeVisible();
   await expect(page.getByText("Sync completed; no new works were found to import.")).toBeVisible();
 

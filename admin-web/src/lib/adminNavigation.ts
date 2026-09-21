@@ -16,7 +16,8 @@ export type AdminIconName =
   | "database"
   | "pulse"
   | "gear"
-  | "people";
+  | "people"
+  | "radar";
 
 export type AdminNavContext =
   | "overview"
@@ -58,9 +59,10 @@ export const ADMIN_LINK_MODULE: Record<string, AdminPermissionRequirement> = {
   [adminRoutes.dedup]: "curation",
   [adminRoutes.creators]: "library",
   [adminRoutes.subscriptions]: "subscriptions",
+  [adminRoutes.discovery]: "subscriptions",
   [adminRoutes.danbooru]: "subscriptions",
   [adminRoutes.jobs]: "tasks",
-  [adminRoutes.scheduler]: ["tasks", "system"],
+  [adminRoutes.scheduler]: "system",
   [adminRoutes.notifications]: "tasks",
   [adminRoutes.dataManagement]: "system",
   [adminRoutes.system]: ["system", "subscriptions"],
@@ -92,6 +94,7 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
   link(adminRoutes.danbooru, "nav.danbooru", "code", "ingestion", { primary: true, keywords: ["reference", "mapping"] }),
   link(adminRoutes.creators, "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
   link(adminRoutes.subscriptions, "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
+  link(adminRoutes.discovery, "nav.discovery", "radar", "source-management", { primary: true, keywords: ["remote follows", "discovery", "远端", "关注发现"] }),
   link(adminRoutes.jobs, "nav.jobs", "clock", "operations", {
     primary: true,
     keywords: ["tasks", "queue", "imports", "任务", "队列", "导入任务"],
@@ -135,7 +138,7 @@ const byHref = (href: string) => ADMIN_NAV_LINKS.find((item) => item.href === hr
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   { labelKey: "nav.library", links: [byHref(adminRoutes.works), byHref(adminRoutes.tags)] },
   { labelKey: "nav.ingestion", links: [byHref(adminRoutes.upload), byHref(adminRoutes.danbooru)] },
-  { labelKey: "nav.sources", links: [byHref(adminRoutes.creators), byHref(adminRoutes.subscriptions)] },
+  { labelKey: "nav.sources", links: [byHref(adminRoutes.creators), byHref(adminRoutes.subscriptions), byHref(adminRoutes.discovery)] },
   { labelKey: "nav.operations", links: [byHref(adminRoutes.jobs), byHref(adminRoutes.scheduler)] },
   { labelKey: "nav.admin", links: [byHref(adminRoutes.dataManagement), byHref(adminRoutes.system), byHref(adminRoutes.settings)] },
 ];

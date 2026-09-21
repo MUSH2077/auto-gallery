@@ -145,6 +145,12 @@ async def enrich_creator_by_id(db: AsyncSession, creator_id: UUID) -> dict[str, 
     # changing the creator.  Persist all derived projection requests in the
     # same transaction as those domain mutations.
     from app.services.creator import CreatorService
+    from app.services.creator_aliases import backfill_creator_alias_batch
+    await backfill_creator_alias_batch(
+        db,
+        (creator_id,),
+        request_projection=False,
+    )
     await CreatorService(db)._request_creator_projection(creator_id)
     await db.commit()
     return result
@@ -350,8 +356,14 @@ async def refresh_all_creator_mappings(
             try:
                 async with db.begin_nested():
                     result = await refresh_creator_mapping(db, creator)
+                    from app.services.creator_aliases import backfill_creator_alias_batch
                     from app.services.creator import CreatorService
 
+                    await backfill_creator_alias_batch(
+                        db,
+                        (creator.id,),
+                        request_projection=False,
+                    )
                     await CreatorService(db)._request_creator_projection(creator.id)
             except AdminOperationAttemptRejected:
                 raise
@@ -574,7 +586,13 @@ async def fetch_and_link_danbooru_artist(
             created += 1
 
         if created or creator_projection_changed:
+            from app.services.creator_aliases import backfill_creator_alias_batch
             from app.services.search_projection_outbox import request_search_projection
+            await backfill_creator_alias_batch(
+                db,
+                (creator_id,),
+                request_projection=False,
+            )
             await request_search_projection(db, creator_ids=[creator_id])
             await db.commit()
         return created

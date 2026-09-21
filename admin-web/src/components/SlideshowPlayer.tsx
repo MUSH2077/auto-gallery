@@ -1,46 +1,16 @@
 "use client";
 
-// Universal fullscreen slideshow (Task 6). One implementation, mounted once
-// per host page via useSlideshow() and toggled open/closed — the creator
-// detail, works list, and tag detail pages all render the same component.
-//
-// State machine:
-//  - `index`: the logical current slide. Source of truth for the dwell
-//    timer, the counter, and prev/next math.
-//  - Two persistent slots (A/B), each rendering one SlideLayer. `frontSlot`
-//    says which slot is opaque (the visible slide); navigating flips it and
-//    assigns the new index to whichever slot was in back, so the outgoing
-//    layer just fades via `.slide-layer`'s CSS transition while the
-//    incoming slot's <img> remounts (keyed by a monotonic `gen` counter) to
-//    fetch a fresh signed preview URL and restart the Ken Burns keyframe.
-//  - `paused`: Space toggles it; the autoplay effect checks it before
-//    scheduling the next dwell timeout.
-//
-// Teardown contract: the autoplay setTimeout is recreated by its effect on
-// every index change and is cleared by that same effect's cleanup on pause,
-// close, and unmount. The keydown listener + focus management is bound once
-// per open session (deps: [open, containerEl] — containerEl is state set via
-// a callback ref, not a plain ref, specifically so the effect re-fires once
-// the dialog's element actually mounts; usePresence mounts it a render after
-// `open` first flips true, so a ref-only `[open]`-keyed effect would read a
-// null container on that render and never get a second chance. Live
-// callbacks are still read through refs so incidental parent re-renders —
-// e.g. background polling on the host page — never rebind it or steal focus
-// back mid-session) and is removed, with focus restored to the trigger, on
-// close and unmount alike. React always runs effect cleanups on unmount
-// regardless of document.hidden, so backgrounding the tab and then
-// navigating away tears down cleanly too.
-
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Pause, Play, X } from "lucide-react";
+
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import { ArrowIcon } from "@/components/WorkViewerParts";
 import { api } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
-import { usePresence, motionTokens } from "@/lib/motion";
-import { useSlideshowConfig } from "@/lib/slideshow/config";
 import { useT } from "@/lib/i18n";
-import { ArrowIcon } from "@/components/WorkViewerParts";
-import { Pause, Play, X } from "lucide-react";
 import { resolveMediaKind } from "@/lib/media";
-import { VideoBadge } from "@/components/MediaAssetRenderer";
+import { motionTokens, usePresence } from "@/lib/motion";
+import { useSlideshowConfig } from "@/lib/slideshow/config";
 
 export interface SlideItem {
   assetId: string;
@@ -49,19 +19,59 @@ export interface SlideItem {
   creatorName?: string | null;
 }
 
-// A signed preview URL that keeps failing (expired token, clock skew, the
-// asset itself is unreachable) must not turn into an unbounded refetch loop
-// hammering the backend after repeated signed-preview expiry.
-// (Task 5) — bounded per slide, resets the moment that slide loads cleanly.
-const MAX_LOAD_RETRY_STREAK = 2;
+type ResolvedSlide = {
+  item: SlideItem;
+  url: string;
+  videoPoster: boolean;
+};
 
-async function fetchPreviewAsset(workId: string, assetId: string): Promise<WorkAsset | null> {
-  try {
-    const assets: WorkAsset[] = await api.getWorkAssets(workId);
-    return assets.find((a) => a.id === assetId) ?? null;
-  } catch {
-    return null;
-  }
+const resolvedSlideCache = new Map<string, Promise<ResolvedSlide | null>>();
+
+function slideKey(item: SlideItem) {
+  return `${item.workId}:${item.assetId}`;
+}
+
+async function decodeImage(url: string): Promise<void> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const done = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      callback();
+    };
+    image.onload = () => done(resolve);
+    image.onerror = () => done(() => reject(new Error("image_decode_failed")));
+    image.src = url;
+    if (typeof image.decode === "function") {
+      void image.decode().then(() => done(resolve)).catch(() => undefined);
+    }
+  });
+}
+
+async function resolveSlide(item: SlideItem, force = false): Promise<ResolvedSlide | null> {
+  const key = slideKey(item);
+  if (force) resolvedSlideCache.delete(key);
+  const cached = resolvedSlideCache.get(key);
+  if (cached) return cached;
+  const request = (async () => {
+    try {
+      const assets: WorkAsset[] = await api.getWorkAssets(item.workId);
+      const asset = assets.find((candidate) => candidate.id === item.assetId);
+      if (!asset) return null;
+      const videoPoster = resolveMediaKind(asset) === "video";
+      const url = videoPoster
+        ? asset.poster_url || asset.thumb_url
+        : asset.preview_url || asset.original_url || asset.thumb_url;
+      if (!url) return null;
+      await decodeImage(url);
+      return { item, url, videoPoster };
+    } catch {
+      return null;
+    }
+  })();
+  resolvedSlideCache.set(key, request);
+  return request;
 }
 
 function PlayIcon() {
@@ -70,120 +80,6 @@ function PlayIcon() {
 
 function PauseIcon() {
   return <Pause className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
-}
-
-function CloseIcon() {
-  return <X className="h-5 w-5" aria-hidden="true" />;
-}
-
-function SlideLayer({ item, gen, front, kenBurns, dwellMs }: {
-  item: SlideItem;
-  gen: number;
-  front: boolean;
-  kenBurns: boolean;
-  dwellMs: number;
-}) {
-  const t = useT();
-  const [url, setUrl] = useState<string | null>(null);
-  const [videoPoster, setVideoPoster] = useState(false);
-  const [broken, setBroken] = useState(false);
-  const retryRef = useRef(0);
-  const cancelledRef = useRef(false);
-  const workId = item.workId;
-  const assetId = item.assetId;
-
-  useEffect(() => {
-    cancelledRef.current = false;
-    retryRef.current = 0;
-    setUrl(null);
-    setVideoPoster(false);
-    setBroken(false);
-    // The back slot doesn't need a signed URL until it is actually shown:
-    // every place that assigns this slot a new (gen, workId, assetId) also
-    // flips `front` to true in the same state batch (see navigateTo and the
-    // "fresh session" effect), so skipping the fetch here only ever defers
-    // it to the render where it's genuinely needed — never drops it.
-    // Deliberately NOT a dependency: `front` also flips back to false on the
-    // *other* slot's turn (this slot going front → back after a crossfade)
-    // without its own gen changing, and re-running this effect then would
-    // wipe the url/broken state mid-fade-out.
-    if (!front) return;
-    fetchPreviewAsset(workId, assetId).then((asset) => {
-      if (cancelledRef.current) return;
-      if (!asset) {
-        setBroken(true);
-        return;
-      }
-      const video = resolveMediaKind(asset) === "video";
-      const resolved = video
-        ? asset.poster_url || asset.thumb_url
-        : asset.preview_url;
-      if (!resolved) {
-        setBroken(true);
-        return;
-      }
-      setVideoPoster(video);
-      setUrl(resolved);
-    });
-    return () => {
-      cancelledRef.current = true;
-    };
-    // `gen` bumps every time this slot is assigned a slide (including being
-    // reassigned the *same* index later in a loop) — re-fetching then keeps
-    // the signed URL fresh rather than reusing one that may have expired.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gen, workId, assetId]);
-
-  const handleError = useCallback(() => {
-    if (cancelledRef.current) return;
-    retryRef.current += 1;
-    if (retryRef.current > MAX_LOAD_RETRY_STREAK) {
-      setBroken(true);
-      return;
-    }
-    fetchPreviewAsset(workId, assetId).then((asset) => {
-      if (cancelledRef.current) return;
-      if (!asset) {
-        setBroken(true);
-        return;
-      }
-      const video = resolveMediaKind(asset) === "video";
-      const resolved = video
-        ? asset.poster_url || asset.thumb_url
-        : asset.preview_url;
-      if (!resolved) {
-        setBroken(true);
-        return;
-      }
-      setVideoPoster(video);
-      setUrl(resolved);
-    });
-  }, [workId, assetId]);
-
-  return (
-    <div className={`slide-layer absolute inset-0 flex items-center justify-center ${front ? "opacity-100" : "opacity-0"}`}>
-      {url && !broken && (
-        <img
-          key={gen}
-          src={url}
-          alt={item.title || ""}
-          className={`max-h-screen max-w-full object-contain ${front && kenBurns && !videoPoster ? "slide-kenburns" : ""}`}
-          style={front && kenBurns && !videoPoster ? ({ "--slide-dwell": `${dwellMs}ms` } as CSSProperties) : undefined}
-          onError={handleError}
-        />
-      )}
-      {url && !broken && videoPoster && front ? (
-        <a
-          href={`/admin/works/${workId}`}
-          className="absolute bottom-20 left-1/2 z-10 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-md border border-white/20 bg-black/75 px-4 text-sm font-medium text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-white"
-        >
-          <VideoBadge />
-          {t("media.open_video")}
-        </a>
-      ) : null}
-      {broken && <div className="text-sm text-white/50">{t("works.na")}</div>}
-    </div>
-  );
 }
 
 export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
@@ -195,67 +91,60 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
   const t = useT();
   const { config } = useSlideshowConfig();
   const { mounted, closing } = usePresence(open, motionTokens.duration.base);
-
-  // State (not a plain ref) so the focus/keyboard effect below can depend on
-  // the *actual mounted element*, not on `open` alone. `usePresence` mounts
-  // the dialog a tick after `open` flips true (see its own comment above),
-  // so on the render where `open` first becomes true the container doesn't
-  // exist yet; a ref-only `[open]`-keyed effect reads `null` that one time
-  // and never gets a second chance to run since `open` doesn't change again
-  // for the rest of the open session. Tracking the node itself as state
-  // means the effect re-fires the moment the node actually appears,
-  // regardless of how many renders that takes.
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
-  const prevFocusRef = useRef<HTMLElement | null>(null);
-
   const [index, setIndex] = useState(startIndex);
   const [paused, setPaused] = useState(false);
-
-  const [slotAIndex, setSlotAIndex] = useState(startIndex);
-  const [slotBIndex, setSlotBIndex] = useState(startIndex);
-  const [slotAGen, setSlotAGen] = useState(0);
-  const [slotBGen, setSlotBGen] = useState(0);
-  const [frontSlot, setFrontSlot] = useState<0 | 1>(0);
-  const frontSlotRef = useRef<0 | 1>(0);
-  const navGenRef = useRef(0);
+  const [loading, setLoading] = useState(true);
+  const [broken, setBroken] = useState(false);
+  const [currentVisual, setCurrentVisual] = useState<ResolvedSlide | null>(null);
+  const [previousVisual, setPreviousVisual] = useState<ResolvedSlide | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const requestSequence = useRef(0);
   const indexRef = useRef(index);
-  indexRef.current = index;
-
+  const currentVisualRef = useRef<ResolvedSlide | null>(null);
+  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const total = items.length;
 
-  // Fresh session every time the caller opens the player — reset position,
-  // pause state, and both slots so a previous session's images don't flash
-  // before the new fetch resolves.
-  useEffect(() => {
-    if (!open) return;
-    navGenRef.current += 1;
-    const gen = navGenRef.current;
-    setIndex(startIndex);
-    setPaused(false);
-    setSlotAIndex(startIndex);
-    setSlotBIndex(startIndex);
-    setSlotAGen(gen);
-    setSlotBGen(gen);
-    setFrontSlot(0);
-    frontSlotRef.current = 0;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, startIndex]);
+  indexRef.current = index;
+  currentVisualRef.current = currentVisual;
 
-  const navigateTo = useCallback((newIndex: number) => {
-    navGenRef.current += 1;
-    const gen = navGenRef.current;
-    const backSlot = frontSlotRef.current === 0 ? 1 : 0;
-    if (backSlot === 0) {
-      setSlotAIndex(newIndex);
-      setSlotAGen(gen);
-    } else {
-      setSlotBIndex(newIndex);
-      setSlotBGen(gen);
-    }
-    frontSlotRef.current = backSlot;
-    setFrontSlot(backSlot);
-    setIndex(newIndex);
+  const armControls = useCallback(() => {
+    setControlsVisible(true);
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    controlsTimerRef.current = setTimeout(() => setControlsVisible(false), 3200);
   }, []);
+
+  const preloadNeighbors = useCallback((activeIndex: number) => {
+    if (total <= 1) return;
+    for (const candidate of [(activeIndex + 1) % total, (activeIndex - 1 + total) % total]) {
+      void resolveSlide(items[candidate]);
+    }
+  }, [items, total]);
+
+  const navigateTo = useCallback(async (nextIndex: number, force = false) => {
+    if (!items[nextIndex]) return;
+    const sequence = ++requestSequence.current;
+    setLoading(true);
+    setBroken(false);
+    const resolved = await resolveSlide(items[nextIndex], force);
+    if (sequence !== requestSequence.current) return;
+    setLoading(false);
+    if (!resolved) {
+      indexRef.current = nextIndex;
+      setIndex(nextIndex);
+      setBroken(true);
+      return;
+    }
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    setPreviousVisual(currentVisualRef.current);
+    setCurrentVisual(resolved);
+    setIndex(nextIndex);
+    preloadNeighbors(nextIndex);
+    transitionTimerRef.current = setTimeout(() => setPreviousVisual(null), motionTokens.duration.slow + 40);
+  }, [items, preloadNeighbors]);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -264,110 +153,97 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
     if (total <= 0) return;
     const next = indexRef.current + 1;
     if (next >= total) {
-      if (config.slideLoop) navigateTo(0);
+      if (config.slideLoop) void navigateTo(0);
       else onCloseRef.current();
       return;
     }
-    navigateTo(next);
-  }, [total, config.slideLoop, navigateTo]);
+    void navigateTo(next);
+  }, [config.slideLoop, navigateTo, total]);
 
   const stepPrev = useCallback(() => {
     if (total <= 0) return;
-    const prev = indexRef.current - 1;
-    if (prev < 0) {
-      if (config.slideLoop) navigateTo(total - 1);
-      return; // no loop: stay put on the first slide
+    const previous = indexRef.current - 1;
+    if (previous < 0) {
+      if (config.slideLoop) void navigateTo(total - 1);
+      return;
     }
-    navigateTo(prev);
-  }, [total, config.slideLoop, navigateTo]);
+    void navigateTo(previous);
+  }, [config.slideLoop, navigateTo, total]);
 
-  // Autoplay: one setTimeout per slide. Cleared on index change, pause,
-  // close, and unmount — never an interval, so there is nothing to drift.
   useEffect(() => {
-    if (!open || paused || total <= 1) return;
-    const timer = setTimeout(() => {
-      stepNext();
-    }, config.slideDwellMs);
-    return () => clearTimeout(timer);
-  }, [open, paused, index, total, config.slideDwellMs, stepNext]);
+    if (!open || !items[startIndex]) return;
+    requestSequence.current += 1;
+    setIndex(startIndex);
+    setPaused(false);
+    setBroken(false);
+    setCurrentVisual(null);
+    setPreviousVisual(null);
+    setControlsVisible(true);
+    void navigateTo(startIndex);
+    armControls();
+  }, [armControls, items, navigateTo, open, startIndex]);
 
-  // Focus + keyboard: bound once per open session on the dialog container
-  // itself. Reads stepNext/stepPrev/onClose through refs so it is never
-  // rebound by an index change, a pause toggle, or an unrelated parent
-  // re-render (e.g. background query polling on the host page) — only by
-  // `open` actually flipping.
+  useEffect(() => {
+    if (!open || paused || loading || total <= 1) return;
+    const timer = setTimeout(stepNext, config.slideDwellMs);
+    return () => clearTimeout(timer);
+  }, [config.slideDwellMs, index, loading, open, paused, stepNext, total]);
+
   const stepNextRef = useRef(stepNext);
-  stepNextRef.current = stepNext;
   const stepPrevRef = useRef(stepPrev);
+  stepNextRef.current = stepNext;
   stepPrevRef.current = stepPrev;
 
   useEffect(() => {
-    const el = containerEl;
-    if (!open || !el) return;
-    prevFocusRef.current = document.activeElement as HTMLElement | null;
-    el.focus();
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onCloseRef.current();
-        return;
-      }
-      if (e.key === "ArrowRight") {
-        stepNextRef.current();
-        return;
-      }
-      if (e.key === "ArrowLeft") {
-        stepPrevRef.current();
-        return;
-      }
-      if (e.key === " " || e.code === "Space" || e.key === "Spacebar") {
-        e.preventDefault();
-        setPaused((p) => !p);
-        return;
-      }
-      if (e.key === "Tab") {
-        // Focus trap, mirrored from Modal.tsx's contract: query focusable
-        // elements at keypress time (not captured once on open) since
-        // controls come and go with `slideShowMeta`/`total`. The container
-        // itself (tabIndex={-1}) is where initial focus lands on open, and
-        // — since this player is mounted inline in the host page rather
-        // than through a portal — the browser's default Tab/Shift+Tab walk
-        // from that container would otherwise be free to step onto
-        // background page content before/after it in the DOM. So every
-        // branch below is explicit; nothing here falls through to default
-        // browser tab behavior.
-        const focusables = el.querySelectorAll<HTMLElement>(
-          'a[href], input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const element = containerEl;
+    if (!open || !element) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    element.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      armControls();
+      if (event.key === "Escape") onCloseRef.current();
+      else if (event.key === "ArrowRight") stepNextRef.current();
+      else if (event.key === "ArrowLeft") stepPrevRef.current();
+      else if (event.key === " " || event.code === "Space" || event.key === "Spacebar") {
+        event.preventDefault();
+        setPaused((value) => !value);
+      } else if (event.key === "Tab") {
+        const focusable = element.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
         );
-        if (!focusables.length) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const activeEl = document.activeElement;
-        if (activeEl === el) {
-          e.preventDefault();
-          (e.shiftKey ? last : first).focus();
-          return;
-        }
-        if (e.shiftKey && activeEl === first) {
-          e.preventDefault();
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (document.activeElement === element) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
           last.focus();
-        } else if (!e.shiftKey && activeEl === last) {
-          e.preventDefault();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
           first.focus();
         }
       }
     };
-    el.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
-      el.removeEventListener("keydown", onKeyDown);
-      prevFocusRef.current?.focus();
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocusRef.current?.focus();
     };
-  }, [open, containerEl]);
+  }, [armControls, containerEl, open]);
+
+  useEffect(() => () => {
+    requestSequence.current += 1;
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+  }, []);
 
   if (!mounted || total === 0) return null;
 
   const current = items[index];
   const kenBurns = config.slideTransition === "kenburns";
+  const controlsClass = controlsVisible ? "opacity-100" : "pointer-events-none opacity-0";
 
   return (
     <div
@@ -376,31 +252,89 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
       aria-modal="true"
       aria-label={t("slideshow.open")}
       tabIndex={-1}
+      onPointerMove={armControls}
+      onPointerDown={armControls}
+      onTouchStart={(event) => {
+        const touch = event.touches[0];
+        if (touch) touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+      }}
+      onTouchEnd={(event) => {
+        const start = touchStartRef.current;
+        const touch = event.changedTouches[0];
+        touchStartRef.current = null;
+        if (!start || !touch) return;
+        const deltaX = touch.clientX - start.x;
+        const deltaY = touch.clientY - start.y;
+        if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+        if (deltaX < 0) stepNext(); else stepPrev();
+      }}
       className={`fixed inset-0 z-[60] bg-black outline-none ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
     >
-      <div className="relative h-full w-full">
-        <SlideLayer item={items[slotAIndex]} gen={slotAGen} front={frontSlot === 0} kenBurns={kenBurns} dwellMs={config.slideDwellMs} />
-        <SlideLayer item={items[slotBIndex]} gen={slotBGen} front={frontSlot === 1} kenBurns={kenBurns} dwellMs={config.slideDwellMs} />
+      <div data-testid="slideshow-stage" className="relative h-full w-full overflow-hidden">
+        {currentVisual ? (
+          <img
+            data-testid="slideshow-backdrop"
+            src={currentVisual.url}
+            alt=""
+            className="no-outline absolute inset-[-5%] h-[110%] w-[110%] scale-110 object-cover opacity-35 blur-3xl"
+            aria-hidden="true"
+          />
+        ) : (
+          <div data-testid="slideshow-backdrop" className="absolute inset-0 bg-black" aria-hidden="true" />
+        )}
+        <div className="absolute inset-0 bg-black/35" aria-hidden="true" />
+
+        {previousVisual ? (
+          <div className="slide-layer absolute inset-0 flex items-center justify-center opacity-0" aria-hidden="true">
+            <img src={previousVisual.url} alt="" className="no-outline max-h-[calc(100vh-8rem)] max-w-full object-contain" />
+          </div>
+        ) : null}
+
+        <div
+          key={currentVisual ? slideKey(currentVisual.item) : "loading"}
+          data-slideshow-foreground="true"
+          className="slideshow-foreground-enter absolute inset-x-4 bottom-24 top-4 flex items-center justify-center sm:inset-x-16 sm:bottom-28 sm:top-8"
+        >
+          {currentVisual ? (
+            <img
+              src={currentVisual.url}
+              alt={currentVisual.item.title || ""}
+              className={`no-outline h-full w-full object-contain drop-shadow-2xl ${kenBurns && !currentVisual.videoPoster ? "slide-kenburns" : ""}`}
+              style={kenBurns && !currentVisual.videoPoster ? ({ "--slide-dwell": `${config.slideDwellMs}ms` } as CSSProperties) : undefined}
+              onError={() => void navigateTo(indexRef.current, true)}
+            />
+          ) : loading ? (
+            <span className="rounded-md bg-black/65 px-4 py-2 text-sm text-white/80">{t("common.loading")}</span>
+          ) : null}
+        </div>
+
+        {currentVisual?.videoPoster ? (
+          <a
+            href={`/admin/works/${currentVisual.item.workId}`}
+            className="absolute bottom-32 left-1/2 z-20 -translate-x-1/2 rounded-md border border-white/25 bg-black/75 px-4 py-2 text-sm font-medium text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
+          >
+            {t("media.open_video")}
+          </a>
+        ) : null}
+
+        {broken ? (
+          <div className="absolute inset-0 z-20 flex items-center justify-center">
+            <div className="rounded-lg border border-white/20 bg-black/80 p-5 text-center text-sm text-white">
+              <p>{t("works.na")}</p>
+              <button type="button" className="mt-3 rounded-md border border-white/25 px-3 py-2" onClick={() => void navigateTo(indexRef.current, true)}>
+                {t("common.retry")}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {config.slideShowMeta && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 bg-gradient-to-t from-black/80 to-transparent p-4 text-white">
-          <div className="min-w-0">
-            {current?.title && <div className="truncate text-sm font-medium">{current.title}</div>}
-            {current?.creatorName && <div className="truncate text-xs text-white/70">{current.creatorName}</div>}
-          </div>
-          <div className="tabular shrink-0 text-xs text-white/70">
-            {t("slideshow.counter", { current: index + 1, total })}
-          </div>
-        </div>
-      )}
-
-      <div className="absolute right-3 top-3 flex gap-2">
+      <div className={`absolute right-3 top-3 z-30 flex gap-2 transition-opacity duration-200 ${controlsClass}`}>
         <button
           type="button"
-          onClick={() => setPaused((p) => !p)}
+          onClick={() => setPaused((value) => !value)}
           aria-label={paused ? t("slideshow.play") : t("slideshow.pause")}
-          className="flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-black/50 text-white shadow-lg hover:bg-black/70"
+          className="flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-black/60 text-white shadow-lg hover:bg-black/80"
         >
           {paused ? <PlayIcon /> : <PauseIcon />}
         </button>
@@ -408,19 +342,19 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
           type="button"
           onClick={onClose}
           aria-label={t("slideshow.close")}
-          className="flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-black/50 text-white shadow-lg hover:bg-black/70"
+          className="flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-black/60 text-white shadow-lg hover:bg-black/80"
         >
-          <CloseIcon />
+          <X className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
 
-      {total > 1 && (
+      {total > 1 ? (
         <>
           <button
             type="button"
             onClick={stepPrev}
             aria-label={t("slideshow.prev")}
-            className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-white/20 bg-black/50 text-white shadow-lg hover:bg-black/70"
+            className={`absolute left-3 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-white/20 bg-black/60 text-white shadow-lg transition-opacity duration-200 hover:bg-black/80 ${controlsClass}`}
           >
             <ArrowIcon direction="left" />
           </button>
@@ -428,17 +362,47 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
             type="button"
             onClick={stepNext}
             aria-label={t("slideshow.next")}
-            className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-white/20 bg-black/50 text-white shadow-lg hover:bg-black/70"
+            className={`absolute right-3 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md border border-white/20 bg-black/60 text-white shadow-lg transition-opacity duration-200 hover:bg-black/80 ${controlsClass}`}
           >
             <ArrowIcon direction="right" />
           </button>
         </>
-      )}
+      ) : null}
+
+      <div className={`absolute inset-x-0 bottom-0 z-30 border-t border-white/15 bg-black/75 px-3 py-3 text-white transition-opacity duration-200 ${controlsClass}`}>
+        <div className="mx-auto flex max-w-5xl items-end gap-4">
+          {config.slideShowMeta ? (
+            <div className="hidden min-w-0 flex-1 sm:block">
+              {current?.title ? <div className="truncate text-sm font-medium">{current.title}</div> : null}
+              {current?.creatorName ? <div className="truncate text-xs text-white/70">{current.creatorName}</div> : null}
+            </div>
+          ) : <div className="hidden flex-1 sm:block" />}
+          <ul
+            role="list"
+            aria-label={t("slideshow.thumbnails")}
+            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:none] sm:max-w-xl"
+          >
+            {items.map((item, itemIndex) => (
+              <li key={slideKey(item)} className="shrink-0">
+                <button
+                  type="button"
+                  aria-label={t("slideshow.go_to", { index: itemIndex + 1 })}
+                  aria-current={itemIndex === index ? "true" : undefined}
+                  onClick={() => void navigateTo(itemIndex)}
+                  className={`h-12 w-12 overflow-hidden rounded-md border bg-black outline-none transition-[border-color,opacity,transform] focus-visible:ring-2 focus-visible:ring-white ${itemIndex === index ? "border-white opacity-100" : "border-white/25 opacity-55 hover:opacity-90"}`}
+                >
+                  <WorkMediaThumbnail assetId={item.assetId} alt="" className="h-full w-full object-cover" />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="shrink-0 text-xs tabular-nums text-white/75">
+            {t("slideshow.counter", { current: index + 1, total })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// Named export alongside the default so useSlideshow.tsx (Task 6 brief) can
-// import it as `{ SlideshowPlayer }`; components/index.ts re-exports the
-// default under the same name for the rest of the app.
 export { SlideshowPlayer };

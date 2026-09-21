@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  useCallback,
   useDeferredValue,
   useEffect,
   useId,
@@ -77,42 +78,53 @@ type ComposeRequest = {
   replace_values?: string[];
 };
 
-export function useSearchComposer({
-  value,
-  scope,
-  onChange,
-}: {
+type SearchComposerOptions = {
   value: string;
   scope: SearchScope;
   onChange: (value: string) => void;
-}) {
-  return useMutation({
-    mutationFn: (compose: ComposeRequest) => api.assistSearch({
-      before_cursor: value,
-      scope,
-      compose,
-    }),
-    onSuccess: (result) => onChange(result.canonical_query || result.query),
+};
+
+function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
+  value,
+  scope,
+  onChange,
+}: SearchComposerOptions) {
+  const inputRef = useRef({ value, scope });
+  const changeRef = useRef(onChange);
+  const requestRef = useRef(0);
+  if (inputRef.current.value !== value || inputRef.current.scope !== scope) {
+    inputRef.current = { value, scope };
+  }
+  changeRef.current = onChange;
+  const discardPendingResult = useCallback(() => { requestRef.current += 1; }, []);
+  useEffect(() => discardPendingResult, [discardPendingResult]);
+
+  const mutation = useMutation({
+    mutationFn: async (compose: T) => {
+      const input = inputRef.current;
+      const request = ++requestRef.current;
+      const result = await api.assistSearch({
+        before_cursor: input.value,
+        scope: input.scope,
+        ...(Array.isArray(compose) ? { composes: compose } : { compose }),
+      });
+      // Typing, navigation or a newer composition supersedes this request.
+      // Object identity also detects editing away and back to the same text.
+      if (request === requestRef.current && input === inputRef.current) {
+        changeRef.current(result.canonical_query || result.query);
+      }
+      return result;
+    },
   });
+  return { ...mutation, discardPendingResult };
 }
 
-export function useSearchBatchComposer({
-  value,
-  scope,
-  onChange,
-}: {
-  value: string;
-  scope: SearchScope;
-  onChange: (value: string) => void;
-}) {
-  return useMutation({
-    mutationFn: (composes: ComposeRequest[]) => api.assistSearch({
-      before_cursor: value,
-      scope,
-      composes,
-    }),
-    onSuccess: (result) => onChange(result.canonical_query || result.query),
-  });
+export function useSearchComposer(options: SearchComposerOptions) {
+  return useSearchComposition<ComposeRequest>(options);
+}
+
+export function useSearchBatchComposer(options: SearchComposerOptions) {
+  return useSearchComposition<ComposeRequest[]>(options);
 }
 
 export interface SmartSearchInputProps {
@@ -128,7 +140,9 @@ export interface SmartSearchInputProps {
   showTokens?: boolean;
   showHelp?: boolean;
   onFocus?: () => void;
+  onEditStart?: () => void;
   onSubmit?: (canonicalQuery: string) => void;
+  keyboardNavigation?: boolean;
 }
 
 export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputProps>(function SmartSearchInput({
@@ -144,7 +158,9 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   showTokens = true,
   showHelp = false,
   onFocus,
+  onEditStart,
   onSubmit,
+  keyboardNavigation = true,
 }, forwardedRef) {
   const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -169,11 +185,16 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   });
 
   const compose = useSearchComposer({ value, scope, onChange });
-  const suggestions = assist.data?.suggestions || [];
-  const qualifiers = (assist.data?.parsed?.tokens || []).filter(
+  const startEditing = () => {
+    compose.discardPendingResult();
+    onEditStart?.();
+  };
+  const currentAssist = deferredValue === value && !assist.isPlaceholderData ? assist.data : undefined;
+  const suggestions = currentAssist?.suggestions || [];
+  const qualifiers = (currentAssist?.parsed?.tokens || []).filter(
     (token): token is SearchQualifierToken => token.kind === "qualifier",
   );
-  const diagnostic = assist.data?.diagnostics?.[0];
+  const diagnostic = currentAssist?.diagnostics?.[0];
 
   useEffect(() => {
     setActiveIndex(0);
@@ -192,6 +213,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!keyboardNavigation) return;
     if (event.key === "ArrowDown" && suggestions.length) {
       event.preventDefault();
       setOpen(true);
@@ -215,12 +237,12 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
         selectSuggestion(activeIndex);
       } else if (!diagnostic && onSubmit) {
         event.preventDefault();
-        onSubmit(assist.data?.canonical_query || value);
+        onSubmit(currentAssist?.canonical_query || value);
       }
     }
   };
 
-  const result: SearchAssistResponse | undefined = assist.data;
+  const result: SearchAssistResponse | undefined = currentAssist;
   const status = diagnostic
     ? diagnosticMessage(t, diagnostic)
     : result?.canonical_query && result.canonical_query !== value
@@ -243,10 +265,13 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
             setOpen(true);
           }}
           onFocus={() => {
+            startEditing();
             setFocused(true);
             setOpen(true);
             onFocus?.();
           }}
+          onPointerDown={startEditing}
+          onSelect={startEditing}
           onBlur={() => setFocused(false)}
           onKeyDown={handleKeyDown}
           autoFocus={autoFocus}

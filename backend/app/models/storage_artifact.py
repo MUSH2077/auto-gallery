@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -32,6 +33,7 @@ class StorageArtifact(TimestampMixin, Base):
     artifact_type: Mapped[str] = mapped_column(String(30), nullable=False)
     file_size: Mapped[int | None] = mapped_column(BigInteger)
     mtime_ns: Mapped[int | None] = mapped_column(BigInteger)
+    metadata_completion_proof: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     content_version: Mapped[str | None] = mapped_column(String(64))
     download_job_id: Mapped[UUID | None] = mapped_column(ForeignKey("download_jobs.id", ondelete="SET NULL"))
     import_job_id: Mapped[UUID | None] = mapped_column(ForeignKey("import_jobs.id", ondelete="SET NULL"))

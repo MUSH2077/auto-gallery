@@ -30,6 +30,7 @@ async def _run_projection(
         max_slice_seconds=max_seconds,
         cooldown_result=cooldown,
         wait_for_capacity=False,
+        lane="background",
     ) as limits:
         if limits is None:
             return {

@@ -7,7 +7,7 @@ from sqlalchemy import select, text
 async def _clear(db):
     await db.execute(text(
         "TRUNCATE task_events, task_runs, download_jobs, subscription_sources, "
-        "subscriptions, creators RESTART IDENTITY CASCADE"
+        "subscriptions, creators, scheduler_batch_items, scheduler_batches RESTART IDENTITY CASCADE"
     ))
     await db.commit()
 
@@ -107,11 +107,16 @@ async def test_manual_all_enabled_includes_manual_and_preserves_strategy(monkeyp
             )
 
             assert result["mode"] == "manual_all_enabled"
-            assert result["candidate_count"] == 2
-            assert result["enqueued_count"] == 2
-            assert set(enqueued_ids) == {automatic_source.id, manual_source.id}
-            assert inactive_source.id not in enqueued_ids
-            assert disabled_source.id not in enqueued_ids
+            assert result["status"] == "enqueued"
+            assert enqueued_ids == []
+            from uuid import UUID
+            from app.services.scheduler_batches import initialize_batch
+            from app.models.scheduler_batch import SchedulerBatchItem
+            await initialize_batch(db, UUID(result["task_id"]))
+            candidates = set((await db.execute(select(SchedulerBatchItem.source_id))).scalars())
+            assert candidates == {automatic_source.id, manual_source.id}
+            assert inactive_source.id not in candidates
+            assert disabled_source.id not in candidates
 
             refreshed = {
                 item.id: item
@@ -178,11 +183,15 @@ async def test_force_eligible_keeps_excluding_explicit_manual(monkeypatch):
                 db,
             )
 
-            assert enqueued_ids == [automatic_source.id]
-            assert manual_source.id not in enqueued_ids
-            assert result["candidate_count"] == 1
-            assert result["skipped_count"] == 1
-            assert result["skipped_reasons"] == {"already_running": 1}
+            assert enqueued_ids == []
+            assert result["status"] == "enqueued"
+            from uuid import UUID
+            from app.services.scheduler_batches import initialize_batch
+            from app.models.scheduler_batch import SchedulerBatchItem
+            await initialize_batch(db, UUID(result["task_id"]))
+            candidates = list((await db.execute(select(SchedulerBatchItem.source_id))).scalars())
+            assert candidates == [automatic_source.id]
+            assert manual_source.id not in candidates
     finally:
         async with async_session() as db:
             await _clear(db)

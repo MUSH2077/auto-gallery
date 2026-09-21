@@ -114,6 +114,33 @@ class TagRepository(BaseRepository[Tag]):
             tag.source_usage = source_usage.get(tag.id, [])
         return tags
 
+    async def page(self, *, offset=0, limit=100, q=None, category=None, sort_by="usage_count", sort_order="desc"):
+        filters = []
+        if q:
+            filters.append(Tag.normalized_name.icontains(q.strip(), autoescape=True))
+        if category is not None:
+            filters.append(Tag.category == category)
+        total = int((await self.session.execute(select(func.count()).select_from(Tag).where(*filters))).scalar_one())
+        if sort_by == "usage_count":
+            counts = select(WorkTag.tag_id, func.count().label("usage_count")).group_by(WorkTag.tag_id).subquery()
+            usage = func.coalesce(counts.c.usage_count, 0)
+            statement = select(Tag, usage).outerjoin(counts, counts.c.tag_id == Tag.id).where(*filters)
+            statement = statement.order_by(usage.desc() if sort_order == "desc" else usage.asc(), Tag.normalized_name, Tag.id)
+            rows = (await self.session.execute(statement.offset(offset).limit(limit))).all()
+            tags = [row[0] for row in rows]
+            counts_by_id = {row[0].id: int(row[1]) for row in rows}
+        else:
+            order = Tag.normalized_name.desc() if sort_order == "desc" else Tag.normalized_name.asc()
+            tags = list((await self.session.execute(select(Tag).where(*filters).order_by(order, Tag.id).offset(offset).limit(limit))).scalars())
+            counts_by_id = dict((await self.session.execute(select(WorkTag.tag_id, func.count()).where(
+                WorkTag.tag_id.in_([tag.id for tag in tags])).group_by(WorkTag.tag_id))).all()) if tags else {}
+        composition = await source_usage_by_tag(self.session, [tag.id for tag in tags])
+        for tag in tags:
+            tag.usage_count = counts_by_id.get(tag.id, 0)
+            tag.source_usage = composition.get(tag.id, [])
+        return {"items": tags, "total": total, "offset": offset, "limit": limit,
+                "next_offset": offset + len(tags) if offset + len(tags) < total else None}
+
     async def get_or_create(self, normalized_name: str) -> Tag:
         result = await self.session.execute(
             select(Tag).where(Tag.normalized_name == normalized_name)

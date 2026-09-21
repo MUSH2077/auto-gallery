@@ -31,6 +31,7 @@ DEFAULT_WORKS_INDEX_UID = f"{settings.meili_index_prefix}works"
 DEFAULT_CREATORS_INDEX_UID = f"{settings.meili_index_prefix}creators"
 DEFAULT_TAGS_INDEX_UID = f"{settings.meili_index_prefix}tags"
 DEFAULT_REPOSITORIES_INDEX_UID = f"{settings.meili_index_prefix}repositories"
+DEFAULT_MEMBERSHIPS_INDEX_UID = f"{settings.meili_index_prefix}subscription_memberships_v1"
 DEFAULT_SUBSCRIPTIONS_INDEX_UID = f"{settings.meili_index_prefix}subscriptions"
 
 logger = logging.getLogger(__name__)
@@ -128,24 +129,119 @@ async def _enqueue_projection_action(
     return len(identities)
 
 
+_INDEX_GENERATION_INTENTS = "search_index_generation_intents"
+_INDEX_GENERATIONS_LOCKED = "search_index_generations_locked"
+
+
 async def _mark_index_changed(db: AsyncSession, index_uid: str) -> None:
-    insert_state = pg_insert(SearchIndexState).values(
-        id=uuid4(),
-        index_uid=index_uid,
-        database_generation=1,
-        indexed_generation=0,
-        status="catching_up",
-    )
-    await db.execute(
-        insert_state.on_conflict_do_update(
-            index_elements=["index_uid"],
-            set_={
-                "database_generation": SearchIndexState.database_generation + 1,
-                "status": "catching_up",
-                "updated_at": func.now(),
-            },
+    """Stage a generation delta on the owning transaction/savepoint.
+
+    The outbox is written immediately. Its global consistency watermark is
+    updated atomically at outer commit, after all business/FK/TaskRun writes.
+    """
+    session = db.sync_session
+    if session.get_transaction() is None:
+        await db.begin()
+    transaction = session.get_nested_transaction() or session.get_transaction()
+    intents = session.info.setdefault(_INDEX_GENERATION_INTENTS, {})
+    deltas = intents.setdefault(transaction, {})
+    deltas[index_uid] = deltas.get(index_uid, 0) + 1
+
+
+@event.listens_for(Session, "before_commit")
+def _commit_index_generations_last(session: Session) -> None:
+    if session.in_nested_transaction():
+        return
+    intents = session.info.get(_INDEX_GENERATION_INTENTS, {})
+    deltas = intents.get(session.get_transaction(), {})
+    if not deltas:
+        return
+    # Session.commit normally flushes after before_commit. Do that work now,
+    # before hot rows, and use Core Connection writes to avoid another autoflush.
+    session.flush()
+    connection = session.connection()
+    for index_uid, delta in sorted(deltas.items()):
+        statement = pg_insert(SearchIndexState.__table__).values(
+            id=uuid4(), index_uid=index_uid, database_generation=delta,
+            indexed_generation=0, status="catching_up",
         )
-    )
+        connection.execute(statement.on_conflict_do_update(
+            index_elements=["index_uid"],
+            set_={"database_generation": SearchIndexState.database_generation + delta,
+                  "status": "catching_up", "updated_at": func.now()},
+        ))
+    session.info[_INDEX_GENERATIONS_LOCKED] = True
+
+
+@event.listens_for(Session, "before_flush")
+def _reject_business_flush_after_index_locks(session: Session, *_args) -> None:
+    if session.info.get(_INDEX_GENERATIONS_LOCKED):
+        raise RuntimeError("Domain writes must flush before search generation locks")
+
+
+@event.listens_for(Session, "after_commit")
+def _merge_or_clear_index_generation_intents(session: Session) -> None:
+    intents = session.info.get(_INDEX_GENERATION_INTENTS, {})
+    nested = session.get_nested_transaction()
+    if nested is not None:
+        deltas = intents.pop(nested, {})
+        parent = intents.setdefault(nested.parent, {})
+        for index_uid, delta in deltas.items():
+            parent[index_uid] = parent.get(index_uid, 0) + delta
+    else:
+        session.info.pop(_INDEX_GENERATION_INTENTS, None)
+        session.info.pop(_INDEX_GENERATIONS_LOCKED, None)
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _discard_rolled_back_index_generation_intents(session: Session, previous_transaction) -> None:
+    if previous_transaction.parent is None:
+        session.info.pop(_INDEX_GENERATION_INTENTS, None)
+        session.info.pop(_INDEX_GENERATIONS_LOCKED, None)
+        session.info.pop(_WORKS_GENERATION_PENDING, None)
+        session.info.pop(_WORKS_GENERATION_COMMITTING, None)
+    else:
+        session.info.get(_INDEX_GENERATION_INTENTS, {}).pop(previous_transaction, None)
+
+
+async def request_membership_projection_where(db: AsyncSession, *conditions, deleting: bool = False) -> int:
+    """Keyset fanout in the domain transaction; call before destructive cascades."""
+    from app.models import UserSubscription
+
+    last_id = None
+    count = 0
+    while True:
+        statement = select(UserSubscription.id).where(*conditions).order_by(UserSubscription.id).limit(OUTBOX_SQL_BATCH_SIZE)
+        if last_id is not None:
+            statement = statement.where(UserSubscription.id > last_id)
+        ids = tuple((await db.execute(statement)).scalars())
+        if not ids:
+            break
+        count += await _enqueue_projection_action(
+            db, DEFAULT_MEMBERSHIPS_INDEX_UID, tuple(map(str, ids)),
+            action="delete" if deleting else "upsert",
+        )
+        last_id = ids[-1]
+    if count:
+        await _mark_index_changed(db, DEFAULT_MEMBERSHIPS_INDEX_UID)
+    return count
+
+
+async def _fanout_memberships(db, *, subscription_ids, creator_ids, repository_ids, deleting=False):
+    from app.models import Subscription, SubscriptionSource, UserSubscription
+
+    count = 0
+    for kind, values in (("subscription", subscription_ids), ("creator", creator_ids), ("repository", repository_ids)):
+        for start in range(0, len(values), OUTBOX_SQL_BATCH_SIZE):
+            ids = [UUID(str(value)) for value in values[start:start + OUTBOX_SQL_BATCH_SIZE]]
+            if kind == "subscription":
+                condition = UserSubscription.subscription_id.in_(ids)
+            elif kind == "creator":
+                condition = UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id.in_(ids)))
+            else:
+                condition = UserSubscription.subscription_id.in_(select(SubscriptionSource.subscription_id).where(SubscriptionSource.id.in_(ids)))
+            count += await request_membership_projection_where(db, condition, deleting=deleting)
+    return count
 
 
 async def request_search_projection(
@@ -161,6 +257,8 @@ async def request_search_projection(
     deleted_repository_ids: Iterable[str | UUID] = (),
     subscription_ids: Iterable[str | UUID] = (),
     deleted_subscription_ids: Iterable[str | UUID] = (),
+    membership_ids: Iterable[str | UUID] = (),
+    deleted_membership_ids: Iterable[str | UUID] = (),
     index_uid: str | None = None,
 ) -> int:
     """Request work/reference projection changes in the caller's transaction.
@@ -172,14 +270,30 @@ async def request_search_projection(
     both collections, the delete is applied last and therefore wins.
     """
 
+    # Preserve generators for both the canonical requests and bounded fanout.
+    subscription_ids = tuple(subscription_ids)
+    creator_ids = tuple(creator_ids)
+    repository_ids = tuple(repository_ids)
+    deleted_subscription_ids = tuple(deleted_subscription_ids)
+    deleted_creator_ids = tuple(deleted_creator_ids)
+    deleted_repository_ids = tuple(deleted_repository_ids)
     requests = (
         (index_uid or DEFAULT_WORKS_INDEX_UID, work_ids, deleted_work_ids),
         (DEFAULT_CREATORS_INDEX_UID, creator_ids, deleted_creator_ids),
         (DEFAULT_TAGS_INDEX_UID, tag_ids, deleted_tag_ids),
         (DEFAULT_REPOSITORIES_INDEX_UID, repository_ids, deleted_repository_ids),
         (DEFAULT_SUBSCRIPTIONS_INDEX_UID, subscription_ids, deleted_subscription_ids),
+        (DEFAULT_MEMBERSHIPS_INDEX_UID, membership_ids, deleted_membership_ids),
     )
     requested = 0
+    requested += await _fanout_memberships(
+        db, subscription_ids=subscription_ids, creator_ids=creator_ids,
+        repository_ids=repository_ids + deleted_repository_ids,
+    )
+    requested += await _fanout_memberships(
+        db, subscription_ids=deleted_subscription_ids, creator_ids=deleted_creator_ids,
+        repository_ids=(), deleting=True,
+    )
     work_requested = False
     changed_indexes: set[str] = set()
     for position, (projection_uid, upsert_values, delete_values) in enumerate(requests):

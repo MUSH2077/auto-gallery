@@ -13,6 +13,7 @@ import {
   PageHeader,
   PageShell,
   PermissionGuard,
+  MatchedIdentityBadge,
   SmartSearchInput,
   SourceBadge,
   WorkMediaThumbnail,
@@ -48,22 +49,38 @@ function SearchContent() {
   const [query, setQuery] = useState(initialQuery);
   const [page, setPage] = useState(Math.max(0, Number(searchParams.get("page") || 1) - 1));
   const pushNextComposedQuery = useRef(false);
+  const urlSyncTimer = useRef<number | null>(null);
+  const latestQuery = useRef(initialQuery);
   const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
-    setQuery(searchParams.get("q") || "");
+    const nextQuery = searchParams.get("q") || "";
+    latestQuery.current = nextQuery;
+    setQuery(nextQuery);
     setPage(Math.max(0, Number(searchParams.get("page") || 1) - 1));
   }, [searchParams]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (deferredQuery.trim() !== latestQuery.current.trim()) return;
       const next = new URLSearchParams();
       if (deferredQuery.trim()) next.set("q", deferredQuery.trim());
       if (page > 0) next.set("page", String(page + 1));
       router.replace(next.size ? `${pathname}?${next.toString()}` : pathname, { scroll: false });
     }, 250);
-    return () => window.clearTimeout(timer);
+    urlSyncTimer.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (urlSyncTimer.current === timer) urlSyncTimer.current = null;
+    };
   }, [deferredQuery, page, pathname, router]);
+
+  const cancelPendingUrlSync = () => {
+    if (urlSyncTimer.current !== null) {
+      window.clearTimeout(urlSyncTimer.current);
+      urlSyncTimer.current = null;
+    }
+  };
 
   const results = useQuery({
     queryKey: ["compound-search", deferredQuery, page],
@@ -80,6 +97,8 @@ function SearchContent() {
     value: query,
     scope: "global",
     onChange: (value) => {
+      cancelPendingUrlSync();
+      latestQuery.current = value;
       setQuery(value);
       setPage(0);
       if (pushNextComposedQuery.current) {
@@ -126,7 +145,6 @@ function SearchContent() {
   };
 
   return (
-    <PermissionGuard anyOf={["library", "subscriptions"]}>
       <PageShell>
         <Breadcrumb items={[{ label: t("search.title") }, { label: deferredQuery || "…" }]} />
         <PageHeader
@@ -150,7 +168,10 @@ function SearchContent() {
 
         <SmartSearchInput
           value={query}
+          onEditStart={composer.discardPendingResult}
           onChange={(value) => {
+            cancelPendingUrlSync();
+            latestQuery.current = value;
             setQuery(value);
             setPage(0);
           }}
@@ -221,6 +242,7 @@ function SearchContent() {
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium">{creator.display_name || creator.name}</span>
                           {creator.description && <span className="mt-1 block truncate text-xs text-muted">{creator.description}</span>}
+                          <span className="mt-1 block"><MatchedIdentityBadge identity={creator.matched_identity} /></span>
                         </span>
                       </Link>
                     );
@@ -236,14 +258,14 @@ function SearchContent() {
                   {works.map((work, index) => {
                     const entrance = workEntrance(`work:${work.id}`, index);
                     return (
-                      <article key={work.id} className={`card-interactive ${entrance.className} relative flex min-h-20 gap-4 p-4`} style={entrance.style}>
+                      <article key={work.id} className={`card-interactive media-motion-card ${entrance.className} relative flex min-h-20 gap-4 p-4`} style={entrance.style}>
                         <Link
                           href={`/admin/works/${work.id}`}
                           className="absolute inset-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                           aria-label={t("search.open_work", { title: work.title || t("search.untitled") })}
                         />
                         {work.thumbnail_asset_id ? (
-                          <span className="h-16 w-16 shrink-0 overflow-hidden rounded">
+                          <span className="media-motion-visual h-16 w-16 shrink-0 overflow-hidden rounded">
                             <WorkMediaThumbnail
                               assetId={work.thumbnail_asset_id}
                               hasVideo={work.has_video}
@@ -274,6 +296,7 @@ function SearchContent() {
                               </Link>
                             )}
                             {work.posted_at && <span>{fmt.date(work.posted_at)}</span>}
+                            <MatchedIdentityBadge identity={work.matched_identity} />
                           </span>
                           {work.tags && work.tags.length > 0 && (
                             <span className="relative z-10 mt-2 flex flex-wrap gap-1">
@@ -337,6 +360,7 @@ function SearchContent() {
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium">{repository.name}</span>
                           <span className="mt-1 block truncate text-xs text-muted">{repository.creator_name} · {repository.source_url || repository.source_creator_id}</span>
+                          <span className="mt-1 block"><MatchedIdentityBadge identity={repository.matched_identity} /></span>
                         </span>
                         <span className={`h-2 w-2 shrink-0 rounded-full ${repository.auth_healthy ? "bg-success" : "bg-danger"}`} aria-hidden />
                       </Link>
@@ -368,6 +392,7 @@ function SearchContent() {
                           <span className="mt-1 block text-xs text-muted">
                             {subscription.creator_name} · {subscription.source_count}
                           </span>
+                          <span className="mt-1 block"><MatchedIdentityBadge identity={subscription.matched_identity} /></span>
                         </span>
                         <span className={`h-2 w-2 shrink-0 rounded-full ${subscription.is_active && subscription.sync_enabled ? "bg-success" : "bg-border"}`} aria-hidden />
                       </Link>
@@ -407,14 +432,15 @@ function SearchContent() {
           </>
         )}
       </PageShell>
-    </PermissionGuard>
   );
 }
 
 export default function SearchPage() {
   return (
-    <Suspense>
-      <SearchContent />
-    </Suspense>
+    <PermissionGuard anyOf={["library", "subscriptions"]}>
+      <Suspense>
+        <SearchContent />
+      </Suspense>
+    </PermissionGuard>
   );
 }

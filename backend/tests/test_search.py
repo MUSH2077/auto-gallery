@@ -2,8 +2,10 @@
 
 import inspect
 import os
+from types import SimpleNamespace
 
 import pytest
+from tests.test_search_delivery import delivery  # noqa: F401
 
 
 class TestSearchService:
@@ -32,6 +34,179 @@ class TestSearchService:
             assert "searchableAttributes" in INDEX_SETTINGS[idx]
             assert "filterableAttributes" in INDEX_SETTINGS[idx]
             assert idx.startswith(os.environ["MEILI_INDEX_PREFIX"])
+
+    def test_identity_alias_settings_preserve_handles_and_disable_technical_typos(self):
+        from app.services.search import (
+            CREATORS_INDEX,
+            INDEX_SETTINGS,
+            REPOSITORIES_INDEX,
+            SUBSCRIPTIONS_INDEX,
+            WORKS_INDEX,
+        )
+
+        for index_uid in (
+            WORKS_INDEX,
+            CREATORS_INDEX,
+            REPOSITORIES_INDEX,
+            SUBSCRIPTIONS_INDEX,
+        ):
+            settings = INDEX_SETTINGS[index_uid]
+            assert settings["nonSeparatorTokens"] == ["_", "@"]
+            assert "disableOnNumbers" not in settings["typoTolerance"]
+            assert set(settings["typoTolerance"]["disableOnAttributes"]) >= {
+                "alias_identities_current",
+                "alias_identities_historical",
+            }
+            assert "alias_names_current" in settings["searchableAttributes"]
+            assert "alias_identities_current" in settings["searchableAttributes"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_numeric_creator_identity_never_falls_through_to_typo_search(
+        self,
+        monkeypatch,
+    ):
+        from app.services.search import SearchService
+
+        service = SearchService(SimpleNamespace())
+
+        async def no_exact_aliases(_parsed):
+            return ()
+
+        async def fail_if_indexed(*_args, **_kwargs):
+            raise AssertionError("numeric creator identities must not use typo search")
+
+        monkeypatch.setattr(service, "_exact_creator_aliases", no_exact_aliases)
+        monkeypatch.setattr(
+            service,
+            "_exact_creator_aliases_for_value",
+            no_exact_aliases,
+        )
+        monkeypatch.setattr(service, "_search_meili", fail_if_indexed)
+
+        result = await service.search(
+            "108990867",
+            scope="creators",
+            permissions={"library"},
+        )
+
+        assert result["groups"]["creators"] == {"total": 0, "items": []}
+
+    def test_reference_text_search_requires_all_terms_but_works_stays_natural(self):
+        from app.services.search import _matching_strategy
+
+        assert _matching_strategy("creators") == "all"
+        assert _matching_strategy("subscriptions") == "all"
+        assert _matching_strategy("repositories") == "all"
+        assert _matching_strategy("works") == "last"
+
+    def test_incremental_projection_waits_for_slow_nas_meili_commits(self):
+        from app.services.search import (
+            MEILI_INCREMENTAL_SLICE_TIMEOUT_MS,
+            MEILI_INCREMENTAL_TASK_TIMEOUT_MS,
+        )
+
+        assert MEILI_INCREMENTAL_TASK_TIMEOUT_MS >= 180_000
+        assert (
+            MEILI_INCREMENTAL_SLICE_TIMEOUT_MS
+            >= MEILI_INCREMENTAL_TASK_TIMEOUT_MS + 60_000
+        )
+
+    def test_projection_audit_uses_meili_112_compatible_id_filter(self):
+        from app.services.search import SearchService, _meili_document_ids_filter
+
+        assert _meili_document_ids_filter(("work-a", "work-b")) == (
+            'id IN ["work-a", "work-b"]'
+        )
+        audit_source = inspect.getsource(SearchService.audit_projection)
+        assert "filter=_meili_document_ids_filter(batch_ids)" in audit_source
+        assert "ids=batch_ids" not in audit_source
+
+    def test_alias_projection_separates_fuzzy_names_from_exact_identities_and_history(self):
+        from app.services.search import _alias_projection_fields
+
+        fields = _alias_projection_fields(
+            (
+                SimpleNamespace(
+                    value="AAkin",
+                    normalized_value="aakin",
+                    source="local",
+                    kind="name",
+                    is_current=True,
+                ),
+                SimpleNamespace(
+                    value="user_dsnj5842",
+                    normalized_value="user_dsnj5842",
+                    source="pixiv",
+                    kind="account",
+                    is_current=True,
+                ),
+                SimpleNamespace(
+                    value="old_handle",
+                    normalized_value="old_handle",
+                    source="pixiv",
+                    kind="account",
+                    is_current=False,
+                ),
+                SimpleNamespace(
+                    value="aakin_old",
+                    normalized_value="aakin_old",
+                    source="danbooru",
+                    kind="other_name",
+                    is_current=False,
+                ),
+            )
+        )
+
+        assert fields["alias_names_current"] == ["AAkin"]
+        assert fields["alias_names_historical"] == ["aakin_old"]
+        assert fields["alias_identities_current"] == ["user_dsnj5842"]
+        assert fields["alias_identities_historical"] == ["old_handle"]
+        assert fields["alias_records"][0]["is_current"] is True
+        assert fields["alias_records"][-1]["is_current"] is False
+
+    def test_fuzzy_alias_explanation_prefers_current_prefix_and_hides_projection_fields(self):
+        from app.services.search import _decorate_alias_hit
+
+        hit = {
+            "id": "creator-1",
+            "name": "aakin5349",
+            "display_name": "AAkin",
+            "alias_names_current": ["long_creator_alias"],
+            "alias_names_historical": ["long_old_alias"],
+            "alias_identities_current": ["user_dsnj5842"],
+            "alias_identities_historical": [],
+            "alias_records": [
+                {
+                    "creator_id": "creator-1",
+                    "value": "long_creator_alias",
+                    "normalized_value": "long_creator_alias",
+                    "source": "danbooru",
+                    "kind": "other_name",
+                    "is_current": True,
+                },
+                {
+                    "creator_id": "creator-1",
+                    "value": "long_old_alias",
+                    "normalized_value": "long_old_alias",
+                    "source": "danbooru",
+                    "kind": "other_name",
+                    "is_current": False,
+                },
+            ],
+        }
+
+        _decorate_alias_hit(hit, "long_creat")
+
+        assert hit["matched_identity"] == {
+            "creator_id": "creator-1",
+            "value": "long_creator_alias",
+            "source": "danbooru",
+            "kind": "other_name",
+            "is_current": True,
+            "match_type": "prefix",
+        }
+        assert "alias_records" not in hit
+        assert "alias_names_current" not in hit
 
     def test_test_database_requires_an_index_namespace(self):
         from app.services.search import _validate_index_namespace
@@ -62,6 +237,17 @@ class TestSearchService:
         from app.services.search import SearchService
         assert hasattr(SearchService, "reindex")
         assert inspect.iscoroutinefunction(SearchService.reindex)
+
+    def test_reference_indexes_default_to_stable_name_order(self):
+        """Changing the subscription default back to timestamps must fail."""
+        from app.services.search import _meili_sort
+        from app.services.search_language import parse_search_query
+
+        for scope in ("creators", "subscriptions"):
+            assert _meili_sort(
+                parse_search_query("", scope),
+                scope,
+            ) == ["name_sort:asc", "id:asc"]
 
     def test_parallel_work_hydration_reserves_a_control_connection(self, monkeypatch):
         from app.services import search
@@ -165,7 +351,7 @@ class TestSearchService:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_reindex_removes_orphans_and_projection_audit_is_clean():
+async def test_reindex_removes_orphans_and_projection_audit_is_clean(delivery):
     from app.database import async_session
     from app.services.search import (
         WORKS_INDEX,
@@ -193,7 +379,19 @@ async def test_reindex_removes_orphans_and_projection_audit_is_clean():
         assert orphan_id in before["indexes"]["works"]["stale_ids"]
 
         rebuilt = await service.reindex()
-        assert rebuilt["status"] == "ok"
+        assert rebuilt["status"] == "pending"
+        from app.services.search_delivery import run_delivery_slice
+        from app.services.search_rebuild import rebuild_status
+        from tests.test_search_delivery import ready_receipt
+        import asyncio
+        for _ in range(300):
+            await run_delivery_slice()
+            await ready_receipt()
+            completed = await rebuild_status(rebuilt["build_id"])
+            if completed["status"] != "pending":
+                break
+            await asyncio.sleep(.05)
+        assert completed["status"] == "ok", completed
 
         after = await service.audit_projection()
         assert after["status"] == "ok"

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import redis
@@ -156,6 +157,95 @@ def test_adaptive_wait_is_jittered_and_capped():
     assert adaptive_wait_delay(10**6, jitter=False) == 30.0
 
 
+@pytest.mark.parametrize(
+    ("first_workload", "second_workload"),
+    [
+        ("maintenance", "light"),
+        ("light", "maintenance"),
+    ],
+)
+def test_control_event_subscription_follows_workload_transition(
+    first_workload,
+    second_workload,
+):
+    class PubSub:
+        def __init__(self):
+            self.channels = set()
+            self.closed = False
+
+        def subscribe(self, *channels):
+            self.channels.update(channels)
+
+        def get_message(self, *, timeout):
+            return {"type": "message", "data": "queued"}
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        def __init__(self):
+            self.pubsubs = []
+
+        def pubsub(self, *, ignore_subscribe_messages):
+            assert ignore_subscribe_messages is True
+            pubsub = PubSub()
+            self.pubsubs.append(pubsub)
+            return pubsub
+
+    worker = _bare_worker()
+    worker.connection = Connection()
+
+    worker._wait_for_control_event(1.0, first_workload)
+    old_pubsub = worker.connection.pubsubs[0]
+    worker._wait_for_control_event(1.0, second_workload)
+
+    assert old_pubsub.closed is True
+    assert len(worker.connection.pubsubs) == 2
+    assert worker._resource_control_pubsub is worker.connection.pubsubs[1]
+    assert worker._resource_control_pubsub.channels == {
+        "resource:control",
+        f"resource:work:{second_workload}",
+    }
+
+
+def test_close_control_pubsub_clears_workload_binding():
+    worker = _bare_worker()
+    worker._resource_control_pubsub = None
+    worker._resource_control_workload = "maintenance"
+
+    worker._close_control_pubsub()
+
+    assert worker._resource_control_workload is None
+
+
+def test_control_event_subscribe_failure_closes_new_pubsub(monkeypatch):
+    class PubSub:
+        def __init__(self):
+            self.closed = False
+
+        def subscribe(self, *_channels):
+            raise redis.exceptions.ConnectionError("subscribe unavailable")
+
+        def close(self):
+            self.closed = True
+
+    pubsub = PubSub()
+    worker = _bare_worker()
+    worker.connection = SimpleNamespace(
+        pubsub=lambda **_kwargs: pubsub,
+    )
+    monkeypatch.setattr(
+        "app.services.resource_aware_worker.time.sleep",
+        lambda _seconds: None,
+    )
+
+    worker._wait_for_control_event(1.0, "maintenance")
+
+    assert pubsub.closed is True
+    assert getattr(worker, "_resource_control_pubsub", None) is None
+    assert getattr(worker, "_resource_control_workload", None) is None
+
+
 def test_worker_pressure_hash_writes_only_on_change_or_heartbeat(monkeypatch):
     worker = _bare_worker()
     now = {"value": 10.0}
@@ -222,6 +312,241 @@ def test_worker_cgroup_oom_kill_is_immediately_fail_closed_and_promoted(monkeypa
     assert feedback["cgroup_deltas"] == {"max": 0, "oom": 1, "oom_kill": 1}
     assert snapshot["status"] == "paused"
     assert promoted == [("worker_cgroup_oom_kill", "test-worker")]
+
+
+def test_worker_retries_unacknowledged_oom_event_with_the_same_identity(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    contributions = iter(
+        [
+            {"max": 0, "oom": 1, "oom_kill": 1},
+            {"max": 0, "oom": 1, "oom_kill": 1},
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": next(contributions),
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/shared",
+        },
+    )
+
+    def promote(reason, **kwargs):
+        calls.append((reason, kwargs))
+        if len(calls) == 1:
+            raise RuntimeError("redis unavailable")
+        return {
+            "status": "paused",
+            "controller_mode": "critical",
+            "reasons": [reason],
+            "budget": {"throughput_scale": 0.0},
+        }
+
+    monkeypatch.setattr(resource_aware_worker, "publish_external_resource_critical", promote)
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    first = worker._publish_pressure_state(dict(normal))
+    second_snapshot = dict(normal)
+    second = worker._publish_pressure_state(second_snapshot)
+
+    assert first["hard_gate_active"] is True
+    assert second["hard_gate_active"] is True
+    assert second_snapshot["status"] == "paused"
+    assert len(calls) == 2
+    assert calls[0][1]["event_id"] == calls[1][1]["event_id"]
+    assert calls[0][1]["cgroup_id"] == "/docker/shared"
+    assert calls[0][1]["oom_kill_counter"] == 1
+
+
+def test_worker_keeps_local_gate_closed_past_recovery_while_oom_is_unacknowledged(
+    monkeypatch,
+):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 1},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unacknowledged",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: (_ for _ in ()).throw(
+            ConnectionError("promotion unavailable")
+        ),
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    first = worker._publish_pressure_state(dict(normal))
+    now["value"] += 61.0
+    second = worker._publish_pressure_state(dict(normal))
+
+    assert first["hard_gate_active"] is True
+    assert second["hard_gate_active"] is True
+    assert worker._pending_cgroup_oom_event is not None
+
+
+def test_worker_local_recovery_requires_confirmed_oom_acknowledgment(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    worker._last_cgroup_events = {"max": 0, "oom": 0, "oom_kill": 0}
+    worker._local_cgroup_oom_kill_latched = True
+    worker._local_cgroup_oom_kill_at = 10.0
+    worker._local_cgroup_oom_acknowledged = False
+    worker._pending_cgroup_oom_event = None
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: 71.0)
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 0, "oom_kill": 0},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/unconfirmed",
+        },
+    )
+
+    feedback = worker._publish_pressure_state(
+        {"status": "normal", "controller_mode": "normal", "reasons": []}
+    )
+
+    assert feedback["hard_gate_active"] is True
+
+
+def test_restarted_worker_does_not_latch_an_acknowledged_historical_oom(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 4},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/shared",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: None,
+    )
+
+    feedback = worker._publish_pressure_state(
+        {"status": "normal", "controller_mode": "normal", "reasons": []}
+    )
+
+    assert feedback["hard_gate_active"] is False
+
+
+def test_live_worker_periodically_touches_recovered_cgroup_ack(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 0.0}
+    touches = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": {"max": 0, "oom": 1, "oom_kill": 4},
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "/docker/long-lived",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda _reason, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "touch_cgroup_oom_kill_ack",
+        lambda connection, cgroup_id, counter: (
+            touches.append((connection, cgroup_id, counter)) or "recovered"
+        ),
+        raising=False,
+    )
+    normal = {"status": "normal", "controller_mode": "normal", "reasons": []}
+
+    worker._publish_pressure_state(dict(normal))
+    now["value"] = 60 * 60 + 1
+    feedback = worker._publish_pressure_state(dict(normal))
+
+    assert touches == [(worker.connection, "/docker/long-lived", 4)]
+    assert feedback["hard_gate_active"] is False
+
+
+def test_worker_cgroup_max_and_oom_only_apply_local_soft_feedback(monkeypatch):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    now = {"value": 10.0}
+    samples = iter(
+        [
+            {"max": 0, "oom": 0, "oom_kill": 0},
+            {"max": 1, "oom": 1, "oom_kill": 0},
+        ]
+    )
+    promoted = []
+    monkeypatch.setattr(resource_aware_worker.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "sample_cgroup_contribution",
+        lambda: {
+            "memory_events": next(samples),
+            "memory": {},
+            "cpu": {},
+            "io": {},
+            "psi": {},
+            "cgroup_id": "worker-test",
+        },
+    )
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "publish_external_resource_critical",
+        lambda reason, **kwargs: promoted.append((reason, kwargs["source"])),
+    )
+
+    shared_snapshot = {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert worker._publish_pressure_state(shared_snapshot)["soft_scale"] == 1.0
+    feedback = worker._publish_pressure_state(shared_snapshot)
+
+    assert feedback == {
+        "hard_gate_active": False,
+        "soft_scale": 0.5,
+        "cgroup_deltas": {"max": 1, "oom": 1, "oom_kill": 0},
+    }
+    assert shared_snapshot == {"status": "normal", "controller_mode": "normal", "reasons": []}
+    assert promoted == []
+    assert worker._local_cgroup_soft_until == 70.0
 
 
 def test_worker_soft_cgroup_feedback_halves_an_enforced_slice():
@@ -323,6 +648,157 @@ def test_operations_worker_selects_profile_from_job_function(monkeypatch):
 
     assert events == ["search_index", "workhorse", "released"]
     assert heavy_io.worker_flock_is_inherited() is False
+
+
+def test_profile_admission_persists_maintenance_pending_before_wait(monkeypatch):
+    from app.services import resource_aware_worker
+
+    owner = "11111111-1111-4111-8111-111111111111"
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "maintenance-pending-admission",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": (owner, 7),
+            "meta": {"registered_admin_operation": "admin-backup-create"},
+            "save_meta": lambda self: None,
+        },
+    )()
+    events = []
+    maintenance_checks = iter((1, 0))
+    worker.connection.exists = lambda _key: next(maintenance_checks)
+    original_set_job_resource_meta = ResourceAwareWorker._set_job_resource_meta
+
+    def record_job_resource_meta(actual_job, workload, state, reason):
+        events.append(("rq", workload, state, reason))
+        original_set_job_resource_meta(actual_job, workload, state, reason)
+
+    worker._set_job_resource_meta = record_job_resource_meta
+    worker._wait_for_control_event = lambda _delay, _workload: events.append(("wait",))
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: [])
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: None)
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "_set_resource_state_sync",
+        lambda actual_owner, state, reason, **kwargs: events.append(
+            ("durable", actual_owner, state, reason, kwargs)
+        ),
+    )
+
+    assert worker._profile_admission(job, "import_db") == (None, None, owner)
+
+    waiting_projection = (
+        "durable",
+        owner,
+        "waiting",
+        "maintenance_pending",
+        {"workload": "import_db", "publisher_attempt": "7"},
+    )
+    assert waiting_projection in events
+    assert events.index(("rq", "import_db", "waiting", "maintenance_pending")) < events.index(
+        waiting_projection
+    ) < events.index(("wait",))
+
+
+@pytest.mark.parametrize("lock_denial", ["busy", "oserror"])
+def test_profile_admission_releases_lease_then_persists_lock_wait_before_wait(
+    monkeypatch,
+    lock_denial,
+):
+    from app.services import resource_aware_worker
+
+    owner = "22222222-2222-4222-8222-222222222222"
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "native-lock-admission",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": (owner, 8),
+            "meta": {"registered_admin_operation": "admin-backup-create"},
+            "save_meta": lambda self: None,
+        },
+    )()
+    events = []
+    leases = []
+    original_set_job_resource_meta = ResourceAwareWorker._set_job_resource_meta
+
+    def record_job_resource_meta(actual_job, workload, state, reason):
+        events.append(("rq", workload, state, reason))
+        original_set_job_resource_meta(actual_job, workload, state, reason)
+
+    class Lease:
+        denial_reason = None
+
+        def __init__(self, *_args, **_kwargs):
+            self.number = len(leases) + 1
+            leases.append(self)
+
+        async def try_acquire(self):
+            events.append(("lease_acquired", self.number))
+            return True
+
+        async def release(self):
+            events.append(("lease_released", self.number))
+
+    class DenyingLock:
+        def try_acquire(self):
+            events.append(("lock_denied", lock_denial))
+            if lock_denial == "oserror":
+                raise OSError("native lock unavailable")
+            return False
+
+    class GrantedLock:
+        def try_acquire(self):
+            events.append(("lock_acquired",))
+            return True
+
+    granted_lock = GrantedLock()
+    locks = iter((DenyingLock(), granted_lock))
+    worker._set_job_resource_meta = record_job_resource_meta
+    worker._wait_for_control_event = lambda _delay, _workload: events.append(("wait",))
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: ["lease"])
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "resource_reservation_details",
+        lambda _snapshot, _workload: (1, 2),
+    )
+    monkeypatch.setattr(resource_aware_worker, "RenewableRedisLease", Lease)
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: next(locks))
+    monkeypatch.setattr(
+        resource_aware_worker,
+        "_set_resource_state_sync",
+        lambda actual_owner, state, reason, **kwargs: events.append(
+            ("durable", actual_owner, state, reason, kwargs)
+        ),
+    )
+
+    admitted_lock, admitted_lease, admitted_owner = worker._profile_admission(job, "maintenance")
+
+    waiting_projection = (
+        "durable",
+        owner,
+        "waiting",
+        "profile_lock_busy",
+        {"workload": "maintenance", "publisher_attempt": "8"},
+    )
+    assert (admitted_lock, admitted_lease, admitted_owner) == (granted_lock, leases[1], owner)
+    assert waiting_projection in events
+    assert events.index(("lease_released", 1)) < events.index(waiting_projection) < events.index(
+        ("wait",)
+    )
+    assert events.index(("rq", "maintenance", "waiting", "profile_lock_busy")) < events.index(
+        waiting_projection
+    )
 
 
 @pytest.mark.integration
@@ -493,6 +969,144 @@ def test_registered_admin_transport_preserves_child_owned_resource_profile():
     assert ResourceAwareWorker._job_workload(job, queue) == "image_derive"
     assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
     assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
+
+
+@pytest.mark.parametrize(
+    "operation_type",
+    [
+        "admin-integrity-scan",
+        "admin-backup-estimate",
+        "admin-backup-create",
+        "admin-restore-validate",
+        "admin-proxy-test",
+        "admin-gallerydl-connectivity-test",
+    ],
+)
+def test_unsliced_registered_admin_jobs_ignore_stale_internal_profile(operation_type):
+    """Rolling queued metadata cannot suppress whole-operation admission."""
+    job = type(
+        "Job",
+        (),
+        {
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "meta": {
+                "registered_admin_operation": operation_type,
+                "registered_admin_internal_profile": "maintenance",
+            },
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+    assert ResourceAwareWorker._job_workload(job, queue) == "maintenance"
+
+
+def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(monkeypatch):
+    import rq
+    from app.services import operations
+
+    published = []
+    monkeypatch.setattr(rq, "Queue", lambda name, connection: (name, connection))
+    monkeypatch.setattr(
+        operations,
+        "checked_enqueue",
+        lambda queue, function, *args, **kwargs: published.append((queue, function, args, kwargs)),
+    )
+
+    operation_types = (
+        "admin-integrity-scan",
+        "admin-backup-estimate",
+        "admin-backup-create",
+        "admin-restore-validate",
+        "admin-proxy-test",
+        "admin-gallerydl-connectivity-test",
+    )
+    for operation_type in operation_types:
+        operations._enqueue_admin_rq(
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            operation_type=operation_type,
+            rq_job_id=f"{operation_type}-rq",
+            queue_name="maintenance",
+            job_timeout=60,
+            redis_client=object(),
+        )
+    operations._enqueue_admin_rq(
+        "22222222-2222-4222-8222-222222222222",
+        1,
+        operation_type="admin-rebuild",
+        rq_job_id="admin-rebuild-rq",
+        queue_name="maintenance",
+        job_timeout=60,
+        redis_client=object(),
+    )
+
+    assert [entry[3]["meta"] for entry in published[:-1]] == [
+        {"registered_admin_operation": operation_type}
+        for operation_type in operation_types
+    ]
+    assert published[-1][3]["meta"] == {
+        "registered_admin_operation": "admin-rebuild",
+        "registered_admin_internal_profile": "maintenance",
+    }
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises):
+    from app.services import resource_aware_worker
+
+    worker = _bare_worker()
+    worker._wait_until_pressure_allows_dequeue = lambda *_args, **_kwargs: {}
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._close_control_pubsub = lambda: None
+    worker._apply_profile_slice = lambda *_args: None
+    worker._set_job_resource_meta = lambda *_args: None
+    job = type(
+        "Job",
+        (),
+        {
+            "id": "unsliced-admin-job",
+            "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
+            "args": ("11111111-1111-4111-8111-111111111111", 1),
+            "meta": {
+                "registered_admin_operation": "admin-backup-create",
+                "registered_admin_internal_profile": "maintenance",
+            },
+            "refresh": lambda self: None,
+        },
+    )()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    held = {"value": False}
+
+    class Lock:
+        def try_acquire(self):
+            assert held["value"] is False
+            held["value"] = True
+            return True
+
+        def release(self):
+            assert held["value"] is True
+            held["value"] = False
+
+    monkeypatch.setattr(resource_aware_worker, "resource_lease_keys", lambda _workload: [])
+    monkeypatch.setattr(resource_aware_worker, "local_lock_for_workload", lambda _workload: Lock())
+    monkeypatch.setattr(resource_aware_worker, "_set_resource_state_sync", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(resource_aware_worker, "profile_slice_cooldown_seconds", lambda *_args, **_kwargs: 0.0)
+
+    def _execute(_self, actual_job, actual_queue):
+        assert (actual_job, actual_queue) == (job, queue)
+        assert held["value"] is True
+        if raises:
+            raise RuntimeError("handler failed")
+        return "handled"
+
+    monkeypatch.setattr(Worker, "execute_job", _execute)
+    if raises:
+        with pytest.raises(RuntimeError, match="handler failed"):
+            worker.execute_job(job, queue)
+    else:
+        assert worker.execute_job(job, queue) == "handled"
+    assert held["value"] is False
 
 
 def test_outbox_slice_bounds_are_applied_before_fork():

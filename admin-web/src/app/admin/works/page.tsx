@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import type { WorkAsset } from "@/lib/api/endpoints/works";
+import type { MediaDerivativeProgress, WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkMediaThumbnail, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
@@ -116,10 +116,26 @@ function WorkCard({
     hoverTimer.current = null;
   };
 
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || !hasMultiple) return;
+    const onWheel = (event: WheelEvent) => {
+      wheelDelta.current += event.deltaY;
+      if (Math.abs(wheelDelta.current) < wheelThreshold) return;
+      event.preventDefault();
+      const normalized = (pageIdx + (wheelDelta.current > 0 ? 1 : -1) + assetIds.length) % assetIds.length;
+      setPageIdx(normalized);
+      onPreviewPage(w.id, normalized);
+      wheelDelta.current = 0;
+    };
+    card.addEventListener("wheel", onWheel, { passive: false });
+    return () => card.removeEventListener("wheel", onWheel);
+  }, [assetIds.length, hasMultiple, onPreviewPage, pageIdx, wheelThreshold, w.id]);
+
   return (
     <article
       ref={cardRef}
-      className={`card-interactive relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
+      className={`card-interactive media-motion-card relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
       style={entrance?.style}
       onMouseEnter={() => {
         onCancelClosePreview();
@@ -130,21 +146,13 @@ function WorkCard({
         clearHoverTimer();
         onScheduleClosePreview();
       }}
-      onWheel={(event) => {
-        if (!hasMultiple) return;
-        wheelDelta.current += event.deltaY;
-        if (Math.abs(wheelDelta.current) < wheelThreshold) return;
-        event.preventDefault();
-        updatePage(pageIdx + (wheelDelta.current > 0 ? 1 : -1));
-        wheelDelta.current = 0;
-      }}
     >
       <Link
         href={`/admin/works/${w.id}`}
         aria-label={t("common.open_item", { name: w.title || t("works.untitled") })}
         className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
-      <div className="pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
+      <div className="media-motion-visual pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
         <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} />
         {selectable && (
           <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
@@ -208,6 +216,86 @@ function WorkCard({
 type SortKey = "created_at" | "posted_at" | "title";
 type ViewMode = "grid" | "list";
 
+function DerivativeProgressCard({
+  progress,
+  refreshing,
+  onRefresh,
+}: {
+  progress?: MediaDerivativeProgress;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const t = useT();
+  const fmt = useI18nFormat();
+  if (!progress || progress.total === 0 || progress.remaining === 0) return null;
+
+  const statusKey = progress.status === "stalled"
+    ? "works.derivative_progress_stalled"
+    : progress.status === "failed"
+      ? "works.derivative_progress_failed"
+      : progress.status === "waiting"
+        ? "works.derivative_progress_waiting"
+        : "works.derivative_progress_running";
+  const percent = Math.min(100, Math.max(0, progress.completion_percent));
+  const stalled = progress.status === "stalled";
+
+  return (
+    <section
+      className={`mb-4 rounded-lg border p-4 ${stalled ? "border-warning/40 bg-warning-subtle" : "border-border bg-surface"}`}
+      role="region"
+      aria-label={t("works.derivative_progress_region")}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-fg">{t("works.derivative_progress_title")}</p>
+          <p className={`mt-0.5 text-xs font-medium ${stalled ? "text-warning" : "text-accent"}`} role="status">
+            {t(statusKey)}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-ghost shrink-0"
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-label={t("works.derivative_progress_refresh")}
+        >
+          {refreshing ? t("common.refreshing") : t("works.derivative_progress_refresh")}
+        </button>
+      </div>
+      <div
+        className="mt-3 h-2 overflow-hidden rounded-full bg-border"
+        role="progressbar"
+        aria-label={t("works.derivative_progress_title")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}
+      >
+        <div
+          className={`h-full w-full rounded-full transition-transform duration-slow ease-out ${stalled ? "bg-warning" : "bg-accent"}`}
+          style={{ transform: `scaleX(${percent / 100})`, transformOrigin: "left" }}
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
+        <span className="font-mono tabular-nums text-fg">
+          {t("works.derivative_progress_count", {
+            completed: fmt.number(progress.completed),
+            total: fmt.number(progress.total),
+          })}
+        </span>
+        <span>
+          {t("works.derivative_progress_remaining", {
+            remaining: fmt.number(progress.remaining),
+            works: fmt.number(progress.affected_works),
+          })}
+        </span>
+        {progress.last_completed_at ? (
+          <span>{t("works.derivative_progress_last", { time: fmt.relative(progress.last_completed_at) })}</span>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function WorksContent() {
   const t = useT();
   const fmt = useI18nFormat();
@@ -256,6 +344,8 @@ function WorksContent() {
     : 0;
   const viewMode = (sp.get("view") as ViewMode) ?? "grid";
   const limit = 30;
+  const navigationParamsRef = useRef(sp.toString());
+  useEffect(() => { navigationParamsRef.current = sp.toString(); }, [sp]);
 
   // Local input for search field — debounced 300ms before writing to URL
   const [inputVal, setInputVal] = useState(search);
@@ -268,26 +358,28 @@ function WorksContent() {
   useEffect(() => {
     if (inputVal === search) return;
     const timer = setTimeout(() => {
-      const p = new URLSearchParams(sp.toString());
+      const p = new URLSearchParams(navigationParamsRef.current);
       stripLegacyWorkQuery(p);
       if (inputVal) p.set("q", inputVal); else p.delete("q");
       p.delete("p");
+      navigationParamsRef.current = p.toString();
       router.replace(`${pathname}?${p.toString()}`, { scroll: false });
     }, 300);
     return () => clearTimeout(timer);
-  }, [inputVal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [inputVal, pathname, router, search]);
 
   function updateParams(
     updates: Record<string, string | null>,
     resetPage = true,
     history: "replace" | "push" = "replace",
   ) {
-    const p = new URLSearchParams(sp.toString());
+    const p = new URLSearchParams(navigationParamsRef.current);
     stripLegacyWorkQuery(p);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === "") p.delete(k); else p.set(k, v);
     }
     if (resetPage) p.delete("p");
+    navigationParamsRef.current = p.toString();
     const href = `${pathname}?${p.toString()}`;
     if (history === "push") {
       router.push(href, { scroll: false });
@@ -298,7 +390,6 @@ function WorksContent() {
 
   function setSearchQuery(next: string) {
     setInputVal(next);
-    updateParams({ q: next || null });
   }
 
   function clearFilters() {
@@ -348,6 +439,14 @@ function WorksContent() {
     ...worksQuery,
     data: worksQuery.data?.groups.works,
   };
+  const derivativeProgress = useQuery({
+    queryKey: queryKeys.works.derivativeProgress,
+    queryFn: ({ signal }) => api.getMediaDerivativeProgress(signal),
+    staleTime: 10_000,
+    refetchInterval: (query) => (
+      (query.state.data?.remaining ?? 0) > 0 ? 15_000 : false
+    ),
+  });
 
   useEffect(() => {
     // placeholderData belongs to the previous page/query.  Its cursor must
@@ -512,6 +611,12 @@ function WorksContent() {
         ) : undefined}
       />
 
+      <DerivativeProgressCard
+        progress={derivativeProgress.data}
+        refreshing={derivativeProgress.isFetching}
+        onRefresh={() => { void derivativeProgress.refetch(); }}
+      />
+
       {worksQuery.isFetching && !worksQuery.isLoading && (
         <div className="mb-2 h-0.5 w-full overflow-hidden rounded bg-subtle" role="status" aria-label={t("common.loading")}>
           <div className="h-full w-1/3 animate-pulse rounded bg-accent" />
@@ -562,6 +667,7 @@ function WorksContent() {
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
+          onEditStart={composer.discardPendingResult}
           scope="works"
           ariaLabel={t("works.search_title")}
           placeholder={t("works.search_title")}

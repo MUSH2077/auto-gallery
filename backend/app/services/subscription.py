@@ -45,6 +45,17 @@ class SubscriptionService:
         self.db = db
         self.repo = SubscriptionRepository(db)
 
+    async def _refresh_creator_aliases(self, creator_ids) -> None:
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        ids = tuple(dict.fromkeys(item for item in creator_ids if item is not None))
+        if ids:
+            await backfill_creator_alias_batch(
+                self.db,
+                ids,
+                request_projection=False,
+            )
+
     async def _work_ids_for_repository_states(
         self,
         states: list[tuple[str, str | None, str | None]],
@@ -116,6 +127,7 @@ class SubscriptionService:
         if merged.get("schedule_mode") != "calendar":
             merged["schedule_rule"] = None
         sub = await self.repo.create(merged)
+        await self._refresh_creator_aliases((sub.creator_id,))
         await request_search_projection(
             self.db,
             creator_ids=[sub.creator_id],
@@ -241,6 +253,7 @@ class SubscriptionService:
 
         creator_ids = {old_creator_id, sub.creator_id}
         creator_ids.discard(None)
+        await self._refresh_creator_aliases(creator_ids)
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -268,6 +281,10 @@ class SubscriptionService:
             await self._projection_context(sub_id)
         )
 
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        await request_membership_projection_where(self.db, UserSubscription.subscription_id == sub_id, deleting=True)
+
         # 1. Delete download jobs and their import jobs first
         djs = await self.db.execute(
             select(DownloadJob).where(DownloadJob.subscription_id == sub_id)
@@ -285,6 +302,8 @@ class SubscriptionService:
 
         # 3. Delete the subscription
         await self.db.delete(sub)
+        await self.db.flush()
+        await self._refresh_creator_aliases((creator_id,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -314,6 +333,7 @@ class SubscriptionService:
             ss.source_creator_id,
             ss.source_url,
         )])
+        await self._refresh_creator_aliases((creator_id,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -354,6 +374,7 @@ class SubscriptionService:
             old_state,
             (ss.source, ss.source_creator_id, ss.source_url),
         ])
+        await self._refresh_creator_aliases((sub.creator_id if sub else None,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -380,6 +401,7 @@ class SubscriptionService:
             ss.source_url,
         )])
         await self.repo.delete_source(ss)
+        await self._refresh_creator_aliases((sub.creator_id if sub else None,))
         await request_search_projection(
             self.db,
             affected_work_ids,
@@ -400,7 +422,7 @@ class SubscriptionService:
                         result, creator_id, source_url)
         return result
 
-    async def trigger_sync(self, subscription_id: UUID) -> dict:
+    async def trigger_sync(self, subscription_id: UUID, *, user_id: int | None = None) -> dict:
         from app.services.tasks import TaskService
         from app.services.subscription_enqueue import enqueue_subscription_source_sync
         from app.services.cache import invalidate_api_caches
@@ -409,14 +431,47 @@ class SubscriptionService:
         if not sub:
             raise ValueError("Subscription not found")
 
-        sources = await self.db.execute(
-            select(SubscriptionSource).where(
-                and_(
-                    SubscriptionSource.subscription_id == subscription_id,
-                    SubscriptionSource.is_enabled == True,
+        membership = None
+        bindings_by_source = {}
+        if user_id is not None:
+            from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
+
+            membership = (
+                await self.db.execute(
+                    select(UserSubscription).where(
+                        UserSubscription.user_id == user_id,
+                        UserSubscription.subscription_id == subscription_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                raise ValueError("Subscription not found")
+            binding_rows = (
+                await self.db.execute(
+                    select(UserSubscriptionSource).where(
+                        UserSubscriptionSource.user_subscription_id == membership.id,
+                        UserSubscriptionSource.is_enabled.is_(True),
+                    )
+                )
+            ).scalars().all()
+            bindings_by_source = {
+                binding.subscription_source_id: binding for binding in binding_rows
+            }
+            source_ids = list(bindings_by_source)
+            sources = await self.db.execute(
+                select(SubscriptionSource).where(SubscriptionSource.id.in_(source_ids))
+                if source_ids
+                else select(SubscriptionSource).where(SubscriptionSource.id.is_(None))
+            )
+        else:
+            sources = await self.db.execute(
+                select(SubscriptionSource).where(
+                    and_(
+                        SubscriptionSource.subscription_id == subscription_id,
+                        SubscriptionSource.is_enabled == True,
+                    )
                 )
             )
-        )
         sub_sources = sources.scalars().all()
         if not sub_sources:
             return {"status": "ok", "message": "No enabled sources", "job_ids": []}
@@ -430,6 +485,8 @@ class SubscriptionService:
             queue_name="downloads",
             progress={"phase": "scanning", "label": "Checking subscription sources", "current": 0, "total": len(sub_sources)},
             meta={"subscription_id": str(subscription_id), "scope": "subscription"},
+            triggering_user_subscription_id=membership.id if membership else None,
+            owner_user_id=membership.user_id if membership else None,
         )
 
         job_ids = []
@@ -445,6 +502,12 @@ class SubscriptionService:
                 force=False,
                 parent_task_id=parent_task.id,
                 force_reason="subscription_sync_now",
+                triggering_user_subscription_id=membership.id if membership else None,
+                triggering_remote_account_id=(
+                    bindings_by_source[ss.id].remote_account_id
+                    if ss.id in bindings_by_source
+                    else None
+                ),
             )
             if result["status"] == "enqueued":
                 job_ids.append(result["job_id"])

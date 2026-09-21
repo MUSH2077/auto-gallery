@@ -1,5 +1,5 @@
 import { request } from "../client";
-import type { CurationCommit, Work } from "../types";
+import type { CurationCommit, RemoteWorkState, Work } from "../types";
 import type { DerivativeStatus, MediaAssetData } from "../../media";
 
 export interface WorkAsset extends MediaAssetData {
@@ -9,7 +9,25 @@ export interface WorkAsset extends MediaAssetData {
   derivative_status?: DerivativeStatus;
 }
 
+export interface MediaDerivativeProgress {
+  total: number;
+  completed: number;
+  pending: number;
+  processing: number;
+  failed: number;
+  remaining: number;
+  affected_works: number;
+  completion_percent: number;
+  status: "idle" | "waiting" | "running" | "stalled" | "failed" | "complete";
+  last_completed_at?: string | null;
+  oldest_unfinished_at?: string | null;
+  stall_after_seconds: number;
+}
+
 export const worksApi = {
+  resolveManualUploadWork: (sourceWorkId: string) => request<{ items: Work[]; total: number }>(
+    `/api/v1/works?q=${encodeURIComponent(`pid:manual/${sourceWorkId}`)}&offset=0&limit=2`,
+  ),
   deleteWork: (id: string) =>
     request<void>(`/api/v1/works/${id}`, { method: "DELETE" }),
 
@@ -23,7 +41,12 @@ export const worksApi = {
 
   getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
 
+  getWorkRemoteState: (id: string) => request<RemoteWorkState>(`/api/v1/works/${id}/remote-state`),
+
   getWorkAssets: (id: string) => request<WorkAsset[]>(`/api/v1/works/${id}/assets`),
+
+  getMediaDerivativeProgress: (signal?: AbortSignal) =>
+    request<MediaDerivativeProgress>("/api/v1/works/derivative-progress", { signal }),
 
   createPlaybackTicket: (workId: string, assetId: string) =>
     request<{ url: string; expires_at: string }>(

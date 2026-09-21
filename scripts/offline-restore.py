@@ -47,10 +47,11 @@ WRITERS = (
     "worker-download",
     "worker-import",
     "worker-operations",
+    "worker-discovery",
     "backend",
 )
 FOREGROUND = ("postgres", "redis", "meilisearch", "migrate", "backend", "admin-web")
-BACKGROUND = ("worker-download", "worker-import", "worker-operations", "scheduler")
+BACKGROUND = ("worker-download", "worker-import", "worker-operations", "worker-discovery", "scheduler")
 PG_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 DATABASE_PAYLOADS = frozenset({"database.dump", "database.sql"})

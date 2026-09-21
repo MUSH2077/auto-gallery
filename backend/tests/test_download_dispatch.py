@@ -27,6 +27,7 @@ class _AdmissionRedis:
         self.mutex = threading.Lock()
         self.jobs = {}
         self.waiting = 0
+        self.publications = []
 
     def lock(self, _name, *, timeout, blocking_timeout):
         assert timeout >= 60
@@ -41,6 +42,10 @@ class _AdmissionRedis:
         return True
 
     def delete(self, *_args):
+        return 1
+
+    def publish(self, channel, payload):
+        self.publications.append((channel, payload))
         return 1
 
 
@@ -114,7 +119,10 @@ def test_ambiguous_enqueue_response_is_resolved_by_deterministic_id(monkeypatch)
             self.connection = connection
 
         def enqueue(self, _func, *_args, **kwargs):
-            job = SimpleNamespace(id=kwargs["job_id"])
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: "queued",
+            )
             self.connection.jobs[job.id] = job
             self.connection.waiting += 1
             raise TimeoutError("response lost after Redis EXEC")
@@ -154,6 +162,114 @@ def test_ambiguous_enqueue_response_is_resolved_by_deterministic_id(monkeypatch)
     )
     assert same_job is rq_job
     assert redis.waiting == 1
+    assert redis.publications == [
+        ("resource:work:download_network", "queued"),
+        ("resource:work:download_network", "queued"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("queue_name", "delay_seconds", "expected_publications"),
+    [
+        (
+            "downloads:pixiv",
+            None,
+            [("resource:work:download_network", "queued")],
+        ),
+        ("downloads:pixiv", 30, []),
+    ],
+)
+def test_download_enqueue_wakes_only_for_immediately_runnable_work(
+    monkeypatch,
+    queue_name,
+    delay_seconds,
+    expected_publications,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+
+    class Queue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.connection = connection
+
+        def _accept(self, kwargs, status):
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: status,
+            )
+            self.connection.jobs[job.id] = job
+            self.connection.waiting += 1
+            return job
+
+        def enqueue(self, _func, *_args, **kwargs):
+            return self._accept(kwargs, "queued")
+
+        def enqueue_in(self, _delay, _func, *_args, **kwargs):
+            return self._accept(kwargs, "scheduled")
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda client, rq_job_id: client.jobs.get(rq_job_id),
+    )
+
+    accepted = backpressure.enqueue_download_rq(
+        queue_name,
+        "app.jobs.download.run_download_job",
+        "domain-job",
+        rq_job_id="download-domain-job-attempt-1",
+        job_timeout=7200,
+        delay_seconds=delay_seconds,
+        redis_client=redis,
+    )
+
+    assert accepted.id == "download-domain-job-attempt-1"
+    assert redis.publications == expected_publications
+
+
+def test_ambiguous_delayed_download_does_not_publish_a_premature_wake(monkeypatch):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+
+    class Queue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.connection = connection
+
+        def enqueue_in(self, _delay, _func, *_args, **kwargs):
+            job = SimpleNamespace(
+                id=kwargs["job_id"],
+                get_status=lambda refresh=True: "scheduled",
+            )
+            self.connection.jobs[job.id] = job
+            self.connection.waiting += 1
+            raise TimeoutError("response lost after Redis EXEC")
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda client, rq_job_id: client.jobs.get(rq_job_id),
+    )
+
+    accepted = backpressure.enqueue_download_rq(
+        "downloads:pixiv",
+        "app.jobs.download.run_download_job",
+        "domain-job",
+        rq_job_id="download-domain-job-attempt-1",
+        job_timeout=7200,
+        delay_seconds=30,
+        redis_client=redis,
+    )
+
+    assert accepted.id == "download-domain-job-attempt-1"
+    assert redis.publications == []
 
 
 def test_waiting_count_includes_queued_intermediate_scheduled_and_deferred(monkeypatch):
@@ -373,6 +489,76 @@ def test_publish_commits_before_rq_and_compensates_both_models(monkeypatch):
     assert task.meta["download_dispatch"]["state"] == "failed"
 
 
+def test_publish_does_not_compensate_an_uncertain_admission(monkeypatch):
+    from redis.exceptions import ConnectionError
+
+    from app.services import download_dispatch
+    from app.services.backpressure import DownloadAdmissionError
+
+    db = _DispatchDB()
+    job = SimpleNamespace(
+        id=uuid4(),
+        status="enqueued",
+        error_log=None,
+        pipeline_stage="enqueued",
+        progress_data={"stage": "enqueued"},
+    )
+    rq_job_id = f"download-{job.id}-attempt-1"
+    task = SimpleNamespace(
+        status="enqueued",
+        error_log=None,
+        rq_job_id=rq_job_id,
+        meta={
+            "download_dispatch": {
+                "state": "pending",
+                "rq_job_id": rq_job_id,
+                "attempt": 1,
+            },
+        },
+    )
+    prepared = download_dispatch.PreparedDownloadDispatch(
+        task=task,
+        queue_name="downloads",
+        rq_job_id=rq_job_id,
+        attempt=1,
+    )
+    admission = DownloadAdmissionError(
+        "redis_unwritable",
+        "queue adapter failed",
+        transient=False,
+        publication_uncertain=True,
+    )
+
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(admission),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ConnectionError("confirmation unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_persist_dispatch_failure",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("uncertain admission must remain pending")
+        ),
+    )
+
+    with pytest.raises(DownloadAdmissionError) as caught:
+        asyncio.run(download_dispatch.publish_prepared_download(db, job, prepared))
+
+    assert caught.value is admission
+    assert db.commit_count == 1
+    assert db.rollback_count == 1
+    assert job.status == task.status == "enqueued"
+    assert task.meta["download_dispatch"]["state"] == "pending"
+
+
 def _pending_outbox_pair(download_dispatch):
     job_id = uuid4()
     rq_job_id = download_dispatch.deterministic_download_rq_job_id(job_id, 2)
@@ -467,6 +653,507 @@ def test_outbox_recovery_transient_rejection_stays_pending(monkeypatch):
     assert task.status == "enqueued"
     assert job.status == "enqueued"
     assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TypeError("broken recovery call"),
+        ValueError("broken recovery value"),
+        RuntimeError("broken recovery invariant"),
+    ],
+)
+def test_outbox_recovery_terminalizes_programming_fault_after_confirmed_absence(
+    monkeypatch,
+    exc,
+):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    lookups = iter([exc, None])
+
+    def lookup(*_args, **_kwargs):
+        result = next(lookups)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lookup)
+    persisted = []
+
+    async def persist(*_args, **kwargs):
+        await db.rollback()
+        persisted.append(type(kwargs["exc"]))
+        return True
+
+    monkeypatch.setattr(
+        download_dispatch,
+        "_persist_dispatch_recovery_error",
+        persist,
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "error"
+    assert db.rollback_count == 1
+    assert persisted == [type(exc)]
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+def test_outbox_recovery_redis_transport_error_remains_deferred(monkeypatch):
+    from redis.exceptions import ConnectionError
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(ConnectionError("redis reset")),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "deferred"
+    assert db.rollback_count == 1
+
+
+def test_dispatch_classifier_rejects_persistent_redis_errors():
+    from redis.exceptions import (
+        AuthenticationError,
+        AuthorizationError,
+        DataError,
+        ResponseError,
+    )
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    for exc in (
+        AuthenticationError("bad credentials"),
+        AuthorizationError("forbidden"),
+        DataError("bad command input"),
+        ResponseError("invalid command"),
+    ):
+        assert is_transient_download_dispatch_error(exc) is False
+
+
+def test_dispatch_classifier_accepts_redis_transport_and_loading_errors():
+    from redis.exceptions import BusyLoadingError, ConnectionError, TimeoutError
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    for exc in (
+        ConnectionError("reset"),
+        TimeoutError("timeout"),
+        BusyLoadingError("loading"),
+    ):
+        assert is_transient_download_dispatch_error(exc) is True
+
+
+@pytest.mark.parametrize("delay_seconds", [None, 30])
+@pytest.mark.parametrize(
+    "error",
+    [TypeError("bad queue call"), pytest.param(
+        __import__("redis.exceptions", fromlist=["AuthenticationError"])
+        .AuthenticationError("bad credentials"),
+        id="authentication",
+    )],
+)
+def test_real_admission_adapter_preserves_nontransient_queue_error(
+    monkeypatch,
+    delay_seconds,
+    error,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+
+    class Queue:
+        def __init__(self, **_kwargs):
+            pass
+
+        def enqueue(self, *_args, **_kwargs):
+            raise error
+
+        def enqueue_in(self, *_args, **_kwargs):
+            raise error
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_existing_rq_job", lambda *_a, **_k: None)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+
+    with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+        backpressure.enqueue_download_rq(
+            "downloads",
+            "app.jobs.download.run_download_job",
+            "domain-job",
+            rq_job_id="download-domain-job-attempt-1",
+            job_timeout=7200,
+            delay_seconds=delay_seconds,
+            redis_client=redis,
+        )
+
+    assert caught.value.code == "redis_unwritable"
+    assert caught.value.transient is False
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_transient"),
+    [
+        (TypeError("bad lookup call"), False),
+        (
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad credentials"),
+            False,
+        ),
+        (
+            __import__("redis.exceptions", fromlist=["ConnectionError"])
+            .ConnectionError("reset"),
+            True,
+        ),
+    ],
+)
+def test_initial_fixed_id_lookup_failure_is_typed_as_uncertain(
+    monkeypatch,
+    error,
+    expected_transient,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+    monkeypatch.setattr(
+        backpressure,
+        "_existing_rq_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+        backpressure.enqueue_download_rq(
+            "downloads",
+            "app.jobs.download.run_download_job",
+            "domain-job",
+            rq_job_id="download-domain-job-attempt-1",
+            job_timeout=7200,
+            redis_client=redis,
+        )
+
+    assert caught.value.transient is expected_transient
+    assert caught.value.publication_uncertain is True
+    assert caught.value.details["error_type"] == type(error).__name__
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.parametrize("boundary", ["lock", "capacity"])
+@pytest.mark.parametrize(
+    ("error", "expected_transient"),
+    [
+        (TypeError("bad adapter"), False),
+        (
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad credentials"),
+            False,
+        ),
+        (
+            __import__("redis.exceptions", fromlist=["ConnectionError"])
+            .ConnectionError("reset"),
+            True,
+        ),
+    ],
+)
+def test_admission_lock_and_capacity_wrappers_preserve_classification(
+    monkeypatch,
+    boundary,
+    error,
+    expected_transient,
+):
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+    if boundary == "lock":
+        class BrokenLock:
+            def acquire(self, **_kwargs):
+                raise error
+
+        monkeypatch.setattr(redis, "lock", lambda *_a, **_k: BrokenLock())
+    else:
+        monkeypatch.setattr(
+            backpressure,
+            "_existing_rq_job",
+            lambda *_a, **_k: None,
+        )
+        monkeypatch.setattr(
+            backpressure,
+            "_redis_capacity_reason",
+            lambda *_a, **_k: (_ for _ in ()).throw(error),
+        )
+
+    with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+        backpressure.enqueue_download_rq(
+            "downloads",
+            "app.jobs.download.run_download_job",
+            "domain-job",
+            rq_job_id="download-domain-job-attempt-1",
+            job_timeout=7200,
+            redis_client=redis,
+        )
+
+    assert caught.value.code == "redis_unwritable"
+    assert caught.value.transient is expected_transient
+    assert caught.value.details["error_type"] == type(error).__name__
+
+
+def test_late_fixed_id_proof_wins_over_wrapped_nontransient_error(monkeypatch):
+    from app.services import download_dispatch
+    from app.services.backpressure import DownloadAdmissionError
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    lookups = iter([None, object()])
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: next(lookups),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            DownloadAdmissionError(
+                "redis_unwritable",
+                "queue adapter failed",
+                transient=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_persist_dispatch_recovery_error",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("late publication proof must not be compensated")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "existing"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "published"
+
+
+def test_enqueue_error_with_unavailable_confirmation_remains_ambiguous(monkeypatch):
+    from redis.exceptions import ConnectionError
+
+    from app.services import backpressure
+
+    redis = _AdmissionRedis()
+    lookups = iter([None, ConnectionError("confirmation unavailable")])
+
+    class Queue:
+        def __init__(self, **_kwargs):
+            pass
+
+        def enqueue(self, *_args, **_kwargs):
+            raise TypeError("bad queue call")
+
+    def lookup(*_args, **_kwargs):
+        outcome = next(lookups)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr("rq.Queue", Queue)
+    monkeypatch.setattr(backpressure, "_existing_rq_job", lookup)
+    monkeypatch.setattr(backpressure, "_download_waiting_count", lambda *_a, **_k: 0)
+
+    with pytest.raises(backpressure.DownloadAdmissionError) as caught:
+        backpressure.enqueue_download_rq(
+            "downloads",
+            "app.jobs.download.run_download_job",
+            "domain-job",
+            rq_job_id="download-domain-job-attempt-1",
+            job_timeout=7200,
+            redis_client=redis,
+        )
+
+    assert caught.value.transient is False
+    assert caught.value.publication_uncertain is True
+    assert caught.value.details["confirmation_error_type"] == "ConnectionError"
+
+
+def test_recovery_does_not_compensate_when_final_publication_lookup_fails(
+    monkeypatch,
+):
+    from redis.exceptions import ConnectionError
+
+    from app.services import download_dispatch
+    from app.services.backpressure import DownloadAdmissionError
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    lookups = iter([None, ConnectionError("confirmation unavailable")])
+
+    def lookup(*_args, **_kwargs):
+        outcome = next(lookups)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(download_dispatch, "_fetch_download_rq_job", lookup)
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            DownloadAdmissionError(
+                "redis_unwritable",
+                "queue adapter failed",
+                transient=False,
+                publication_uncertain=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_persist_dispatch_recovery_error",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("uncertain publication must not be compensated")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "deferred"
+    assert db.rollback_count == 1
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capacity_result", "expected_transient", "expected_code"),
+    [
+        (TypeError("bad capacity call"), False, "redis_unwritable"),
+        (
+            __import__("redis.exceptions", fromlist=["AuthenticationError"])
+            .AuthenticationError("bad credentials"),
+            False,
+            "redis_unwritable",
+        ),
+        (
+            __import__("redis.exceptions", fromlist=["ConnectionError"])
+            .ConnectionError("reset"),
+            True,
+            "redis_unwritable",
+        ),
+        (8, True, "queue_saturated"),
+    ],
+)
+async def test_cached_automatic_admission_preserves_dispatch_classification(
+    monkeypatch,
+    capacity_result,
+    expected_transient,
+    expected_code,
+):
+    from app.services import backpressure, resource_pressure
+    from app.services.download_dispatch import is_transient_download_dispatch_error
+
+    async def no_base_pressure(*_args, **_kwargs):
+        return None
+
+    async def healthy_pressure():
+        return {"status": "normal", "budget": {"throughput_scale": 1.0}}
+
+    monkeypatch.setattr(backpressure, "_base_download_backpressure_reason", no_base_pressure)
+    monkeypatch.setattr(resource_pressure, "get_resource_pressure_snapshot", healthy_pressure)
+    monkeypatch.setattr(backpressure, "_download_queue_limit", lambda: 8)
+    monkeypatch.setattr(backpressure, "get_redis", lambda: object())
+    if isinstance(capacity_result, Exception):
+        monkeypatch.setattr(
+            backpressure,
+            "_redis_capacity_reason",
+            lambda *_a, **_k: (_ for _ in ()).throw(capacity_result),
+        )
+    else:
+        monkeypatch.setattr(backpressure, "_redis_capacity_reason", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            backpressure,
+            "_download_waiting_count",
+            lambda *_a, **_k: capacity_result,
+        )
+
+    async with backpressure.download_admission_batch(object(), automatic=True):
+        reason = await backpressure.download_backpressure_reason(
+            object(),
+            automatic=True,
+            include_queue=True,
+        )
+
+    error = backpressure.admission_error(reason)
+    assert reason["code"] == expected_code
+    assert error.transient is (None if expected_code == "queue_saturated" else expected_transient)
+    assert is_transient_download_dispatch_error(error) is expected_transient
+
+
+def test_outbox_recovery_marks_malformed_retry_intent_invalid(monkeypatch):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    task.meta[download_dispatch.DISPATCH_META_KEY]["rq_job_id"] = "wrong-attempt-id"
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid intent must not query Redis")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "invalid"
+    assert db.commit_count == 1
+    assert task.status == job.status == "enqueued"
+    dispatch = task.meta[download_dispatch.DISPATCH_META_KEY]
+    assert dispatch["state"] == download_dispatch.DISPATCH_INVALID
+    assert "does not match" in dispatch["last_error"]
+
+
+def test_existing_rq_record_is_publication_proof_when_status_adapter_breaks(monkeypatch):
+    from app.services import download_dispatch
+
+    db = _DispatchDB()
+    task, job = _pending_outbox_pair(download_dispatch)
+    monkeypatch.setattr(
+        download_dispatch,
+        "_fetch_download_rq_job",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "_rq_job_state",
+        lambda *_a, **_k: (_ for _ in ()).throw(TypeError("bad status adapter")),
+    )
+    monkeypatch.setattr(
+        download_dispatch,
+        "enqueue_download_rq",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("an existing fixed id must not be re-enqueued")
+        ),
+    )
+
+    outcome = asyncio.run(
+        download_dispatch.recover_download_dispatch_candidate(db, task, job)
+    )
+
+    assert outcome == "existing"
+    assert task.meta[download_dispatch.DISPATCH_META_KEY]["state"] == "published"
 
 
 def test_outbox_recovery_existing_fixed_id_does_not_reenqueue(monkeypatch):

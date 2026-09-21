@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
+from app.schemas.task_actions import TaskCapabilities
 
 
 class AdminOperationAccepted(BaseModel):
@@ -13,6 +14,11 @@ class AdminOperationAccepted(BaseModel):
     job_id: str
     status: Literal["enqueued"]
     operation_type: str
+
+
+class AdminOperationAcceptedMessage(AdminOperationAccepted):
+    message: str
+    options: dict[str, Any] | None = None
 
 
 class AdminOperationSnapshot(BaseModel):
@@ -28,7 +34,15 @@ class AdminOperationSnapshot(BaseModel):
 class AdminOperationCurrent(BaseModel):
     task_id: str
     job_id: str | None = None
-    status: Literal["enqueued", "running", "recovering", "paused"]
+    status: Literal[
+        "enqueued",
+        "running",
+        "recovering",
+        "paused",
+        "failed",
+        "stale",
+        "cancelled",
+    ]
     operation_type: str
     progress: dict[str, Any] | None = None
 
@@ -36,3 +50,15 @@ class AdminOperationCurrent(BaseModel):
 class AdminOperationSnapshotResponse(BaseModel):
     snapshot: AdminOperationSnapshot | None = None
     current: AdminOperationCurrent | None = None
+
+
+class AdminOperationRead(TaskCapabilities):
+    task_id: str | None = None
+    job_id: str | None = None
+    status: str
+    operation_type: str | None = None
+    model_config = {"extra": "allow"}
+
+
+class AdminOperationPage(BaseModel):
+    operations: list[AdminOperationRead]

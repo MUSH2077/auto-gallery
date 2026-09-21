@@ -23,6 +23,9 @@ class _FakeLeaseRedis:
         self.values[key] = value
         return True
 
+    def delete(self, key):
+        return int(self.values.pop(key, None) is not None)
+
     def eval(self, script, _keys, key, token, *args):
         if self.values.get(key) != token:
             return 0
@@ -42,9 +45,19 @@ class _ReservationRedis(_FakeLeaseRedis):
 
         keys = list(values[:key_count])
         args = list(values[key_count:])
-        if script == heavy_io._RESERVE_SCRIPT:
+        if script.endswith(heavy_io._RESERVE_SCRIPT):
             target = keys[0]
-            token, requested, capacity, _ttl = args
+            token, requested, capacity, _ttl = args[:4]
+            if len(args) > 4:
+                marker, marker_key = args[4:]
+                if marker:
+                    self.values[marker_key] = marker
+                    if json.loads(marker)["profile"] == "maintenance" or target in {
+                        heavy_io.RESOURCE_BACKGROUND_TOKEN_KEY, heavy_io.HEAVY_IO_LOCK_KEY,
+                    }:
+                        return -4
+                else:
+                    self.delete(marker_key)
             if target in self.values:
                 return 0
             reserved = 0
@@ -69,7 +82,11 @@ class _ReservationRedis(_FakeLeaseRedis):
 
 def test_aggregate_reservation_counts_network_and_disk_before_grant(monkeypatch):
     from app.services import heavy_io
-    from app.services.resource_pressure import ResourcePressureStateMachine, ResourceSample
+    from app.services.resource_pressure import (
+        PressureThresholds,
+        ResourcePressureStateMachine,
+        ResourceSample,
+    )
 
     mib = 1024 ** 2
     gib = 1024 ** 3
@@ -77,7 +94,13 @@ def test_aggregate_reservation_counts_network_and_disk_before_grant(monkeypatch)
         "app.services.resource_pressure.current_memory_available_bytes",
         lambda: 8 * gib,
     )
-    snapshot = ResourcePressureStateMachine().update(
+    snapshot = ResourcePressureStateMachine(
+        PressureThresholds(
+            warning_available_bytes=1536 * mib,
+            pause_available_bytes=1280 * mib,
+            resume_available_bytes=1792 * mib,
+        )
+    ).update(
         ResourceSample(
             memory_total_bytes=8 * gib,
             memory_available_bytes=int(1.45 * gib),
@@ -362,10 +385,26 @@ def test_download_queue_gate_detects_noeviction_write_failure(monkeypatch):
 
 def test_download_create_maps_queue_saturation_to_429(monkeypatch):
     from app.api.download_jobs import create_job
+    from app.schemas.download_job import DownloadJobCreate
+    from app.services import subscription_membership
     from app.services.backpressure import DownloadAdmissionError
     from app.services.download import DownloadService
 
-    async def reject(_self, _data):
+    user_id = 41
+    subscription_id = uuid4()
+    membership_id = uuid4()
+
+    class OwnedMembershipService:
+        def __init__(self, _db, owner_id):
+            assert owner_id == user_id
+
+        async def require_membership(self, target_id):
+            assert target_id == subscription_id
+            return SimpleNamespace(id=membership_id)
+
+    async def reject(_self, payload, *, user_id: int):
+        assert user_id == 41
+        assert payload["triggering_user_subscription_id"] == membership_id
         raise DownloadAdmissionError(
             "queue_saturated",
             "Download queue is full",
@@ -373,14 +412,19 @@ def test_download_create_maps_queue_saturation_to_429(monkeypatch):
             details={"queued": 100, "maximum_queued": 100},
         )
 
+    monkeypatch.setattr(
+        subscription_membership,
+        "SubscriptionMembershipService",
+        OwnedMembershipService,
+    )
     monkeypatch.setattr(DownloadService, "create_job", reject)
-    data = SimpleNamespace(model_dump=lambda: {
-        "subscription_id": uuid4(),
+    data = DownloadJobCreate.model_validate({
+        "subscription_id": subscription_id,
         "source": "pixiv",
         "source_url": "https://www.pixiv.net/users/1",
     })
     with pytest.raises(HTTPException) as caught:
-        asyncio.run(create_job(data, db=object()))
+        asyncio.run(create_job(data, db=object(), user=SimpleNamespace(id=user_id)))
     assert caught.value.status_code == 429
     assert caught.value.detail["code"] == "queue_saturated"
 

@@ -1,10 +1,9 @@
 """Profile-scoped admission for bounded background slices.
 
 Ordinary profiles take a shared POSIX maintenance barrier and a bounded Redis
-reservation.  The first NAS rollout intentionally permits one disk slice plus
-one network download at a time; unlike the former monolithic lock, foreground
-and control work continue and the disk token is released every 20 seconds (or
-one bounded unit).  Maintenance takes the same POSIX barrier exclusively.
+reservation. One ingest slice, one background slice and one network download
+may coexist, subject to their aggregate memory reservation. Maintenance takes
+the same POSIX barrier exclusively.
 Redis leases provide cross-process visibility and an atomic RAM reservation;
 POSIX locks on the shared NAS volume remain authoritative if Redis stalls.
 Downloads may run to completion and only serialize the same source archive.
@@ -34,6 +33,14 @@ logger = logging.getLogger(__name__)
 HEAVY_IO_LOCK_KEY = "lock:heavy-io"
 RESOURCE_NETWORK_TOKEN_KEY = "lock:resource-budget:network"
 RESOURCE_DISK_TOKEN_KEY = "lock:resource-budget:disk"
+RESOURCE_BACKGROUND_TOKEN_KEY = "lock:resource-budget:background"
+RESOURCE_RESERVATION_KEYS = (
+    RESOURCE_NETWORK_TOKEN_KEY,
+    RESOURCE_DISK_TOKEN_KEY,
+    RESOURCE_BACKGROUND_TOKEN_KEY,
+    "lock:resource-budget:remote-search",
+)
+RESOURCE_ADMISSION_MODE = "dual_disk_lanes_v2"
 DEFAULT_LEASE_SECONDS = 300
 DEFAULT_RENEW_SECONDS = 60
 DEFAULT_POLL_SECONDS = 10.0
@@ -85,8 +92,28 @@ local capacity = tonumber(ARGV[3])
 if total + requested > capacity then
   return -1
 end
+local background_now = nil
+if KEYS[1] == "lock:resource-budget:background" then
+  background_now = tonumber(redis.call("time")[1])
+  local ingest_ready = redis.call("exists", "lock:resource-budget:disk") == 1
+    or redis.call("llen", "rq:queue:imports") > 0
+    or redis.call("zcard", "rq:wip:imports") > 0
+  if ingest_ready then
+    local last = redis.call("get", "resource:lanes:last-background")
+    if not last then
+      redis.call("set", "resource:lanes:last-background", background_now, "NX", "EX", 86400)
+      return -3
+    end
+    if background_now - tonumber(last) < 60 then
+      return -3
+    end
+  end
+end
 local result = redis.call("set", KEYS[1], ARGV[1], "NX", "EX", ARGV[4])
 if result then
+  if background_now then
+    redis.call("set", "resource:lanes:last-background", background_now, "EX", 86400)
+  end
   return 1
 end
 return 0
@@ -109,6 +136,7 @@ def _update_current_job_resource_meta(
     state: str,
     reason: str | None,
     workload: str | None,
+    execution_token: str | None = None,
 ) -> None:
     try:
         from rq import get_current_job
@@ -118,6 +146,7 @@ def _update_current_job_resource_meta(
             return
         payload = {
             "owner": str(owner),
+            "execution_token": execution_token,
             "state": state,
             "reason": reason,
             "workload": workload,
@@ -130,7 +159,7 @@ def _update_current_job_resource_meta(
         previous = metadata.get("resource_governance")
         if isinstance(previous, dict) and all(
             previous.get(key) == payload.get(key)
-            for key in ("owner", "state", "reason", "workload")
+            for key in ("owner", "execution_token", "state", "reason", "workload")
         ):
             return
         metadata["resource_governance"] = payload
@@ -147,32 +176,28 @@ async def set_resource_state(
     *,
     workload: str | None = None,
     publisher_attempt: str | None = None,
+    execution_token: str | None = None,
 ) -> None:
     """Expose running/waiting/yielded state through RQ and an optional callback."""
 
     if state not in {"running", "waiting", "yielded"}:
         raise ValueError(f"unsupported resource state: {state}")
+    identity = {"execution_token": str(execution_token)} if execution_token is not None else {}
     await asyncio.to_thread(
         _update_current_job_resource_meta,
         owner,
         state,
         reason,
         workload,
+        **identity,
     )
     callback = _resource_state_callback
     if callback is None:
         return
     try:
-        result = (
-            callback(
-                str(owner),
-                state,
-                reason,
-                publisher_attempt=publisher_attempt,
-            )
-            if publisher_attempt is not None
-            else callback(str(owner), state, reason)
-        )
+        if publisher_attempt is not None:
+            identity["publisher_attempt"] = publisher_attempt
+        result = callback(str(owner), state, reason, **identity)
         if inspect.isawaitable(result):
             await result
     except Exception:
@@ -215,38 +240,41 @@ def workload_conflict_group(workload: str) -> str | None:
     return profile.replace("_", "-")
 
 
-def profile_lease_key(workload: str) -> str | None:
+def profile_lease_key(workload: str, *, lane: str | None = None) -> str | None:
     group = workload_conflict_group(workload)
     if group is None:
         return None
     if group == "maintenance":
         return HEAVY_IO_LOCK_KEY
+    if lane is not None:
+        group = f"{lane}-{group}"
     return f"lock:resource-profile:{group}"
 
 
-def resource_budget_token_key(workload: str) -> str | None:
-    """Return the v1 aggregate reservation token for a workload profile."""
+def resource_budget_token_key(workload: str, *, lane: str | None = None) -> str | None:
+    """Separate foreground ingestion from derived work, sharing the RAM floor."""
 
     from app.services.resource_pressure import workload_profile_name
 
     profile = workload_profile_name(workload)
+    if lane not in (None, "ingest", "background"):
+        raise ValueError(f"unsupported resource lane: {lane}")
     if profile == "light":
         return None
     if profile == "maintenance":
         return HEAVY_IO_LOCK_KEY
     if profile == "download_network":
         return RESOURCE_NETWORK_TOKEN_KEY
-    # First rollout: one bounded disk slice at a time.  This is deliberately
-    # stricter than future weighted multi-token admission, but unlike the old
-    # global lock it still permits network and foreground/light work to coexist.
-    return RESOURCE_DISK_TOKEN_KEY
+    if lane == "ingest" or (lane is None and profile == "import_db"):
+        return RESOURCE_DISK_TOKEN_KEY
+    return RESOURCE_BACKGROUND_TOKEN_KEY
 
 
-def resource_lease_keys(workload: str) -> list[str]:
+def resource_lease_keys(workload: str, *, lane: str | None = None) -> list[str]:
     """Fixed-order aggregate token followed by an optional conflict lease."""
 
-    token_key = resource_budget_token_key(workload)
-    profile_key = profile_lease_key(workload)
+    token_key = resource_budget_token_key(workload, lane=lane)
+    profile_key = profile_lease_key(workload, lane=lane)
     return list(dict.fromkeys(key for key in (token_key, profile_key) if key))
 
 
@@ -292,13 +320,14 @@ def local_lock_for_workload(
     workload: str,
     *,
     source_identity: str | None = None,
+    lane: str | None = None,
 ) -> "LocalResourceLocks | None":
     from app.services.resource_pressure import workload_profile_name
 
     profile = workload_profile_name(workload)
     group = workload_conflict_group(workload)
     if group == "maintenance":
-        return LocalResourceLocks([LocalHeavyIOLock()])
+        return LocalResourceLocks([LocalHeavyIOLock()], remote_exclusive=True)
     if profile == "light":
         return None
 
@@ -306,7 +335,13 @@ def local_lock_for_workload(
     # maintenance takes the matching exclusive flock, so profiles may coexist
     # but VACUUM/backup waits for all of them to finish and blocks new slices.
     locks = [LocalHeavyIOLock(shared=True)]
+    token = resource_budget_token_key(workload, lane=lane)
+    if token in (RESOURCE_DISK_TOKEN_KEY, RESOURCE_BACKGROUND_TOKEN_KEY):
+        name = "ingest" if token == RESOURCE_DISK_TOKEN_KEY else "background"
+        locks.append(LocalHeavyIOLock(_local_lock_path().with_name(f"lane-{name}.lock")))
     if group is not None:
+        if lane is not None:
+            group = f"{lane}-{group}"
         locks.append(
             LocalHeavyIOLock(_local_lock_path().with_name(f"profile-{group}.lock"))
         )
@@ -317,7 +352,7 @@ def local_lock_for_workload(
         locks.append(
             LocalHeavyIOLock(_local_lock_path().with_name(f"source-{digest}.lock"))
         )
-    return LocalResourceLocks(locks)
+    return LocalResourceLocks(locks, remote_exclusive=token == RESOURCE_BACKGROUND_TOKEN_KEY)
 
 
 def local_source_lock(source_identity: str) -> "LocalResourceLocks":
@@ -389,8 +424,9 @@ class LocalHeavyIOLock:
 class LocalResourceLocks:
     """Fixed-order maintenance barrier plus one profile/source mutex."""
 
-    def __init__(self, locks: list[LocalHeavyIOLock]) -> None:
+    def __init__(self, locks: list[LocalHeavyIOLock], *, remote_exclusive: bool = False) -> None:
         self.locks = locks
+        self.remote_exclusive = remote_exclusive
 
     @property
     def path(self) -> Path:
@@ -405,6 +441,13 @@ class LocalResourceLocks:
                         held.release()
                     return False
                 acquired.append(lock)
+            from app.services.remote_search_flight import read_marker
+
+            marker = read_marker()
+            if marker and (self.remote_exclusive or marker.get("profile") == "maintenance"):
+                for held in reversed(acquired):
+                    held.release()
+                return False
             return True
         except BaseException:
             for held in reversed(acquired):
@@ -516,25 +559,30 @@ def _adaptive_poll_seconds(attempt: int, initial: float) -> float:
     return max(2.0, min(30.0, base * random.uniform(0.85, 1.15)))
 
 
-async def _wait_for_resource_event(workload: str, seconds: float) -> None:
+async def _wait_for_resource_event(workload: str, seconds: float, *, task_id: str | None = None) -> None:
     """Wait for a mode/budget event, using timeout when pub/sub is unavailable."""
 
     pubsub = None
+    deadline = time.monotonic() + max(0.05, seconds)
     try:
         from app.services.resource_pressure import RESOURCE_CONTROL_CHANNEL
 
         pubsub = _get_lease_redis().pubsub(ignore_subscribe_messages=False)
-        pubsub.subscribe(
+        channels = [
             RESOURCE_CONTROL_CHANNEL,
             f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload_profile_channel(workload)}",
-        )
+        ]
+        if task_id:
+            from app.services.redis_pubsub import TaskChannel
+
+            channels.append(TaskChannel.control(task_id))
+        await asyncio.to_thread(pubsub.subscribe, *channels)
         # Redis sends one acknowledgement per subscribed channel.  Leaving the
         # second ACK queued makes the apparent event wait return immediately
         # and turns a critical worker into a subscribe/close busy loop.
         subscribed = 0
-        setup_deadline = time.monotonic() + 1.0
-        while subscribed < 2 and time.monotonic() < setup_deadline:
-            message = await asyncio.to_thread(pubsub.get_message, timeout=0.25)
+        while subscribed < len(channels) and time.monotonic() < deadline:
+            message = await asyncio.to_thread(pubsub.get_message, timeout=min(0.25, max(0, deadline - time.monotonic())))
             if not message:
                 continue
             message_type = str(message.get("type") or "")
@@ -542,7 +590,9 @@ async def _wait_for_resource_event(workload: str, seconds: float) -> None:
                 subscribed += 1
             elif message_type in {"message", "pmessage"}:
                 return
-        await asyncio.to_thread(pubsub.get_message, timeout=max(0.05, seconds))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            await asyncio.to_thread(pubsub.get_message, timeout=remaining)
         return
     except Exception:
         logger.debug("Resource event wait unavailable", exc_info=True)
@@ -552,7 +602,9 @@ async def _wait_for_resource_event(workload: str, seconds: float) -> None:
                 await asyncio.to_thread(pubsub.close)
             except Exception:
                 pass
-    await asyncio.sleep(max(0.05, seconds))
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        await asyncio.sleep(remaining)
 
 
 def workload_profile_channel(workload: str) -> str:
@@ -604,7 +656,7 @@ async def wait_for_resource_capacity(
         )
         await _wait_for_resource_event(
             workload,
-            _adaptive_poll_seconds(attempt, poll_seconds),
+            2.0 if workload_profile_channel(workload) == "import_db" else _adaptive_poll_seconds(attempt, poll_seconds),
         )
         attempt += 1
 
@@ -662,35 +714,55 @@ class RenewableRedisLease:
         self._renew_thread: threading.Thread | None = None
 
     async def _release_keys(self, keys: list[str]) -> None:
+        released = False
         for key in reversed(keys):
             try:
-                await asyncio.to_thread(
+                removed = await asyncio.to_thread(
                     self.redis.eval,
                     _RELEASE_SCRIPT,
                     1,
                     key,
                     self.lease_value,
                 )
+                released = bool(removed) or released
             except Exception:
                 logger.warning("Failed to release Redis lease %s", key, exc_info=True)
+        if released:
+            try:
+                from app.services.resource_pressure import RESOURCE_CONTROL_CHANNEL
+
+                await asyncio.to_thread(
+                    self.redis.publish,
+                    RESOURCE_CONTROL_CHANNEL,
+                    json.dumps({"type": "resource_released", "workload": self.workload}),
+                )
+            except Exception:
+                # Capacity is already released; timeout remains the wake fallback.
+                logger.debug("Unable to publish resource release", exc_info=True)
 
     async def try_acquire(self) -> bool:
         acquired: list[str] = []
         self.denial_reason = None
         try:
+            from app.services.remote_search_flight import reconcile_reservation, reserve_memory
+
+            marker = await asyncio.to_thread(reconcile_reservation, self.redis)
+            if marker and (marker.get("profile") == "maintenance" or HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
+                self.denial_reason = "remote_search_in_flight"
+                return False
             for key in self.keys:
                 if key == self.reservation_key:
                     reserve_keys = list(
                         dict.fromkeys(
                             [
                                 key,
-                                RESOURCE_NETWORK_TOKEN_KEY,
-                                RESOURCE_DISK_TOKEN_KEY,
+                                *RESOURCE_RESERVATION_KEYS,
                             ]
                         )
                     )
                     result = await asyncio.to_thread(
-                        self.redis.eval,
+                        reserve_memory,
+                        self.redis,
                         _RESERVE_SCRIPT,
                         len(reserve_keys),
                         *reserve_keys,
@@ -702,8 +774,12 @@ class RenewableRedisLease:
                     ok = int(result or 0) == 1
                     if not ok:
                         self.denial_reason = (
-                            "resource_reservation_capacity"
+                            "remote_search_in_flight"
+                            if int(result or 0) == -4
+                            else "resource_reservation_capacity"
                             if int(result or 0) in {-1, -2}
+                            else "background_yield_to_ingest"
+                            if int(result or 0) == -3
                             else "resource_reservation_busy"
                         )
                 else:
@@ -820,6 +896,8 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                 HEAVY_IO_LOCK_KEY,
                 RESOURCE_NETWORK_TOKEN_KEY,
                 RESOURCE_DISK_TOKEN_KEY,
+                RESOURCE_BACKGROUND_TOKEN_KEY,
+                "lock:resource-budget:remote-search",
                 *(profile_lease_key(profile) for profile in (
                     "import_db",
                     "image_derive",
@@ -838,7 +916,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
         values = pipeline.execute()
     except Exception as exc:
         return {
-            "mode": "single_disk_token_v1",
+            "mode": RESOURCE_ADMISSION_MODE,
             "active": [],
             "active_count": 0,
             "reserved_bytes": None,
@@ -901,13 +979,18 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
         active.append(lease)
     active.sort(key=lambda value: (str(value.get("profile")), str(value.get("owner"))))
     return {
-        "mode": "single_disk_token_v1",
+        "mode": RESOURCE_ADMISSION_MODE,
         "active": active,
         "active_count": len(active),
         "reserved_bytes": sum(int(value.get("reserved_bytes") or 0) for value in active),
         "network_active": any(RESOURCE_NETWORK_TOKEN_KEY in value["keys"] for value in active),
-        "disk_active": any(RESOURCE_DISK_TOKEN_KEY in value["keys"] for value in active),
-        "maintenance_active": any(HEAVY_IO_LOCK_KEY in value["keys"] for value in active),
+        "disk_active": any(
+            RESOURCE_DISK_TOKEN_KEY in value["keys"] or RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"]
+            for value in active
+        ),
+        "ingest_active": any(RESOURCE_DISK_TOKEN_KEY in value["keys"] for value in active),
+        "background_active": any(RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"] for value in active),
+        "maintenance_active": any(HEAVY_IO_LOCK_KEY in value["keys"] or value.get("profile") == "maintenance" for value in active),
     }
 
 
@@ -922,6 +1005,8 @@ async def heavy_io_slot(
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     redis_client=None,
     publisher_attempt: str | None = None,
+    lane: str | None = None,
+    execution_token: str | None = None,
 ):
     from app.services.resource_pressure import workload_profile_name
 
@@ -948,6 +1033,7 @@ async def heavy_io_slot(
                 reason,
                 workload=workload,
                 publisher_attempt=publisher_attempt,
+                execution_token=execution_token,
             )
             raise HeavyIOUnavailable(
                 "resource_pressure",
@@ -975,12 +1061,13 @@ async def heavy_io_slot(
                     "maintenance_pending",
                     workload=workload,
                     publisher_attempt=publisher_attempt,
+                    execution_token=execution_token,
                 )
                 raise HeavyIOUnavailable("maintenance_pending")
 
     local_lock: LocalResourceLocks | None = None
     keys: list[str] = (
-        resource_lease_keys(workload)
+        resource_lease_keys(workload, lane=lane)
         if not inherited_flock or needs_child_budget_token
         else []
     )
@@ -1001,9 +1088,10 @@ async def heavy_io_slot(
                     "profile_memory_reserve_live",
                     workload=workload,
                     publisher_attempt=publisher_attempt,
+                    execution_token=execution_token,
                 )
                 raise HeavyIOUnavailable("profile_memory_reserve_live")
-            budget_token = resource_budget_token_key(workload)
+            budget_token = resource_budget_token_key(workload, lane=lane)
             lease = RenewableRedisLease(
                 keys,
                 workload=workload,
@@ -1015,10 +1103,7 @@ async def heavy_io_slot(
                 reservation_key=(
                     budget_token
                     if (not inherited_flock or needs_child_budget_token)
-                    and budget_token in {
-                        RESOURCE_NETWORK_TOKEN_KEY,
-                        RESOURCE_DISK_TOKEN_KEY,
-                    }
+                    and budget_token in RESOURCE_RESERVATION_KEYS
                     else None
                 ),
                 reservation_bytes=reservation_bytes,
@@ -1035,6 +1120,7 @@ async def heavy_io_slot(
                     denial_reason,
                     workload=workload,
                     publisher_attempt=publisher_attempt,
+                    execution_token=execution_token,
                 )
                 raise HeavyIOUnavailable(denial_reason)
             else:
@@ -1057,6 +1143,7 @@ async def heavy_io_slot(
                 else local_lock_for_workload(
                     workload,
                     source_identity=source_identity,
+                    lane=lane,
                 )
             )
             if local_lock is not None:
@@ -1075,6 +1162,7 @@ async def heavy_io_slot(
                         "profile_busy",
                         workload=workload,
                         publisher_attempt=publisher_attempt,
+                        execution_token=execution_token,
                     )
                     raise HeavyIOUnavailable("profile_busy")
         logger.info(
@@ -1090,13 +1178,14 @@ async def heavy_io_slot(
             None,
             workload=workload,
             publisher_attempt=publisher_attempt,
+            execution_token=execution_token,
         )
         yield lease
     finally:
-        if lease is not None:
-            await lease.release()
         if local_lock is not None:
             local_lock.release()
+        if lease is not None:
+            await lease.release()
 
 
 @asynccontextmanager
@@ -1109,20 +1198,16 @@ async def adaptive_resource_slice(
     source_identity: str | None = None,
     wait_for_capacity: bool = True,
     cooldown_result: dict[str, float] | None = None,
+    lane: str | None = None,
 ):
-    """Acquire one self-renewing profile slice and cool down lock-free.
+    """Acquire one bounded slice; the caller must schedule the returned delay."""
 
-    Coordinator RQ jobs are deliberately classified as ``light`` in the
-    parent worker.  This child-side context therefore owns the renewable Redis
-    reservation as well as the POSIX profile lock for exactly one bounded
-    action.  Resource waits happen before either is held; enforce-mode duty
-    cycle sleep happens after both are released.
-    """
+    if cooldown_result is None:
+        raise ValueError("adaptive_resource_slice requires a cooldown_result continuation owner")
 
     from app.services.resource_pressure import (
         current_profile_slice_limits,
         profile_slice_cooldown_seconds,
-        sleep_for_profile_slice_cooldown,
     )
 
     attempt = 0
@@ -1148,6 +1233,7 @@ async def adaptive_resource_slice(
                     workload,
                     owner,
                     source_identity=source_identity,
+                    **({"lane": lane} if lane is not None else {}),
                 )
             )
         except HeavyIOUnavailable as error:
@@ -1182,22 +1268,13 @@ async def adaptive_resource_slice(
             "slice_complete",
             workload=workload,
         )
-        if cooldown_result is not None:
-            cooldown_result["seconds"] = profile_slice_cooldown_seconds(
-                snapshot,
-                elapsed_seconds=elapsed,
-                # At 10% a 20-second slice needs 180 seconds idle.  Capping at
-                # 30 would silently turn the promised 10% budget into 40%.
-                max_seconds=300.0,
-                workload=workload,
-            )
-        else:
-            await sleep_for_profile_slice_cooldown(
-                snapshot,
-                elapsed_seconds=elapsed,
-                max_seconds=300.0,
-                workload=workload,
-            )
+        cooldown_result["seconds"] = profile_slice_cooldown_seconds(
+            snapshot,
+            elapsed_seconds=elapsed,
+            # Preserve the 10% duty cycle outside workers and transactions.
+            max_seconds=300.0,
+            workload=workload,
+        )
 
 
 @asynccontextmanager
@@ -1276,10 +1353,7 @@ async def try_heavy_io_slot(
                 redis_client=redis_client,
                 reservation_key=(
                     budget_token
-                    if budget_token in {
-                        RESOURCE_NETWORK_TOKEN_KEY,
-                        RESOURCE_DISK_TOKEN_KEY,
-                    }
+                    if budget_token in RESOURCE_RESERVATION_KEYS
                     else None
                 ),
                 reservation_bytes=reservation_bytes,
@@ -1325,10 +1399,10 @@ async def try_heavy_io_slot(
         # intentionally no child Redis lease, but admission did succeed.
         yield lease if lease is not None else True
     finally:
-        if lease is not None:
-            await lease.release()
         if local_lock is not None:
             local_lock.release()
+        if lease is not None:
+            await lease.release()
 
 
 def _rq_owner(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:

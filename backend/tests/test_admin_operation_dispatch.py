@@ -33,6 +33,170 @@ def _clear_rq_task(redis_client, *task_ids) -> None:
         redis_client.delete(*set(keys))
 
 
+@pytest.mark.parametrize(
+    ("rq_status", "expected_publications"),
+    [
+        ("queued", [("resource:work:light", "queued")]),
+        ("scheduled", []),
+    ],
+)
+def test_admin_recovery_wakes_only_existing_queued_delivery(
+    monkeypatch,
+    rq_status,
+    expected_publications,
+):
+    from app import database
+    from app.services import operations
+
+    task_id = uuid4()
+    rq_job_id = f"admin-{task_id}-attempt-1"
+    dispatch = {
+        "attempt": 1,
+        "rq_job_id": rq_job_id,
+        "operation_type": "admin-search-reindex",
+        "queue_name": "maintenance",
+        "job_timeout": 60,
+        "publication_state": operations.ADMIN_DISPATCH_PENDING,
+    }
+    task = SimpleNamespace(
+        id=task_id,
+        kind="admin",
+        operation_type="admin-search-reindex",
+        status="enqueued",
+        rq_job_id=rq_job_id,
+        meta={operations.ADMIN_DISPATCH_META_KEY: dispatch},
+        result_data={},
+        last_heartbeat_at=None,
+    )
+
+    class DB:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: task)
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class Redis:
+        def __init__(self):
+            self.publications = []
+
+        def publish(self, channel, payload):
+            self.publications.append((channel, payload))
+            return 1
+
+    redis = Redis()
+    existing = SimpleNamespace(get_status=lambda refresh=True: rq_status)
+    monkeypatch.setattr(database, "async_session", lambda: DB())
+    monkeypatch.setattr(
+        operations,
+        "_fetch_admin_rq",
+        lambda *_args, **_kwargs: existing,
+    )
+
+    outcome = asyncio.run(
+        operations.publish_admin_operation(
+            task_id,
+            1,
+            redis_client=redis,
+        )
+    )
+
+    assert outcome == "existing"
+    assert redis.publications == expected_publications
+
+
+@pytest.mark.asyncio
+async def test_admin_existing_wake_does_not_block_event_loop_or_outcome(monkeypatch):
+    from app import database
+    from app.services import operations
+
+    task_id = uuid4()
+    rq_job_id = f"admin-{task_id}-attempt-1"
+    dispatch = {
+        "attempt": 1,
+        "rq_job_id": rq_job_id,
+        "operation_type": "admin-search-reindex",
+        "queue_name": "maintenance",
+        "job_timeout": 60,
+        "publication_state": operations.ADMIN_DISPATCH_PENDING,
+    }
+    task = SimpleNamespace(
+        id=task_id,
+        kind="admin",
+        operation_type="admin-search-reindex",
+        status="enqueued",
+        rq_job_id=rq_job_id,
+        meta={operations.ADMIN_DISPATCH_META_KEY: dispatch},
+        result_data={},
+        last_heartbeat_at=None,
+    )
+
+    class DB:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: task)
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class Redis:
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.progressed_before_return = []
+
+        def publish(self, _channel, _payload):
+            self.started.set()
+            self.progressed_before_return.append(self.release.wait(timeout=0.5))
+            raise OSError("wake unavailable")
+
+    async def release_stalled_wake():
+        while not redis.started.is_set():
+            await asyncio.sleep(0)
+        redis.release.set()
+
+    redis = Redis()
+    existing = SimpleNamespace(get_status=lambda refresh=True: "queued")
+    monkeypatch.setattr(database, "async_session", lambda: DB())
+    monkeypatch.setattr(
+        operations,
+        "_fetch_admin_rq",
+        lambda *_args, **_kwargs: existing,
+    )
+
+    outcome, _ = await asyncio.gather(
+        operations.publish_admin_operation(
+            task_id,
+            1,
+            redis_client=redis,
+        ),
+        release_stalled_wake(),
+    )
+
+    assert outcome == "existing"
+    assert redis.progressed_before_return == [True]
+    assert task.meta[operations.ADMIN_DISPATCH_META_KEY]["publication_state"] == (
+        operations.ADMIN_DISPATCH_PUBLISHED
+    )
+
+
 @pytest.mark.asyncio
 async def test_file_publication_finalizer_survives_outer_cancellation():
     """Lease-loss cancellation must wait for the fenced final commit to settle."""
@@ -994,11 +1158,16 @@ async def test_operation_reads_are_postgresql_first_when_redis_is_down(monkeypat
     from app.api.admin import data as data_api
     from app.database import async_session, engine
     from app.services import operations
+    from app.models.user import User
+    from tests.test_admin_slow_operations import _seed_user
 
     task_id = None
+    username = f"dispatch_read_{uuid4().hex}"
     try:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            await _seed_user(db, username, permissions=["system"])
+            user = (await db.execute(select(User).where(User.username == username))).scalar_one()
             prepared = await operations.prepare_admin_operation(
                 db,
                 operation_type="admin-search-reindex",
@@ -1017,14 +1186,16 @@ async def test_operation_reads_are_postgresql_first_when_redis_is_down(monkeypat
             "get_redis",
             lambda: (_ for _ in ()).throw(redis_lib.ConnectionError("redis down")),
         )
-        detail = await data_api.get_admin_operation(str(task_id))
-        listing = await data_api.list_active_operations()
+        detail = await data_api.get_admin_operation(str(task_id), user=user)
+        listing = await data_api.list_active_operations(user=user)
         assert detail["job_id"] == str(task_id)
         assert detail["status"] == "enqueued"
         assert [item["job_id"] for item in listing["operations"]] == [str(task_id)]
     finally:
         async with async_session() as db:
             await _clear_dispatch_rows(db)
+            await db.execute(delete(User).where(User.username == username))
+            await db.commit()
         await engine.dispose()
 
 
@@ -1115,11 +1286,10 @@ async def test_cleaning_danbooru_and_job_diagnostic_starts_are_durable_without_r
     monkeypatch.setattr(operations, "get_redis", lambda: unavailable)
     monkeypatch.setattr(reference_api, "get_redis", lambda: unavailable)
     monkeypatch.setattr(settings_api, "get_redis", lambda: unavailable)
-    monkeypatch.setattr(
-        import_runner,
-        "cleanup_metadata_jsons",
-        lambda _root: asyncio.sleep(0, result=7),
-    )
+    async def forbidden_cleanup(_root):
+        raise AssertionError("HTTP admission must not perform metadata cleanup")
+
+    monkeypatch.setattr(import_runner, "cleanup_metadata_jsons", forbidden_cleanup)
     monkeypatch.setattr(
         reference_api,
         "_precheck_pixiv_ids",

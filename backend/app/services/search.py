@@ -11,8 +11,9 @@ import asyncio
 import base64
 from collections import defaultdict
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timezone
+from difflib import SequenceMatcher
 import hashlib
 import json
 import logging
@@ -20,6 +21,7 @@ import math
 import struct
 import tempfile
 import time as monotonic_time
+import unicodedata
 from pathlib import PurePosixPath
 from threading import Lock
 from typing import Any, Awaitable, BinaryIO, Callable, Iterable
@@ -30,7 +32,7 @@ from weakref import WeakKeyDictionary, WeakValueDictionary
 from meilisearch_python_sdk import Client as MeiliClient
 from meilisearch_python_sdk.models.search import SearchParams
 from meilisearch_python_sdk.models.settings import MeilisearchSettings
-from sqlalchemy import String, and_, cast, exists, func, literal_column, not_, or_, select
+from sqlalchemy import String, and_, case, cast, exists, func, literal_column, not_, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +42,7 @@ from app.models import (
     Asset,
     AssetSource,
     Creator,
+    CreatorAlias,
     DownloadJob,
     ImportJob,
     SourceCreator,
@@ -48,6 +51,8 @@ from app.models import (
     SubscriptionSource,
     Tag,
     TaskRun,
+    UserSubscription,
+    UserSubscriptionSource,
     Work,
     WorkCurationState,
     WorkSource,
@@ -69,14 +74,10 @@ from app.services.cache import (
 )
 from app.services.search_projection_outbox import (
     ProjectionEvent,
-    claim_projection_events,
-    complete_projection_events,
     complete_projection_versions,
     enqueue_projection_events,
     prune_completed_projection_events,
-    release_projection_events,
     replay_projection_events,
-    retry_projection_events,
 )
 from app.services.search_language import (
     HAS_TARGETS,
@@ -93,13 +94,18 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.creator_aliases import normalize_creator_alias
 from app.services.operations import inaccessible_admin_operation_types_for_permissions
 from app.services.source_search_identity import (
     ParsedSourceURL,
     parse_source_identity,
     parse_source_url,
 )
-from app.services.tasks import task_payload
+from app.services.tasks import (
+    import_job_visibility_condition,
+    task_payload,
+    task_surface_visibility_condition,
+)
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
@@ -122,97 +128,6 @@ class ResolvedSourceURL:
         }.get(target, ())
 
 
-async def _run_profiled_search_slice(
-    owner: str,
-    action: Callable[[Any], Awaitable[Any]],
-    *,
-    workload: str = "search_index",
-    max_work_units: int = 500,
-    max_slice_seconds: float = 20.0,
-) -> Any:
-    """Run one rebuild slice under an adaptive permit, then yield the disk.
-
-    Full rebuilds are long-lived administrative jobs, so an RQ-level lease
-    would recreate the old global lock for all 67k documents.  Each call waits
-    before opening a database session, holds the profile only for one bounded
-    DB/Meili batch, and performs enforce-mode duty-cycle sleep after every
-    Redis/POSIX lease has been released.
-    """
-
-    from app.services.heavy_io import (
-        HeavyIOUnavailable,
-        heavy_io_slot,
-        set_resource_state,
-        wait_for_resource_capacity,
-    )
-    from app.services.resource_pressure import (
-        profile_slice_limits,
-        sleep_for_profile_slice_cooldown,
-    )
-
-    attempt = 0
-    while True:
-        snapshot = await wait_for_resource_capacity(
-            workload=workload,
-            owner=owner,
-        )
-        limits = profile_slice_limits(
-            snapshot,
-            workload,
-            max_work_units=max_work_units,
-            max_slice_seconds=max_slice_seconds,
-        )
-        if not limits.allowed:
-            # The snapshot may have changed between the wait and pure limit
-            # calculation.  Re-enter the event-driven hard gate without
-            # opening a transaction or taking a local flock.
-            continue
-
-        entered = False
-        started = monotonic_time.perf_counter()
-        try:
-            async with heavy_io_slot(workload, owner):
-                entered = True
-                result = await action(limits)
-        except HeavyIOUnavailable:
-            if entered:
-                raise
-            await asyncio.sleep(min(30.0, 2.0 ** min(attempt + 1, 5)))
-            attempt += 1
-            continue
-        except BaseException:
-            if entered:
-                await set_resource_state(
-                    owner,
-                    "yielded",
-                    "slice_failed",
-                    workload=workload,
-                )
-                await sleep_for_profile_slice_cooldown(
-                    snapshot,
-                    elapsed_seconds=(
-                        monotonic_time.perf_counter() - started
-                    ),
-                    max_seconds=300.0,
-                    workload=workload,
-                )
-            raise
-
-        await set_resource_state(
-            owner,
-            "yielded",
-            "slice_complete",
-            workload=workload,
-        )
-        await sleep_for_profile_slice_cooldown(
-            snapshot,
-            elapsed_seconds=monotonic_time.perf_counter() - started,
-            max_seconds=300.0,
-            workload=workload,
-        )
-        return result
-
-
 def _validate_index_namespace(database_url: str, index_prefix: str) -> str:
     database_name = urlparse(database_url).path.lstrip("/").split("?", 1)[0]
     if database_name.endswith("_test") and not index_prefix:
@@ -232,6 +147,7 @@ CREATORS_INDEX = f"{_INDEX_PREFIX}creators"
 TAGS_INDEX = f"{_INDEX_PREFIX}tags"
 REPOSITORIES_INDEX = f"{_INDEX_PREFIX}repositories"
 SUBSCRIPTIONS_INDEX = f"{_INDEX_PREFIX}subscriptions"
+MEMBERSHIPS_INDEX = f"{_INDEX_PREFIX}subscription_memberships_v1"
 
 INDEX_LABELS = {
     WORKS_INDEX: "works",
@@ -239,6 +155,7 @@ INDEX_LABELS = {
     TAGS_INDEX: "tags",
     REPOSITORIES_INDEX: "repositories",
     SUBSCRIPTIONS_INDEX: "subscriptions",
+    MEMBERSHIPS_INDEX: "subscription_memberships",
 }
 
 MEILI_TARGET_INDEX: dict[SearchTarget, str] = {
@@ -251,7 +168,17 @@ MEILI_TARGET_INDEX: dict[SearchTarget, str] = {
 
 INDEX_SETTINGS = {
     WORKS_INDEX: {
-        "searchableAttributes": ["title", "description", "creator_names", "tags", "source_work_ids"],
+        "searchableAttributes": [
+            "title",
+            "description",
+            "creator_names",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "tags",
+            "source_work_ids",
+        ],
         "filterableAttributes": [
             "id",
             "is_nsfw",
@@ -278,9 +205,27 @@ INDEX_SETTINGS = {
         # Without it, equal timestamps/titles can move between offset pages.
         "sortableAttributes": ["posted_ts", "created_ts", "updated_ts", "title", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_work_ids",
+            ],
+        },
     },
     CREATORS_INDEX: {
-        "searchableAttributes": ["name", "display_name", "description", "source_creator_ids"],
+        "searchableAttributes": [
+            "name",
+            "display_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "description",
+            "source_creator_ids",
+        ],
         "filterableAttributes": [
             "id",
             "is_active",
@@ -293,8 +238,17 @@ INDEX_SETTINGS = {
             "created_ts",
             "updated_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_creator_ids",
+            ],
+        },
     },
     TAGS_INDEX: {
         "searchableAttributes": ["normalized_name", "category"],
@@ -306,6 +260,10 @@ INDEX_SETTINGS = {
         "searchableAttributes": [
             "name",
             "creator_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
             "source",
             "source_creator_id",
             "source_url",
@@ -325,11 +283,31 @@ INDEX_SETTINGS = {
             "updated_ts",
             "synced_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_creator_id",
+                "source_url",
+            ],
+        },
     },
     SUBSCRIPTIONS_INDEX: {
-        "searchableAttributes": ["name", "creator_name", "sources", "source_urls", "source_creator_ids"],
+        "searchableAttributes": [
+            "name",
+            "creator_name",
+            "alias_names_current",
+            "alias_names_historical",
+            "alias_identities_current",
+            "alias_identities_historical",
+            "sources",
+            "source_urls",
+            "source_creator_ids",
+        ],
         "filterableAttributes": [
             "id",
             "creator_id",
@@ -344,12 +322,30 @@ INDEX_SETTINGS = {
             "updated_ts",
             "synced_ts",
         ],
-        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts"],
+        "sortableAttributes": ["name_sort", "created_ts", "updated_ts", "synced_ts", "id"],
         "pagination": {"maxTotalHits": 100_000},
+        "nonSeparatorTokens": ["_", "@"],
+        "typoTolerance": {
+            "enabled": True,
+            "disableOnAttributes": [
+                "alias_identities_current",
+                "alias_identities_historical",
+                "source_urls",
+                "source_creator_ids",
+            ],
+        },
     },
 }
 
-WORK_PROJECTION_VERSION = 3
+# One physical index for all actors; identity is the private membership UUID.
+INDEX_SETTINGS[MEMBERSHIPS_INDEX] = {
+    **INDEX_SETTINGS[SUBSCRIPTIONS_INDEX],
+    "searchableAttributes": ["name", "canonical_name", *INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["searchableAttributes"][1:]],
+    "filterableAttributes": [*INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["filterableAttributes"], "user_id", "subscription_id"],
+    "sortableAttributes": [*INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["sortableAttributes"], "subscription_id"],
+}
+
+WORK_PROJECTION_VERSION = 4
 WORK_HYDRATION_QUERY_COUNT = 4
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
@@ -362,8 +358,12 @@ MEILI_DOCUMENT_PAYLOAD_BYTES = 4 * 1024 * 1024
 # turn a successful create/update into a failed rebuild and cleanup cycle.
 MEILI_WRITE_TIMEOUT_SECONDS = 120
 MEILI_TASK_TIMEOUT_MS = 120_000
-MEILI_INCREMENTAL_TASK_TIMEOUT_MS = 30_000
-MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 45_000
+# Incremental writes share the same NAS-backed LMDB as full rebuilds.  A
+# healthy 4 MiB document task can take more than two minutes while Meilisearch
+# compacts or batches adjacent tasks; abandoning it after 30 seconds only
+# resubmits duplicate work and prevents the durable outbox from converging.
+MEILI_INCREMENTAL_TASK_TIMEOUT_MS = 180_000
+MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 240_000
 INDEX_SETTINGS_CACHE_TTL = 30 * 24 * 60 * 60
 INDEX_WRITE_LOCK = "search:index-write"
 INDEX_WRITE_LOCK_TTL_SECONDS = 900
@@ -450,7 +450,7 @@ DEFAULT_SORT = {
     "creators": "name_sort:asc",
     "tags": "usage_count:desc",
     "repositories": "updated_ts:desc",
-    "subscriptions": "updated_ts:desc",
+    "subscriptions": "name_sort:asc",
 }
 
 SORT_FIELD = {
@@ -571,6 +571,24 @@ class SearchBackendUnavailable(RuntimeError):
     pass
 
 
+class NameAnchorsUnavailable(ValueError):
+    """The active reference query cannot expose stable name offsets."""
+
+
+REFERENCE_NAME_ANCHORS = tuple(
+    [
+        {"key": chr(code), "label": chr(code), "kind": "latin"}
+        for code in range(ord("A"), ord("Z") + 1)
+    ]
+    + [
+        {"key": "0-9", "label": "0–9", "kind": "digit"},
+        {"key": "kana", "label": "かな", "kind": "kana"},
+        {"key": "han", "label": "汉", "kind": "han"},
+        {"key": "other", "label": "#", "kind": "other"},
+    ]
+)
+
+
 def _meili_search_semaphore() -> asyncio.BoundedSemaphore:
     """Return one bounded search gate per asyncio event loop."""
 
@@ -677,6 +695,7 @@ async def _refresh_search_index_checkpoints(index_uids: Iterable[str]) -> None:
         TAGS_INDEX: Tag,
         REPOSITORIES_INDEX: SubscriptionSource,
         SUBSCRIPTIONS_INDEX: Subscription,
+        MEMBERSHIPS_INDEX: UserSubscription,
     }
     for index_uid in tuple(dict.fromkeys(index_uids)):
         model = models.get(index_uid)
@@ -768,6 +787,12 @@ def _wait_for_task(
 def _settings_digest(config: dict[str, Any]) -> str:
     payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _meili_document_ids_filter(identities: Iterable[str]) -> str:
+    """Build a Meilisearch 1.12-compatible primary-key batch filter."""
+
+    return f"id IN {json.dumps(list(identities), ensure_ascii=False)}"
 
 
 def _index_revision(index: Any) -> str | None:
@@ -1202,9 +1227,10 @@ def _apply_sql_sort(stmt, query: SearchQuery, model, *, reverse: bool = False):
         direction_asc = not direction_asc
     ordered = column.asc() if direction_asc else column.desc()
     # A deterministic UUID tie-breaker keeps offset pages stable when titles or
-    # timestamps collide.  Explicit NULL placement also prevents the SQL and
-    # indexed paths from changing page boundaries between directions.
-    ordered = ordered.nulls_first() if reverse else ordered.nulls_last()
+    # timestamps collide. Nullable fields need explicit NULL placement for
+    # cursor boundaries; nonnullable fields retain the existing index order.
+    if column.nullable:
+        ordered = ordered.nulls_first() if reverse else ordered.nulls_last()
     identity_order = model.id.asc() if direction_asc else model.id.desc()
     return stmt.order_by(ordered, identity_order)
 
@@ -1303,6 +1329,175 @@ def _free_text(query: SearchQuery) -> str:
     return " ".join(values)
 
 
+def _normalize_reference_name(value: str) -> str:
+    """Match PostgreSQL's reference-list normalization in search documents."""
+
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _alias_projection_fields(aliases: Iterable[Any]) -> dict[str, list[Any]]:
+    name_kinds = {"name", "other_name"}
+    ordered = sorted(
+        aliases,
+        key=lambda item: (
+            not bool(item.is_current),
+            0 if item.kind == "name" else 1 if item.kind == "other_name" else 2,
+            str(item.source),
+            str(item.normalized_value),
+        ),
+    )
+    fields: dict[str, list[Any]] = {
+        "alias_names_current": [],
+        "alias_names_historical": [],
+        "alias_identities_current": [],
+        "alias_identities_historical": [],
+        "alias_records": [],
+    }
+    seen: dict[str, set[str]] = {
+        key: set() for key in fields if key != "alias_records"
+    }
+    for item in ordered:
+        family = "names" if item.kind in name_kinds else "identities"
+        suffix = "current" if item.is_current else "historical"
+        field = f"alias_{family}_{suffix}"
+        normalized = str(item.normalized_value)
+        if normalized not in seen[field]:
+            seen[field].add(normalized)
+            fields[field].append(str(item.value))
+        fields["alias_records"].append(
+            {
+                "value": str(item.value),
+                "normalized_value": normalized,
+                "source": str(item.source),
+                "kind": str(item.kind),
+                "is_current": bool(item.is_current),
+            }
+        )
+    return fields
+
+
+def _merge_alias_projection_fields(
+    projections: Iterable[dict[str, list[Any]]],
+) -> dict[str, list[Any]]:
+    merged = _alias_projection_fields(())
+    seen = {key: set() for key in merged if key != "alias_records"}
+    for projection in projections:
+        for key in seen:
+            for value in projection.get(key, []):
+                normalized = _normalize_reference_name(str(value))
+                if normalized not in seen[key]:
+                    seen[key].add(normalized)
+                    merged[key].append(value)
+        merged["alias_records"].extend(projection.get("alias_records", []))
+    return merged
+
+
+_ALIAS_PROJECTION_FIELDS = (
+    "alias_names_current",
+    "alias_names_historical",
+    "alias_identities_current",
+    "alias_identities_historical",
+    "alias_records",
+)
+
+
+def _strip_alias_projection_fields(hit: dict[str, Any]) -> None:
+    for field in _ALIAS_PROJECTION_FIELDS:
+        hit.pop(field, None)
+
+
+def _decorate_alias_hit(hit: dict[str, Any], query_text: str) -> None:
+    records = list(hit.get("alias_records") or [])
+    query_values = {
+        normalize_creator_alias(query_text, kind="name"),
+        normalize_creator_alias(query_text, kind="account"),
+    } - {""}
+    primary_values = {
+        normalize_creator_alias(str(hit.get(field) or ""), kind="name")
+        for field in ("name", "display_name", "creator_name")
+    } - {""}
+    if query_values & primary_values:
+        _strip_alias_projection_fields(hit)
+        return
+
+    candidates: list[tuple[int, bool, int, dict[str, Any]]] = []
+    for position, record in enumerate(records):
+        normalized = str(record.get("normalized_value") or "")
+        if not normalized:
+            continue
+        if normalized in query_values:
+            match_rank = 0
+            match_type = "exact"
+        elif any(
+            normalized.startswith(value) or value.startswith(normalized)
+            for value in query_values
+            if len(value) >= 2
+        ):
+            match_rank = 1
+            match_type = "prefix"
+        elif record.get("kind") in {"name", "other_name"} and max(
+            (
+                SequenceMatcher(None, value, normalized).ratio()
+                for value in query_values
+            ),
+            default=0.0,
+        ) >= 0.72:
+            match_rank = 2
+            match_type = "fuzzy"
+        else:
+            continue
+        candidates.append(
+            (
+                match_rank,
+                not bool(record.get("is_current")),
+                position,
+                {**record, "match_type": match_type},
+            )
+        )
+    if candidates:
+        selected = min(candidates, key=lambda item: item[:3])[3]
+        hit["matched_identity"] = {
+            key: selected.get(key)
+            for key in (
+                "creator_id",
+                "value",
+                "source",
+                "kind",
+                "is_current",
+                "match_type",
+            )
+        }
+    _strip_alias_projection_fields(hit)
+
+
+def _reference_name_expressions(name_expression: Any) -> tuple[Any, Any, Any]:
+    """Return normalized name, fixed anchor key, and sortable anchor rank."""
+
+    normalized = func.lower(
+        func.normalize(name_expression, literal_column("NFKC"))
+    )
+    initial = func.substr(normalized, 1, 1)
+    is_latin = initial.op("~")(r"^[a-z]$")
+    is_digit = initial.op("~")(r"^[0-9]$")
+    is_kana = initial.op("~")(r"^[\u3040-\u30ff\uff66-\uff9f]$")
+    is_han = initial.op("~")(r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$")
+    anchor_key = case(
+        (is_latin, func.upper(initial)),
+        (is_digit, "0-9"),
+        (is_kana, "kana"),
+        (is_han, "han"),
+        else_="other",
+    )
+    anchor_rank = case(
+        (is_latin, func.ascii(initial) - func.ascii("a")),
+        (is_digit, 26),
+        (is_kana, 27),
+        (is_han, 28),
+        else_=29,
+    )
+    return normalized, anchor_key, anchor_rank
+
+
 def _grouped_qualifiers(query: SearchQuery, target: SearchTarget) -> dict[tuple[str, bool], list[SearchQualifier]]:
     grouped: dict[tuple[str, bool], list[SearchQualifier]] = defaultdict(list)
     for token in query.qualifiers:
@@ -1335,6 +1530,7 @@ def _compile_meili_filter(
     resolved: dict[tuple[str, str], Any],
     *,
     force_sfw: bool,
+    identity_field: str = "id",
 ) -> str | None:
     parts: list[str] = []
     fields = MEILI_FIELD[target]
@@ -1358,11 +1554,11 @@ def _compile_meili_filter(
                 identities = source_url.ids_for(target) if source_url else ()
                 if identities:
                     identity_expression = " OR ".join(
-                        f"id = {_meili_literal(identity)}" for identity in identities
+                        f"{identity_field} = {_meili_literal(identity)}" for identity in identities
                     )
                     expression = f"({identity_expression})"
                 else:
-                    expression = 'id = "__source_url_no_match__"'
+                    expression = f'{identity_field} = "__source_url_no_match__"'
                 expressions.append(f"NOT ({expression})" if negated else expression)
         elif key in fields:
             field = fields[key]
@@ -1392,7 +1588,7 @@ def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     if selected and selected[0] != "relevance":
         field, direction = SORT_FIELD[selected[0]]
         order = [f"{field}:{direction}"]
-        if target == "works" and field != "id":
+        if target in {"works", "creators", "repositories", "subscriptions"} and field != "id":
             order.append(f"id:{direction}")
         return order
     if query.terms or selected == ("relevance",):
@@ -1401,10 +1597,14 @@ def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     if not default:
         return None
     order = [default]
-    if target == "works":
+    if target in {"works", "creators", "repositories", "subscriptions"}:
         direction = default.rsplit(":", 1)[-1]
         order.append(f"id:{direction}")
     return order
+
+
+def _matching_strategy(target: SearchTarget) -> str:
+    return "last" if target == "works" else "all"
 
 
 def _search_hits(result: Any) -> tuple[list[dict], int]:
@@ -1458,6 +1658,116 @@ class SearchService:
             raise SearchPermissionError(query.targets[0])
         return allowed
 
+    async def _exact_creator_aliases_for_value(
+        self,
+        value: str,
+    ) -> list[CreatorAlias]:
+        normalized_values = tuple(
+            {
+                normalize_creator_alias(value, kind="name"),
+                normalize_creator_alias(value, kind="account"),
+            }
+            - {""}
+        )
+        if not normalized_values:
+            return []
+        kind_rank = case(
+            (CreatorAlias.kind == "account", 0),
+            (CreatorAlias.kind == "url_handle", 1),
+            (CreatorAlias.kind == "source_id", 2),
+            (CreatorAlias.kind == "url", 3),
+            (CreatorAlias.kind == "name", 4),
+            else_=5,
+        )
+        return list(
+            (
+                await self.db.execute(
+                    select(CreatorAlias)
+                    .where(CreatorAlias.normalized_value.in_(normalized_values))
+                    .order_by(
+                        CreatorAlias.is_current.desc(),
+                        kind_rank,
+                        CreatorAlias.last_seen_at.desc(),
+                        CreatorAlias.creator_id,
+                    )
+                )
+            ).scalars()
+        )
+
+    async def _exact_creator_aliases(
+        self,
+        query: SearchQuery,
+    ) -> list[CreatorAlias]:
+        if len(query.terms) != 1:
+            return []
+        return await self._exact_creator_aliases_for_value(query.terms[0].value)
+
+    @staticmethod
+    def _parse_exact_alias_query(value: str, scope: SearchScope) -> SearchQuery:
+        """Represent one stored identity as a literal term.
+
+        Stored source identities may legitimately contain query-language
+        punctuation (for example Danbooru aliases with parentheses).  Exact
+        PostgreSQL resolution happens before query-language parsing, so once
+        an entire input value is known to be an identity it must not be
+        reinterpreted as grouping, a qualifier, or multiple natural-language
+        terms.
+        """
+
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        parsed = parse_search_query(f'"{escaped}"', scope)
+        return replace(parsed, raw=value)
+
+    @staticmethod
+    def _alias_filtered_query(
+        query: SearchQuery,
+        creator_ids: Iterable[UUID],
+    ) -> SearchQuery:
+        qualifier_tokens = tuple(query.qualifiers)
+        synthetic = tuple(
+            SearchQualifier(
+                key="creator",
+                value=str(creator_id),
+                negated=False,
+                quoted=False,
+                start=0,
+                end=0,
+            )
+            for creator_id in dict.fromkeys(creator_ids)
+        )
+        return replace(query, tokens=(*qualifier_tokens, *synthetic))
+
+    @staticmethod
+    def _attach_exact_alias_matches(
+        target: SearchTarget,
+        group: dict,
+        aliases: Iterable[CreatorAlias],
+    ) -> None:
+        by_creator: dict[str, CreatorAlias] = {}
+        for alias in aliases:
+            by_creator.setdefault(str(alias.creator_id), alias)
+        for item in group.get("items", []):
+            if target == "creators":
+                creator_ids = (str(item.get("id") or ""),)
+            elif target == "works":
+                creator_ids = tuple(str(value) for value in item.get("creator_ids") or ())
+            else:
+                creator_ids = (str(item.get("creator_id") or ""),)
+            alias = next(
+                (by_creator[value] for value in creator_ids if value in by_creator),
+                None,
+            )
+            if alias is None:
+                continue
+            item["matched_identity"] = {
+                "creator_id": str(alias.creator_id),
+                "value": alias.value,
+                "source": alias.source,
+                "kind": alias.kind,
+                "is_current": bool(alias.is_current),
+                "match_type": "exact",
+            }
+
     async def _resolve_creator(self, value: str, token: SearchQualifier) -> tuple[str, list[str]]:
         try:
             creator_id = UUID(value)
@@ -1468,14 +1778,28 @@ class SearchService:
             if row:
                 return str(row.id), []
 
-        normalized = value.strip().lower()
+        normalized = normalize_creator_alias(value, kind="name")
+        account_normalized = normalize_creator_alias(value, kind="account")
         rows = await self.db.execute(
             select(Creator.id, Creator.name, Creator.display_name)
             .outerjoin(SourceCreator, SourceCreator.creator_id == Creator.id)
             .where(or_(
-                func.lower(Creator.name) == normalized,
-                func.lower(func.coalesce(Creator.display_name, "")) == normalized,
+                func.lower(func.normalize(Creator.name, literal_column("NFKC"))) == normalized,
+                func.lower(
+                    func.normalize(
+                        func.coalesce(Creator.display_name, ""),
+                        literal_column("NFKC"),
+                    )
+                )
+                == normalized,
                 func.lower(SourceCreator.source_creator_id) == normalized,
+                Creator.id.in_(
+                    select(CreatorAlias.creator_id).where(
+                        CreatorAlias.normalized_value.in_(
+                            tuple({normalized, account_normalized})
+                        )
+                    )
+                ),
             ))
             .distinct()
             .limit(6)
@@ -1611,6 +1935,25 @@ class SearchService:
         repository_ids: set[UUID] = set()
         subscription_ids: set[UUID] = set()
         work_ids: set[UUID] = set()
+
+        alias_values = {
+            normalize_creator_alias(parsed.normalized_url, kind="url"),
+        }
+        if hint:
+            alias_values.add(normalize_creator_alias(hint, kind="account"))
+        creator_ids.update(
+            (
+                await self.db.execute(
+                    select(CreatorAlias.creator_id)
+                    .where(
+                        CreatorAlias.source == parsed.source,
+                        CreatorAlias.normalized_value.in_(tuple(alias_values)),
+                        CreatorAlias.kind.in_({"url", "url_handle", "account"}),
+                    )
+                    .distinct()
+                )
+            ).scalars()
+        )
 
         source_creator_matches = [
             _normalized_url_expression(SourceCreator.source_url) == normalized,
@@ -1944,6 +2287,9 @@ class SearchService:
         force_sfw: bool = False,
         kind: str | None = None,
         cursor: str | None = None,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         request_started_at = monotonic_time.perf_counter()
         # ``kind`` remains a thin adapter for internal callers while all
@@ -1956,9 +2302,19 @@ class SearchService:
                 "repositories": "repositories",
                 "subscriptions": "subscriptions",
             }.get(kind, scope)  # type: ignore[assignment]
-        parsed = parse_search_query(query, scope)
+        # A complete stored identity is authoritative and must be resolved
+        # before the search language interprets punctuation or whitespace.
+        # This also keeps aliases such as ``circle_name_(old)`` searchable
+        # without weakening the parser for ordinary free-text expressions.
+        raw_exact_aliases = await self._exact_creator_aliases_for_value(query)
+        url_input = query.strip().casefold().startswith(("http://", "https://"))
+        parsed = (
+            self._parse_exact_alias_query(query, scope)
+            if raw_exact_aliases and not url_input
+            else parse_search_query(query, scope)
+        )
         parsed_at = monotonic_time.perf_counter()
-        permission_set = permissions or {"library", "subscriptions", "tasks", "curation"}
+        permission_set = permissions if permissions is not None else {"library", "subscriptions", "tasks", "curation"}
         targets = self._allowed_targets(parsed, permission_set)
         if parsed.values("is") and "trashed" in parsed.values("is") and "curation" not in permission_set:
             raise SearchPermissionError("works:trashed")
@@ -1974,6 +2330,76 @@ class SearchService:
             "index_lag": None,
         }
 
+        exact_aliases = raw_exact_aliases or await self._exact_creator_aliases(parsed)
+        exact_alias_targets = tuple(
+            target
+            for target in targets
+            if target in {"works", "creators", "repositories", "subscriptions"}
+            and not (target == "subscriptions" and user_id is not None)
+        )
+        exact_alias_search = bool(exact_aliases and exact_alias_targets)
+        if exact_alias_search:
+            alias_query = self._alias_filtered_query(
+                parsed,
+                (alias.creator_id for alias in exact_aliases),
+            )
+            alias_creator_count = len({alias.creator_id for alias in exact_aliases})
+            alias_rank: dict[str, int] = {}
+            for position, alias in enumerate(exact_aliases):
+                alias_rank.setdefault(str(alias.creator_id), position)
+            for target in exact_alias_targets:
+                target_offset = offset if len(exact_alias_targets) == 1 else 0
+                target_limit = (
+                    min(limit, 10) if len(exact_alias_targets) > 1 else limit
+                )
+                # A unique identity does not need client-side creator ranking.
+                # Page it at the requested offset so prolific creators remain
+                # searchable beyond the first 1,000 related works.  Ambiguous
+                # aliases still fetch a bounded candidate window so current
+                # identities can be ranked ahead of historical ones.
+                direct_page = alias_creator_count == 1 or bool(parsed.values("sort"))
+                fetch_offset = target_offset if direct_page else 0
+                fetch_limit = (
+                    target_limit
+                    if direct_page
+                    else min(
+                        1000,
+                        max(target_offset + target_limit, alias_creator_count * 10),
+                    )
+                )
+                if target == "works":
+                    group = await self._search_works_db(
+                        alias_query,
+                        resolved,
+                        fetch_offset,
+                        fetch_limit,
+                        force_sfw=force_sfw,
+                        cursor=cursor,
+                    )
+                else:
+                    group = await self._search_identity_reference_db(
+                        target,
+                        alias_query,
+                        resolved,
+                        fetch_offset,
+                        fetch_limit,
+                        allowed_subscription_ids=allowed_subscription_ids,
+                        allowed_repository_ids=allowed_repository_ids,
+                        user_id=user_id,
+                    )
+                self._attach_exact_alias_matches(target, group, exact_aliases)
+                if not direct_page:
+                    group["items"].sort(
+                        key=lambda item: alias_rank.get(
+                            str((item.get("matched_identity") or {}).get("creator_id") or ""),
+                            len(alias_rank),
+                        )
+                    )
+                    group["items"] = group["items"][
+                        target_offset:target_offset + target_limit
+                    ]
+                groups[target] = group
+
         # Works list queries with no free text use PostgreSQL.  This keeps the
         # high-traffic gallery independent from the search index while still
         # preserving the public compound-search contract.
@@ -1983,7 +2409,22 @@ class SearchService:
             token.key in {"uid", "pid", "url"}
             for token in parsed.qualifiers
         )
-        if not text and has_source_identity:
+        if (
+            not text
+            and len(targets) == 1
+            and targets[0] in {"creators", "subscriptions"}
+        ):
+            target = targets[0]
+            groups[target] = await self._search_browse_reference_db(
+                target,
+                parsed,
+                resolved,
+                offset,
+                limit,
+                allowed_subscription_ids=allowed_subscription_ids,
+                user_id=user_id,
+            )
+        elif not text and has_source_identity:
             for target in targets:
                 target_offset = offset if len(targets) == 1 else 0
                 target_limit = min(limit, 10) if len(targets) > 1 else limit
@@ -2003,6 +2444,9 @@ class SearchService:
                         resolved,
                         target_offset,
                         target_limit,
+                        allowed_subscription_ids=allowed_subscription_ids,
+                        allowed_repository_ids=allowed_repository_ids,
+                        user_id=user_id,
                     )
         elif not text and targets == ("works",) and self._works_db_compatible(parsed):
             groups["works"], execution = await self._hedged_structured_works_search(
@@ -2016,13 +2460,53 @@ class SearchService:
         elif not text and not has_filters and len(targets) == 1:
             target = targets[0]
             if target in ("creators", "subscriptions", "tags", "repositories"):
-                groups[target] = await self._search_reference_db(target, offset, limit)
+                groups[target] = await self._search_reference_db(
+                    target,
+                    offset,
+                    limit,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                    user_id=user_id,
+                )
 
-        meili_targets = [t for t in targets if t in MEILI_TARGET_INDEX and t not in groups]
+        # Meilisearch 1.12 supports attribute-level typo controls but not the
+        # later ``disableOnNumbers`` setting.  A single numeric reference term
+        # is therefore authoritative in PostgreSQL: an exact stored identity
+        # was handled above, while an unknown number must not degrade into a
+        # one-digit typo match against another creator identity.
+        numeric_identity_literal = (
+            not parsed.qualifiers
+            and len(parsed.terms) == 1
+            and unicodedata.normalize(
+                "NFKC",
+                parsed.terms[0].value.strip(),
+            ).isdecimal()
+        )
+        if numeric_identity_literal and not exact_alias_search:
+            for target in targets:
+                if target in {"creators", "repositories", "subscriptions"} and not (target == "subscriptions" and user_id is not None):
+                    groups.setdefault(target, {"total": 0, "items": []})
+
+        meili_targets = [
+            t for t in targets if t in MEILI_TARGET_INDEX and t not in groups
+            and (not exact_alias_search or (t == "subscriptions" and user_id is not None))
+        ]
         if cursor and meili_targets:
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
-            groups.update(await self._search_meili(parsed, meili_targets, resolved, offset, limit, force_sfw))
+            groups.update(
+                await self._search_meili(
+                    parsed,
+                    meili_targets,
+                    resolved,
+                    offset,
+                    limit,
+                    force_sfw,
+                    allowed_subscription_ids=allowed_subscription_ids,
+                    allowed_repository_ids=allowed_repository_ids,
+                    user_id=user_id,
+                )
+            )
             execution.update({
                 "winner": "meilisearch",
                 "consistency": "fulltext_index_required",
@@ -2035,9 +2519,23 @@ class SearchService:
                 offset,
                 limit,
                 permissions=permission_set,
+                user_id=user_id,
             )
         if "scheduler" in targets:
-            groups["scheduler"] = await self._search_scheduler(parsed, resolved, offset, limit)
+            groups["scheduler"] = await self._search_scheduler(
+                parsed,
+                resolved,
+                offset,
+                limit,
+                user_id=user_id,
+            )
+
+        # Alias projection fields exist only to drive Meilisearch relevance
+        # and explain which identity matched.  Never expose the raw projection
+        # arrays through the public search response.
+        for group in groups.values():
+            for item in group.get("items", []):
+                _strip_alias_projection_fields(item)
 
         first_target = targets[0]
         total = groups.get(first_target, {}).get("total", 0) if len(targets) == 1 else groups.get("works", {}).get("total", 0)
@@ -2085,13 +2583,18 @@ class SearchService:
         offset: int,
         limit: int,
         force_sfw: bool,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict[str, dict]:
         text = _free_text(query)
         timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
         deadline = monotonic_time.perf_counter() + timeout_seconds
         prepared: list[tuple[SearchTarget, str, dict[str, Any]]] = []
         for target in targets:
-            index_uid = MEILI_TARGET_INDEX[target]
+            membership_target = target == "subscriptions" and user_id is not None
+            index_uid = MEMBERSHIPS_INDEX if membership_target else MEILI_TARGET_INDEX[target]
             target_limit = (
                 min(limit, 10)
                 if query.scope == "global" and len(targets) > 1
@@ -2100,14 +2603,49 @@ class SearchService:
             search_kwargs: dict[str, Any] = {
                 "offset": offset if len(targets) == 1 else 0,
                 "limit": target_limit,
+                "matching_strategy": _matching_strategy(target),
             }
             filter_expression = _compile_meili_filter(
                 query,
                 target,
                 resolved,
                 force_sfw=force_sfw,
+                identity_field="subscription_id" if membership_target else "id",
             )
+            if membership_target:
+                ownership_filter = f"user_id = {_meili_literal(user_id)}"
+                filter_expression = f"({filter_expression}) AND {ownership_filter}" if filter_expression else ownership_filter
+            if target == "subscriptions" and not membership_target and allowed_subscription_ids is not None:
+                if allowed_subscription_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(subscription_id))}"
+                        for subscription_id in sorted(
+                            allowed_subscription_ids, key=str
+                        )
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_subscription__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
+            if target == "repositories" and allowed_repository_ids is not None:
+                if allowed_repository_ids:
+                    ownership_filter = "(" + " OR ".join(
+                        f"id = {_meili_literal(str(repository_id))}"
+                        for repository_id in sorted(allowed_repository_ids, key=str)
+                    ) + ")"
+                else:
+                    ownership_filter = 'id = "__no_owned_repository__"'
+                filter_expression = (
+                    f"({filter_expression}) AND {ownership_filter}"
+                    if filter_expression
+                    else ownership_filter
+                )
             sort = _meili_sort(query, target)
+            if membership_target and sort:
+                sort = [value.replace("id:", "subscription_id:") if value.startswith("id:") else value for value in sort]
             if filter_expression:
                 search_kwargs["filter"] = filter_expression
             if sort:
@@ -2133,27 +2671,33 @@ class SearchService:
                 raise TimeoutError
 
             def _run_searches(socket_timeout: float = remaining) -> list[Any]:
+                from types import SimpleNamespace
+                requests = [(uid, kwargs) for _target, uid, kwargs in prepared]
+                count_positions = {}
+                for position, (_target, uid, kwargs) in enumerate(prepared):
+                    if uid == MEMBERSHIPS_INDEX:
+                        count_positions[position] = len(requests)
+                        count_kwargs = {key: value for key, value in kwargs.items() if key not in {"offset", "limit", "sort"}}
+                        count_kwargs.update(page=1, hits_per_page=1, attributes_to_retrieve=["id"])
+                        requests.append((uid, count_kwargs))
                 client = _client(timeout_seconds=socket_timeout)
                 multi_search = getattr(client, "multi_search", None)
-                if len(prepared) > 1 and callable(multi_search):
-                    return list(multi_search([
-                        SearchParams(
-                            index_uid=index_uid,
-                            query=text,
-                            **search_kwargs,
-                        )
-                        for _target, index_uid, search_kwargs in prepared
+                if len(requests) > 1 and callable(multi_search):
+                    results = list(multi_search([
+                        SearchParams(index_uid=uid, query=text, **kwargs)
+                        for uid, kwargs in requests
                     ]))
-
-                # Compatibility fallback for older SDKs.  Divide the socket
-                # budget across targets so a cancelled executor thread cannot
-                # continue issuing N full-timeout requests in the background.
-                per_target_timeout = max(0.1, socket_timeout / len(prepared))
-                fallback_client = _client(timeout_seconds=per_target_timeout)
-                return [
-                    fallback_client.index(index_uid).search(text, **search_kwargs)
-                    for _target, index_uid, search_kwargs in prepared
-                ]
+                else:
+                    client = _client(timeout_seconds=max(0.1, socket_timeout / len(requests)))
+                    results = [client.index(uid).search(text, **kwargs) for uid, kwargs in requests]
+                if len(results) != len(requests):
+                    raise RuntimeError("Meilisearch returned an incomplete multi-search response")
+                for position, count_position in count_positions.items():
+                    total = getattr(results[count_position], "total_hits", None)
+                    if total is None:
+                        raise RuntimeError("Meilisearch did not return an exact membership count")
+                    results[position] = SimpleNamespace(hits=results[position].hits, estimated_total_hits=int(total))
+                return results[:len(prepared)]
 
             results = await asyncio.wait_for(
                 asyncio.to_thread(_run_searches),
@@ -2168,6 +2712,27 @@ class SearchService:
             output: dict[str, dict] = {}
             for (target, _index_uid, _kwargs), result in zip(prepared, results):
                 hits, total = _search_hits(result)
+                if target == "subscriptions" and user_id is not None:
+                    # A stale document cannot re-grant a removed membership.
+                    # Hydrate this page, never the actor's complete membership set.
+                    ids = [UUID(str(hit["id"])) for hit in hits]
+                    live = {str(member.id): member for member in (await self.db.execute(
+                        select(UserSubscription).where(UserSubscription.id.in_(ids), UserSubscription.user_id == user_id)
+                    )).scalars()} if ids else {}
+                    safe_hits = []
+                    for hit in hits:
+                        member = live.get(str(hit["id"]))
+                        if member is None or str(member.subscription_id) != str(hit.get("subscription_id")):
+                            continue
+                        hit["id"] = str(member.subscription_id)
+                        hit["name"] = member.name
+                        for field in ("user_id", "subscription_id", "canonical_name", "projection_hash", "projection_version"):
+                            hit.pop(field, None)
+                        safe_hits.append(hit)
+                    total = max(0, total - (len(hits) - len(safe_hits)))
+                    hits = safe_hits
+                for hit in hits:
+                    _decorate_alias_hit(hit, text)
                 if target == "works" and query.scope == "works":
                     for hit in hits:
                         # Preserve the public document shape without loading the
@@ -2215,8 +2780,12 @@ class SearchService:
         visibility: str = "all",
         *,
         permissions: set[str] | frozenset[str],
+        user_id: int | None = None,
+        operation_type: str | None = None,
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
+        if operation_type:
+            conditions.append(TaskRun.operation_type == operation_type)
         excluded_admin_operation_types = (
             inaccessible_admin_operation_types_for_permissions(permissions)
         )
@@ -2226,6 +2795,13 @@ class SearchService:
                 TaskRun.operation_type.is_(None),
                 TaskRun.operation_type.not_in(excluded_admin_operation_types),
             ))
+        if user_id is not None:
+            conditions.append(
+                task_surface_visibility_condition(
+                    user_id,
+                    include_global_system_tasks="system" in permissions,
+                )
+            )
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2281,6 +2857,8 @@ class SearchService:
             stmt = stmt.order_by(TaskRun.created_at.desc())
         total = int((await self.db.execute(count_stmt)).scalar_one())
         rows = (await self.db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, rows, user_id=user_id)
         return {"total": total, "items": [task_payload(row) for row in rows]}
 
     async def search_tasks(
@@ -2291,6 +2869,8 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         permissions: set[str] | frozenset[str] | None = None,
+        user_id: int | None = None,
+        operation_type: str | None = None,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2301,6 +2881,8 @@ class SearchService:
             limit,
             visibility=visibility,
             permissions=permissions if permissions is not None else frozenset(),
+            user_id=user_id,
+            operation_type=operation_type,
         )
 
     async def search_download_jobs(
@@ -2310,6 +2892,8 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
+        subscription_id: UUID | str | None = None,
     ) -> list[DownloadJob]:
         """Return download-domain rows using the canonical task search AST.
 
@@ -2320,6 +2904,12 @@ class SearchService:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if subscription_id is not None:
+            conditions.append(DownloadJob.subscription_id == UUID(str(subscription_id)))
+        if user_id is not None:
+            from app.services.tasks import download_job_visibility_condition
+
+            conditions.append(download_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2386,12 +2976,15 @@ class SearchService:
         offset: int = 0,
         limit: int = 50,
         visibility: str = "all",
+        user_id: int | None = None,
     ) -> tuple[int, list[ImportJob]]:
         """Return import-domain rows using the canonical task search AST."""
 
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
         conditions = []
+        if user_id is not None:
+            conditions.append(import_job_visibility_condition(user_id))
         if visibility == "actionable":
             conditions.append(
                 or_(
@@ -2469,6 +3062,8 @@ class SearchService:
         resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
+        *,
+        user_id: int | None = None,
     ) -> dict:
         from app.jobs.subscription_sync import schedule_decision_snapshot
         from app.services.settings import get_scheduler_config
@@ -2483,14 +3078,48 @@ class SearchService:
             tz = timezone.utc
         now = datetime.now(tz)
         scheduler_enabled = bool(config.get("scheduler_enabled", True))
-        rows = (await self.db.execute(
+        scheduler_stmt = (
             select(SubscriptionSource, Subscription, Creator)
             .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
             .join(Creator, Subscription.creator_id == Creator.id)
-            .order_by(Creator.display_name, Creator.name, SubscriptionSource.source)
-        )).all()
+        )
+        if user_id is not None:
+            from app.models.remote_discovery import (
+                UserSubscription,
+                UserSubscriptionSource,
+            )
+
+            scheduler_stmt = (
+                scheduler_stmt.add_columns(UserSubscriptionSource, UserSubscription)
+                .join(
+                    UserSubscriptionSource,
+                    UserSubscriptionSource.subscription_source_id
+                    == SubscriptionSource.id,
+                )
+                .join(
+                    UserSubscription,
+                    UserSubscription.id
+                    == UserSubscriptionSource.user_subscription_id,
+                )
+                .where(
+                    UserSubscriptionSource.user_id == user_id,
+                    UserSubscription.user_id == user_id,
+                )
+            )
+        rows = (
+            await self.db.execute(
+                scheduler_stmt.order_by(
+                    Creator.display_name,
+                    Creator.name,
+                    SubscriptionSource.source,
+                )
+            )
+        ).all()
         items = []
-        for repository, subscription, creator in rows:
+        for row in rows:
+            repository, subscription, creator = row[:3]
+            source_policy = row[3] if user_id is not None else repository
+            subscription_policy = row[4] if user_id is not None else subscription
             try:
                 provider = registry.get(repository.source)
                 normalized_url = provider.normalize_url(repository.source_url) if repository.source_url else None
@@ -2502,22 +3131,23 @@ class SearchService:
                 can_download = False
                 display_name = repository.source
             decision = schedule_decision_snapshot(
-                subscription,
+                subscription_policy,
                 config,
-                repository.last_synced_at,
-                repository.last_attempted_at,
+                source_policy.last_synced_at,
+                source_policy.last_attempted_at,
                 now,
                 tz,
+                source_policy.next_sync_at,
             )
             due = bool(decision.get("due"))
             reason = str(decision.get("reason"))
             suppression_reason = None
-            auth_healthy = repository.auth_healthy is not False
-            if not subscription.is_active:
+            auth_healthy = source_policy.auth_healthy is not False
+            if not subscription_policy.is_active:
                 due, reason = False, "subscription_inactive"
-            elif not subscription.sync_enabled:
+            elif not subscription_policy.sync_enabled:
                 due, reason = False, "subscription_sync_disabled"
-            elif not repository.is_enabled:
+            elif not source_policy.is_enabled:
                 due, reason = False, "source_disabled"
             elif not auth_healthy:
                 due, reason = False, "auth_unhealthy"
@@ -2530,9 +3160,9 @@ class SearchService:
                 suppression_reason = "scheduler_disabled"
             items.append({
                 "subscription_id": str(subscription.id),
-                "subscription_name": subscription.name,
-                "subscription_active": subscription.is_active,
-                "subscription_sync_enabled": subscription.sync_enabled,
+                "subscription_name": subscription_policy.name,
+                "subscription_active": subscription_policy.is_active,
+                "subscription_sync_enabled": subscription_policy.sync_enabled,
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
                 "source_id": str(repository.id),
@@ -2540,19 +3170,19 @@ class SearchService:
                 "source_display_name": display_name,
                 "source_url": repository.source_url,
                 "source_creator_id": repository.source_creator_id,
-                "source_enabled": repository.is_enabled,
-                "effective_mode": decision.get("mode") or subscription.schedule_mode or config.get("schedule_mode", "interval"),
+                "source_enabled": source_policy.is_enabled,
+                "effective_mode": decision.get("mode") or subscription_policy.schedule_mode or config.get("schedule_mode", "interval"),
                 "timezone": tz_name,
-                "scheduled_times": subscription.scheduled_times or config.get("scheduled_times", ""),
+                "scheduled_times": subscription_policy.scheduled_times or config.get("scheduled_times", ""),
                 "schedule_rule": (
-                    effective_calendar_rule(subscription, config)
-                    if (subscription.schedule_mode or config.get("schedule_mode"))
+                    effective_calendar_rule(subscription_policy, config)
+                    if (subscription_policy.schedule_mode or config.get("schedule_mode"))
                     in {"calendar", "fixed_time"}
                     else None
                 ),
-                "sync_interval_hours": subscription.sync_interval_hours,
-                "last_synced_at": _iso(repository.last_synced_at),
-                "last_attempted_at": _iso(repository.last_attempted_at),
+                "sync_interval_hours": subscription_policy.sync_interval_hours,
+                "last_synced_at": _iso(source_policy.last_synced_at),
+                "last_attempted_at": _iso(source_policy.last_attempted_at),
                 "due": due,
                 "decision": "due_now" if due else reason,
                 "reason": reason,
@@ -2613,6 +3243,7 @@ class SearchService:
         permissions: set[str],
         compose: dict | None = None,
         composes: list[dict] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         query = before_cursor + after_cursor
         edits = ([compose] if compose else []) + (composes or [])
@@ -2658,6 +3289,7 @@ class SearchService:
             scope=scope,
             limit=limit,
             permissions=permissions,
+            allowed_repository_ids=allowed_repository_ids,
         )
         if diagnostic and not suggestions:
             suggestions = [
@@ -2687,6 +3319,7 @@ class SearchService:
         scope: SearchScope,
         limit: int,
         permissions: set[str],
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> list[dict]:
         negated = fragment.startswith("-")
         value = fragment[1:] if negated else fragment
@@ -2758,14 +3391,22 @@ class SearchService:
         elif key == "repo":
             if "subscriptions" not in permissions:
                 return []
-            rows = await self.db.execute(
-                select(SubscriptionSource.source, SubscriptionSource.source_creator_id, SubscriptionSource.id)
+            repo_stmt = (
+                select(
+                    SubscriptionSource.source,
+                    SubscriptionSource.source_creator_id,
+                    SubscriptionSource.id,
+                )
                 .where(or_(
                     SubscriptionSource.source_creator_id.ilike(f"%{partial}%"),
                     SubscriptionSource.source_url.ilike(f"%{partial}%"),
                 ))
-                .limit(limit)
             )
+            if allowed_repository_ids is not None:
+                repo_stmt = repo_stmt.where(
+                    SubscriptionSource.id.in_(allowed_repository_ids)
+                )
+            rows = await self.db.execute(repo_stmt.limit(limit))
             values = [f"{source}/{source_creator_id}" if source_creator_id else str(repo_id) for source, source_creator_id, repo_id in rows.all()]
         replacements = []
         for candidate in values[:limit]:
@@ -2799,6 +3440,40 @@ class SearchService:
                 by_url[_normalize_url(source_url)].append(str(repo_id))
         self._repository_maps = (by_identity, by_url)
         return self._repository_maps
+
+    async def _creator_alias_projections(
+        self,
+        creator_ids: Iterable[UUID],
+    ) -> dict[str, dict[str, list[Any]]]:
+        identities = tuple(dict.fromkeys(creator_ids))
+        if not identities:
+            return {}
+        rows = list(
+            (
+                await self.db.execute(
+                    select(CreatorAlias)
+                    .where(CreatorAlias.creator_id.in_(identities))
+                    .order_by(
+                        CreatorAlias.creator_id,
+                        CreatorAlias.is_current.desc(),
+                        CreatorAlias.kind,
+                        CreatorAlias.normalized_value,
+                    )
+                )
+            ).scalars()
+        )
+        grouped: dict[str, list[CreatorAlias]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.creator_id)].append(row)
+        projections: dict[str, dict[str, list[Any]]] = {}
+        for creator_id, aliases in grouped.items():
+            projection = _alias_projection_fields(aliases)
+            projection["alias_records"] = [
+                {**record, "creator_id": creator_id}
+                for record in projection["alias_records"]
+            ]
+            projections[creator_id] = projection
+        return projections
 
     async def _build_work_documents(self, work_ids: Iterable[UUID] | None = None) -> list[dict]:
         if work_ids is None:
@@ -2923,6 +3598,13 @@ class SearchService:
             if source_url:
                 repository_ids[key].update(repository_by_url.get(_normalize_url(source_url), []))
 
+        all_creator_ids = {
+            UUID(creator_id)
+            for values in creator_ids.values()
+            for creator_id in values
+        }
+        alias_by_creator = await self._creator_alias_projections(all_creator_ids)
+
         asset_ids: dict[str, list[str]] = defaultdict(list)
         asset_id_sets: dict[str, set[str]] = defaultdict(set)
         asset_mimes: dict[str, set[str]] = defaultdict(set)
@@ -2955,6 +3637,10 @@ class SearchService:
             ordered_creator_names = sorted(creator_names[key])
             ordered_creator_ids = sorted(creator_ids[key])
             ordered_sources = sorted(sources[key])
+            aliases = _merge_alias_projection_fields(
+                alias_by_creator.get(creator_id, _alias_projection_fields(()))
+                for creator_id in ordered_creator_ids
+            )
             documents.append(_with_projection_hash({
                 "id": key,
                 "title": work.title or "",
@@ -2963,6 +3649,7 @@ class SearchService:
                 "creator_names": ordered_creator_names,
                 "creator_id": ordered_creator_ids[0] if ordered_creator_ids else "",
                 "creator_ids": ordered_creator_ids,
+                **aliases,
                 "repository_ids": sorted(repository_ids[key]),
                 "source": ordered_sources[0] if ordered_sources else "unknown",
                 "sources": ordered_sources,
@@ -3008,6 +3695,7 @@ class SearchService:
             creator_statement.order_by(Creator.created_at.desc())
         )).scalars().all()
         selected_ids = [creator.id for creator in rows]
+        alias_by_creator = await self._creator_alias_projections(selected_ids)
         source_rows = (await self.db.execute(
             select(SourceCreator.creator_id, SourceCreator.source, SourceCreator.source_creator_id)
             .where(
@@ -3059,7 +3747,9 @@ class SearchService:
         return [{
             "id": str(creator.id),
             "name": creator.name,
-            "name_sort": (creator.display_name or creator.name).lower(),
+            "name_sort": _normalize_reference_name(
+                creator.display_name or creator.name
+            ),
             "display_name": creator.display_name or creator.name,
             "description": (creator.description or "")[:1000],
             "thumbnail_url": creator.thumbnail_url,
@@ -3076,6 +3766,7 @@ class SearchService:
             "sources": sorted(sources[str(creator.id)]),
             "source_creator_ids": sorted(source_ids[str(creator.id)]),
             "source_creator_keys": sorted(source_creator_keys[str(creator.id)]),
+            **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
             "created_at": _iso(creator.created_at),
             "updated_at": _iso(creator.updated_at),
             "created_ts": _timestamp(creator.created_at),
@@ -3154,6 +3845,9 @@ class SearchService:
         rows = (await self.db.execute(
             statement.order_by(SubscriptionSource.created_at.desc())
         )).all()
+        alias_by_creator = await self._creator_alias_projections(
+            creator.id for _repo, _subscription, creator in rows
+        )
         return [{
             "id": str(repo.id),
             "name": f"{repo.source}/{repo.source_creator_id}" if repo.source_creator_id else (repo.source_url or str(repo.id)),
@@ -3167,6 +3861,7 @@ class SearchService:
             "source_url": repo.source_url,
             "creator_id": str(creator.id),
             "creator_name": creator.display_name or creator.name,
+            **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
             "subscription_id": str(subscription.id),
             "subscription_name": subscription.name,
             "is_enabled": bool(repo.is_enabled),
@@ -3181,6 +3876,50 @@ class SearchService:
             "updated_ts": _timestamp(repo.updated_at),
             "synced_ts": _timestamp(repo.last_synced_at),
         } for repo, subscription, creator in rows]
+
+    async def _build_membership_documents(self, membership_ids: Iterable[UUID]) -> list[dict]:
+        """Build one bounded identity window using the canonical search vocabulary."""
+        identities = tuple(membership_ids)
+        if not identities:
+            return []
+        if len(identities) > 500:
+            raise ValueError("Membership projection batches must contain at most 500 IDs")
+        members = list((await self.db.execute(
+            select(UserSubscription).where(UserSubscription.id.in_(identities))
+            .order_by(UserSubscription.id)
+        )).scalars())
+        canonical = {doc["id"]: doc for doc in await self._build_subscription_documents(
+            tuple({member.subscription_id for member in members})
+        )}
+        stats = {row[0]: row[1:] for row in (await self.db.execute(
+            select(UserSubscriptionSource.user_subscription_id,
+                   func.max(UserSubscriptionSource.last_synced_at),
+                   func.count(UserSubscriptionSource.id),
+                   func.count(UserSubscriptionSource.id).filter(UserSubscriptionSource.is_enabled.is_(True)))
+            .where(UserSubscriptionSource.user_subscription_id.in_(identities))
+            .group_by(UserSubscriptionSource.user_subscription_id)
+        )).all()}
+        documents = []
+        for member in members:
+            source_doc = canonical.get(str(member.subscription_id))
+            if source_doc is None:
+                continue
+            latest, count, enabled = stats.get(member.id, (None, 0, 0))
+            document = {
+                **source_doc, "id": str(member.id), "user_id": member.user_id,
+                "subscription_id": str(member.subscription_id),
+                "canonical_name": source_doc["name"], "name": member.name or "",
+                "is_active": bool(member.is_active), "sync_enabled": bool(member.sync_enabled),
+                "sync_interval_hours": member.sync_interval_hours,
+                "schedule_mode": member.schedule_mode, "schedule_rule": member.schedule_rule,
+                "scheduled_times": member.scheduled_times,
+                "last_synced_at": _iso(latest), "synced_ts": _timestamp(latest),
+                "never_synced": latest is None, "has_last_sync": latest is not None,
+                "source_count": int(count), "enabled_source_count": int(enabled),
+                "updated_at": _iso(member.updated_at), "updated_ts": _timestamp(member.updated_at),
+            }
+            documents.append(_with_projection_hash(document))
+        return documents
 
     async def _build_subscription_documents(
         self,
@@ -3200,6 +3939,9 @@ class SearchService:
         rows = (await self.db.execute(
             subscription_statement.order_by(Subscription.created_at.desc())
         )).all()
+        alias_by_creator = await self._creator_alias_projections(
+            creator.id for _subscription, creator in rows
+        )
         selected_ids = [subscription.id for subscription, _creator in rows]
         source_rows = (await self.db.execute(
             select(SubscriptionSource)
@@ -3211,6 +3953,16 @@ class SearchService:
             by_subscription[str(repository.subscription_id)].append(repository)
 
         running_statuses = {"enqueued", "downloading", "downloaded", "importing"}
+        index_safe_job = and_(
+            DownloadJob.owner_user_id.is_(None),
+            DownloadJob.triggering_user_subscription_id.is_(None),
+            DownloadJob.triggering_remote_account_id.is_(None),
+        )
+        index_safe_task = and_(
+            TaskRun.owner_user_id.is_(None),
+            TaskRun.triggering_user_subscription_id.is_(None),
+            TaskRun.triggering_remote_account_id.is_(None),
+        )
         job_stats_rows = (await self.db.execute(
             select(
                 DownloadJob.subscription_id,
@@ -3218,7 +3970,10 @@ class SearchService:
                     DownloadJob.status.in_(running_statuses)
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+            )
             .group_by(DownloadJob.subscription_id)
         )).all()
         running_stats = {
@@ -3240,6 +3995,8 @@ class SearchService:
             .where(
                 DownloadJob.subscription_id.in_(selected_ids),
                 TaskRun.attention_state == "open",
+                index_safe_job,
+                index_safe_task,
             )
             .group_by(DownloadJob.subscription_id)
         )).all()
@@ -3263,7 +4020,11 @@ class SearchService:
                     TaskRun.subject_id == DownloadJob.id,
                 ),
             )
-            .where(DownloadJob.subscription_id.in_(selected_ids))
+            .where(
+                DownloadJob.subscription_id.in_(selected_ids),
+                index_safe_job,
+                index_safe_task,
+            )
             .where(or_(
                 TaskRun.status.in_({"enqueued", "running", "paused", "recovering"}),
                 TaskRun.attention_state == "open",
@@ -3289,9 +4050,12 @@ class SearchService:
             documents.append({
                 "id": str(subscription.id),
                 "name": subscription.name or creator.display_name or creator.name,
-                "name_sort": (subscription.name or creator.display_name or creator.name).lower(),
+                "name_sort": _normalize_reference_name(
+                    creator.display_name or creator.name
+                ),
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
+                **alias_by_creator.get(str(creator.id), _alias_projection_fields(())),
                 "is_active": bool(subscription.is_active),
                 "sync_enabled": bool(subscription.sync_enabled),
                 "sync_interval_hours": subscription.sync_interval_hours,
@@ -3337,237 +4101,21 @@ class SearchService:
             return
         await enqueue_projection_events(WORKS_INDEX, identities, action="upsert")
 
-    async def _direct_index_work_ids(
-        self,
-        work_ids: Iterable[UUID],
-        *,
-        index_uid: str = WORKS_INDEX,
-    ) -> int:
-        identities = tuple(dict.fromkeys(UUID(str(value)) for value in work_ids))
-        if not identities:
-            return 0
-
-        def _prepare() -> MeiliClient:
-            client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
-            _ensure_indexes(client, {index_uid: INDEX_SETTINGS[WORKS_INDEX]})
-            return client
-
-        client = await asyncio.to_thread(_prepare)
-        indexed = 0
-        for start in range(0, len(identities), WORK_DOCUMENT_BATCH_SIZE):
-            batch_ids = identities[start:start + WORK_DOCUMENT_BATCH_SIZE]
-            documents = await self._build_work_documents(batch_ids)
-            present = {str(document["id"]) for document in documents}
-            missing = [str(work_id) for work_id in batch_ids if str(work_id) not in present]
-
-            def _deliver() -> None:
-                _write_document_batch(client, index_uid, documents)
-                _delete_document_batch(client, index_uid, missing)
-
-            await asyncio.to_thread(_deliver)
-            indexed += len(documents)
-        return indexed
-
     async def drain_search_projection_outbox(self, *, limit: int = 500) -> dict[str, int | str]:
-        """Deliver one coalesced outbox batch with one writer globally active."""
+        """Run one durable submission or one-shot poll and release the worker."""
+        from app.services.search_delivery import run_delivery_slice
 
-        lease = await asyncio.to_thread(
-            cache_try_lock,
-            INDEX_WRITE_LOCK,
-            INDEX_WRITE_LOCK_TTL_SECONDS,
-        )
-        if lease is None:
-            return {"status": "busy", "claimed": 0, "upserted": 0, "deleted": 0}
-
-        claimed: list[ProjectionEvent] = []
-        deferred: list[ProjectionEvent] = []
-        try:
-            claimed = await claim_projection_events(
-                limit=max(1, min(int(limit), WORK_DOCUMENT_BATCH_SIZE)),
-                lease_seconds=INDEX_WRITE_LOCK_TTL_SECONDS,
-            )
-            if not claimed:
-                return {"status": "idle", "claimed": 0, "upserted": 0, "deleted": 0}
-
-            supported_indexes = {
-                WORKS_INDEX,
-                CREATORS_INDEX,
-                TAGS_INDEX,
-                REPOSITORIES_INDEX,
-                SUBSCRIPTIONS_INDEX,
-            }
-            unsupported = [
-                event for event in claimed if event.index_uid not in supported_indexes
-            ]
-            if unsupported:
-                raise ValueError(
-                    "Unsupported search outbox indexes: "
-                    + ", ".join(sorted({event.index_uid for event in unsupported}))
-                )
-
-            events_by_index: dict[str, list[ProjectionEvent]] = defaultdict(list)
-            for event in claimed:
-                events_by_index[event.index_uid].append(event)
-            documents_by_index: dict[str, list[dict[str, Any]]] = {}
-            delete_ids_by_index: dict[str, list[str]] = {}
-            builder_names = {
-                CREATORS_INDEX: "_build_creator_documents",
-                TAGS_INDEX: "_build_tag_documents",
-                REPOSITORIES_INDEX: "_build_repository_documents",
-                SUBSCRIPTIONS_INDEX: "_build_subscription_documents",
-            }
-            # Assemble authoritative documents in a short independent read
-            # transaction and close it before any network wait.
-            async with async_session() as projection_db:
-                projection_service = SearchService(projection_db)
-                for index_uid, events in events_by_index.items():
-                    upsert_events = [event for event in events if event.action == "upsert"]
-                    upsert_ids = [UUID(event.entity_id) for event in upsert_events]
-                    if index_uid == WORKS_INDEX:
-                        documents = await projection_service._build_work_documents(upsert_ids)
-                    else:
-                        documents = await getattr(
-                            projection_service,
-                            builder_names[index_uid],
-                        )(upsert_ids)
-                    documents_by_index[index_uid] = documents
-                    document_ids = {str(document["id"]) for document in documents}
-                    # A row deleted after an upsert was queued must remove the
-                    # projection instead of being acknowledged as a no-op.
-                    delete_ids_by_index[index_uid] = [
-                        event.entity_id
-                        for event in events
-                        if event.action == "delete"
-                        or (
-                            event.action == "upsert"
-                            and event.entity_id not in document_ids
-                        )
-                    ]
-
-            selected, deferred = _select_projection_event_slice(
-                claimed,
-                documents_by_index,
-            )
-            claimed = selected
-            if deferred:
-                await release_projection_events(deferred)
-
-            selected_by_index: dict[str, list[ProjectionEvent]] = defaultdict(list)
-            for event in claimed:
-                selected_by_index[event.index_uid].append(event)
-            for index_uid, index_documents in tuple(documents_by_index.items()):
-                selected_upserts = {
-                    event.entity_id
-                    for event in selected_by_index.get(index_uid, ())
-                    if event.action == "upsert"
-                }
-                documents_by_index[index_uid] = [
-                    document
-                    for document in index_documents
-                    if str(document["id"]) in selected_upserts
-                ]
-                selected_ids = {
-                    event.entity_id
-                    for event in selected_by_index.get(index_uid, ())
-                }
-                delete_ids_by_index[index_uid] = [
-                    identity
-                    for identity in delete_ids_by_index[index_uid]
-                    if identity in selected_ids
-                ]
-            events_by_index = selected_by_index
-
-            renewed = await asyncio.to_thread(
-                cache_refresh_lock,
-                INDEX_WRITE_LOCK,
-                lease,
-                INDEX_WRITE_LOCK_TTL_SECONDS,
-            )
-            if not renewed:
-                raise RuntimeError("Lost search index writer lease before delivery")
-
-            def _deliver() -> None:
-                client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
-                slice_deadline = (
-                    monotonic_time.monotonic()
-                    + (MEILI_INCREMENTAL_SLICE_TIMEOUT_MS / 1000)
-                )
-
-                def _remaining_task_timeout() -> int:
-                    remaining_ms = int(
-                        (slice_deadline - monotonic_time.monotonic()) * 1000
-                    )
-                    if remaining_ms <= 0:
-                        raise TimeoutError("Incremental search slice timed out")
-                    return max(
-                        1,
-                        min(MEILI_INCREMENTAL_TASK_TIMEOUT_MS, remaining_ms),
-                    )
-
-                for index_uid in INDEX_SETTINGS:
-                    if index_uid not in events_by_index:
-                        continue
-                    _ensure_indexes(
-                        client,
-                        {index_uid: INDEX_SETTINGS[index_uid]},
-                        task_timeout_in_ms=_remaining_task_timeout(),
-                    )
-                    _write_document_batch(
-                        client,
-                        index_uid,
-                        documents_by_index[index_uid],
-                        timeout_in_ms=_remaining_task_timeout(),
-                    )
-                    _delete_document_batch(
-                        client,
-                        index_uid,
-                        delete_ids_by_index[index_uid],
-                        timeout_in_ms=_remaining_task_timeout(),
-                    )
-
-            await asyncio.to_thread(_deliver)
-            await complete_projection_events(claimed)
-            await _refresh_search_index_checkpoints(events_by_index.keys())
-            slice_exhausted = bool(deferred) or len(claimed) >= max(
-                1,
-                min(int(limit), WORK_DOCUMENT_BATCH_SIZE),
-            )
-            return {
-                "status": "partial" if deferred else "ok",
-                "claimed": len(claimed),
-                "upserted": sum(len(value) for value in documents_by_index.values()),
-                "deleted": sum(
-                    len(set(value)) for value in delete_ids_by_index.values()
-                ),
-                "deferred": len(deferred),
-                "slice_exhausted": slice_exhausted,
-                "more_likely": slice_exhausted,
-            }
-        except Exception as exc:
-            if claimed:
-                _forget_ensured_settings(event.index_uid for event in claimed)
-                await retry_projection_events(claimed, str(exc))
-            if deferred:
-                try:
-                    await release_projection_events(deferred)
-                except Exception:
-                    logger.debug(
-                        "Unable to release deferred search projection claims",
-                        exc_info=True,
-                    )
-            logger.warning("Search projection outbox drain failed", exc_info=True)
-            return {
-                "status": "error",
-                "claimed": len(claimed),
-                "upserted": 0,
-                "deleted": 0,
-                "deferred": len(deferred),
-            }
-        finally:
-            await asyncio.to_thread(cache_release_lock, INDEX_WRITE_LOCK, lease)
+        return await run_delivery_slice(limit=limit)
 
     async def _search_reference_db(
-        self, target: str, offset: int, limit: int
+        self,
+        target: str,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
+        user_id: int | None = None,
     ) -> dict:
         """Direct DB list query for real-time listing — no index dependency.
 
@@ -3578,12 +4126,418 @@ class SearchService:
         if target == "creators":
             return await self._search_creators_db(offset, limit)
         if target == "subscriptions":
-            return await self._search_subscriptions_db(offset, limit)
+            return await self._search_subscriptions_db(
+                offset,
+                limit,
+                allowed_subscription_ids=allowed_subscription_ids,
+                user_id=user_id,
+            )
+        if target == "repositories" and allowed_repository_ids is not None:
+            # Empty reference searches do not currently expose repositories;
+            # retain that contract while keeping the ownership argument
+            # explicit for future DB-backed listing support.
+            return {"total": 0, "items": []}
         if target == "works":
             return await self._search_works_db(offset, limit)
         # Tags and repositories already have their own DB endpoints;
         # fall through for any future targets.
         return {"total": 0, "items": []}
+
+    def _reference_browse_statement(
+        self,
+        target: SearchTarget,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> tuple[Any, tuple[Any, ...], str]:
+        """Build the authoritative creator/subscription browse projection."""
+
+        if target not in {"creators", "subscriptions"}:
+            raise ValueError(f"Unsupported reference browse target: {target}")
+
+        if target == "creators":
+            model = Creator
+            identity = Creator.id
+            name = func.coalesce(Creator.display_name, Creator.name)
+            statement = select(identity.label("id"))
+        else:
+            model = Subscription
+            identity = Subscription.id
+            name = func.coalesce(Creator.display_name, Creator.name)
+            statement = select(identity.label("id")).join(
+                Creator,
+                Creator.id == Subscription.creator_id,
+            )
+            if user_id is not None:
+                statement = statement.join(
+                    UserSubscription,
+                    and_(
+                        UserSubscription.subscription_id == Subscription.id,
+                        UserSubscription.user_id == user_id,
+                    ),
+                )
+            if allowed_subscription_ids is not None:
+                statement = statement.where(
+                    Subscription.id.in_(allowed_subscription_ids)
+                )
+
+        conditions: list[Any] = []
+        for (key, negated), tokens in _grouped_qualifiers(query, target).items():
+            expressions: list[Any] = []
+            for token in tokens:
+                value = _resolved_value(token, resolved)
+                expression = None
+                if key == "uid":
+                    source, source_creator_id = parse_source_identity(token.value)
+                    if target == "creators":
+                        expression = or_(
+                            Creator.id.in_(
+                                select(SourceCreator.creator_id).where(
+                                    SourceCreator.creator_id.is_not(None),
+                                    SourceCreator.source == source,
+                                    SourceCreator.source_creator_id
+                                    == source_creator_id,
+                                )
+                            ),
+                            Creator.id.in_(
+                                select(Subscription.creator_id)
+                                .join(
+                                    SubscriptionSource,
+                                    SubscriptionSource.subscription_id
+                                    == Subscription.id,
+                                )
+                                .where(
+                                    SubscriptionSource.source == source,
+                                    SubscriptionSource.source_creator_id
+                                    == source_creator_id,
+                                )
+                            ),
+                        )
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == source,
+                                SubscriptionSource.source_creator_id
+                                == source_creator_id,
+                            )
+                        )
+                elif key == "url":
+                    source_url = _resolved_source_url(token, resolved)
+                    identities = source_url.ids_for(target) if source_url else ()
+                    expression = identity.in_(
+                        [UUID(item) for item in identities]
+                    )
+                elif key == "source":
+                    if target == "creators":
+                        expression = Creator.id.in_(
+                            select(SourceCreator.creator_id).where(
+                                SourceCreator.creator_id.is_not(None),
+                                SourceCreator.source == value,
+                            )
+                        )
+                    else:
+                        expression = Subscription.id.in_(
+                            select(SubscriptionSource.subscription_id).where(
+                                SubscriptionSource.source == value
+                            )
+                        )
+                elif key == "creator":
+                    creator_id = UUID(value)
+                    expression = (
+                        Creator.id == creator_id
+                        if target == "creators"
+                        else Subscription.creator_id == creator_id
+                    )
+                elif key == "repo" and target == "subscriptions":
+                    repository_id = UUID(value)
+                    expression = Subscription.id.in_(
+                        select(SubscriptionSource.subscription_id).where(
+                            SubscriptionSource.id == repository_id
+                        )
+                    )
+                elif key == "is":
+                    if target == "creators":
+                        expression = {
+                            "favorite": Creator.is_favorite.is_(True),
+                            "active": Creator.is_active.is_(True),
+                            "inactive": Creator.is_active.is_(False),
+                        }.get(value)
+                    else:
+                        state_model = (
+                            UserSubscription
+                            if user_id is not None
+                            else Subscription
+                        )
+                        expression = {
+                            "active": state_model.is_active.is_(True),
+                            "inactive": state_model.is_active.is_(False),
+                            "sync-enabled": state_model.sync_enabled.is_(True),
+                            "sync-disabled": state_model.sync_enabled.is_(False),
+                            "never-synced": self._subscription_never_synced_expression(
+                                user_id=user_id
+                            ),
+                        }.get(value)
+                elif key == "has":
+                    if target == "creators":
+                        expression = {
+                            "subscription": select(Subscription.id).where(
+                                Subscription.creator_id == Creator.id
+                            ).exists(),
+                            "repository": select(SubscriptionSource.id)
+                            .join(
+                                Subscription,
+                                Subscription.id
+                                == SubscriptionSource.subscription_id,
+                            )
+                            .where(Subscription.creator_id == Creator.id)
+                            .exists(),
+                            "danbooru": Creator.danbooru_artist_id.is_not(None),
+                        }.get(value)
+                    elif value == "last-sync":
+                        expression = self._subscription_has_last_sync_expression(
+                            user_id=user_id
+                        )
+                elif key in {"created", "updated", "synced"}:
+                    if key == "synced" and target == "subscriptions":
+                        expression = or_(
+                            _sql_date_expression(
+                                Subscription.last_synced_at,
+                                value,
+                            ),
+                            select(SubscriptionSource.id).where(
+                                SubscriptionSource.subscription_id
+                                == Subscription.id,
+                                _sql_date_expression(
+                                    SubscriptionSource.last_synced_at,
+                                    value,
+                                ),
+                            ).exists(),
+                        )
+                    elif key != "synced":
+                        expression = _sql_date_expression(
+                            getattr(model, f"{key}_at"),
+                            value,
+                        )
+                if expression is not None:
+                    expressions.append(
+                        not_(expression) if negated else expression
+                    )
+            if expressions:
+                conditions.append(
+                    and_(*expressions) if negated else or_(*expressions)
+                )
+
+        if conditions:
+            statement = statement.where(and_(*conditions))
+
+        normalized_name, anchor_key, anchor_rank = (
+            _reference_name_expressions(name)
+        )
+        selected_sort = query.values("sort")
+        sort_name = selected_sort[0] if selected_sort else "name-asc"
+        direction = "asc" if sort_name.endswith("-asc") else "desc"
+        if sort_name.startswith("name-"):
+            sort_value = normalized_name
+        elif sort_name.startswith("created-"):
+            sort_value = model.created_at
+        elif sort_name.startswith("updated-"):
+            sort_value = model.updated_at
+        else:
+            sort_value = (
+                Subscription.last_synced_at
+                if target == "subscriptions"
+                else model.updated_at
+            )
+
+        projection = statement.add_columns(
+            normalized_name.label("name_sort"),
+            anchor_key.label("anchor_key"),
+            anchor_rank.label("anchor_rank"),
+            sort_value.label("sort_value"),
+        ).subquery()
+        if sort_name.startswith("name-"):
+            name_sort = projection.c.name_sort.collate("und-x-icu")
+            if direction == "asc":
+                order_by = (
+                    projection.c.anchor_rank.asc(),
+                    name_sort.asc(),
+                    projection.c.id.asc(),
+                )
+            else:
+                order_by = (
+                    projection.c.anchor_rank.desc(),
+                    name_sort.desc(),
+                    projection.c.id.desc(),
+                )
+        else:
+            value_order = (
+                projection.c.sort_value.asc().nulls_last()
+                if direction == "asc"
+                else projection.c.sort_value.desc().nulls_last()
+            )
+            identity_order = (
+                projection.c.id.asc()
+                if direction == "asc"
+                else projection.c.id.desc()
+            )
+            order_by = (value_order, identity_order)
+        return projection, order_by, direction
+
+    @staticmethod
+    def _subscription_has_last_sync_expression(*, user_id: int | None) -> Any:
+        if user_id is not None:
+            return select(UserSubscriptionSource.id).where(
+                UserSubscriptionSource.user_subscription_id
+                == UserSubscription.id,
+                UserSubscriptionSource.user_id == user_id,
+                UserSubscriptionSource.last_synced_at.is_not(None),
+            ).exists()
+        return select(SubscriptionSource.id).where(
+            SubscriptionSource.subscription_id == Subscription.id,
+            SubscriptionSource.last_synced_at.is_not(None),
+        ).exists()
+
+    @classmethod
+    def _subscription_never_synced_expression(
+        cls,
+        *,
+        user_id: int | None,
+    ) -> Any:
+        canonical_missing = Subscription.last_synced_at.is_(None)
+        return and_(
+            canonical_missing,
+            not_(
+                cls._subscription_has_last_sync_expression(user_id=user_id)
+            ),
+        )
+
+    async def _search_browse_reference_db(
+        self,
+        target: SearchTarget,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
+        projection, order_by, _direction = self._reference_browse_statement(
+            target,
+            query,
+            resolved,
+            allowed_subscription_ids=allowed_subscription_ids,
+            user_id=user_id,
+        )
+        total = int(
+            (
+                await self.db.execute(
+                    select(func.count()).select_from(projection)
+                )
+            ).scalar_one()
+        )
+        identities = list(
+            (
+                await self.db.execute(
+                    select(projection.c.id)
+                    .order_by(*order_by)
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        if not identities:
+            return {"total": total, "items": []}
+        builder = (
+            self._build_creator_documents
+            if target == "creators"
+            else self._build_subscription_documents
+        )
+        documents = await builder(identities)
+        by_id = {document["id"]: document for document in documents}
+        return {
+            "total": total,
+            "items": [
+                by_id[str(identity)]
+                for identity in identities
+                if str(identity) in by_id
+            ],
+        }
+
+    async def name_anchors(
+        self,
+        *,
+        scope: SearchScope,
+        query: str,
+        permissions: set[str],
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
+        parsed = parse_search_query(query, scope)
+        targets = self._allowed_targets(parsed, permissions)
+        selected_sort = parsed.values("sort")
+        if (
+            scope not in {"creators", "subscriptions"}
+            or targets != (scope,)
+            or parsed.terms
+            or (
+                selected_sort
+                and selected_sort[0] not in {"name-asc", "name-desc"}
+            )
+        ):
+            raise NameAnchorsUnavailable(
+                "Name anchors require a structured reference query sorted by name"
+            )
+        resolved = await self._resolve_qualifiers(parsed)
+        projection, order_by, direction = self._reference_browse_statement(
+            scope,
+            parsed,
+            resolved,
+            allowed_subscription_ids=allowed_subscription_ids,
+            user_id=user_id,
+        )
+        ordered = select(
+            projection.c.anchor_key.label("anchor_key"),
+            (
+                func.row_number().over(order_by=order_by) - 1
+            ).label("offset"),
+        ).cte("ordered_reference_names")
+        rows = (
+            await self.db.execute(
+                select(
+                    ordered.c.anchor_key,
+                    func.min(ordered.c.offset),
+                    func.count(),
+                ).group_by(ordered.c.anchor_key)
+            )
+        ).all()
+        aggregates = {
+            key: {"offset": int(offset), "count": int(count)}
+            for key, offset, count in rows
+        }
+        definitions = (
+            reversed(REFERENCE_NAME_ANCHORS)
+            if direction == "desc"
+            else REFERENCE_NAME_ANCHORS
+        )
+        items = []
+        for definition in definitions:
+            aggregate = aggregates.get(definition["key"])
+            items.append(
+                {
+                    **definition,
+                    "offset": aggregate["offset"] if aggregate else None,
+                    "count": aggregate["count"] if aggregate else 0,
+                }
+            )
+        return {
+            "scope": scope,
+            "direction": direction,
+            "total": sum(item["count"] for item in items),
+            "items": items,
+        }
 
     async def _search_identity_reference_db(
         self,
@@ -3592,6 +4546,10 @@ class SearchService:
         resolved: dict[tuple[str, str], Any],
         offset: int,
         limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+        allowed_repository_ids: set[UUID] | None = None,
     ) -> dict:
         """Execute source-identity reference searches against committed rows."""
 
@@ -3601,6 +4559,12 @@ class SearchService:
             "subscriptions": Subscription,
         }[target]
         conditions: list[Any] = []
+        if target == "subscriptions" and user_id is not None:
+            conditions.append(Subscription.id.in_(select(UserSubscription.subscription_id).where(UserSubscription.user_id == user_id)))
+        if target == "subscriptions" and allowed_subscription_ids is not None:
+            conditions.append(Subscription.id.in_(allowed_subscription_ids))
+        if target == "repositories" and allowed_repository_ids is not None:
+            conditions.append(SubscriptionSource.id.in_(allowed_repository_ids))
 
         for (key, negated), tokens in _grouped_qualifiers(query, target).items():
             expressions: list[Any] = []
@@ -3843,7 +4807,9 @@ class SearchService:
         items = [{
             "id": str(creator.id),
             "name": creator.name,
-            "name_sort": (creator.display_name or creator.name).lower(),
+            "name_sort": _normalize_reference_name(
+                creator.display_name or creator.name
+            ),
             "display_name": creator.display_name or creator.name,
             "description": (creator.description or "")[:1000],
             "thumbnail_url": creator.thumbnail_url,
@@ -3867,24 +4833,57 @@ class SearchService:
 
         return {"total": total, "items": items}
 
-    async def _search_subscriptions_db(self, offset: int, limit: int) -> dict:
+    async def _search_subscriptions_db(
+        self,
+        offset: int,
+        limit: int,
+        *,
+        allowed_subscription_ids: set[UUID] | None = None,
+        user_id: int | None = None,
+    ) -> dict:
         # Total count
-        total = (await self.db.execute(
-            select(func.count()).select_from(Subscription)
-        )).scalar() or 0
+        ownership = (
+            Subscription.id.in_(allowed_subscription_ids)
+            if allowed_subscription_ids is not None
+            else None
+        )
+        if user_id is not None:
+            actor_ownership = Subscription.id.in_(select(UserSubscription.subscription_id).where(UserSubscription.user_id == user_id))
+            ownership = and_(ownership, actor_ownership) if ownership is not None else actor_ownership
+        count_stmt = select(func.count()).select_from(Subscription)
+        if ownership is not None:
+            count_stmt = count_stmt.where(ownership)
+        total = (await self.db.execute(count_stmt)).scalar() or 0
 
         # Paginated rows
-        rows = (await self.db.execute(
+        rows_stmt = (
             select(Subscription, Creator)
             .join(Creator, Creator.id == Subscription.creator_id)
             .order_by(Subscription.updated_at.desc())
             .offset(offset).limit(limit)
-        )).all()
+        )
+        if ownership is not None:
+            rows_stmt = rows_stmt.where(ownership)
+        rows = (await self.db.execute(rows_stmt)).all()
 
         if not rows:
             return {"total": total, "items": []}
 
         sub_ids = [sub.id for sub, _ in rows]
+
+        from app.services.tasks import (
+            download_job_visibility_condition,
+            task_visibility_condition,
+        )
+
+        job_visibility = (
+            download_job_visibility_condition(user_id)
+            if user_id is not None
+            else None
+        )
+        task_visibility = (
+            task_visibility_condition(user_id) if user_id is not None else None
+        )
 
         # Sources per subscription
         source_rows = (await self.db.execute(
@@ -3896,19 +4895,25 @@ class SearchService:
         for repo in source_rows:
             by_sub[str(repo.subscription_id)].append(repo)
 
-        running_rows = (await self.db.execute(
-            select(DownloadJob.subscription_id, func.count(DownloadJob.id))
-            .where(
-                DownloadJob.subscription_id.in_(sub_ids),
-                DownloadJob.status.in_({"enqueued", "downloading", "downloaded", "importing"}),
-            )
-            .group_by(DownloadJob.subscription_id)
-        )).all()
+        running_stmt = select(
+            DownloadJob.subscription_id,
+            func.count(DownloadJob.id),
+        ).where(
+            DownloadJob.subscription_id.in_(sub_ids),
+            DownloadJob.status.in_(
+                {"enqueued", "downloading", "downloaded", "importing"}
+            ),
+        )
+        if job_visibility is not None:
+            running_stmt = running_stmt.where(job_visibility)
+        running_rows = (
+            await self.db.execute(running_stmt.group_by(DownloadJob.subscription_id))
+        ).all()
         running_by_sub = {
             str(subscription_id): int(count)
             for subscription_id, count in running_rows
         }
-        actionable_rows = (await self.db.execute(
+        actionable_stmt = (
             select(DownloadJob, TaskRun)
             .join(
                 TaskRun,
@@ -3924,8 +4929,16 @@ class SearchService:
                     TaskRun.attention_state == "open",
                 ),
             )
-            .order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
-        )).all()
+        )
+        if job_visibility is not None:
+            actionable_stmt = actionable_stmt.where(job_visibility)
+        if task_visibility is not None:
+            actionable_stmt = actionable_stmt.where(task_visibility)
+        actionable_rows = (
+            await self.db.execute(
+                actionable_stmt.order_by(TaskRun.updated_at.desc(), TaskRun.id.desc())
+            )
+        ).all()
         actionable_by_sub: dict[str, list[tuple[DownloadJob, TaskRun]]] = defaultdict(list)
         for job, task in actionable_rows:
             actionable_by_sub[str(job.subscription_id)].append((job, task))
@@ -3942,7 +4955,9 @@ class SearchService:
             items.append({
                 "id": str(subscription.id),
                 "name": subscription.name or creator.display_name or creator.name,
-                "name_sort": (subscription.name or creator.display_name or creator.name).lower(),
+                "name_sort": _normalize_reference_name(
+                    creator.display_name or creator.name
+                ),
                 "creator_id": str(creator.id),
                 "creator_name": creator.display_name or creator.name,
                 "is_active": bool(subscription.is_active),
@@ -4608,570 +5623,17 @@ class SearchService:
             ) if work_rows and (cursor or offset > 0) else None,
         }
 
-    @staticmethod
-    async def _renew_index_write_lease(lease: str, ttl_seconds: int) -> None:
-        renewed = await asyncio.to_thread(
-            cache_refresh_lock,
-            INDEX_WRITE_LOCK,
-            lease,
-            ttl_seconds,
-        )
-        if not renewed:
-            raise RuntimeError("Lost search index writer lease during rebuild")
-
-    @staticmethod
-    async def _committed_repository_maps() -> tuple[
-        dict[tuple[str, str], list[str]],
-        dict[str, list[str]],
-    ]:
-        async with async_session() as db:
-            return await SearchService(db)._repository_lookup()
-
-    @staticmethod
-    async def _committed_work_documents(
-        work_ids: Iterable[UUID],
-        repository_maps: tuple[
-            dict[tuple[str, str], list[str]],
-            dict[str, list[str]],
-        ],
-    ) -> list[dict]:
-        async with async_session() as db:
-            service = SearchService(
-                db,
-                parallel_hydration=_parallel_work_hydration_supported(),
-            )
-            service._repository_maps = repository_maps
-            return await service._build_work_documents(work_ids)
-
-    async def _stream_works_to_index(
-        self,
-        client: MeiliClient,
-        index_uid: str,
-        *,
-        batch_size: int,
-        lease: str,
-        lease_ttl_seconds: int,
-        resource_owner: str,
-    ) -> tuple[int, int, tuple[dict[tuple[str, str], list[str]], dict[str, list[str]]]]:
-        """Walk committed works by UUID keyset and release each batch promptly."""
-
-        batch_size = max(1, min(int(batch_size), WORK_DOCUMENT_BATCH_SIZE))
-        repository_maps = await self._committed_repository_maps()
-        last_id: UUID | None = None
-        indexed = 0
-        batches = 0
-        while True:
-            async def _slice(limits: Any) -> tuple[tuple[UUID, ...], int]:
-                effective_batch = max(1, min(batch_size, int(limits.work_units)))
-                async with async_session() as db:
-                    statement = (
-                        select(Work.id).order_by(Work.id).limit(effective_batch)
-                    )
-                    if last_id is not None:
-                        statement = statement.where(Work.id > last_id)
-                    identities = tuple(
-                        (await db.execute(statement)).scalars().all()
-                    )
-                    if not identities:
-                        return (), 0
-                    batch_service = SearchService(
-                        db,
-                        parallel_hydration=_parallel_work_hydration_supported(),
-                    )
-                    batch_service._repository_maps = repository_maps
-                    documents = await batch_service._build_work_documents(
-                        identities
-                    )
-                documents_by_id = {
-                    str(document["id"]): document for document in documents
-                }
-                ordered_documents = [
-                    documents_by_id[str(identity)]
-                    for identity in identities
-                    if str(identity) in documents_by_id
-                ]
-                first_payload = next(
-                    iter(_document_batches(ordered_documents)),
-                    [],
-                )
-                selected_ids = {
-                    str(document["id"]) for document in first_payload
-                }
-                processed_identities: list[UUID] = []
-                for identity in identities:
-                    document = documents_by_id.get(str(identity))
-                    if document is not None and str(identity) not in selected_ids:
-                        break
-                    processed_identities.append(identity)
-                if not processed_identities:
-                    raise RuntimeError("Search work slice made no keyset progress")
-                await asyncio.to_thread(
-                    _write_document_batch,
-                    client,
-                    index_uid,
-                    first_payload,
-                )
-                return tuple(processed_identities), len(first_payload)
-
-            identities, document_count = await _run_profiled_search_slice(
-                resource_owner,
-                _slice,
-                max_work_units=batch_size,
-            )
-            if not identities:
-                break
-            indexed += document_count
-            batches += 1
-            last_id = identities[-1]
-            del identities
-            await self._renew_index_write_lease(lease, lease_ttl_seconds)
-        return indexed, batches, repository_maps
-
-    async def _stream_reference_to_index(
-        self,
-        client: MeiliClient,
-        live_index: str,
-        staging_index: str,
-        *,
-        batch_size: int,
-        lease: str,
-        lease_ttl_seconds: int,
-        resource_owner: str,
-    ) -> tuple[int, int]:
-        """Keyset-build a reference projection without retaining all documents."""
-
-        specifications = {
-            CREATORS_INDEX: (Creator, "_build_creator_documents"),
-            TAGS_INDEX: (Tag, "_build_tag_documents"),
-            REPOSITORIES_INDEX: (SubscriptionSource, "_build_repository_documents"),
-            SUBSCRIPTIONS_INDEX: (Subscription, "_build_subscription_documents"),
-        }
-        model, builder_name = specifications[live_index]
-        batch_size = max(1, min(int(batch_size), WORK_DOCUMENT_BATCH_SIZE))
-        last_id: UUID | None = None
-        indexed = 0
-        batches = 0
-        while True:
-            async def _slice(limits: Any) -> tuple[tuple[UUID, ...], int]:
-                effective_batch = max(1, min(batch_size, int(limits.work_units)))
-                async with async_session() as db:
-                    statement = (
-                        select(model.id).order_by(model.id).limit(effective_batch)
-                    )
-                    if last_id is not None:
-                        statement = statement.where(model.id > last_id)
-                    identities = tuple(
-                        (await db.execute(statement)).scalars().all()
-                    )
-                    if not identities:
-                        return (), 0
-                    documents = await getattr(
-                        SearchService(db), builder_name
-                    )(identities)
-                documents_by_id = {
-                    str(document["id"]): document for document in documents
-                }
-                ordered_documents = [
-                    documents_by_id[str(identity)]
-                    for identity in identities
-                    if str(identity) in documents_by_id
-                ]
-                first_payload = next(
-                    iter(_document_batches(ordered_documents)),
-                    [],
-                )
-                selected_ids = {
-                    str(document["id"]) for document in first_payload
-                }
-                processed_identities: list[UUID] = []
-                for identity in identities:
-                    document = documents_by_id.get(str(identity))
-                    if document is not None and str(identity) not in selected_ids:
-                        break
-                    processed_identities.append(identity)
-                if not processed_identities:
-                    raise RuntimeError("Search reference slice made no keyset progress")
-                await asyncio.to_thread(
-                    _write_document_batch,
-                    client,
-                    staging_index,
-                    first_payload,
-                )
-                return tuple(processed_identities), len(first_payload)
-
-            identities, document_count = await _run_profiled_search_slice(
-                resource_owner,
-                _slice,
-                max_work_units=batch_size,
-            )
-            if not identities:
-                break
-            indexed += document_count
-            batches += 1
-            last_id = identities[-1]
-            del identities
-            await self._renew_index_write_lease(lease, lease_ttl_seconds)
-        return indexed, batches
-
-    async def _replay_work_events_to_staging(
-        self,
-        client: MeiliClient,
-        index_uid: str,
-        *,
-        since: datetime,
-        lease: str,
-        lease_ttl_seconds: int,
-        resource_owner: str,
-    ) -> tuple[BinaryIO, int]:
-        """Apply mutations concurrent with the keyset walk before swapping."""
-
-        replay_log = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
-        replayed_count = 0
-        cursor: tuple[datetime, UUID] | None = None
-        try:
-            for _ in range(500_001):
-                async def _slice(limits: Any) -> list[ProjectionEvent]:
-                    events = await replay_projection_events(
-                        WORKS_INDEX,
-                        since=since,
-                        after=cursor,
-                        limit=max(
-                            1,
-                            min(
-                                WORK_DOCUMENT_BATCH_SIZE,
-                                int(limits.work_units),
-                            ),
-                        ),
-                    )
-                    if not events:
-                        return []
-                    upsert_events = [
-                        event for event in events if event.action == "upsert"
-                    ]
-                    # Repository membership may change while a long rebuild is
-                    # streaming. Reload it for every replay slice so a matching
-                    # outbox version cannot be acknowledged with the map that
-                    # was cached at rebuild start.
-                    current_repository_maps = (
-                        await self._committed_repository_maps()
-                        if upsert_events
-                        else ({}, {})
-                    )
-                    documents = (
-                        await self._committed_work_documents(
-                            [UUID(event.entity_id) for event in upsert_events],
-                            current_repository_maps,
-                        )
-                        if upsert_events
-                        else []
-                    )
-                    selected, _deferred = _select_projection_event_slice(
-                        events,
-                        {WORKS_INDEX: documents},
-                    )
-                    selected_upserts = {
-                        event.entity_id
-                        for event in selected
-                        if event.action == "upsert"
-                    }
-                    documents = [
-                        document
-                        for document in documents
-                        if str(document["id"]) in selected_upserts
-                    ]
-                    present_ids = {
-                        str(document["id"]) for document in documents
-                    }
-                    delete_ids = [
-                        event.entity_id
-                        for event in selected
-                        if event.action == "delete"
-                        or (
-                            event.action == "upsert"
-                            and event.entity_id not in present_ids
-                        )
-                    ]
-                    await asyncio.to_thread(
-                        _write_document_batch,
-                        client,
-                        index_uid,
-                        documents,
-                    )
-                    await asyncio.to_thread(
-                        _delete_document_batch,
-                        client,
-                        index_uid,
-                        delete_ids,
-                    )
-                    return selected
-
-                events = await _run_profiled_search_slice(
-                    resource_owner,
-                    _slice,
-                    max_work_units=WORK_DOCUMENT_BATCH_SIZE,
-                )
-                if not events:
-                    break
-                for event in events:
-                    replay_log.write(
-                        _REBUILD_REPLAY_RECORD.pack(event.id.bytes, event.version)
-                    )
-                replayed_count += len(events)
-                cursor = (events[-1].updated_at, events[-1].id)
-                await self._renew_index_write_lease(lease, lease_ttl_seconds)
-                if replayed_count > 500_000:
-                    raise RuntimeError(
-                        "Search outbox replay exceeded 500,000 events"
-                    )
-            else:
-                raise RuntimeError("Search outbox replay exceeded 500,000 events")
-            replay_log.flush()
-            replay_log.seek(0)
-            return replay_log, replayed_count
-        except BaseException:
-            replay_log.close()
-            raise
-
     async def _rebuild_selected_indexes(
-        self,
-        live_indexes: tuple[str, ...],
-        *,
-        batch_size: int = WORK_DOCUMENT_BATCH_SIZE,
-        resource_owner: str | None = None,
+        self, live_indexes: tuple[str, ...], *,
+        batch_size: int = WORK_DOCUMENT_BATCH_SIZE, resource_owner: str | None = None,
     ) -> dict[str, Any]:
-        """Build isolated indexes with bounded memory, then atomically swap."""
+        from app.services.search_rebuild import start_rebuild
+        from app.services.outbox_coordinator import wake_pending_outboxes
 
-        lease_ttl_seconds = 2 * 60 * 60
-        client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
-        lease = await asyncio.to_thread(
-            cache_try_lock,
-            INDEX_WRITE_LOCK,
-            lease_ttl_seconds,
-        )
-        if lease is None:
-            raise RuntimeError("Another search writer or rebuild is active")
-
-        heartbeat_stop = asyncio.Event()
-        writer_lease_lost = asyncio.Event()
-
-        async def _writer_lease_heartbeat() -> None:
-            interval = max(30.0, min(60.0, lease_ttl_seconds / 3))
-            while not heartbeat_stop.is_set():
-                try:
-                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
-                    return
-                except TimeoutError:
-                    pass
-                try:
-                    renewed = await asyncio.to_thread(
-                        cache_refresh_lock,
-                        INDEX_WRITE_LOCK,
-                        lease,
-                        lease_ttl_seconds,
-                    )
-                except Exception:
-                    # Ownership is now unverifiable.  Fail closed at the next
-                    # slice boundary; never allow this rebuild to swap after a
-                    # second writer may have acquired an expired key.
-                    logger.exception("Search rebuild writer lease heartbeat failed")
-                    writer_lease_lost.set()
-                    return
-                if not renewed:
-                    logger.error("Search rebuild lost its writer lease")
-                    writer_lease_lost.set()
-                    return
-
-        async def _assert_writer_lease() -> None:
-            if writer_lease_lost.is_set():
-                raise RuntimeError("Lost search index writer lease during rebuild")
-            try:
-                await self._renew_index_write_lease(lease, lease_ttl_seconds)
-            except Exception:
-                writer_lease_lost.set()
-                raise
-
-        writer_heartbeat = asyncio.create_task(_writer_lease_heartbeat())
-
-        started_at = datetime.now(timezone.utc)
-        started_clock = monotonic_time.perf_counter()
-        generation = uuid4().hex[:12]
-        profile_owner = resource_owner or f"search-rebuild-{generation}"
-        staging = {
-            live_index: f"{live_index}__staging_{generation}"
-            for live_index in live_indexes
-        }
-        stats: dict[str, int] = {live_index: 0 for live_index in live_indexes}
-        work_batches = 0
-        replay_log: BinaryIO | None = None
-        replayed_count = 0
-        try:
-            for live_index, staging_index in staging.items():
-                async def _create_slice(
-                    _limits: Any,
-                    *,
-                    current_live: str = live_index,
-                    current_staging: str = staging_index,
-                ) -> None:
-                    await _assert_writer_lease()
-                    await asyncio.to_thread(
-                        _create_staging_index,
-                        client,
-                        current_live,
-                        current_staging,
-                    )
-
-                await _run_profiled_search_slice(
-                    profile_owner,
-                    _create_slice,
-                    max_work_units=1,
-                )
-                await self._renew_index_write_lease(lease, lease_ttl_seconds)
-
-            repository_maps = None
-            if WORKS_INDEX in live_indexes:
-                stats[WORKS_INDEX], work_batches, repository_maps = (
-                    await self._stream_works_to_index(
-                        client,
-                        staging[WORKS_INDEX],
-                        batch_size=batch_size,
-                        lease=lease,
-                        lease_ttl_seconds=lease_ttl_seconds,
-                        resource_owner=profile_owner,
-                    )
-                )
-
-            for live_index in live_indexes:
-                if live_index == WORKS_INDEX:
-                    continue
-                reference_count, _reference_batches = (
-                    await self._stream_reference_to_index(
-                        client,
-                        live_index,
-                        staging[live_index],
-                        batch_size=batch_size,
-                        lease=lease,
-                        lease_ttl_seconds=lease_ttl_seconds,
-                        resource_owner=profile_owner,
-                    )
-                )
-                stats[live_index] = reference_count
-
-            if WORKS_INDEX in live_indexes:
-                assert repository_maps is not None
-                replay_log, replayed_count = (
-                    await self._replay_work_events_to_staging(
-                    client,
-                    staging[WORKS_INDEX],
-                    since=started_at,
-                    lease=lease,
-                    lease_ttl_seconds=lease_ttl_seconds,
-                    resource_owner=profile_owner,
-                    )
-                )
-
-            await self._renew_index_write_lease(lease, lease_ttl_seconds)
-
-            def _swap() -> None:
-                for live_index in live_indexes:
-                    _ensure_live_index_for_swap(client, live_index)
-                _wait_for_task(
-                    client,
-                    client.swap_indexes([
-                        (live_index, staging[live_index])
-                        for live_index in live_indexes
-                    ]),
-                    timeout_in_ms=MEILI_TASK_TIMEOUT_MS,
-                )
-                _remember_live_settings(live_indexes, client)
-
-            async def _swap_slice(_limits: Any) -> None:
-                # Validate the fencing token only after the maintenance
-                # barrier is held.  A long wait for other slices therefore
-                # cannot end in a stale rebuild swapping over a newer writer.
-                await _assert_writer_lease()
-                await asyncio.to_thread(_swap)
-
-            # Swapping the staging indexes is the only rebuild phase that must
-            # exclude every other disk profile.  The maintenance permit is
-            # deliberately held only for this short atomic cut-over.
-            await _run_profiled_search_slice(
-                profile_owner,
-                _swap_slice,
-                workload="maintenance",
-                max_work_units=1,
-            )
-            if replay_log is not None:
-                while payload := replay_log.read(
-                    _REBUILD_REPLAY_RECORD.size * WORK_DOCUMENT_BATCH_SIZE
-                ):
-                    if len(payload) % _REBUILD_REPLAY_RECORD.size:
-                        raise RuntimeError("Corrupt search rebuild replay log")
-                    versions = [
-                        (
-                            UUID(bytes=event_id),
-                            int(version),
-                        )
-                        for event_id, version in _REBUILD_REPLAY_RECORD.iter_unpack(
-                            payload
-                        )
-                    ]
-                    await complete_projection_versions(versions)
-            await prune_completed_projection_events(retention_hours=24)
-            await _refresh_search_index_checkpoints(live_indexes)
-            return {
-                "status": "ok",
-                "counts": stats,
-                "batches": work_batches,
-                "replayed": replayed_count,
-                "seconds": round(monotonic_time.perf_counter() - started_clock, 1),
-            }
-        finally:
-            try:
-                if not writer_lease_lost.is_set():
-                    for staging_index in staging.values():
-                        async def _cleanup_slice(
-                            _limits: Any,
-                            *,
-                            current_staging: str = staging_index,
-                        ) -> None:
-                            await _assert_writer_lease()
-                            await asyncio.to_thread(
-                                _drop_index_best_effort,
-                                client,
-                                current_staging,
-                            )
-
-                        try:
-                            await _run_profiled_search_slice(
-                                profile_owner,
-                                _cleanup_slice,
-                                max_work_units=1,
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:
-                            # Never perform an ungoverned delete just to clean
-                            # a failed rebuild.  A uniquely named orphan is safe
-                            # and can be reclaimed by a later run.
-                            logger.warning(
-                                "Unable to clean staging search index %s",
-                                staging_index,
-                                exc_info=True,
-                            )
-            finally:
-                if replay_log is not None:
-                    replay_log.close()
-                heartbeat_stop.set()
-                writer_heartbeat.cancel()
-                try:
-                    await writer_heartbeat
-                except asyncio.CancelledError:
-                    pass
-                await asyncio.to_thread(
-                    cache_release_lock,
-                    INDEX_WRITE_LOCK,
-                    lease,
-                )
+        result = await start_rebuild(live_indexes, batch_size=batch_size, owner=resource_owner)
+        if result["status"] == "pending":
+            wake_pending_outboxes({"search": 1})
+        return result
 
     async def refresh_reference_indexes(self) -> None:
         """Atomically refresh reference projections with bounded peak memory."""
@@ -5182,6 +5644,7 @@ class SearchService:
                 TAGS_INDEX,
                 REPOSITORIES_INDEX,
                 SUBSCRIPTIONS_INDEX,
+                MEMBERSHIPS_INDEX,
             ))
         except Exception:
             logger.warning("Reference search indexing failed", exc_info=True)
@@ -5195,8 +5658,8 @@ class SearchService:
                 batch_size=batch_size,
             )
             return {
-                "status": "ok",
-                "total": int(result["counts"][WORKS_INDEX]),
+                **result,
+                "total": int(result["counts"].get(WORKS_INDEX, 0)),
                 "batches": int(result["batches"]),
                 "replayed": int(result["replayed"]),
                 "seconds": result["seconds"],
@@ -5290,6 +5753,7 @@ class SearchService:
             TAGS_INDEX: Tag,
             REPOSITORIES_INDEX: SubscriptionSource,
             SUBSCRIPTIONS_INDEX: Subscription,
+            MEMBERSHIPS_INDEX: UserSubscription,
         }
 
         async def _database_ids(model: Any) -> set[str]:
@@ -5382,7 +5846,7 @@ class SearchService:
             def _read_hashes(batch_ids: list[str]) -> dict[str, tuple[Any, Any]]:
                 client = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS)
                 page = client.index(WORKS_INDEX).get_documents(
-                    ids=batch_ids,
+                    filter=_meili_document_ids_filter(batch_ids),
                     limit=len(batch_ids),
                     fields=["id", "projection_version", "projection_hash"],
                 )
@@ -5441,6 +5905,39 @@ class SearchService:
         indexes["works"]["field_drift_ids_truncated"] = (
             field_drift_count > len(field_drift_ids)
         )
+        member_audited = 0
+        member_drift = []
+        member_drift_count = 0
+        cursor = None
+        while True:
+            statement = select(UserSubscription.id).order_by(UserSubscription.id).limit(500)
+            if cursor is not None:
+                statement = statement.where(UserSubscription.id > cursor)
+            async with async_session() as db:
+                ids = tuple((await db.execute(statement)).scalars())
+                if not ids:
+                    break
+                expected_docs = await SearchService(db)._build_membership_documents(ids)
+            def read_member_hashes():
+                page = _client(timeout_seconds=MEILI_WRITE_TIMEOUT_SECONDS).index(MEMBERSHIPS_INDEX).get_documents(
+                    filter=_meili_document_ids_filter(map(str, ids)), limit=len(ids),
+                    fields=["id", "projection_hash"],
+                )
+                docs, _ = _page_results(page)
+                return {doc["id"]: doc.get("projection_hash") for doc in docs}
+            actual = await asyncio.to_thread(read_member_hashes)
+            drift = [doc["id"] for doc in expected_docs if actual.get(doc["id"]) != doc["projection_hash"]]
+            member_audited += len(expected_docs)
+            member_drift_count += len(drift)
+            member_drift.extend(drift[:max(0, drift_id_limit - len(member_drift))])
+            cursor = ids[-1]
+        indexes["subscription_memberships"].update(
+            field_audit_count=member_audited, field_drift_count=member_drift_count,
+            field_drift_ids=member_drift, field_drift_ids_truncated=member_drift_count > len(member_drift),
+        )
+        if member_drift_count:
+            has_drift = True
+            indexes["subscription_memberships"]["status"] = "drift"
         return {"status": "drift" if has_drift else "ok", "indexes": indexes}
 
     async def reindex(self, *, resource_owner: str | None = None) -> dict:
@@ -5451,6 +5948,7 @@ class SearchService:
                 TAGS_INDEX,
                 REPOSITORIES_INDEX,
                 SUBSCRIPTIONS_INDEX,
+                MEMBERSHIPS_INDEX,
             ), resource_owner=resource_owner)
         except Exception as exc:
             logger.exception("Search reindex failed")
@@ -5458,6 +5956,8 @@ class SearchService:
                 "status": "error",
                 "message": str(exc),
             }
+        if result["status"] != "ok":
+            return result
         stats = result["counts"]
         return {
             "status": "ok",

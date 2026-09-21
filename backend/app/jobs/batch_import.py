@@ -256,6 +256,12 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     sources_count += 1
 
                 from app.services.creator import CreatorService
+                from app.services.creator_aliases import backfill_creator_alias_batch
+                await backfill_creator_alias_batch(
+                    db,
+                    (creator.id,),
+                    request_projection=False,
+                )
                 await CreatorService(db)._request_creator_projection(creator.id)
                 await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()
@@ -464,6 +470,12 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     sources_created += 1
 
                 from app.services.creator import CreatorService
+                from app.services.creator_aliases import backfill_creator_alias_batch
+                await backfill_creator_alias_batch(
+                    db,
+                    (creator.id,),
+                    request_projection=False,
+                )
                 await CreatorService(db)._request_creator_projection(creator.id)
                 await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()

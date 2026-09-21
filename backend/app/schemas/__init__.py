@@ -4,6 +4,18 @@ from app.schemas.source_creator import SourceCreatorRead, SourceCreatorCreate
 from app.schemas.creator_link import CreatorLinkRead, CreatorLinkCreate, CreatorLinkUpdate
 from app.schemas.subscription import SubscriptionRead, SubscriptionCreate, SubscriptionUpdate
 from app.schemas.subscription_source import SubscriptionSourceRead, SubscriptionSourceCreate, SubscriptionSourceUpdate
+from app.schemas.remote_discovery import (
+    DiscoveryCandidateRead,
+    RemoteAccountCreate,
+    RemoteAccountRead,
+    RemoteAccountUpdate,
+    UserSubscriptionCreate,
+    UserSubscriptionRead,
+    UserSubscriptionSourceCreate,
+    UserSubscriptionSourceRead,
+    UserSubscriptionSourceUpdate,
+    UserSubscriptionUpdate,
+)
 from app.schemas.download_job import DownloadJobRead, DownloadJobCreate
 from app.schemas.import_job import ImportJobRead
 from app.schemas.work import WorkRead, WorkList
@@ -18,6 +30,9 @@ __all__ = [
     "CreatorLinkRead", "CreatorLinkCreate", "CreatorLinkUpdate",
     "SubscriptionRead", "SubscriptionCreate", "SubscriptionUpdate",
     "SubscriptionSourceRead", "SubscriptionSourceCreate", "SubscriptionSourceUpdate",
+    "UserSubscriptionRead", "UserSubscriptionCreate", "UserSubscriptionUpdate",
+    "UserSubscriptionSourceRead", "UserSubscriptionSourceCreate", "UserSubscriptionSourceUpdate",
+    "RemoteAccountRead", "RemoteAccountCreate", "RemoteAccountUpdate", "DiscoveryCandidateRead",
     "DownloadJobRead", "DownloadJobCreate",
     "ImportJobRead",
     "WorkRead", "WorkList",

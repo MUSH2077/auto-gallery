@@ -378,22 +378,25 @@ def test_schedule_decision_snapshot_manual_has_no_next_due():
 
 
 def test_system_router_exposes_workbench_and_scheduler_decisions_routes():
-    # scheduler-decisions moved to `tasks_ops_router` (Task 6 fix round 1:
-    # scheduler operations belong to the `tasks` permission module, not
-    # `system`) — check both routers defined in app.api.system.
+    # Scheduler status and plans back the system-only scheduler page. Keep
+    # them on the system router so its navigation and API boundary agree.
     from app.api.system import router, tasks_ops_router
 
-    paths = {route.path for route in router.routes} | {route.path for route in tasks_ops_router.routes}
-    assert "/system/workbench" in paths
-    assert "/system/scheduler-decisions" in paths
+    system_paths = {route.path for route in router.routes}
+    task_paths = {route.path for route in tasks_ops_router.routes}
+    assert "/system/workbench" in system_paths
+    assert "/system/queue-stats" in system_paths
+    assert "/system/scheduler-decisions" in system_paths
+    assert "/system/queue-stats" not in task_paths
+    assert "/system/scheduler-decisions" not in task_paths
 
 
 def test_scheduler_disabled_is_global_suppression_not_one_attention_per_source():
     import inspect
 
-    from app.api.system import scheduler_decisions
+    from app.services.scheduler_decisions import decision_item
 
-    source = inspect.getsource(scheduler_decisions)
+    source = inspect.getsource(decision_item)
     assert 'suppression_reason = "scheduler_disabled"' in source
     assert '\n            reason = "scheduler_disabled"' not in source
     assert '"scheduler_disabled",' not in source[source.index("is_attention =") :]

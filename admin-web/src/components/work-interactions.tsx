@@ -170,22 +170,30 @@ export function WorkPreviewOverlay({
   const ratio = naturalRatio || ((currentAsset?.width || 0) > 0 && (currentAsset?.height || 0) > 0 ? (currentAsset!.width! / currentAsset!.height!) : 4 / 3);
   const style = useMemo(() => previewPosition(anchor, ratio, previewSize), [anchor, ratio, previewSize]);
   const canPage = Math.max(assetIds.length, assets?.length || 0) > 1;
+  const overlayRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setNaturalRatio(null);
   }, [currentSrc, currentId]);
 
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay || !canPage) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      onWheelPage(event.deltaY > 0 ? 1 : -1);
+    };
+    overlay.addEventListener("wheel", onWheel, { passive: false });
+    return () => overlay.removeEventListener("wheel", onWheel);
+  }, [canPage, onWheelPage]);
+
   return (
     <div
+      ref={overlayRef}
       className="popover fixed z-50 overflow-hidden rounded-md border border-border bg-surface shadow-overlay"
       style={style}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      onWheel={(event) => {
-        if (!canPage) return;
-        event.preventDefault();
-        onWheelPage(event.deltaY > 0 ? 1 : -1);
-      }}
     >
       <div className="relative flex items-center justify-center bg-canvas" style={{ height: "var(--preview-image-height)" }}>
         {isLoading ? (

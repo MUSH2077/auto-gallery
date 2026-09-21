@@ -1,12 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Literal
 from app.auth import RequirePermission
 from sqlalchemy import delete as sql_delete, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.tag import TagRead, TagCreate, TagUpdate, TagDetail, CreatorRef, TagSourceUsage
+from app.schemas.tag import TagRead, TagPage, TagCreate, TagUpdate, TagDetail, CreatorRef, TagSourceUsage
 from app.repositories.tag import TagRepository, source_usage_by_tag
 from app.services.search_projection_outbox import request_search_projection
 from app.models.tag import Tag
@@ -35,6 +36,14 @@ async def list_tags(offset: int = 0, limit: int = 100,
         sort_by=sort_by,
         sort_order=sort_order,
     )
+
+
+@router.get("/page", response_model=TagPage)
+async def tag_page(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                   q: str | None = Query(None, max_length=255), category: str | None = None,
+                   sort_by: Literal["name", "usage_count"] = "usage_count",
+                   sort_order: Literal["asc", "desc"] = "desc", db: AsyncSession = Depends(get_db)):
+    return await TagRepository(db).page(offset=offset, limit=limit, q=q, category=category, sort_by=sort_by, sort_order=sort_order)
 
 
 @router.get("/{tag_id}", response_model=TagDetail)

@@ -9,19 +9,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.download_job import DownloadJob
 from app.models.task_run import TaskRun
 from app.models.task_state import transition_download_job
-from app.services.backpressure import DownloadAdmissionError, enqueue_download_rq
+from app.services.backpressure import (
+    DownloadAdmissionError,
+    enqueue_download_rq,
+    is_transient_redis_admission_error,
+)
 from app.services.job_manifest import append_manifest_event
 from app.services.job_progress import apply_download_progress
 from app.services.redis_client import get_redis
@@ -35,6 +39,55 @@ DISPATCH_PENDING = "pending"
 DISPATCH_PUBLISHED = "published"
 DISPATCH_FAILED = "failed"
 DISPATCH_INVALID = "invalid"
+TRANSIENT_ADMISSION_CODES = frozenset({
+    "queue_saturated",
+    "enqueue_busy",
+    "redis_capacity",
+    "redis_unwritable",
+})
+# The publication fence protects two small rows while one deterministic Redis
+# publication is resolved. Bound database contention independently of Redis'
+# own five-second admission-lock wait so API and recovery callers cannot hang.
+DOWNLOAD_DISPATCH_LOCK_WAIT_MS = 1000
+
+
+class _DownloadDispatchLockBusy(RuntimeError):
+    """The exact-attempt publication fence could not be acquired in time."""
+
+
+def _is_postgres_lock_timeout(exc: BaseException) -> bool:
+    """Recognize PostgreSQL lock timeout by SQLSTATE, never error text."""
+
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if (
+            getattr(current, "sqlstate", None) == "55P03"
+            or getattr(current, "pgcode", None) == "55P03"
+        ):
+            return True
+        for nested in (
+            getattr(current, "orig", None),
+            current.__cause__,
+            current.__context__,
+        ):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
+
+
+def is_transient_download_dispatch_error(exc: Exception) -> bool:
+    """Classify only recognized capacity and Redis transport failures."""
+
+    if isinstance(exc, DownloadAdmissionError):
+        if exc.transient is not None:
+            return exc.transient
+        return exc.code in TRANSIENT_ADMISSION_CODES
+    return is_transient_redis_admission_error(exc)
 
 
 @dataclass(frozen=True)
@@ -239,10 +292,10 @@ async def publish_prepared_download(
 ) -> Any:
     """Commit the durable intent, then atomically publish it to Redis.
 
-    If publication is rejected, both the domain job and its TaskRun are moved
-    to ``failed`` in a compensating transaction.  A crash/timeout after Redis
-    accepts the request is safe because ``rq_job_id`` was committed first and
-    the atomic publisher resolves that deterministic id before retrying.
+    A definite publication rejection moves both the domain job and its TaskRun
+    to ``failed`` in a compensating transaction. An uncertain acknowledgement
+    remains pending because ``rq_job_id`` was committed first and bounded
+    recovery can resolve that deterministic id safely.
     """
 
     effective_job_timeout = prepared.job_timeout if job_timeout is None else int(job_timeout)
@@ -255,43 +308,147 @@ async def publish_prepared_download(
     if effective_action != prepared.action:
         raise ValueError("publish action differs from the durable dispatch intent")
 
+    job_id = UUID(str(job.id))
+    task_id = (
+        UUID(str(prepared.task.id))
+        if isinstance(job, DownloadJob) and isinstance(prepared.task, TaskRun)
+        else None
+    )
+    rq_job_id = prepared.rq_job_id
+
     # This is the critical ordering boundary: no worker can see the RQ job
     # until DownloadJob + TaskRun + deterministic rq_job_id are durable.
     await db.commit()
+    rows_locked = False
+    if task_id is not None:
+        try:
+            locked_job, locked_task = await _locked_download_dispatch_rows(
+                db,
+                job_id=job_id,
+                task_id=task_id,
+            )
+        except _DownloadDispatchLockBusy as exc:
+            await db.rollback()
+            raise DownloadAdmissionError(
+                "enqueue_busy",
+                "Download dispatch is already being published; retry shortly",
+                details={
+                    "job_id": str(job_id),
+                    "rq_job_id": rq_job_id,
+                    "lock_wait_ms": DOWNLOAD_DISPATCH_LOCK_WAIT_MS,
+                },
+                transient=True,
+            ) from exc
+        if locked_job is None or locked_task is None:
+            await db.rollback()
+            raise DownloadAdmissionError(
+                "dispatch_superseded",
+                "Download dispatch attempt no longer exists",
+                status_code=409,
+                details={"job_id": str(job_id), "rq_job_id": rq_job_id},
+            )
+
+        dispatch = dict((locked_task.meta or {}).get(DISPATCH_META_KEY) or {})
+        same_attempt = (
+            str(locked_task.rq_job_id or "") == prepared.rq_job_id
+            and str(dispatch.get("rq_job_id") or "") == prepared.rq_job_id
+        )
+        if (
+            same_attempt
+            and dispatch.get("state") == DISPATCH_PENDING
+            and locked_job.status == "enqueued"
+            and locked_task.status == "enqueued"
+        ):
+            job = locked_job
+            prepared = replace(prepared, task=locked_task)
+            rows_locked = True
+        elif same_attempt and (
+            dispatch.get("state") == DISPATCH_PUBLISHED
+            or (
+                dispatch.get("state") == DISPATCH_PENDING
+                and (
+                    locked_job.status != "enqueued"
+                    or locked_task.status != "enqueued"
+                )
+            )
+        ):
+            # A recovery publisher or worker already proved publication. The
+            # caller does not consume the return value, and replaying here
+            # could recreate a cleaned-up deterministic RQ record.
+            await db.commit()
+            return None
+        else:
+            await db.rollback()
+            raise DownloadAdmissionError(
+                "dispatch_superseded",
+                "Download dispatch attempt is no longer pending",
+                status_code=409,
+                details={"job_id": str(job_id), "rq_job_id": rq_job_id},
+            )
+
     try:
         rq_job = await asyncio.to_thread(
             enqueue_download_rq,
             prepared.queue_name,
             "app.jobs.download.run_download_job",
-            str(job.id),
+            str(job_id),
             rq_job_id=prepared.rq_job_id,
             job_timeout=effective_job_timeout,
             delay_seconds=effective_delay,
         )
     except DownloadAdmissionError as exc:
-        exc.details.setdefault("job_id", str(job.id))
+        exc.details.setdefault("job_id", str(job_id))
+        if exc.publication_uncertain:
+            try:
+                accepted = await asyncio.to_thread(
+                    _fetch_download_rq_job,
+                    prepared.rq_job_id,
+                )
+            except Exception as confirmation_exc:
+                # Preserve the pending outbox when neither success nor absence
+                # can be established. A later bounded recovery retries the
+                # same deterministic id.
+                await db.rollback()
+                logger.warning(
+                    "Unable to confirm ambiguous direct download publication "
+                    "job=%s rq_job=%s",
+                    job_id,
+                    prepared.rq_job_id,
+                    exc_info=True,
+                )
+                raise exc from confirmation_exc
+            if accepted is not None:
+                if rows_locked:
+                    _set_dispatch_state(prepared.task, DISPATCH_PUBLISHED)
+                    await db.commit()
+                return accepted
         try:
             await _persist_dispatch_failure(db, job, prepared, exc)
         except Exception:
             logger.exception(
                 "Failed to persist enqueue compensation for download %s",
-                job.id,
+                job_id,
             )
         raise
     except Exception as exc:
         admission = DownloadAdmissionError(
             "redis_unwritable",
             "Download queue rejected the job",
-            details={"error_type": type(exc).__name__, "job_id": str(job.id)},
+            details={"error_type": type(exc).__name__, "job_id": str(job_id)},
         )
         try:
             await _persist_dispatch_failure(db, job, prepared, admission)
         except Exception:
             logger.exception(
                 "Failed to persist enqueue compensation for download %s",
-                job.id,
+                job_id,
             )
         raise admission from exc
+
+    if rows_locked:
+        # Release the exact-attempt publication fence before the RQ worker
+        # updates either row. This transaction contains locking reads only.
+        await db.commit()
 
     # Do not write the detached/pre-publication DownloadJob snapshot again
     # here.  The worker can start immediately after RQ's EXEC; a second commit
@@ -300,7 +457,7 @@ async def publish_prepared_download(
     # and the worker's state transition is the durable acceptance evidence.
     logger.info(
         "Published download %s to %s as %s (action=%s delay=%s)",
-        job.id,
+        job_id,
         prepared.queue_name,
         prepared.rq_job_id,
         effective_action,
@@ -368,23 +525,37 @@ async def _locked_download_dispatch_rows(
     job_id: UUID,
     task_id: UUID,
 ) -> tuple[DownloadJob | None, TaskRun | None]:
-    job = (
-        await db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.id == job_id)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if job is None:
-        return None, None
-    task = (
-        await db.execute(
-            select(TaskRun)
-            .where(TaskRun.id == task_id)
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    return job, task
+    # Global order: DownloadJob, TaskRun, then optional scheduler-batch parent.
+    # SET LOCAL scopes the wait budget to this transaction and resets on its
+    # commit/rollback, including pooled production connections.
+    await db.execute(
+        text("SELECT set_config('lock_timeout', :value, true)"),
+        {"value": str(max(1, int(DOWNLOAD_DISPATCH_LOCK_WAIT_MS)))},
+    )
+    try:
+        job = (
+            await db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == job_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if job is None:
+            return None, None
+        task = (
+            await db.execute(
+                select(TaskRun)
+                .where(TaskRun.id == task_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return job, task
+    except Exception as exc:
+        if _is_postgres_lock_timeout(exc):
+            raise _DownloadDispatchLockBusy from exc
+        raise
 
 
 async def _persist_terminal_rq_record(
@@ -395,6 +566,7 @@ async def _persist_terminal_rq_record(
     rq_job,
     rq_job_id: str,
     rq_status: str,
+    locked_rows: tuple[DownloadJob, TaskRun] | None = None,
 ) -> bool:
     """Make an RQ-terminal/DB-enqueued split-brain state explicit."""
 
@@ -403,15 +575,17 @@ async def _persist_terminal_rq_record(
     diagnostics = _rq_terminal_diagnostics(rq_job, rq_status)
     diagnostics["rq_job_id"] = rq_job_id
 
-    # The Redis lookup is deliberately outside row locks. Reacquire current
-    # authoritative rows before making a terminal transition so a concurrent
-    # retry/resume with a newer deterministic id always wins.
-    await db.rollback()
-    job, task = await _locked_download_dispatch_rows(
-        db,
-        job_id=job_id,
-        task_id=task_id,
-    )
+    if locked_rows is None:
+        # Legacy callers resolve Redis before this helper. Reacquire current
+        # rows before terminalizing so a newer deterministic attempt wins.
+        await db.rollback()
+        job, task = await _locked_download_dispatch_rows(
+            db,
+            job_id=job_id,
+            task_id=task_id,
+        )
+    else:
+        job, task = locked_rows
     if (
         job is None
         or task is None
@@ -473,7 +647,94 @@ async def _persist_terminal_rq_record(
     return True
 
 
-async def recover_download_dispatch_candidate(
+async def _persist_dispatch_recovery_error(
+    db: AsyncSession,
+    job_id: UUID | str,
+    task_id: UUID | str,
+    *,
+    rq_job_id: str,
+    exc: Exception,
+    locked_rows: tuple[DownloadJob, TaskRun] | None = None,
+) -> bool:
+    """Fail an exact pending attempt after a non-transient recovery fault."""
+
+    job_id = UUID(str(job_id))
+    task_id = UUID(str(task_id))
+    if locked_rows is None:
+        await db.rollback()
+        job, task = await _locked_download_dispatch_rows(
+            db,
+            job_id=job_id,
+            task_id=task_id,
+        )
+    else:
+        job, task = locked_rows
+    if (
+        job is None
+        or task is None
+        or job.status != "enqueued"
+        or task.status != "enqueued"
+        or str(task.rq_job_id or "") != rq_job_id
+        or ((task.meta or {}).get(DISPATCH_META_KEY) or {}).get("state")
+        != DISPATCH_PENDING
+    ):
+        await db.rollback()
+        return False
+
+    diagnostic_exc = (
+        exc.__cause__
+        if isinstance(exc, DownloadAdmissionError) and exc.__cause__ is not None
+        else exc
+    )
+    message = (
+        "Download dispatch recovery failed before publication could be "
+        f"confirmed ({type(diagnostic_exc).__name__}: {diagnostic_exc})"
+    )[:5000]
+    transition_download_job(job, "failed", message)
+    apply_download_progress(job, "failed", message, publish=False)
+    _set_dispatch_state(task, DISPATCH_FAILED, error=message)
+    task_result = dict(task.result_data or {})
+    task_result["download_dispatch_failure"] = {
+        "code": "dispatch_recovery_error",
+        "error_type": type(diagnostic_exc).__name__,
+        "rq_job_id": rq_job_id,
+    }
+    if isinstance(exc, DownloadAdmissionError):
+        task_result["download_dispatch_failure"]["admission_code"] = exc.code
+    await TaskService(db).update_task(
+        task,
+        status="failed",
+        progress=job.progress_data,
+        result=task_result,
+        error=message,
+        meta=task.meta,
+        rq_job_id=rq_job_id,
+        reason_code="dispatch_recovery_error",
+    )
+    append_manifest_event(
+        job,
+        "dispatch_recovery_failed",
+        rq_job_id=rq_job_id,
+        error_type=type(diagnostic_exc).__name__,
+        admission_code=exc.code if isinstance(exc, DownloadAdmissionError) else None,
+    )
+    await request_search_projection(
+        db,
+        subscription_ids=[job.subscription_id] if job.subscription_id else (),
+    )
+    await db.commit()
+    return True
+
+
+async def recover_download_dispatch_candidate(db, task, job, *, redis_client=None) -> str:
+    if (task.meta or {}).get("scheduler_batch_task_id"):
+        from app.services.redis_budget import budget_redis
+        with budget_redis(seconds=5, reserve_seconds=0):
+            return await _recover_download_dispatch_candidate(db, task, job, redis_client=get_redis())
+    return await _recover_download_dispatch_candidate(db, task, job, redis_client=redis_client)
+
+
+async def _recover_download_dispatch_candidate(
     db: AsyncSession,
     task: TaskRun,
     job: DownloadJob,
@@ -482,17 +743,44 @@ async def recover_download_dispatch_candidate(
 ) -> str:
     """Recover one committed download publication intent.
 
-    Capacity and Redis failures are deliberately non-terminal here: the
-    original request is gone, so the durable outbox row remains pending for a
-    later bounded recovery cycle instead of being compensated to ``failed``.
+    Recognized transient capacity, lock, and Redis transport failures remain
+    pending for a later bounded recovery cycle. Definite nontransient failures
+    become actionable only after the fixed RQ id is confirmed absent.
     """
 
-    if task.status != "enqueued" or job.status != "enqueued":
-        return "skipped"
-    if ((task.meta or {}).get(DISPATCH_META_KEY) or {}).get("state") != DISPATCH_PENDING:
-        return "skipped"
     task_id = str(task.id)
     job_id = str(job.id)
+    rows_locked = False
+    if isinstance(task, TaskRun) and isinstance(job, DownloadJob):
+        try:
+            locked_job, locked_task = await _locked_download_dispatch_rows(
+                db,
+                job_id=UUID(job_id),
+                task_id=UUID(task_id),
+            )
+        except _DownloadDispatchLockBusy:
+            await db.rollback()
+            logger.warning(
+                "Download dispatch recovery deferred for publication fence "
+                "task=%s job=%s",
+                task_id,
+                job_id,
+            )
+            return "deferred"
+        if locked_job is None or locked_task is None:
+            await db.rollback()
+            return "skipped"
+        job, task = locked_job, locked_task
+        rows_locked = True
+
+    if task.status != "enqueued" or job.status != "enqueued":
+        if rows_locked:
+            await db.rollback()
+        return "skipped"
+    if ((task.meta or {}).get(DISPATCH_META_KEY) or {}).get("state") != DISPATCH_PENDING:
+        if rows_locked:
+            await db.rollback()
+        return "skipped"
     try:
         payload = _validated_dispatch_payload(task, job)
     except (TypeError, ValueError) as exc:
@@ -501,6 +789,22 @@ async def recover_download_dispatch_candidate(
         logger.error("Invalid download dispatch outbox task=%s: %s", task_id, exc)
         return "invalid"
 
+    # A batch parent is the cancellation fence for *all* publications,
+    # including outbox replay after a process restart. Take it after domain
+    # locks; cancellation commits its parent-only fence before child cleanup.
+    batch = None
+    batch_parent_id = (task.meta or {}).get("scheduler_batch_task_id")
+    if batch_parent_id:
+        from app.models.scheduler_batch import SchedulerBatch
+        batch = (await db.execute(select(SchedulerBatch).where(
+            SchedulerBatch.task_id == UUID(batch_parent_id)))).scalar_one_or_none()
+        if batch is not None:
+            parent = (await db.execute(select(TaskRun).where(TaskRun.id == UUID(batch_parent_id))
+                .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+            if parent is None or parent.status not in {"enqueued", "running", "recovering", "paused"}:
+                await db.rollback()
+                return "cancelled"
+
     try:
         existing = await asyncio.to_thread(
             _fetch_download_rq_job,
@@ -508,10 +812,21 @@ async def recover_download_dispatch_candidate(
             redis_client=redis_client,
         )
         if existing is not None:
-            rq_status, is_active = await asyncio.to_thread(
-                _rq_job_state,
-                existing,
-            )
+            try:
+                rq_status, is_active = await asyncio.to_thread(
+                    _rq_job_state,
+                    existing,
+                )
+            except Exception:
+                # The deterministic RQ record itself is publication proof.
+                # A faulty status adapter must not compensate work that Redis
+                # can still deliver.
+                logger.exception(
+                    "Unable to inspect existing download RQ status task=%s job=%s",
+                    task_id,
+                    job_id,
+                )
+                rq_status, is_active = "unknown", True
             if not is_active:
                 persisted = await _persist_terminal_rq_record(
                     db,
@@ -520,10 +835,12 @@ async def recover_download_dispatch_candidate(
                     rq_job=existing,
                     rq_job_id=payload["rq_job_id"],
                     rq_status=rq_status,
+                    locked_rows=(job, task) if rows_locked else None,
                 )
                 return "terminal" if persisted else "skipped"
         if existing is None:
-            await asyncio.to_thread(
+            from app.jobs.admin_operations import _await_admin_file_finalizer
+            await _await_admin_file_finalizer(asyncio.to_thread(
                 enqueue_download_rq,
                 payload["queue_name"],
                 "app.jobs.download.run_download_job",
@@ -532,25 +849,83 @@ async def recover_download_dispatch_candidate(
                 job_timeout=payload["job_timeout"],
                 delay_seconds=payload["delay_seconds"],
                 redis_client=redis_client,
-            )
+            ))
             outcome = "replayed"
         else:
             outcome = "existing"
     except Exception as exc:
-        # End the read transaction and leave both domain/task states plus the
-        # outbox metadata unchanged for the next recovery cycle.
-        await db.rollback()
-        logger.warning(
-            "Download dispatch recovery deferred task=%s job=%s error=%s",
-            task_id,
-            job_id,
-            type(exc).__name__,
-        )
-        return "deferred"
+        if is_transient_download_dispatch_error(exc):
+            # Leave both domain/task states and outbox metadata unchanged for
+            # the next recovery cycle, releasing the exact-attempt locks.
+            await db.rollback()
+            logger.warning(
+                "Download dispatch recovery deferred task=%s job=%s error=%s",
+                task_id,
+                job_id,
+                type(exc).__name__,
+            )
+            return "deferred"
+        late_existing = None
+        try:
+            late_existing = await asyncio.to_thread(
+                _fetch_download_rq_job,
+                payload["rq_job_id"],
+                redis_client=redis_client,
+            )
+        except Exception:
+            logger.warning(
+                "Unable to complete final fixed-id lookup after dispatch error "
+                "task=%s job=%s",
+                task_id,
+                job_id,
+                exc_info=True,
+            )
+            # A failed lookup never proves that the deterministic RQ job is
+            # absent, regardless of the original error category. Keep the
+            # exact durable attempt pending until its state can be checked.
+            await db.rollback()
+            return "deferred"
+        if late_existing is not None:
+            logger.warning(
+                "Recovered late fixed-id publication proof task=%s job=%s rq_job=%s",
+                task_id,
+                job_id,
+                payload["rq_job_id"],
+            )
+            existing = late_existing
+            outcome = "existing"
+        else:
+            logger.exception(
+                "Download dispatch recovery failed task=%s job=%s error=%s",
+                task_id,
+                job_id,
+                type(exc).__name__,
+            )
+            persisted = await _persist_dispatch_recovery_error(
+                db,
+                job_id,
+                task_id,
+                rq_job_id=payload["rq_job_id"],
+                exc=exc,
+                locked_rows=(job, task) if rows_locked else None,
+            )
+            return "error" if persisted else "skipped"
 
     # Refresh after Redis work so a concurrent worker/API transition is not
     # overwritten; only the TaskRun outbox metadata is changed.
-    await db.refresh(task)
+    if batch is None:
+        await db.refresh(task)
+    else:
+        # A very fast worker may already have compacted the operational row.
+        # Its durable receipt remains authoritative; never recreate the dispatch.
+        task = (await db.execute(select(TaskRun).where(TaskRun.id == UUID(task_id))
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if task is None:
+            from app.models.repository_sync_receipt import RepositorySyncReceipt
+            receipt = (await db.execute(select(RepositorySyncReceipt.id).where(
+                RepositorySyncReceipt.source_download_job_id == UUID(job_id)))).scalar_one_or_none()
+            await db.commit()
+            return "terminal" if receipt else "skipped"
     if ((task.meta or {}).get(DISPATCH_META_KEY) or {}).get("state") == DISPATCH_PENDING:
         _set_dispatch_state(task, DISPATCH_PUBLISHED)
         await db.commit()
@@ -608,6 +983,8 @@ async def recover_download_dispatch_outbox(
         "deferred": 0,
         "invalid": 0,
         "skipped": 0,
+        "cancelled": 0,
+        "error": 0,
     }
     for task, job in rows:
         await db.refresh(task)

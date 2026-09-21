@@ -1,6 +1,7 @@
 """Static contracts for the durable full-library dedup scan coordinator."""
 
 import inspect
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -45,6 +46,75 @@ def test_asset_scan_terminal_paths_release_only_the_owned_operation_lock():
     )
     assert "release_owned_operation_lock" in combined
     assert "ASSET_DEDUP_SCAN_OPERATION_LOCK" in combined
+
+
+@pytest.mark.asyncio
+async def test_latest_asset_scan_operation_uses_durable_scope(monkeypatch):
+    from app.api.admin import dedup as dedup_api
+
+    calls = []
+
+    async def fake_latest(_db, **kwargs):
+        calls.append(kwargs)
+        return {"snapshot": None, "current": None}
+
+    monkeypatch.setattr(
+        "app.services.operations.latest_successful_admin_operation",
+        fake_latest,
+    )
+
+    result = await dedup_api.latest_asset_dedup_scan(db=object())
+
+    assert result == {"snapshot": None, "current": None}
+    assert calls == [{
+        "operation_type": "asset-dedup-scan",
+        "scope_key": "lock:admin:asset-dedup-scan",
+        "include_retryable": True,
+    }]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_latest_asset_scan_restores_retryable_failure():
+    from app.database import async_session, engine
+    from app.models import TaskEvent, TaskRun
+    from app.services import operations
+
+    try:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            prepared = await operations.prepare_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                title="Failed asset dedup scan",
+                entity="assets",
+                options={"scan_id": "failed"},
+                queue_name="maintenance",
+                job_timeout=60,
+            )
+            prepared.task.status = "failed"
+            prepared.task.error_log = "fixture failure"
+            prepared.task.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            state = await operations.latest_successful_admin_operation(
+                db,
+                operation_type="asset-dedup-scan",
+                scope_key="lock:admin:asset-dedup-scan",
+                include_retryable=True,
+            )
+
+            assert state["snapshot"] is None
+            assert state["current"]["task_id"] == str(prepared.task.id)
+            assert state["current"]["status"] == "failed"
+    finally:
+        async with async_session() as db:
+            await db.execute(delete(TaskEvent))
+            await db.execute(delete(TaskRun).where(TaskRun.kind == "admin"))
+            await db.commit()
+        await engine.dispose()
 
 
 @pytest.mark.integration

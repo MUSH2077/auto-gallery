@@ -5,9 +5,10 @@ import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta, GalleryDLMultiConfig } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { PageHeader, ErrorState, PageShell } from "@/components";
+import { PageHeader, ErrorState, PageShell, PermissionGuard } from "@/components";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
+import { parseOptionalFiniteNumber } from "@/lib/task-actions";
 
 type TabKey = "pixiv" | "twitter" | "iwara" | "danbooru" | "pinterest" | "lofter" | "weibo" | "bilibili";
 type PatternTarget = "directory" | "filename";
@@ -478,7 +479,7 @@ function initBilibili(d: any): BilibiliSourceConfig {
   };
 }
 
-export default function GalleryDLConfigPage() {
+function GalleryDLConfigContent() {
   const t = useT();
   const [activeTab, setActiveTab] = useState<TabKey>("pixiv");
   const config = useQuery({ queryKey: ["gallerydl-config"], queryFn: () => api.getGalleryDLConfig() });
@@ -510,6 +511,14 @@ export default function GalleryDLConfigPage() {
       setActiveTab={setActiveTab}
       connection={connection}
     />
+  );
+}
+
+export default function GalleryDLConfigPage() {
+  return (
+    <PermissionGuard module="system">
+      <GalleryDLConfigContent />
+    </PermissionGuard>
   );
 }
 
@@ -691,7 +700,7 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
       />
       <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.rate_limit")}</h4>
       <div className="w-64">
-        <NumberField label={t("gallerydl.sleep_seconds")} desc={t("gallerydl.sleep_seconds.desc")} value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseFloat(v) || undefined)} placeholder="0" />
+        <NumberField label={t("gallerydl.sleep_seconds")} desc={t("gallerydl.sleep_seconds.desc")} value={numStr(data.sleep_request)} onChange={(v) => set("sleep_request", parseOptionalFiniteNumber(v, undefined))} placeholder="0" />
       </div>
       <h4 className="font-medium text-sm text-fg border-b border-border pb-2">{t("gallerydl.metadata_section")}</h4>
       <div className="space-y-1">

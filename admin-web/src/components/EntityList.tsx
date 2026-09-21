@@ -34,6 +34,8 @@ export function EntityRow({
   selected = false,
   entrance,
   className = "",
+  positionInSet,
+  setSize,
 }: {
   children: ReactNode;
   label: string;
@@ -41,6 +43,8 @@ export function EntityRow({
   selected?: boolean;
   entrance?: EntityEntranceProps;
   className?: string;
+  positionInSet?: number;
+  setSize?: number;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -53,6 +57,8 @@ export function EntityRow({
   return (
     <div
       role="listitem"
+      aria-posinset={positionInSet}
+      aria-setsize={setSize}
       className={entrance?.className}
       style={entrance?.style}
     >
@@ -69,4 +75,3 @@ export function EntityRow({
     </div>
   );
 }
-

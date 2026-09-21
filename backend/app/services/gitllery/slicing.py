@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -229,6 +229,135 @@ class RepoResolver:
                     result[desc.key()] = (desc, [])
                 result[desc.key()][1].append(change)
         return result
+
+    async def _hydrate_repository_keys(
+        self,
+        keys: list[tuple[str, str]],
+    ) -> list[RepoDescriptor]:
+        """Hydrate one bounded key page with a fixed number of queries."""
+
+        if not keys:
+            return []
+
+        repos = (
+            await self.db.execute(
+                select(SubscriptionSource)
+                .where(
+                    tuple_(
+                        SubscriptionSource.source,
+                        SubscriptionSource.source_creator_id,
+                    ).in_(keys)
+                )
+                .order_by(SubscriptionSource.created_at)
+            )
+        ).scalars().all()
+        page_resolver = RepoResolver(self.db)
+        page_resolver._repo_lookup = {}
+        for repo in repos:
+            if repo.source_creator_id:
+                page_resolver._repo_lookup.setdefault(
+                    (repo.source, repo.source_creator_id),
+                    repo,
+                )
+
+        ranked_sources = (
+            select(
+                WorkSource.id.label("work_source_id"),
+                func.row_number().over(
+                    partition_by=(
+                        WorkSource.source,
+                        WorkSource.source_creator_id,
+                    ),
+                    order_by=WorkSource.id,
+                ).label("position"),
+            )
+            .where(
+                tuple_(WorkSource.source, WorkSource.source_creator_id).in_(keys)
+            )
+            .subquery()
+        )
+        work_sources = (
+            await self.db.execute(
+                select(WorkSource)
+                .join(
+                    ranked_sources,
+                    WorkSource.id == ranked_sources.c.work_source_id,
+                )
+                .where(ranked_sources.c.position == 1)
+            )
+        ).scalars().all()
+        work_source_by_key = {
+            (work_source.source, work_source.source_creator_id): work_source
+            for work_source in work_sources
+            if work_source.source_creator_id
+        }
+
+        subscription_ids = {
+            repo.subscription_id
+            for repo in page_resolver._repo_lookup.values()
+        }
+        page_resolver._creator_by_subscription = {
+            subscription_id: None for subscription_id in subscription_ids
+        }
+        if subscription_ids:
+            creator_rows = await self.db.execute(
+                select(Subscription.id, Subscription.creator_id).where(
+                    Subscription.id.in_(subscription_ids)
+                )
+            )
+            for subscription_id, creator_id in creator_rows.all():
+                page_resolver._creator_by_subscription[subscription_id] = (
+                    str(creator_id) if creator_id else None
+                )
+
+        fallback_keys = [
+            key for key in keys if key not in page_resolver._repo_lookup
+        ]
+        page_resolver._creator_by_source_creator = {
+            key: None for key in fallback_keys
+        }
+        if fallback_keys:
+            creator_rows = await self.db.execute(
+                select(
+                    SourceCreator.source,
+                    SourceCreator.source_creator_id,
+                    SourceCreator.creator_id,
+                ).where(
+                    tuple_(
+                        SourceCreator.source,
+                        SourceCreator.source_creator_id,
+                    ).in_(fallback_keys)
+                )
+            )
+            for source, source_creator_id, creator_id in creator_rows.all():
+                page_resolver._creator_by_source_creator[
+                    (source, source_creator_id)
+                ] = str(creator_id) if creator_id else None
+
+        result: list[RepoDescriptor] = []
+        for key in keys:
+            work_source = work_source_by_key.get(key)
+            if work_source is None:
+                continue
+            descriptor = await page_resolver._descriptor_for_work_source(work_source)
+            if descriptor is not None:
+                result.append(descriptor)
+        return result
+
+    async def repository_page(self, *, after: tuple[str, str] | None = None, limit: int = 25) -> list[RepoDescriptor]:
+        """Resolve one source/creator page before a bounded initialization slice."""
+        stmt = (select(WorkSource.source, WorkSource.source_creator_id)
+                .where(WorkSource.source_creator_id.isnot(None), WorkSource.source_creator_id != "")
+                .distinct().order_by(WorkSource.source, WorkSource.source_creator_id).limit(limit))
+        if after is not None:
+            stmt = stmt.where(tuple_(WorkSource.source, WorkSource.source_creator_id) > tuple_(*after))
+        keys = [
+            (source, source_creator_id)
+            for source, source_creator_id in (await self.db.execute(stmt)).all()
+        ]
+        if not keys:
+            return []
+        return await self._hydrate_repository_keys(keys)
 
     async def all_repositories(self) -> list[RepoDescriptor]:
         rows = await self.db.execute(

@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 from app.providers.pixiv import PixivProvider
 from app.providers.iwara import IwaraProvider
+from app.providers.bilibili import BilibiliProvider
 from app.providers.x import XProvider
 
 
@@ -190,6 +191,22 @@ class TestXProvider:
         assert work["posted_at"] == metadata["date"]
         assert [tag["original_name"] for tag in tags] == ["WutheringWaves", "changli"]
 
+    def test_parse_current_gallerydl_asset_uses_tweet_and_sequence_identity(self):
+        """Falling back to absent id_str would collapse every current X asset to an empty ID."""
+        metadata = {
+            "tweet_id": 1806295396614095134,
+            "num": 2,
+            "width": 2048,
+            "height": 1536,
+            "user": {"id": 1260945906582470661, "name": "xianyuliangryo"},
+        }
+
+        asset = self.p.parse_assets(metadata, ["downloaded.jpg"])[0]
+
+        assert asset["source_asset_id"] == "1806295396614095134_2"
+        assert asset["width"] == 2048
+        assert asset["height"] == 1536
+
     def test_get_creator_dir_from_url(self):
         """get_creator_dir_from_url extracts screen name from profile URL."""
         assert self.p.get_creator_dir_from_url("https://x.com/artist_handle") == "artist_handle"
@@ -221,3 +238,41 @@ class TestXProvider:
         assert url_creator != meta_creator
         assert url_creator == "artist_handle"
         assert meta_creator == "other_artist"
+
+
+class TestBilibiliProvider:
+    def setup_method(self):
+        self.p = BilibiliProvider()
+
+    def test_current_opus_metadata_uses_flat_creator_and_work_fields(self):
+        """Reading the removed nested user/id shape would create empty Bilibili identities."""
+        metadata = {
+            "opus_id": "7788",
+            "user_id": 765,
+            "username": "Bili Artist",
+            "title": "Fixture opus",
+            "content": ["A", "B"],
+            "date": "2026-09-01 10:00:00",
+            "num": 2,
+            "suffix": "l",
+            "url": "https://i0.hdslb.com/fixture.jpg",
+            "width": 1600,
+            "height": 1200,
+        }
+
+        creator = self.p.parse_source_creator(metadata)
+        work = self.p.parse_work_source(metadata)
+        asset = self.p.parse_assets(metadata, ["fixture.jpg"])[0]
+
+        assert creator["source_creator_id"] == "765"
+        assert creator["display_name"] == "Bili Artist"
+        assert work["source_work_id"] == "7788"
+        assert work["source_creator_id"] == "765"
+        assert work["source_url"] == "https://www.bilibili.com/opus/7788"
+        assert work["description"] == "A\nB"
+        assert asset["source_asset_id"] == "7788_2l"
+
+    def test_normalizes_individual_opus_url(self):
+        assert self.p.normalize_url("https://www.bilibili.com/opus/7788") == (
+            "https://www.bilibili.com/opus/7788"
+        )

@@ -22,7 +22,7 @@ servers:
       - oneTimeTicket: []
 channels:
   /api/v1/ws:
-    description: Global task event stream for the authenticated installation.
+    description: Owner-filtered task event stream for an authenticated user with task permission.
     publish:
       operationId: sendRealtimeCommand
       message:
@@ -37,6 +37,7 @@ channels:
           - $ref: "#/components/messages/Connected"
           - $ref: "#/components/messages/Pong"
           - $ref: "#/components/messages/Subscribed"
+          - $ref: "#/components/messages/SubscriptionDenied"
           - $ref: "#/components/messages/Unsubscribed"
           - $ref: "#/components/messages/StatusChange"
           - $ref: "#/components/messages/Progress"
@@ -144,6 +145,15 @@ components:
           task_id:
             type: string
             format: uuid
+    SubscriptionDenied:
+      name: subscription_denied
+      description: Identical response for malformed, unknown, and unauthorized task references.
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: subscription_denied
     Unsubscribed:
       name: unsubscribed
       payload:

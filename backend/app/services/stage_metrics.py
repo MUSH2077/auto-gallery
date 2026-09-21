@@ -12,12 +12,13 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import json
 import logging
 import os
 import resource
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -27,6 +28,87 @@ from sqlalchemy.orm import Session
 from app.database import engine
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ImportMetrics:
+    job_id: str
+    execution_token: str
+    seconds: dict[str, float] = field(default_factory=dict)
+    deferred: dict[str, int] = field(default_factory=dict)
+
+
+_import_metrics: contextvars.ContextVar[_ImportMetrics | None] = contextvars.ContextVar(
+    "import_execution_metrics", default=None,
+)
+
+
+@contextlib.contextmanager
+def import_execution_metrics(job_id, execution_token, *, queue_wait_seconds=0.0):
+    """Keep attempt timings separate, including when an older attempt exits late."""
+    metrics = _ImportMetrics(str(job_id), str(execution_token))
+    if queue_wait_seconds is not None:
+        metrics.seconds["queue_wait"] = max(0.0, queue_wait_seconds)
+    token = _import_metrics.set(metrics)
+    try:
+        yield metrics
+    finally:
+        payload = {
+            "stage": "import_execution",
+            "job_id": metrics.job_id,
+            "execution_token": metrics.execution_token,
+            "phase_timings_ms": {key: round(value * 1000) for key, value in metrics.seconds.items()},
+            "deferred_work": dict(metrics.deferred),
+        }
+        _import_metrics.reset(token)
+        _log_metrics(payload)
+
+
+@contextlib.contextmanager
+def measure_import_phase(phase: str):
+    metrics = _import_metrics.get()
+    if metrics is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        metrics.seconds[phase] = metrics.seconds.get(phase, 0.0) + time.perf_counter() - started
+
+
+def timed_import_phase(phase: str):
+    def decorate(func):
+        @functools.wraps(func)
+        async def wrapped(*args, **kwargs):
+            with measure_import_phase(phase):
+                return await func(*args, **kwargs)
+        return wrapped
+    return decorate
+
+
+def import_metrics_progress(job) -> dict[str, Any]:
+    metrics = _import_metrics.get()
+    if metrics is None or str(job.id) != metrics.job_id or str(getattr(job, "execution_token", None)) != metrics.execution_token:
+        return {}
+    return {
+        "execution_token": metrics.execution_token,
+        "phase_timings_ms": {key: round(value * 1000) for key, value in metrics.seconds.items()},
+        "deferred_work": dict(metrics.deferred),
+    }
+
+
+def record_import_deferred(**counts: int) -> None:
+    """Record only intents whose domain/outbox transaction has committed."""
+    metrics = _import_metrics.get()
+    if metrics is not None:
+        for key, value in counts.items():
+            metrics.deferred[key] = metrics.deferred.get(key, 0) + value
+
+
+def _log_metrics(payload: dict[str, Any]) -> None:
+    # Worker/RQ formatters emit %(message)s, so `extra` alone loses every value.
+    logger.info("pipeline stage metrics " + json.dumps(payload, default=str, separators=(",", ":")), extra={"stage_metrics": payload})
 
 
 @dataclass
@@ -60,7 +142,7 @@ def _install_hooks() -> None:
         @event.listens_for(Session, "after_commit")
         def _count_commit(_session) -> None:
             counters = _active.get()
-            if counters is not None:
+            if counters is not None and not _session.in_nested_transaction():
                 counters.commits += 1
 
         _hooks_installed = True
@@ -103,6 +185,9 @@ def measure_stage(
         "stage": stage,
         **{key: value for key, value in dimensions.items() if value is not None},
     }
+    execution = _import_metrics.get()
+    if execution is not None:
+        payload.update(job_id=execution.job_id, execution_token=execution.execution_token)
     outcome = "ok"
     try:
         yield payload
@@ -130,7 +215,11 @@ def measure_stage(
             rss_peak_bytes=max(rss_started, _rss_peak_bytes()),
         )
         _active.reset(token)
-        logger.info("pipeline stage metrics", extra={"stage_metrics": payload})
+        parent = _active.get()
+        if parent is not None:
+            parent.sql += counters.sql
+            parent.commits += counters.commits
+        _log_metrics(payload)
 
 
 class measure_async_stage:

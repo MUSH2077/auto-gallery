@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 
 import redis
 from rq import Worker
+from rq.exceptions import StopRequested
 from rq.worker import WorkerStatus
 
 from app.config import settings
 from app.services.heavy_io import (
     HEAVY_IO_LOCK_KEY,
-    RESOURCE_DISK_TOKEN_KEY,
-    RESOURCE_NETWORK_TOKEN_KEY,
+    RESOURCE_RESERVATION_KEYS,
     RenewableRedisLease,
     local_lock_for_workload,
     mark_worker_flock_inherited,
@@ -26,11 +26,14 @@ from app.services.heavy_io import (
 )
 from app.services.resource_pressure import get_resource_pressure_snapshot_sync
 from app.services.resource_pressure import (
+    CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS,
     RESOURCE_CONTROL_CHANNEL,
+    cgroup_oom_kill_event_id,
     profile_slice_cooldown_seconds,
     publish_external_resource_critical,
     resource_profile_permit,
     sample_cgroup_contribution,
+    touch_cgroup_oom_kill_ack,
     workload_profile_name,
 )
 
@@ -122,10 +125,10 @@ class ResourceAwareWorker(Worker):
         """Publish a low-write worker view and close worker-local cgroup gaps.
 
         The backend monitor can only see its own cgroup.  Every worker therefore
-        treats a newly observed ``oom_kill`` or ``max`` event in its cgroup as
-        an immediate hard gate and promotes it into the shared latch.  A plain
-        ``oom`` allocation failure without either boundary event remains soft
-        evidence and temporarily halves bounded work slices.
+        treats a newly observed ``oom_kill`` event in its cgroup as an
+        immediate hard gate and promotes it into the shared latch.  ``max``
+        and allocation-only ``oom`` events remain local soft evidence and
+        temporarily halve bounded work slices.
         """
 
         now = time.monotonic()
@@ -152,35 +155,80 @@ class ResourceAwareWorker(Worker):
         # the same cumulative event would otherwise cause a publish storm.
         self._last_cgroup_events = cgroup_events
 
-        if cgroup_deltas["oom"] > 0:
+        if cgroup_deltas["max"] > 0 or cgroup_deltas["oom"] > 0:
             self._local_cgroup_soft_until = max(
                 getattr(self, "_local_cgroup_soft_until", 0.0),
                 now + 60.0,
             )
 
-        hard_event_reason = (
-            "worker_cgroup_oom_kill"
-            if cgroup_deltas["oom_kill"] > 0
-            else "worker_cgroup_memory_max"
-            if cgroup_deltas["max"] > 0
-            else None
+        hard_event_reason = "worker_cgroup_oom_kill"
+        previous_pending = getattr(self, "_pending_cgroup_oom_event", None)
+        new_oom_event = cgroup_deltas["oom_kill"] > 0
+        had_local_latch = bool(
+            getattr(self, "_local_cgroup_oom_kill_latched", False)
         )
-        if hard_event_reason is not None:
+        cgroup_id = str(cgroup_contribution.get("cgroup_id") or "unknown")
+        oom_kill_counter = max(0, int(cgroup_events.get("oom_kill") or 0))
+        last_ack_touch_at = float(
+            getattr(self, "_last_cgroup_ack_touch_at", 0.0)
+        )
+        if (
+            oom_kill_counter > 0
+            and not new_oom_event
+            and now - last_ack_touch_at >= CGROUP_OOM_ACK_TOUCH_INTERVAL_SECONDS
+        ):
+            try:
+                acknowledgment_state = touch_cgroup_oom_kill_ack(
+                    self.connection,
+                    cgroup_id,
+                    oom_kill_counter,
+                )
+            except Exception:
+                self.log.exception("Unable to refresh live cgroup OOM acknowledgment")
+            else:
+                self._last_cgroup_ack_touch_at = now
+                if acknowledgment_state != "recovered" and not had_local_latch:
+                    new_oom_event = True
+        if new_oom_event:
+            previous_pending = {
+                "event_id": cgroup_oom_kill_event_id(cgroup_id, oom_kill_counter),
+                "cgroup_id": cgroup_id,
+                "oom_kill_counter": oom_kill_counter,
+            }
+            self._pending_cgroup_oom_event = previous_pending
             self._local_cgroup_oom_kill_latched = True
+            self._local_cgroup_oom_acknowledged = False
             self._local_cgroup_oom_kill_at = now
             self._local_cgroup_hard_reason = hard_event_reason
+
+        if previous_pending is not None:
             try:
                 external = publish_external_resource_critical(
                     hard_event_reason,
                     redis_client=self.connection,
                     source=str(self.name),
+                    event_id=str(previous_pending["event_id"]),
+                    cgroup_id=str(previous_pending["cgroup_id"]),
+                    oom_kill_counter=int(previous_pending["oom_kill_counter"]),
                 )
-                snapshot.clear()
-                snapshot.update(external)
             except Exception:
                 self.log.exception(
                     "Unable to promote worker cgroup memory event; local gate remains closed"
                 )
+            else:
+                self._pending_cgroup_oom_event = None
+                self._local_cgroup_oom_acknowledged = True
+                self._last_cgroup_ack_touch_at = now
+                if external is not None:
+                    self._local_cgroup_oom_kill_latched = True
+                    self._local_cgroup_hard_reason = hard_event_reason
+                    snapshot.clear()
+                    snapshot.update(external)
+                elif new_oom_event and not had_local_latch:
+                    # Another process already acknowledged this cumulative
+                    # event and its global latch has completed recovery.
+                    self._local_cgroup_oom_kill_latched = False
+                    self._local_cgroup_hard_reason = None
 
         local_latched = bool(
             getattr(self, "_local_cgroup_oom_kill_latched", False)
@@ -193,9 +241,12 @@ class ResourceAwareWorker(Worker):
             )
             if (
                 shared_recovered
+                and getattr(self, "_pending_cgroup_oom_event", None) is None
+                and bool(getattr(self, "_local_cgroup_oom_acknowledged", False))
                 and now - event_at >= max(0.0, settings.resource_pressure_resume_seconds)
             ):
                 self._local_cgroup_oom_kill_latched = False
+                self._local_cgroup_oom_acknowledged = False
                 self._local_cgroup_hard_reason = None
                 local_latched = False
             else:
@@ -222,16 +273,6 @@ class ResourceAwareWorker(Worker):
             if now < float(getattr(self, "_local_cgroup_soft_until", 0.0))
             else 1.0
         )
-        if local_soft_scale < 1.0:
-            snapshot["reasons"] = list(
-                dict.fromkeys(
-                    [
-                        *(snapshot.get("reasons") or []),
-                        "worker_cgroup_memory_pressure",
-                    ]
-                )
-            )
-
         budget = snapshot.get("budget") or {}
         cgroup_signature = tuple(cgroup_events.get(name) for name in ("max", "oom", "oom_kill"))
         signature = (
@@ -403,6 +444,16 @@ class ResourceAwareWorker(Worker):
         """
 
         metadata = getattr(job, "meta", None) or {}
+        operation_type = metadata.get("registered_admin_operation")
+        if operation_type:
+            from app.services.operations import ADMIN_PARENT_ADMISSION_OPERATION_TYPES
+
+            if str(operation_type) in ADMIN_PARENT_ADMISSION_OPERATION_TYPES:
+                # Rolling workers can receive deliveries published by the
+                # previous image with stale internal-slice metadata. These
+                # handlers never acquire child slices, so the parent must own
+                # the maintenance lease and POSIX lock for the whole workhorse.
+                return None
         registered_profile = metadata.get("registered_admin_internal_profile")
         if registered_profile:
             return str(registered_profile)
@@ -552,32 +603,62 @@ class ResourceAwareWorker(Worker):
     def _close_control_pubsub(self) -> None:
         pubsub = getattr(self, "_resource_control_pubsub", None)
         self._resource_control_pubsub = None
+        self._resource_control_workload = None
         if pubsub is not None:
             try:
                 pubsub.close()
             except Exception:
                 self.log.debug("Unable to close resource control subscriber", exc_info=True)
 
+    def _raise_if_shutdown_requested(self) -> None:
+        if getattr(self, "_stop_requested", False) or getattr(
+            self, "_shutdown_requested_date", None
+        ) is not None:
+            self._close_control_pubsub()
+            raise StopRequested()
+
     def _wait_for_control_event(self, seconds: float, workload: str) -> None:
         """Block on a control/work event, with timeout as the recovery fallback."""
 
         try:
             pubsub = getattr(self, "_resource_control_pubsub", None)
+            subscribed_workload = getattr(self, "_resource_control_workload", None)
+            if pubsub is not None and subscribed_workload != workload:
+                self._close_control_pubsub()
+                pubsub = None
             if pubsub is None:
                 pubsub = self.connection.pubsub(ignore_subscribe_messages=True)
+                self._resource_control_pubsub = pubsub
                 pubsub.subscribe(
                     RESOURCE_CONTROL_CHANNEL,
                     f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}",
                 )
-                self._resource_control_pubsub = pubsub
-            pubsub.get_message(timeout=max(0.05, seconds))
-            return
+                self._resource_control_workload = workload
+            # An accepted job marks the worker busy, so RQ's warm signal sets
+            # a flag instead of raising. Observe it without resampling pressure.
+            deadline = time.monotonic() + max(0.05, seconds)
+            while True:
+                self._raise_if_shutdown_requested()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                if pubsub.get_message(timeout=min(1.0, remaining)) is not None:
+                    return
+        except StopRequested:
+            self._close_control_pubsub()
+            raise
         except (AttributeError, *REDIS_CONNECTION_ERRORS):
             self._close_control_pubsub()
         except Exception:
             self._close_control_pubsub()
             self.log.debug("Resource control event wait failed", exc_info=True)
-        time.sleep(max(0.05, seconds))
+        if getattr(self, "_resource_admission_active", False):
+            deadline = time.monotonic() + max(0.05, seconds)
+            while time.monotonic() < deadline:
+                self._raise_if_shutdown_requested()
+                time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        else:
+            time.sleep(max(0.05, seconds))
 
     def _wait_until_pressure_allows_dequeue(
         self,
@@ -596,6 +677,7 @@ class ResourceAwareWorker(Worker):
         last_bookkeeping = 0.0
         last_job_reason: str | None = None
         while True:
+            self._raise_if_shutdown_requested()
             snapshot_readable = True
             try:
                 snapshot = get_resource_pressure_snapshot_sync(redis_client=self.connection)
@@ -682,10 +764,13 @@ class ResourceAwareWorker(Worker):
             now = time.monotonic()
             if now - last_bookkeeping >= WORKER_STATE_HEARTBEAT_SECONDS or last_bookkeeping == 0:
                 try:
-                    self.set_state(WorkerStatus.IDLE)
+                    admitting = getattr(self, "_resource_admission_active", False)
+                    self.set_state(WorkerStatus.BUSY if admitting else WorkerStatus.IDLE)
                     self.procline(f"Waiting: {workload} resource budget")
                     self.heartbeat()
-                    if self.should_run_maintenance_tasks:
+                    # RQ intermediate cleanup cannot distinguish our live
+                    # admission waiter from a worker that died after dequeue.
+                    if not admitting and self.should_run_maintenance_tasks:
                         self.run_maintenance_tasks()
                     last_bookkeeping = now
                 except REDIS_CONNECTION_ERRORS as exc:
@@ -746,6 +831,7 @@ class ResourceAwareWorker(Worker):
         wait_attempt = 0
         workload = self._workload_profile()
         while True:
+            self._raise_if_shutdown_requested()
             if workload != "light":
                 self._wait_until_pressure_allows_dequeue(interval, workload=workload)
 
@@ -798,15 +884,16 @@ class ResourceAwareWorker(Worker):
                 peeked_job, peeked_queue = self._peek_heterogeneous_head()
                 if peeked_job is not None and peeked_queue is not None:
                     peeked_workload = self._job_workload(peeked_job, peeked_queue)
-                    self._wait_until_pressure_allows_dequeue(
-                        interval,
-                        workload=peeked_workload,
-                        job=peeked_job,
-                        owner=self._job_owner(peeked_job),
-                        hard_only=self._job_uses_nonblocking_child_admission(
-                            peeked_job
-                        ),
-                    )
+                    if self._internal_slice_workload(peeked_job) != "search_index":
+                        self._wait_until_pressure_allows_dequeue(
+                            interval,
+                            workload=peeked_workload,
+                            job=peeked_job,
+                            owner=self._job_owner(peeked_job),
+                            hard_only=self._job_uses_nonblocking_child_admission(
+                                peeked_job
+                            ),
+                        )
                 else:
                     # A transient fetch failure must not bypass the hard gate.
                     self._wait_until_pressure_allows_dequeue(
@@ -900,6 +987,11 @@ class ResourceAwareWorker(Worker):
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
+        if self._internal_slice_workload(job) == "search_index":
+            # A remote poll releases an already reserved workload even under
+            # pressure. The child applies heavy admission only for new writes.
+            self._active_profile_snapshot = {}
+            return None, None, owner
         attempt = 0
         while True:
             snapshot = self._wait_until_pressure_allows_dequeue(
@@ -909,6 +1001,7 @@ class ResourceAwareWorker(Worker):
                 owner=owner,
                 hard_only=self._job_uses_nonblocking_child_admission(job),
             )
+            self._raise_if_shutdown_requested()
             nonblocking_child = self._job_uses_nonblocking_child_admission(job)
             if (
                 workload_profile_name(workload) != "maintenance"
@@ -924,6 +1017,13 @@ class ResourceAwareWorker(Worker):
                         workload,
                         "waiting",
                         "maintenance_pending",
+                    )
+                    _set_resource_state_sync(
+                        owner,
+                        "waiting",
+                        "maintenance_pending",
+                        workload=workload,
+                        publisher_attempt=publisher_attempt,
                     )
                     self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                     attempt += 1
@@ -980,10 +1080,7 @@ class ResourceAwareWorker(Worker):
                     owner=owner,
                     reservation_key=(
                         budget_token
-                        if budget_token in {
-                            RESOURCE_NETWORK_TOKEN_KEY,
-                            RESOURCE_DISK_TOKEN_KEY,
-                        }
+                        if budget_token in RESOURCE_RESERVATION_KEYS
                         else None
                     ),
                     reservation_bytes=reservation_bytes,
@@ -1012,6 +1109,13 @@ class ResourceAwareWorker(Worker):
                 if lease is not None:
                     asyncio.run(lease.release())
                 self._set_job_resource_meta(job, workload, "waiting", "profile_lock_busy")
+                _set_resource_state_sync(
+                    owner,
+                    "waiting",
+                    "profile_lock_busy",
+                    workload=workload,
+                    publisher_attempt=publisher_attempt,
+                )
                 self._wait_for_control_event(adaptive_wait_delay(attempt), workload)
                 attempt += 1
                 continue
@@ -1040,8 +1144,35 @@ class ResourceAwareWorker(Worker):
         workload = self._job_workload(job, queue)
         publisher_attempt = self._job_publisher_attempt(job)
         internally_sliced = self._internal_slice_workload(job) is not None
-        self._bound_job_slice(job, workload)
-        local_lock, lease, owner = self._profile_admission(job, workload)
+        # RQ has popped this still-QUEUED job but not prepared an execution.
+        # Make signals cooperative while acquiring leases. At a wait boundary
+        # a stop returns ownership atomically, without reviving cancelled jobs.
+        self._resource_admission_active = True
+        try:
+            self.set_state(WorkerStatus.BUSY)
+            self._raise_if_shutdown_requested()
+            self._bound_job_slice(job, workload)
+            local_lock, lease, owner = self._profile_admission(job, workload)
+        except StopRequested:
+            self.connection.eval(
+                """
+                redis.call('LREM', KEYS[2], 0, ARGV[1])
+                redis.call('DEL', KEYS[5])
+                if redis.call('HGET', KEYS[1], 'status') ~= 'queued' then
+                    return 0
+                end
+                redis.call('LREM', KEYS[3], 0, ARGV[1])
+                redis.call('LPUSH', KEYS[3], ARGV[1])
+                redis.call('SADD', KEYS[4], KEYS[3])
+                return 1
+                """,
+                5, job.key, queue.intermediate_queue.key,
+                queue.key, queue.redis_queues_keys,
+                queue.intermediate_queue.get_first_seen_key(job.id), job.id,
+            )
+            raise
+        finally:
+            self._resource_admission_active = False
         profile_snapshot = getattr(self, "_active_profile_snapshot", {})
         slice_started = time.monotonic()
         inherited_profile = workload_profile_name(workload)
@@ -1055,10 +1186,10 @@ class ResourceAwareWorker(Worker):
             finally:
                 mark_worker_flock_inherited(False)
         finally:
-            if lease is not None:
-                asyncio.run(lease.release())
             if local_lock is not None:
                 local_lock.release()
+            if lease is not None:
+                asyncio.run(lease.release())
             try:
                 job.refresh()
             except Exception:

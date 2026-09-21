@@ -2,10 +2,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults } from "@/lib/api";
-import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState } from "@/components";
+import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
 import { useT } from "@/lib/i18n";
 
-export default function SubscriptionDefaultsPage() {
+function SubscriptionDefaultsContent() {
   const t = useT();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
@@ -147,5 +147,13 @@ export default function SubscriptionDefaultsPage() {
         </>
       )}
     </PageShell>
+  );
+}
+
+export default function SubscriptionDefaultsPage() {
+  return (
+    <PermissionGuard module="system">
+      <SubscriptionDefaultsContent />
+    </PermissionGuard>
   );
 }

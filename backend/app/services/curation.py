@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
+from time import monotonic
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, update as sql_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,7 @@ from app.models import (
     CreatorCurationState,
     CurationChange,
     CurationCommit,
+    MediaDerivativeOutbox,
     SourceCreator,
     SubscriptionSource,
     VisualAssetGroup,
@@ -29,6 +32,7 @@ from app.models import (
     WorkSource,
     WorkTag,
     Tag,
+    User,
 )
 from app.schemas.curation import CurationChangeRead, CurationCommitRead
 from app.services.search_projection_outbox import request_search_projection
@@ -38,6 +42,7 @@ VISIBLE = "visible"
 TRASHED = "trashed"
 PURGED = "purged"
 ARCHIVED = "archived"
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -1114,14 +1119,55 @@ class CurationService:
         self,
         *,
         resource_owner: str | None = None,
+        continuation: dict | None = None,
     ) -> dict:
+        """Commit a bounded baseline slice and return its scheduling delay."""
         from app.services.heavy_io import adaptive_resource_slice
+
+        state = dict(continuation or {})
+        cooldown: dict[str, float] = {}
+        await self.db.commit()
+        async with adaptive_resource_slice(
+            "import_db", resource_owner or "curation-baseline-backfill",
+            lane="background", max_work_units=1 if state.get("phase") == "works" else self.COMMIT_WORK_LIMIT,
+            max_slice_seconds=20.0, wait_for_capacity=False, cooldown_result=cooldown,
+        ) as limits:
+            if limits is None:
+                return {"status": "pending", "continuation": state,
+                        "successor_delay_seconds": 2.0}
+            started = monotonic()
+            deadline = started + limits.slice_seconds if limits.slice_seconds is not None else None
+            result = await self._run_backfill_slice(state, max(1, int(limits.work_units)), deadline=deadline)
+            await self.db.commit()
+            elapsed = monotonic() - started
+            logger.info("Curation baseline slice complete", extra={"resource_slice": {
+                "elapsed_seconds": elapsed, "limit_seconds": limits.slice_seconds,
+                "overrun_seconds": max(0.0, elapsed - limits.slice_seconds) if limits.slice_seconds is not None else 0.0,
+                "work_chunk_limit": self.COMMIT_WORK_LIMIT,
+            }})
+        if result["status"] == "pending":
+            result["successor_delay_seconds"] = max(2.0, cooldown.get("seconds", 0.0))
+        return result
+
+    async def _commit_backfill_unit(self) -> None:
+        from app.services.operations import fence_current_admin_operation_transaction
+
+        await fence_current_admin_operation_transaction(self.db)
+        await self.db.commit()
+
+    async def _run_backfill_slice(self, continuation: dict, work_units: int, *, deadline: float | None = None) -> dict:
+        from contextlib import aclosing
 
         created = {"creators": 0, "repositories": 0, "work_groups": 0}
         skipped = {"creators": 0, "repositories": 0, "work_groups": 0}
 
-        creator_rows = await self.db.execute(select(Creator).order_by(Creator.created_at))
-        for creator in creator_rows.scalars().all():
+        phase = continuation.get("phase", "creators")
+        creator_rows = await self.db.execute(
+            select(Creator).where(~select(CurationCommit.id).where(
+                CurationCommit.dedupe_key == func.concat("creator:", Creator.id, ":added")
+            ).exists()).order_by(Creator.id).limit(work_units)
+        ) if phase == "creators" else None
+        for creator in creator_rows.scalars().all() if creator_rows is not None else []:
             dedupe_key = f"creator:{creator.id}:added"
             if await self._commit_exists(dedupe_key):
                 skipped["creators"] += 1
@@ -1145,11 +1191,21 @@ class CurationService:
             )
             commit.stats = {"creator_count": 1}
             created["creators"] += 1
-            if (created["creators"] + skipped["creators"]) % 25 == 0:
-                await self.db.commit()
+            await self._commit_backfill_unit()
+            if deadline is not None and monotonic() >= deadline:
+                break
+        if created["creators"]:
+            return {"status": "pending", "created": created, "skipped": skipped,
+                    "continuation": continuation}
+        if phase == "creators":
+            phase = continuation["phase"] = "repositories"
 
-        repo_rows = await self.db.execute(select(SubscriptionSource).order_by(SubscriptionSource.created_at))
-        for repo in repo_rows.scalars().all():
+        repo_rows = await self.db.execute(
+            select(SubscriptionSource).where(~select(CurationCommit.id).where(
+                CurationCommit.dedupe_key == func.concat("repository:", SubscriptionSource.id, ":added")
+            ).exists()).order_by(SubscriptionSource.id).limit(work_units)
+        ) if phase == "repositories" else None
+        for repo in repo_rows.scalars().all() if repo_rows is not None else []:
             dedupe_key = f"repository:{repo.id}:added"
             if await self._commit_exists(dedupe_key):
                 skipped["repositories"] += 1
@@ -1180,34 +1236,45 @@ class CurationService:
             )
             commit.stats = {"repository_count": 1}
             created["repositories"] += 1
-            if (created["repositories"] + skipped["repositories"]) % 25 == 0:
-                await self.db.commit()
+            await self._commit_backfill_unit()
+            if deadline is not None and monotonic() >= deadline:
+                break
+        if created["repositories"]:
+            return {"status": "pending", "created": created, "skipped": skipped,
+                    "continuation": continuation}
+        continuation["phase"] = "works"
 
-        legacy_complete_groups: set[str] = set()
-        async for group in self._iter_baseline_work_groups():
-            dedupe_key = group["dedupe_key"]
-            base_dedupe_key = group["base_dedupe_key"]
-            if base_dedupe_key in legacy_complete_groups:
-                skipped["work_groups"] += 1
-                continue
-            existing_commit = await self._commit_for_key(dedupe_key)
-            if existing_commit is not None:
-                if (
-                    group["chunk_index"] == 0
-                    and not (existing_commit.extra_metadata or {}).get(
-                        "baseline_chunked"
-                    )
-                ):
-                    legacy_complete_groups.add(base_dedupe_key)
-                skipped["work_groups"] += 1
-                continue
-            works = group["works"]
-            async with adaptive_resource_slice(
-                "import_db",
-                resource_owner or "curation-baseline-backfill",
-                max_work_units=len(works),
-                max_slice_seconds=20.0,
-            ):
+        async with aclosing(self._iter_baseline_work_groups(
+            continuation.get("work_cursor")
+        )) as groups:
+            async for group in groups:
+                continuation["work_cursor"] = group["cursor"]
+                dedupe_key = group["dedupe_key"]
+                base_dedupe_key = group["base_dedupe_key"]
+                if base_dedupe_key == continuation.get("legacy_complete_group"):
+                    skipped["work_groups"] += 1
+                    if deadline is not None and monotonic() >= deadline:
+                        return {"status": "pending", "created": created, "skipped": skipped,
+                                "continuation": continuation}
+                    continue
+                existing_commit = await self._commit_for_key(dedupe_key)
+                if existing_commit is not None:
+                    if (
+                        group["chunk_index"] == 0
+                        and not (existing_commit.extra_metadata or {}).get(
+                            "baseline_chunked"
+                        )
+                    ):
+                        continuation["legacy_complete_group"] = base_dedupe_key
+                    skipped["work_groups"] += 1
+                    # Reading an already durable group does not consume a
+                    # write work unit. Continue within this bounded time
+                    # slice instead of paying one scheduler delay per group.
+                    if deadline is not None and monotonic() >= deadline:
+                        return {"status": "pending", "created": created, "skipped": skipped,
+                                "continuation": continuation}
+                    continue
+                works = group["works"]
                 commit = await self._create_commit(
                     message=f"Baseline: add {len(works)} works on {group['day']}",
                     trigger="baseline_backfill",
@@ -1261,7 +1328,12 @@ class CurationService:
                     )
                 commit.stats = {"work_count": len(works), "baseline": True}
                 created["work_groups"] += 1
-                await self.db.commit()
+                # Existing 25-work dedupe chunks are atomic scheduling units;
+                # shrinking one to an adaptive grant would rewrite its key.
+                await self._commit_backfill_unit()
+
+                return {"status": "pending", "created": created, "skipped": skipped,
+                        "continuation": continuation}
 
         await self.db.commit()
         return {"status": "ok", "created": created, "skipped": skipped, "expected": (await self.backfill_status())["expected"]}
@@ -1355,7 +1427,7 @@ class CurationService:
                 })
         return sorted(groups.values(), key=lambda g: (g["occurred_at"], g["dedupe_key"]))
 
-    async def _iter_baseline_work_groups(self):
+    async def _iter_baseline_work_groups(self, cursor: dict | None = None):
         """Stream deterministic repository/day chunks of at most 25 works."""
 
         from app.database import async_session
@@ -1396,9 +1468,16 @@ class CurationService:
             .execution_options(yield_per=100)
         )
 
-        current_base: str | None = None
+        if cursor:
+            from sqlalchemy import tuple_
+            stmt = stmt.where(tuple_(
+                WorkSource.source, func.coalesce(WorkSource.source_creator_id, ""),
+                day_expr, Work.id,
+            ) > tuple_(cursor["source"], cursor["source_creator_id"],
+                       date.fromisoformat(cursor["day"]), UUID(cursor["work_id"])))
+        current_base = cursor["base_dedupe_key"] if cursor else None
         current: dict | None = None
-        chunk_index = 0
+        chunk_index = int(cursor["chunk_index"]) + 1 if cursor else 0
 
         async def emit_current():
             nonlocal current
@@ -1474,6 +1553,14 @@ class CurationService:
                         "source_creator_id": work_source.source_creator_id,
                     }
                 )
+                current["cursor"] = {
+                    "source": work_source.source,
+                    "source_creator_id": work_source.source_creator_id or "",
+                    "day": day,
+                    "work_id": str(work.id),
+                    "base_dedupe_key": base_key,
+                    "chunk_index": chunk_index,
+                }
                 if len(current["works"]) >= self.COMMIT_WORK_LIMIT:
                     payload = await emit_current()
                     if payload is not None:
@@ -1527,6 +1614,13 @@ class CurationService:
             [w.id for w in works],
             ownership_work_ids=asset_scope_work_ids,
         )
+        upload_quota_reclaimed = await self._release_manual_upload_quota(
+            [work.id for work in works],
+            {asset.id for asset in assets},
+        )
+        derivative_requests_cancelled = await self._cancel_media_derivatives(
+            {asset.id for asset in assets}
+        )
         commit = await self._create_commit(
             message=message or f"Purge {len(works)} trashed work{'s' if len(works) != 1 else ''}",
             trigger="work_purge",
@@ -1576,13 +1670,164 @@ class CurationService:
                 after_state=after,
                 impact={"bytes_reclaimed": reclaimed, "missing_files": missing},
             )
-        commit.stats = {"work_count": len(works), "asset_count": len(assets), "bytes_reclaimed": bytes_reclaimed}
+        commit.stats = {
+            "work_count": len(works),
+            "asset_count": len(assets),
+            "bytes_reclaimed": bytes_reclaimed,
+            "upload_quota_reclaimed": upload_quota_reclaimed,
+            "derivative_requests_cancelled": derivative_requests_cancelled,
+        }
         # Purged works remain database rows with a non-visible projection; an
         # upsert keeps identity audits exact while visibility filters hide them.
         await request_search_projection(self.db, [work.id for work in works])
         await self.db.commit()
         await self.db.refresh(commit)
         return commit
+
+    async def _cancel_media_derivatives(self, asset_ids: set[UUID]) -> int:
+        """Make queued derivative work terminal before its source is removed."""
+        if not asset_ids:
+            return 0
+        result = await self.db.execute(
+            sql_update(MediaDerivativeOutbox)
+            .where(
+                MediaDerivativeOutbox.asset_id.in_(asset_ids),
+                MediaDerivativeOutbox.state != "complete",
+            )
+            .values(
+                state="cancelled",
+                completed_at=_now(),
+                lease_expires_at=None,
+                last_error=None,
+            )
+            .returning(MediaDerivativeOutbox.id)
+        )
+        return len(result.scalars().all())
+
+    async def _release_manual_upload_quota(
+        self,
+        work_ids: list[UUID],
+        purged_asset_ids: set[UUID],
+    ) -> int:
+        """Return charged bytes for manual assets removed by this purge.
+
+        The upload metadata records the exact bytes charged. Restricting the
+        calculation to assets eligible for this purge preserves the charge
+        when another surviving work still references an asset. This runs in
+        the same transaction that changes the work to ``purged``; a retry no
+        longer sees the work as a purge candidate and therefore cannot return
+        the same quota twice.
+        """
+        if not work_ids or not purged_asset_ids:
+            return 0
+
+        source_rows = list((await self.db.execute(
+            select(WorkSource.id, WorkSource.raw_metadata).where(
+                WorkSource.work_id.in_(work_ids),
+                func.lower(WorkSource.source) == "manual",
+            )
+        )).all())
+        if not source_rows:
+            return 0
+
+        source_ids = {row.id for row in source_rows}
+        asset_rows = list((await self.db.execute(
+            select(
+                AssetSource.work_source_id,
+                AssetSource.source_asset_id,
+                Asset.file_name,
+            )
+            .join(Asset, Asset.id == AssetSource.asset_id)
+            .where(
+                AssetSource.work_source_id.in_(source_ids),
+                AssetSource.asset_id.in_(purged_asset_ids),
+            )
+        )).all())
+        eligible_names: dict[UUID, set[str]] = {}
+        for row in asset_rows:
+            names = eligible_names.setdefault(row.work_source_id, set())
+            if row.source_asset_id:
+                names.add(str(row.source_asset_id))
+            if row.file_name:
+                names.add(Path(str(row.file_name)).stem)
+
+        charges: list[tuple[int | None, str | None, int]] = []
+        owner_ids: set[int] = set()
+        legacy_usernames: set[str] = set()
+        for row in source_rows:
+            metadata = row.raw_metadata if isinstance(row.raw_metadata, dict) else {}
+            allowed = eligible_names.get(row.id, set())
+            amount = 0
+            files = metadata.get("files")
+            if isinstance(files, list):
+                for entry in files:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = entry.get("name")
+                    if not name or Path(str(name)).stem not in allowed:
+                        continue
+                    size = entry.get("size")
+                    if isinstance(size, bool):
+                        continue
+                    try:
+                        parsed_size = int(size)
+                    except (TypeError, ValueError):
+                        continue
+                    if parsed_size > 0:
+                        amount += parsed_size
+            if amount <= 0:
+                continue
+
+            owner_id = metadata.get("uploaded_by_user_id")
+            try:
+                owner_id = int(owner_id) if owner_id is not None else None
+            except (TypeError, ValueError):
+                owner_id = None
+            if owner_id is not None and owner_id > 0:
+                owner_ids.add(owner_id)
+                charges.append((owner_id, None, amount))
+                continue
+            username = str(metadata.get("uploaded_by") or "").strip()
+            if username:
+                legacy_usernames.add(username)
+                charges.append((None, username, amount))
+
+        if not charges:
+            return 0
+
+        owner_predicates = []
+        if owner_ids:
+            owner_predicates.append(User.id.in_(owner_ids))
+        if legacy_usernames:
+            owner_predicates.append(User.username.in_(legacy_usernames))
+        users = list((await self.db.execute(
+            select(User).where(or_(*owner_predicates))
+        )).scalars().all())
+        users_by_id = {user.id: user for user in users}
+        users_by_name = {user.username: user for user in users}
+        amounts_by_user: dict[int, int] = {}
+        for owner_id, username, amount in charges:
+            user = users_by_id.get(owner_id) if owner_id is not None else users_by_name.get(username or "")
+            if user is None:
+                logger.warning(
+                    "Unable to return manual-upload quota: uploader no longer exists",
+                    extra={"owner_user_id": owner_id, "username": username, "bytes": amount},
+                )
+                continue
+            amounts_by_user[user.id] = amounts_by_user.get(user.id, 0) + amount
+
+        for user_id, amount in amounts_by_user.items():
+            await self.db.execute(
+                sql_update(User)
+                .where(User.id == user_id)
+                .values(
+                    upload_used_bytes=func.greatest(
+                        User.upload_used_bytes - amount,
+                        0,
+                    )
+                )
+            )
+        return sum(amounts_by_user.values())
 
     async def _purge_candidate_works(self, work_ids: list[UUID] | None) -> list[Work]:
         stmt = select(Work).join(WorkCurationState, WorkCurationState.work_id == Work.id).where(WorkCurationState.visibility == TRASHED)

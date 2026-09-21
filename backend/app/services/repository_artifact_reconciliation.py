@@ -222,7 +222,7 @@ async def _mark_existing_rows_done(
             StorageArtifact.id.in_(artifact_ids),
             _eligible_artifact(now),
         )
-        .values(
+        .values(metadata_completion_proof=None,
             state="done",
             import_job_id=None,
             lease_token=None,
@@ -313,7 +313,7 @@ async def reconcile_repository_artifacts(
                     StorageArtifact.download_job_id.in_(recoverable_owner_ids),
                 ),
             )
-            .values(
+            .values(metadata_completion_proof=None,
                 download_job_id=current_job.id,
                 state="new",
                 import_job_id=None,

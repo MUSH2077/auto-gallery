@@ -22,6 +22,15 @@ class CreatorService:
         self.db = db
         self.repo = CreatorRepository(db)
 
+    async def _refresh_aliases(self, creator_id: UUID) -> None:
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        await backfill_creator_alias_batch(
+            self.db,
+            (creator_id,),
+            request_projection=False,
+        )
+
     async def _projection_dependents(
         self,
         creator_id: UUID,
@@ -127,6 +136,7 @@ class CreatorService:
         # mapping. Never blocks creation — misses/outages come back as status.
         from app.services.creator_enrichment import enrich_creator_from_danbooru
         await enrich_creator_from_danbooru(self.db, creator)
+        await self._refresh_aliases(creator.id)
         await self._request_creator_projection(creator.id)
         await self.db.commit()
         return creator
@@ -134,6 +144,7 @@ class CreatorService:
     async def update_creator(self, creator_id: UUID, data: dict):
         creator = await self.get_creator(creator_id)
         creator = await self.repo.update(creator, data)
+        await self._refresh_aliases(creator_id)
         await self._request_creator_projection(creator_id)
         await self.db.commit()
         await self.db.refresh(creator)
@@ -142,6 +153,12 @@ class CreatorService:
     async def delete_creator(self, creator_id: UUID):
         creator = await self.get_creator(creator_id)
         dependents = await self._projection_dependents(creator_id)
+
+        from app.models import UserSubscription
+        from app.services.search_projection_outbox import request_membership_projection_where
+        await request_membership_projection_where(
+            self.db, UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id == creator_id)), deleting=True,
+        )
 
         # 1. Find all subscriptions for this creator
         subs = await self.db.execute(
@@ -193,6 +210,8 @@ class CreatorService:
 
     async def add_source_creator(self, data: dict):
         sc = await self.repo.add_source_creator(data)
+        if sc.creator_id is not None:
+            await self._refresh_aliases(sc.creator_id)
         work_ids = set((await self.db.execute(
             select(WorkSource.work_id).where(
                 WorkSource.source == sc.source,
@@ -212,6 +231,8 @@ class CreatorService:
 
     async def add_link(self, data: dict):
         link = await self.repo.add_link(data)
+        await self._refresh_aliases(link.creator_id)
+        await self._request_creator_projection(link.creator_id)
         await self.db.commit()
         return link
 
@@ -220,6 +241,8 @@ class CreatorService:
         if not link:
             raise ValueError("CreatorLink not found")
         link = await self.repo.update_link(link, data)
+        await self._refresh_aliases(link.creator_id)
+        await self._request_creator_projection(link.creator_id)
         await self.db.commit()
         await self.db.refresh(link)
         return link
@@ -231,7 +254,10 @@ class CreatorService:
         link = await self.repo.get_link(link_id)
         if not link:
             raise ValueError("CreatorLink not found")
+        creator_id = link.creator_id
         await self.repo.delete_link(link)
+        await self._refresh_aliases(creator_id)
+        await self._request_creator_projection(creator_id)
         await self.db.commit()
 
     async def enrich_from_danbooru(self, creator_id: UUID, source_url: str | None = None,

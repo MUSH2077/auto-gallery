@@ -174,6 +174,29 @@ def test_backfill_status_and_run_use_curation_service(monkeypatch):
     assert calls == ["status", ("enqueue", "admin-curation-backfill")]
 
 
+def test_latest_backfill_operation_uses_durable_scope(monkeypatch):
+    from app.api import curation
+
+    calls = []
+
+    async def fake_latest(_db, **kwargs):
+        calls.append(kwargs)
+        return {"snapshot": None, "current": None}
+
+    monkeypatch.setattr(
+        "app.services.operations.latest_successful_admin_operation",
+        fake_latest,
+    )
+
+    result = asyncio.run(curation.latest_curation_backfill(db=object()))
+
+    assert result == {"snapshot": None, "current": None}
+    assert calls == [{
+        "operation_type": "admin-curation-backfill",
+        "scope_key": "library:curation-backfill:active",
+    }]
+
+
 def test_revert_rejects_baseline_commit():
     from fastapi import HTTPException
     from app.services.curation import CurationService

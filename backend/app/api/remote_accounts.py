@@ -1,0 +1,301 @@
+"""Authenticated user's remote discovery accounts and X OAuth setup."""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import RequirePermission
+from app.config import settings
+from app.database import get_db
+from app.schemas.remote_discovery import (
+    RemoteAccountCreate,
+    RemoteAccountRead,
+    RemoteAccountUpdate,
+    XDownloadAuthUpdate,
+    XOAuthCallbackRequest,
+)
+from app.services.redis_client import get_redis
+from app.services.remote_accounts import (
+    RemoteAccountService,
+    RemoteCredentialGenerationChanged,
+)
+from app.services.remote_discovery_rollout import (
+    RemoteDiscoveryUnavailable,
+    require_preview,
+)
+from app.services.x_oauth import XOAuthPKCEState, get_x_oauth_exchange, validate_x_oauth_scopes
+
+
+router = APIRouter(dependencies=[RequirePermission("subscriptions")])
+
+
+def _not_found_or_bad_request(exc: Exception) -> HTTPException:
+    if isinstance(exc, RemoteDiscoveryUnavailable):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "remote_discovery_unavailable",
+                "reason": exc.code,
+                "source": exc.source,
+            },
+        )
+    status = 404 if "not found" in str(exc).casefold() else 400
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+def _stale_provider_result() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "remote_account_stale",
+            "message": "Remote account changed while the provider request was running",
+        },
+    )
+
+
+@router.get("", response_model=list[RemoteAccountRead])
+async def list_remote_accounts(
+    offset: int = 0,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    return await RemoteAccountService(db, user.id).list(offset=offset, limit=limit)
+
+
+@router.post("", response_model=RemoteAccountRead, status_code=201)
+async def create_remote_account(
+    data: RemoteAccountCreate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteAccountService(db, user.id).create(data.model_dump())
+        await db.commit()
+        return result
+    except (ValueError, RuntimeError) as exc:
+        raise _not_found_or_bad_request(exc) from exc
+
+
+@router.get("/x/oauth/authorize")
+async def authorize_x_oauth(
+    account_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+    redis=Depends(get_redis),
+):
+    try:
+        require_preview("x")
+        if account_id is not None:
+            account = await RemoteAccountService(db, user.id).get(account_id)
+            if account.source != "x":
+                raise ValueError("OAuth reauthentication requires an X remote account")
+        result = XOAuthPKCEState(
+            redis,
+            client_id=settings.x_oauth_client_id,
+            redirect_uri=settings.x_oauth_redirect_uri,
+        ).authorize(user_id=user.id, account_id=str(account_id) if account_id else None)
+    except (ValueError, RemoteDiscoveryUnavailable) as exc:
+        raise _not_found_or_bad_request(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"authorization_url": result.url, "state": result.state, "expires_in": 600}
+
+
+@router.post("/x/oauth/callback", response_model=RemoteAccountRead)
+async def x_oauth_callback(
+    data: XOAuthCallbackRequest,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+    redis=Depends(get_redis),
+    exchange=Depends(get_x_oauth_exchange),
+):
+    try:
+        require_preview("x")
+        payload = XOAuthPKCEState(
+            redis,
+            client_id=settings.x_oauth_client_id,
+            redirect_uri=settings.x_oauth_redirect_uri,
+        ).consume(state=data.state, user_id=user.id)
+        token_response = await exchange.exchange(
+            code=data.code,
+            verifier=payload.verifier,
+            redirect_uri=settings.x_oauth_redirect_uri,
+            client_id=settings.x_oauth_client_id,
+        )
+        credentials = {
+            key: str(token_response[key])
+            for key in ("access_token", "refresh_token")
+            if token_response.get(key)
+        }
+        credentials["client_id"] = settings.x_oauth_client_id
+        scopes = validate_x_oauth_scopes(str(token_response.get("scope") or ""))
+        service = RemoteAccountService(db, user.id)
+        if payload.account_id:
+            result = await service.update(
+                UUID(payload.account_id),
+                {"auth_method": "oauth2", "credentials": credentials, "scopes": scopes},
+            )
+        else:
+            existing = next(
+                (account for account in await service.list(limit=10) if account.source == "x"),
+                None,
+            )
+            if existing:
+                result = await service.update(
+                    existing.id,
+                    {"auth_method": "oauth2", "credentials": credentials, "scopes": scopes},
+                )
+            else:
+                result = await service.create(
+                    {
+                        "source": "x",
+                        "auth_method": "oauth2",
+                        "credentials": credentials,
+                        "scopes": scopes,
+                    }
+                )
+        await db.commit()
+        return result
+    except RemoteDiscoveryUnavailable as exc:
+        await db.rollback()
+        raise _not_found_or_bad_request(exc) from exc
+    except (ValueError, RuntimeError) as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{account_id}/download-auth", response_model=RemoteAccountRead)
+async def put_remote_account_download_auth(
+    account_id: UUID,
+    data: XDownloadAuthUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteAccountService(db, user.id).set_download_auth(
+            account_id,
+            data.cookie,
+        )
+        await db.commit()
+        return result
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
+    except (ValueError, RemoteDiscoveryUnavailable) as exc:
+        # Download-auth validation records only a non-sensitive reason and does
+        # not damage the account's discovery authentication health.
+        await db.commit()
+        raise _not_found_or_bad_request(exc) from exc
+    except Exception as exc:
+        await db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "download_auth_validation_failed"},
+        ) from exc
+
+
+@router.delete("/{account_id}/download-auth", status_code=204)
+async def delete_remote_account_download_auth(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        await RemoteAccountService(db, user.id).clear_download_auth(account_id)
+        await db.commit()
+    except (ValueError, RuntimeError, RemoteDiscoveryUnavailable) as exc:
+        await db.rollback()
+        raise _not_found_or_bad_request(exc) from exc
+
+
+@router.get("/{account_id}", response_model=RemoteAccountRead)
+async def get_remote_account(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        return await RemoteAccountService(db, user.id).get(account_id)
+    except (ValueError, RuntimeError) as exc:
+        raise _not_found_or_bad_request(exc) from exc
+
+
+@router.patch("/{account_id}", response_model=RemoteAccountRead)
+async def update_remote_account(
+    account_id: UUID,
+    data: RemoteAccountUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteAccountService(db, user.id).update(
+            account_id, data.model_dump(exclude_unset=True)
+        )
+        await db.commit()
+        return result
+    except (ValueError, RuntimeError) as exc:
+        raise _not_found_or_bad_request(exc) from exc
+
+
+@router.delete("/{account_id}", status_code=204)
+async def delete_remote_account(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        await RemoteAccountService(db, user.id).delete(account_id)
+        await db.commit()
+    except (ValueError, RuntimeError) as exc:
+        raise _not_found_or_bad_request(exc) from exc
+
+
+@router.post("/{account_id}/test", response_model=RemoteAccountRead)
+async def test_remote_account(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        result = await RemoteAccountService(db, user.id).test(account_id)
+        await db.commit()
+        return result
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
+    except RemoteDiscoveryUnavailable as exc:
+        await db.commit()
+        raise _not_found_or_bad_request(exc) from exc
+    except ValueError as exc:
+        await db.commit()
+        raise _not_found_or_bad_request(exc) from exc
+    except Exception as exc:
+        await db.commit()
+        raise HTTPException(status_code=502, detail="Remote account validation failed") from exc
+
+
+@router.get("/{account_id}/collections")
+async def list_remote_account_collections(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user=RequirePermission("subscriptions"),
+):
+    try:
+        collections = await RemoteAccountService(db, user.id).collections(account_id)
+        return [
+            {"id": item.id, "name": item.name, "selector": dict(item.selector)}
+            for item in collections
+        ]
+    except RemoteCredentialGenerationChanged as exc:
+        await db.rollback()
+        raise _stale_provider_result() from exc
+    except RemoteDiscoveryUnavailable as exc:
+        raise _not_found_or_bad_request(exc) from exc
+    except ValueError as exc:
+        raise _not_found_or_bad_request(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Remote collections request failed") from exc

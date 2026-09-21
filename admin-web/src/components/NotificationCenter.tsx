@@ -8,6 +8,9 @@ import { api, queryKeys } from "@/lib/api";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { usePermissions } from "@/lib/usePermissions";
+import { useAuth } from "@/lib/auth";
+import { taskRunDestination } from "@/lib/taskRoutes";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -35,6 +38,7 @@ export interface BatchJobState {
 
 export interface OperationJobState {
   jobId: string;
+  taskId?: string;
   kind: "admin-clear" | "admin-rebuild" | "admin-disk-import" | "danbooru-import-all" | string;
   title: string;
   startedAt: number;
@@ -64,6 +68,7 @@ interface NotificationCtx {
     kind: OperationJobState["kind"],
     title: string,
     meta?: Record<string, any>,
+    taskId?: string,
   ) => void;
   clearOperationJob: () => void;
 }
@@ -109,6 +114,16 @@ function operationResultMessage(operation: OperationJobState, t: TFunction): str
     });
   }
   return operation.result?.message || t("status.completed");
+}
+
+const TASK_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function operationDestination(operation: OperationJobState): string | null {
+  if (operation.taskId && TASK_RUN_ID.test(operation.taskId)) {
+    return `${adminRoutes.jobs}?tab=admin&task=${operation.taskId}`;
+  }
+  if (operation.kind === "danbooru-import-all") return adminRoutes.danbooru;
+  return null;
 }
 
 function refetchCreatorSubscriptionQueries(qc: QueryClient) {
@@ -229,6 +244,16 @@ function refreshOperationQueries(
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const t = useT();
   const qc = useQueryClient();
+  const { isAuthenticated, isLoading: authLoading, user: authUser } = useAuth();
+  const {
+    has,
+    isLoading: permissionsLoading,
+    user: permissionsUser,
+  } = usePermissions({ enabled: isAuthenticated });
+  const canAccessBatchImports = isAuthenticated
+    && !permissionsLoading
+    && permissionsUser?.id === authUser?.id
+    && has("subscriptions");
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
   const [operationJob, setOperationJob] = useState<OperationJobState | null>(null);
@@ -239,6 +264,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const timers = timersRef.current;
     return () => { timers.forEach((t) => clearTimeout(t)); timers.clear(); };
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) setBatchJob(null);
+  }, [authLoading, isAuthenticated]);
 
   const scheduleRemoval = useCallback((id: string) => {
     const existing = timersRef.current.get(id);
@@ -304,9 +333,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     kind: OperationJobState["kind"],
     title: string,
     meta?: Record<string, any>,
+    taskId?: string,
   ) => {
     const state: OperationJobState = {
-      jobId, kind, title,
+      jobId, taskId, kind, title,
       startedAt: Date.now(),
       progress: null, result: null,
       status: "running",
@@ -315,7 +345,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setOperationJob(state);
     try {
       sessionStorage.setItem(OPERATION_STORAGE_KEY, JSON.stringify({
-        jobId, kind, title, meta, startedAt: state.startedAt,
+        jobId, taskId, kind, title, meta, startedAt: state.startedAt,
       }));
     } catch {}
   }, []);
@@ -340,6 +370,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   // Mount recovery: restore batch job from sessionStorage (only if recent)
   useEffect(() => {
+    if (!canAccessBatchImports) return;
     try {
       const stored = sessionStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -371,7 +402,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch {}
-  }, []); // eslint-disable-line
+  }, [canAccessBatchImports]);
 
   useEffect(() => {
     try {
@@ -385,6 +416,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       }
       setOperationJob({
         jobId: parsed.jobId,
+        taskId: parsed.taskId,
         kind: parsed.kind,
         title: parsed.title,
         meta: parsed.meta,
@@ -400,7 +432,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const batchStatusQuery = useQuery({
     queryKey: ["batch-import-status-global", batchJob?.jobId],
     queryFn: () => api.getBatchImportStatus(batchJob?.jobId || undefined),
-    enabled: !!batchJob?.jobId,
+    enabled: canAccessBatchImports && !!batchJob?.jobId,
     staleTime: 0, // Always refetch on mount to restore result after navigation
     refetchInterval: (query) => {
       if (!batchJob) return false;
@@ -452,17 +484,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!operationJob || !operationStatusQuery.data) return;
     const data = operationStatusQuery.data;
+    const taskId = typeof data.task_id === "string" && TASK_RUN_ID.test(data.task_id)
+      ? data.task_id
+      : operationJob.taskId;
 
     if (data.status === "queued" || data.status === "enqueued" || data.status === "running") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, status: "running" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, status: "running" }
         : prev);
       return;
     }
 
     if (data.status === "complete") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
         : prev);
       refreshOperationQueries(qc, operationJob.kind, operationJob.meta, data.result);
       try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
@@ -471,7 +506,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     if (data.status === "failed") {
       setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
+        ? { ...prev, taskId, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
         : prev);
       try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
     }
@@ -500,13 +535,6 @@ function taskActivityStatus(status?: string | null): ActivityStatus {
   if (status === "complete" || status === "completed") return "completed";
   if (status === "failed" || status === "cancelled" || status === "stale") return "error";
   return "pending";
-}
-
-function bellTaskLink(task: { kind?: string; id?: string }): string | null {
-  if ((task.kind === "download" || task.kind === "import") && task.id) {
-    return `/admin/jobs?tab=${task.kind}&task=${task.id}`;
-  }
-  return null;
 }
 
 export function NotificationBell() {
@@ -558,6 +586,7 @@ export function NotificationBell() {
     + (operationJob?.status === "running" ? 1 : 0)
     + serverItems.filter((task) => taskActivityStatus(task.status) === "running").length;
   const hasRecent = serverItems.length > 0 || !!batchJob || !!operationJob;
+  const operationLink = operationJob ? operationDestination(operationJob) : null;
 
   const statusIcon = (status: ActivityStatus) => {
     if (status === "running") {
@@ -662,10 +691,11 @@ export function NotificationBell() {
                   </div>
                 )}
                 {operationJob && (
-                  <div className="cursor-pointer border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle"
+                  <div className={`${operationLink ? "cursor-pointer" : "cursor-default"} border-b border-border px-4 py-2.5 transition-colors hover:bg-subtle dark:border-border dark:hover:bg-subtle`}
                     onClick={() => {
+                      if (!operationLink) return;
                       setOpen(false);
-                      router.push(operationJob.kind === "danbooru-import-all" ? adminRoutes.danbooru : `${adminRoutes.jobs}?tab=admin&task=${operationJob.jobId}`);
+                      router.push(operationLink);
                     }}>
                     <div className="flex items-start gap-2.5">
                       <div className="mt-0.5">{statusIcon(operationJob.status)}</div>
@@ -706,7 +736,7 @@ export function NotificationBell() {
                 )}
                 {serverItems.map((task, index) => {
                   const st = taskActivityStatus(task.status);
-                  const link = bellTaskLink(task);
+                  const link = taskRunDestination(task);
                   const entrance = itemEntrance(task.id, index);
                   return (
                     <div key={task.id}

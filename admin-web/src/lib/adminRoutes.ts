@@ -21,6 +21,8 @@ export const adminRoutes = {
   creatorMapping: (id: string) => `/admin/creators/${encodeURIComponent(id)}/mapping`,
   creatorDuplicates: "/admin/creators/duplicates",
   subscriptions: "/admin/subscriptions",
+  discovery: "/admin/discovery",
+  discoveryCandidate: (id: string) => `/admin/discovery/candidates/${encodeURIComponent(id)}`,
   subscription: (id: string) => `/admin/subscriptions/${encodeURIComponent(id)}`,
   repository: (id: string) => `/admin/subscriptions/repositories/${encodeURIComponent(id)}`,
 
@@ -88,6 +90,9 @@ export function adminBreadcrumbParents(pathname: string): AdminBreadcrumbParent[
   ) {
     return [{ labelKey: "subscriptions.title", href: adminRoutes.subscriptions }];
   }
+  if (pathname.startsWith(`${adminRoutes.discovery}/candidates/`)) {
+    return [{ labelKey: "discovery.title", href: adminRoutes.discovery }];
+  }
   return [];
 }
 
@@ -109,6 +114,10 @@ const SETTINGS_PAGE_TITLE_KEYS: Readonly<Record<string, string>> = {
 };
 
 export function adminPageTitleKey(pathname: string): string | null {
+  if (pathname === adminRoutes.discovery) return "discovery.title";
+  if (pathname.startsWith(`${adminRoutes.discovery}/candidates/`)) {
+    return "discovery.creator_details";
+  }
   if (pathname.startsWith(`${adminRoutes.users}/`)) return "user_detail.title";
   return SETTINGS_PAGE_TITLE_KEYS[pathname] || null;
 }

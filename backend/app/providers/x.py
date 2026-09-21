@@ -24,6 +24,9 @@ class XProvider(BaseProvider):
             can_download=True,
             supports_gallerydl=True,
             supports_tags=True,
+            supports_remote_discovery=True,
+            discovery_auth_methods=("oauth2", "cookie"),
+            supports_collection_selectors=True,
         )
 
     def normalize_url(self, input_text: str) -> str | None:
@@ -109,9 +112,17 @@ class XProvider(BaseProvider):
         media_list = entities.get("media", [])
         if not media_list:
             # Fallback: single asset from raw_metadata
+            tweet_id = str(
+                raw_metadata.get("tweet_id")
+                or raw_metadata.get("id_str")
+                or raw_metadata.get("id")
+                or ""
+            )
+            num = raw_metadata.get("num")
+            asset_id = f"{tweet_id}_{num}" if tweet_id and num is not None else tweet_id
             return [{
                 "source": self.source_name,
-                "source_asset_id": str(raw_metadata.get("id_str") or raw_metadata.get("id", "")),
+                "source_asset_id": asset_id,
                 "source_url": raw_metadata.get("url") or raw_metadata.get("media_url"),
                 "width": raw_metadata.get("width"),
                 "height": raw_metadata.get("height"),

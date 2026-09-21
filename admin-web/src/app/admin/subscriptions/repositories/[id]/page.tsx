@@ -154,19 +154,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
     ["commit_revert", t("repo_detail.graph_filter_revert")],
   ];
   if (graph.isLoading) return <div className="h-24 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />;
-  if (!graph.data?.nodes.length) {
-    return (
-      <EmptyState
-        title={t("repo_detail.graph_empty_title")}
-        description={t("repo_detail.graph_empty_desc")}
-        action={(
-          <Link href={adminRoutes.curation} className="mt-3 inline-flex rounded-md border border-border px-3 py-1.5 text-sm font-medium text-accent hover:bg-subtle dark:border-border dark:text-accent dark:hover:bg-subtle">
-            {t("repo_detail.open_curation")}
-          </Link>
-        )}
-      />
-    );
-  }
+  if (!graph.data) return null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -188,7 +176,17 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
         ))}
       </div>
       <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
-        {graph.data.nodes.map((node, index) => (
+        {graph.data.nodes.length === 0 ? (
+          <EmptyState
+            title={t("repo_detail.graph_empty_title")}
+            description={t("repo_detail.graph_empty_desc")}
+            action={(
+              <Link href={adminRoutes.curation} className="mt-3 inline-flex rounded-md border border-border px-3 py-1.5 text-sm font-medium text-accent hover:bg-subtle dark:border-border dark:text-accent dark:hover:bg-subtle">
+                {t("repo_detail.open_curation")}
+              </Link>
+            )}
+          />
+        ) : graph.data.nodes.map((node, index) => (
           <div key={node.id} className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-3 pb-5 last:pb-0">
             {index < graph.data.nodes.length - 1 && <div className="absolute left-[15px] top-8 h-[calc(100%-1.5rem)] w-px bg-border dark:bg-border" />}
             <div className={`relative z-10 mt-1 h-8 w-8 rounded-full border-2 ${graphTone(node)}`} />
@@ -260,16 +258,18 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
   );
 }
 
-function GitlleryRepositoryHistory({ repositoryId }: { repositoryId: string }) {
+function GitlleryRepositoryHistory({ repositoryId, hasProjectedContent }: { repositoryId: string; hasProjectedContent: boolean }) {
   const t = useT();
   const fmt = useI18nFormat();
   const status = useQuery({
     queryKey: queryKeys.gitllery.repositoryStatus(repositoryId),
     queryFn: () => api.gitlleryRepositoryStatus(repositoryId),
+    enabled: hasProjectedContent,
   });
   const log = useQuery({
     queryKey: queryKeys.gitllery.log(repositoryId),
     queryFn: () => api.gitlleryLog(repositoryId),
+    enabled: hasProjectedContent,
   });
   const repositoryStatus = status.data?.repositories.find((item) => item.repository_id === repositoryId);
 
@@ -277,7 +277,9 @@ function GitlleryRepositoryHistory({ repositoryId }: { repositoryId: string }) {
     <div className="space-y-4">
       <section>
         <h2 className="mb-3 text-base font-semibold">{t("repo_detail.gitllery_status")}</h2>
-        {status.isLoading ? (
+        {!hasProjectedContent ? (
+          <EmptyState title={t("repo_detail.gitllery_status_empty")} description={t("repo_detail.gitllery_status_empty_desc")} />
+        ) : status.isLoading ? (
           <div className="h-20 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />
         ) : status.error ? (
           <ErrorState message={(status.error as Error).message} onRetry={() => status.refetch()} />
@@ -294,7 +296,9 @@ function GitlleryRepositoryHistory({ repositoryId }: { repositoryId: string }) {
       </section>
       <section>
         <h2 className="mb-3 text-base font-semibold">{t("repo_detail.gitllery_log")}</h2>
-        {log.isLoading ? (
+        {!hasProjectedContent ? (
+          <EmptyState title={t("repo_detail.gitllery_log_empty")} description={t("repo_detail.gitllery_log_empty_desc")} />
+        ) : log.isLoading ? (
           <div className="h-20 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />
         ) : log.error ? (
           <ErrorState message={(log.error as Error).message} onRetry={() => log.refetch()} />
@@ -413,12 +417,12 @@ export default function RepositoryDetailPage() {
     mutationFn: () => api.deleteRepository(id, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscription_detail.remove_source"), {
           entity: "hierarchy-delete", entity_type: "repository", entity_ids: [id],
         });
-        toast.success(t("deletion.queued"));
+        toast.success(t("subscription_detail.remove_source_queued"));
       } else {
-        toast.success(t("deletion.soft_deleted"));
+        toast.success(t("subscription_detail.source_removed"));
       }
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       qc.invalidateQueries({ queryKey: ["repositories"] });
@@ -480,12 +484,14 @@ export default function RepositoryDetailPage() {
             <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary disabled:opacity-50">
               {running || sync.isPending ? t("repo.syncing") : t("repo.sync_now")}
             </button>
-            <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
-              {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
-            </button>
-            {canManageRepositories && (isAdmin || repo.is_enabled) && (
+            {canManageRepositories && (
+              <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
+                {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
+              </button>
+            )}
+            {canManageRepositories && (
               <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-                {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+                {t("subscription_detail.remove_source")}
               </button>
             )}
             <Link href={`/admin/subscriptions/${subscription.id}`} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
@@ -559,7 +565,7 @@ export default function RepositoryDetailPage() {
               <h2 className="mb-3 text-base font-semibold">{t("repo_detail.curation_graph")}</h2>
               <RepositoryGraph repositoryId={id} />
             </section>
-            <GitlleryRepositoryHistory repositoryId={id} />
+            {has("curation") && <GitlleryRepositoryHistory repositoryId={id} hasProjectedContent={work_total > 0} />}
           </div>
         )}
         {tab === "content" && (
@@ -622,7 +628,8 @@ export default function RepositoryDetailPage() {
       </section>
       <HierarchyDeletionDialog
         open={showDelete}
-        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        title={t("subscription_detail.remove_source")}
+        message={t("subscription_detail.remove_source_message")}
         confirmationPhrase={repoName(repo)}
         preview={deletionPreview.data}
         previewLoading={deletionPreview.isLoading}

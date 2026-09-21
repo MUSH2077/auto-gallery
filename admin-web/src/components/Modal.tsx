@@ -19,7 +19,7 @@ export default function Modal({ open, onClose, title, children }: {
   }, [onClose]);
 
   useEffect(() => {
-    if (!open || !modalRef.current) return;
+    if (!open || !mounted || !modalRef.current) return;
     prevFocus.current = document.activeElement as HTMLElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -48,7 +48,7 @@ export default function Modal({ open, onClose, title, children }: {
       document.body.style.overflow = previousOverflow;
       prevFocus.current?.focus();
     };
-  }, [open]);
+  }, [mounted, open]);
 
   if (!mounted) return null;
   return (

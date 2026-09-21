@@ -9,6 +9,48 @@ from app.services import media_derivatives
 from app.services import outbox_coordinator
 
 
+def test_scheduled_wake_job_missing_from_registry_is_not_active(monkeypatch):
+    """A persisted scheduled status must not strand an outbox after registry loss."""
+
+    job = SimpleNamespace(
+        origin="operations",
+        get_status=lambda refresh=True: SimpleNamespace(value="scheduled"),
+    )
+
+    monkeypatch.setattr("rq.job.Job.fetch", lambda *_args, **_kwargs: job)
+
+    class EmptyScheduledRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_job_ids(self, *_args, **_kwargs):
+            return []
+
+    monkeypatch.setattr("rq.registry.ScheduledJobRegistry", EmptyScheduledRegistry)
+
+    assert outbox_coordinator._wake_job_is_active(object(), "orphaned-wake") is False
+
+
+def test_scheduled_wake_job_in_registry_remains_active(monkeypatch):
+    job = SimpleNamespace(
+        origin="operations",
+        get_status=lambda refresh=True: SimpleNamespace(value="scheduled"),
+    )
+
+    monkeypatch.setattr("rq.job.Job.fetch", lambda *_args, **_kwargs: job)
+
+    class LiveScheduledRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_job_ids(self, *_args, **_kwargs):
+            return ["live-wake"]
+
+    monkeypatch.setattr("rq.registry.ScheduledJobRegistry", LiveScheduledRegistry)
+
+    assert outbox_coordinator._wake_job_is_active(object(), "live-wake") is True
+
+
 def test_successor_clears_owned_marker_before_waking(monkeypatch):
     calls = []
 
@@ -137,13 +179,15 @@ async def test_media_empty_slice_does_not_create_successor_hint(monkeypatch):
     assert result["more_likely"] is False
 
 
-def test_search_job_wakes_successor_when_bounded_slice_is_exhausted():
-    import inspect
-
+def test_search_job_preserves_delayed_poll_successor(monkeypatch):
     from app.jobs import search_projection
-    from app.services.search import SearchService
+    from app.services import search_delivery
 
-    job_source = inspect.getsource(search_projection.run_search_projection_outbox)
-    drain_source = inspect.getsource(SearchService.drain_search_projection_outbox)
-    assert "clear_and_wake_outbox_successor" in job_source
-    assert '\"more_likely\": slice_exhausted' in drain_source
+    async def pending(**kwargs):
+        return {"status": "pending", "more_likely": True, "successor_delay_seconds": 15}
+
+    monkeypatch.setattr(search_delivery, "run_delivery_slice", pending)
+    monkeypatch.setattr(search_projection, "clear_and_wake_outbox_successor", lambda *_args: None)
+    result = search_projection.run_search_projection_outbox()
+    assert result["more_likely"] is True
+    assert result["successor_delay_seconds"] == 15

@@ -232,6 +232,31 @@
   .card-interactive {
     @apply rounded-lg border border-border bg-surface;
   }
+  .media-motion-card {
+    transform: translateZ(0);
+    transition-property: border-color, box-shadow, transform;
+    transition-duration: 220ms;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .media-motion-card .media-motion-visual {
+    transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  html.media-motion-disabled .media-motion-card,
+  html.media-motion-disabled .media-motion-card .media-motion-visual {
+    transform: none !important;
+    transition: none !important;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .media-motion-card:hover,
+    .media-motion-card:focus-within {
+      transform: perspective(900px) translateY(-3px) rotateX(0.7deg);
+      box-shadow: 0 14px 30px -24px rgb(var(--ag-accent) / 0.65);
+    }
+    .media-motion-card:hover .media-motion-visual,
+    .media-motion-card:focus-within .media-motion-visual {
+      transform: scale(1.035);
+    }
+  }
   .card-interactive {
     @apply hover:bg-subtle hover:border-accent/50 hover:-translate-y-px hover:shadow-md
            active:translate-y-0 active:scale-[0.99];
@@ -270,7 +295,7 @@
   .input:disabled, .select:disabled, .textarea:disabled {
     @apply cursor-not-allowed bg-subtle text-placeholder opacity-70;
   }
-  .input:invalid, .select:invalid, .textarea:invalid {
+  .input:user-invalid, .select:user-invalid, .textarea:user-invalid {
     @apply border-danger/60;
   }
   .input:-webkit-autofill,
@@ -287,6 +312,21 @@
   input[type="radio"]:focus-visible,
   input[type="range"]:focus-visible {
     @apply outline-none ring-2 ring-accent/35;
+  }
+  .compact-selection-hitbox {
+    @apply inline-flex min-h-6 min-w-6 shrink-0 cursor-pointer items-center justify-center rounded;
+  }
+  .compact-selection-checkbox {
+    @apply absolute inset-0 z-10 h-6 w-6 cursor-pointer opacity-0;
+  }
+  .compact-selection-visual {
+    @apply pointer-events-none inline-flex h-4 w-4 items-center justify-center rounded border border-border bg-input text-white transition-colors;
+  }
+  .compact-selection-visual-active {
+    @apply border-accent bg-accent;
+  }
+  .compact-selection-checkbox:focus-visible + .compact-selection-visual {
+    @apply ring-2 ring-accent/35 ring-offset-2 ring-offset-surface;
   }
   .textarea {
     @apply min-h-[84px];
@@ -322,6 +362,31 @@
   }
   .entity-list > [role="listitem"] + [role="listitem"] {
     @apply border-t border-border;
+  }
+  .virtual-reference-row:not(:first-child) .entity-row {
+    @apply border-t border-border;
+  }
+  .reference-list-layout {
+    @apply grid min-w-0 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_2rem];
+  }
+  .reference-name-rail {
+    @apply sticky bottom-0 z-20 flex max-w-full gap-0.5 overflow-x-auto rounded-lg
+           border border-border bg-surface/95 p-1 shadow-sm backdrop-blur
+           md:top-16 md:bottom-auto md:max-h-[calc(100vh-5rem)] md:flex-col md:overflow-x-hidden md:overflow-y-auto;
+    padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .reference-name-rail::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  .reference-name-anchor {
+    @apply inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded px-1
+           text-[10px] font-semibold text-muted hover:bg-subtle hover:text-fg
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40
+           disabled:cursor-default disabled:opacity-25;
   }
   .entity-row {
     @apply relative flex min-h-[76px] w-full min-w-0 cursor-pointer items-center gap-3 p-4
@@ -576,6 +641,11 @@
      mirrors motionTokens.duration.slow — see src/lib/motion/tokens.ts);
      toggling opacity-0/opacity-100 on each layer drives the fade. */
   .slide-layer { transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1); }
+  @keyframes slideshowForegroundIn {
+    from { opacity: 0; transform: scale(0.995); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .slideshow-foreground-enter { animation: slideshowForegroundIn 240ms cubic-bezier(0.16, 1, 0.3, 1); }
   /* Right-edge slide-over drawers (task/job detail). Exit driven by
      usePresence, same contract as .popover-exit. */
   @keyframes drawerIn {

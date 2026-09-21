@@ -42,6 +42,33 @@ ALL_BACKUP_CONTENTS = [
 ]
 
 
+def _gallerydl_backup_ignore(_directory: str, names: list[str]) -> set[str]:
+    """Exclude every runtime job overlay from durable backup traversal."""
+
+    return {
+        name
+        for name in names
+        if name in {"jobs", "auth-temp", "auto-gallery-secrets"}
+        or name.startswith("auth-")
+    }
+
+
+def _gallerydl_backup_files(config_root: Path):
+    for candidate in config_root.rglob("*"):
+        try:
+            relative = candidate.relative_to(config_root)
+        except ValueError:  # pragma: no cover - rglob containment invariant
+            continue
+        if not relative.parts or relative.parts[0] in {
+            "jobs",
+            "auth-temp",
+            "auto-gallery-secrets",
+        }:
+            continue
+        if candidate.is_file() and not candidate.is_symlink():
+            yield candidate
+
+
 class RestoreUploadCreateRequest(BaseModel):
     filename: str
     size_bytes: int
@@ -145,7 +172,9 @@ def _estimate_component_sizes() -> dict[str, int]:
     # gallery-dl config
     config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
     if config_src.exists():
-        sizes["gallerydl-config"] = sum(f.stat().st_size for f in config_src.rglob("*") if f.is_file())
+        sizes["gallerydl-config"] = sum(
+            f.stat().st_size for f in _gallerydl_backup_files(config_src)
+        )
     else:
         sizes["gallerydl-config"] = 0
 
@@ -236,6 +265,7 @@ async def latest_backup(db: AsyncSession = Depends(get_db)):
         db,
         operation_type="admin-backup-create",
         scope_key="backup:create:active",
+        include_retryable=True,
     )
 
 
@@ -347,12 +377,15 @@ def _create_backup_sync(
         # 1. PostgreSQL dump
         if "database" in selected:
             dump_path = os.path.join(tmpdir, "database.dump")
-            env = _pg_env_with_passfile(tmpdir, db_info)
-            result = subprocess.run(
-                ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
-                 "-d", db_info["dbname"], "--format=custom", "--compress=3",
-                 "--no-owner", "--no-acl", "-f", dump_path],
-                capture_output=True, text=True, env=env, timeout=120)
+            with tempfile.TemporaryDirectory(
+                prefix="ag-backup-credentials-"
+            ) as credential_tmpdir:
+                env = _pg_env_with_passfile(credential_tmpdir, db_info)
+                result = subprocess.run(
+                    ["pg_dump", "-h", db_info["host"], "-p", db_info["port"], "-U", db_info["user"],
+                     "-d", db_info["dbname"], "--format=custom", "--compress=3",
+                     "--no-owner", "--no-acl", "-f", dump_path],
+                    capture_output=True, text=True, env=env, timeout=120)
             if result.returncode != 0:
                 raise RuntimeError(f"Database dump failed: {result.stderr[:500]}")
             sizes["database"] = os.path.getsize(dump_path)
@@ -362,8 +395,19 @@ def _create_backup_sync(
             config_src = Path(os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"))
             config_dst = os.path.join(tmpdir, "gallerydl-config")
             if config_src.exists():
-                shutil.copytree(str(config_src), config_dst, symlinks=False, ignore_dangling_symlinks=True,
-                                ignore=shutil.ignore_patterns("*.pyc", "__pycache__", ".git"))
+                shutil.copytree(
+                    str(config_src),
+                    config_dst,
+                    symlinks=False,
+                    ignore_dangling_symlinks=True,
+                    ignore=lambda directory, names: (
+                        shutil.ignore_patterns("*.pyc", "__pycache__", ".git")(
+                            directory,
+                            names,
+                        )
+                        | _gallerydl_backup_ignore(directory, names)
+                    ),
+                )
 
         # 3. App config
         if "app-config" in selected:

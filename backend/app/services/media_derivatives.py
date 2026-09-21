@@ -40,6 +40,7 @@ MEDIA_ALGORITHM_VERSION = "media-v1"
 PHASH_ALGORITHM_VERSION = "imagehash-phash-v1"
 _LEASE_SECONDS = 30 * 60
 _REQUEST_SQL_BATCH_SIZE = 500
+MEDIA_DERIVATIVE_STALL_SECONDS = 5 * 60
 
 
 def _now() -> datetime:
@@ -703,3 +704,117 @@ async def media_derivative_status(
         )
     )
     return {asset_id: state for asset_id, state in rows}
+
+
+async def media_derivative_progress(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    stall_after_seconds: int = MEDIA_DERIVATIVE_STALL_SECONDS,
+) -> dict[str, Any]:
+    """Return aggregate progress for thumbnail intents only.
+
+    Hashing and deduplication share this outbox but do not affect whether a
+    user can see a work preview, so they are deliberately excluded from the
+    denominator.
+    """
+
+    observed_at = now or _now()
+    thumbnail_requested = (
+        func.coalesce(
+            MediaDerivativeOutbox.requested.op("->>")("thumbnail"),
+            "false",
+        )
+        == "true"
+    )
+    row = (
+        await db.execute(
+            select(
+                func.count(MediaDerivativeOutbox.id),
+                func.count(MediaDerivativeOutbox.id).filter(
+                    MediaDerivativeOutbox.state == "complete"
+                ),
+                func.count(MediaDerivativeOutbox.id).filter(
+                    MediaDerivativeOutbox.state == "pending"
+                ),
+                func.count(MediaDerivativeOutbox.id).filter(
+                    MediaDerivativeOutbox.state == "processing"
+                ),
+                func.count(MediaDerivativeOutbox.id).filter(
+                    MediaDerivativeOutbox.state == "failed"
+                ),
+                func.max(MediaDerivativeOutbox.completed_at).filter(
+                    MediaDerivativeOutbox.state == "complete"
+                ),
+                func.min(MediaDerivativeOutbox.created_at).filter(
+                    MediaDerivativeOutbox.state.in_(("pending", "processing", "failed"))
+                ),
+            ).where(thumbnail_requested)
+        )
+    ).one()
+    (
+        total,
+        completed,
+        pending,
+        processing,
+        failed,
+        last_completed_at,
+        oldest_unfinished_at,
+    ) = row
+    total = int(total or 0)
+    completed = int(completed or 0)
+    pending = int(pending or 0)
+    processing = int(processing or 0)
+    failed = int(failed or 0)
+    remaining = pending + processing + failed
+
+    affected_works = int(
+        (
+            await db.execute(
+                select(func.count(func.distinct(WorkSource.work_id)))
+                .select_from(MediaDerivativeOutbox)
+                .join(AssetSource, AssetSource.asset_id == MediaDerivativeOutbox.asset_id)
+                .join(WorkSource, WorkSource.id == AssetSource.work_source_id)
+                .where(
+                    thumbnail_requested,
+                    MediaDerivativeOutbox.state.in_(("pending", "processing", "failed")),
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+
+    if total == 0:
+        status = "idle"
+    elif remaining == 0:
+        status = "complete"
+    elif processing > 0:
+        status = "running"
+    else:
+        last_progress_at = last_completed_at or oldest_unfinished_at
+        stalled = bool(
+            last_progress_at
+            and (observed_at - last_progress_at).total_seconds()
+            >= max(1, int(stall_after_seconds))
+        )
+        if stalled:
+            status = "stalled"
+        elif failed > 0 and pending == 0:
+            status = "failed"
+        else:
+            status = "waiting"
+
+    return {
+        "total": total,
+        "completed": completed,
+        "pending": pending,
+        "processing": processing,
+        "failed": failed,
+        "remaining": remaining,
+        "affected_works": affected_works,
+        "completion_percent": round((completed / total) * 100, 1) if total else 100.0,
+        "status": status,
+        "last_completed_at": last_completed_at,
+        "oldest_unfinished_at": oldest_unfinished_at,
+        "stall_after_seconds": max(1, int(stall_after_seconds)),
+    }

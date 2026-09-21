@@ -5,7 +5,8 @@ app/services/manual_upload.py) synthesizes one metadata.json per uploaded
 work with this shape (task-8-brief.md Step 1):
 
     {"category": "manual", "id": <work_uuid>, "title": ..., "tags": [...],
-     "is_nsfw": bool, "uploaded_by": <username>, "target_creator_id": <uuid|None>,
+     "is_nsfw": bool, "uploaded_by": <username>, "uploaded_by_user_id": <int>,
+     "target_creator_id": <uuid|None>,
      "files": [{"name", "original_name", "size"}, ...], "date": <iso8601>}
 
 "target_creator_id" is set only when a curator explicitly targeted an
@@ -71,6 +72,7 @@ class ManualProvider(BaseProvider):
             "display_name": uploaded_by,
             "raw_metadata": {
                 "uploaded_by": uploaded_by,
+                "uploaded_by_user_id": raw_metadata.get("uploaded_by_user_id"),
                 "target_creator_id": raw_metadata.get("target_creator_id"),
             },
         }

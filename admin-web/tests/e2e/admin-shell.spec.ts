@@ -259,6 +259,8 @@ async function installFixtureRoutes(context: BrowserContext) {
       });
     } else if (path === "/api/v1/creators/fixture-creator/links") {
       await route.fulfill({ json: [] });
+    } else if (path === "/api/v1/creators/fixture-creator/references") {
+      await route.fulfill({ json: { pixiv: [], danbooru: null } });
     } else if (path === "/api/v1/creators/fixture-creator/timeline") {
       const year = Number((url.searchParams.get("from_date") || "2026").slice(0, 4));
       const days = year === 2023
@@ -550,6 +552,21 @@ async function installFixtureRoutes(context: BrowserContext) {
       });
     } else if (path === "/api/v1/works") {
       await route.fulfill({ json: { items: [], total: 0 } });
+    } else if (path === "/api/v1/works/derivative-progress") {
+      await route.fulfill({ json: {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        processing: 0,
+        failed: 0,
+        remaining: 0,
+        affected_works: 0,
+        completion_percent: 100,
+        status: "idle",
+        last_completed_at: null,
+        oldest_unfinished_at: null,
+        stall_after_seconds: 300,
+      } });
     } else if (path === "/api/v1/creators") {
       await route.fulfill({ json: { items: [], total: 0 } });
     } else if (path === "/api/v1/creators/count") {
@@ -580,6 +597,16 @@ async function installFixtureRoutes(context: BrowserContext) {
           db_stats: { works: 0, assets: 0, creators: 0, subscriptions: 0, tags: 0 },
         },
       });
+    } else if ([
+      "/api/v1/admin/integrity-check/latest",
+      "/api/v1/admin/cleanup-metadata-jsons/latest",
+      "/api/v1/admin/library/rebuild/latest",
+      "/api/v1/admin/library/import-from-disk/latest",
+      "/api/v1/admin/creators/re-enrich/latest",
+      "/api/v1/admin/backup/latest",
+      "/api/v1/admin/operations/clear/latest",
+    ].includes(path)) {
+      await route.fulfill({ json: { current: null, snapshot: null } });
     } else if (path === "/api/v1/admin/integrity-check") {
       await route.fulfill({
         json: { issues: [], db_stats: {}, checked_at: "2026-07-27T12:00:00Z" },
@@ -746,6 +773,8 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: { backups: [] } });
     } else if (path === "/api/v1/admin/backup/estimate") {
       await route.fulfill({ json: { components: {} } });
+    } else if (path === "/api/v1/tags/page") {
+      await route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 100 } });
     } else if (path === "/api/v1/tags") {
       await route.fulfill({ json: [] });
     } else if (path === "/api/v1/sources") {
@@ -758,6 +787,26 @@ async function installFixtureRoutes(context: BrowserContext) {
       await route.fulfill({ json: {} });
     }
   });
+}
+
+async function installAuthenticatedShellRoutes(page: Page) {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
+  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
+  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
+    view: "attention",
+    total: 0,
+    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
+    items: [],
+  } }));
+  await page.route("**/api/v1/tasks**", (route) => route.fulfill({
+    json: { items: [], total: 0, offset: 0, limit: 50 },
+  }));
+  await page.route("**/api/v1/system/scheduler-decisions**", (route) => route.fulfill({ json: {
+    updated_at: "2026-07-27T12:00:00Z",
+    scheduler_enabled: true,
+    timezone: "UTC",
+    items: [],
+  } }));
 }
 
 async function expectNoPageOverflow(page: Page) {
@@ -1019,11 +1068,28 @@ test("desktop sidebar is the sole peer-page navigation and command palette remai
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
   await expect(page.locator("aside").first()).toHaveCSS("width", "248px");
   const sidebar = page.locator("#admin-sidebar");
-  await expect(sidebar.locator("nav a")).toHaveCount(11);
+  await expect(sidebar.locator("nav a")).toHaveCount(12);
+  await expect(sidebar.getByRole("link", { name: "Remote Discovery", exact: true })).toHaveAttribute(
+    "href",
+    "/admin/discovery",
+  );
   await expect(sidebar.locator("nav").getByRole("link", { name: "Dashboard", exact: true })).toHaveCount(0);
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAttribute("href", "/admin");
   await expect(sidebar.locator("[data-sidebar-brand]")).toHaveAccessibleName("Go to dashboard");
-  await expect(sidebar.getByRole("heading", { name: "Upload & Import" })).toBeVisible();
+  await expect(sidebar.locator("nav h2")).toHaveCount(0);
+  await expect(sidebar.locator('section[aria-label="Upload & Import"]')).toBeVisible();
+  await expect(sidebar.locator("section[data-sidebar-group] + section[data-sidebar-group]").first()).toHaveCSS(
+    "border-top-style",
+    "solid",
+  );
+  const dividerSpacing = await sidebar
+    .locator("section[data-sidebar-group] + section[data-sidebar-group]")
+    .first()
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { top: style.paddingTop, bottom: style.paddingBottom };
+    });
+  expect(dividerSpacing.top).toBe(dividerSpacing.bottom);
   await expect(sidebar.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Danbooru" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Notifications" })).toHaveCount(0);
@@ -1168,6 +1234,7 @@ for (const viewport of [
 }
 
 test("creator activity calendar aligns real month spans and its year listbox supports keyboard selection", async ({ page }) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/creators/fixture-creator");
 
@@ -1176,7 +1243,15 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByTestId("creator-tag-chart")).toBeVisible();
   await expect(page.getByTestId("creator-monthly-chart")).toBeVisible();
   await expect(page.locator('[data-chart-kind="tick-rows"]')).toHaveAttribute("data-chart-unit", "5");
-  await expect(page.locator('[data-chart-kind="ballot-tally"] a')).toHaveCount(6);
+  const tagRows = page.locator('[data-chart-kind="ballot-tally"] button');
+  await expect(tagRows).toHaveCount(6);
+  await tagRows.first().click();
+  await expect(page.getByRole("heading", { name: "Works", exact: true })).toBeVisible();
+  const clearTag = page.getByTitle("Clear tag filter: architectural-light");
+  await expect(clearTag).toBeVisible();
+  await clearTag.click();
+  await expect(clearTag).toHaveCount(0);
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.screenshot({ path: "/tmp/auto-gallery-creator-charts-desktop.png", fullPage: true });
 
   const activityGrid = page.locator('[data-chart-kind="activity-dot-matrix"] [role="grid"]');
@@ -1296,6 +1371,67 @@ test("creator activity calendar aligns real month spans and its year listbox sup
   await expect(page.getByTestId("creator-activity-chart")).toBeVisible();
   await expect(page.locator(".chart-dot-enter")).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+test("creator references keep Pixiv identities and Danbooru aliases in separate read-only groups", async ({ page }) => {
+  const mappingWrites: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== "GET" && (path.includes("source-creators") || path.endsWith("/links"))) {
+      mappingWrites.push(`${request.method()} ${path}`);
+    }
+  });
+  await page.route("**/api/v1/creators/fixture-creator/references", (route) => route.fulfill({
+    json: {
+      pixiv: [
+        {
+          source_creator_id: "100",
+          display_name: "Current Pixiv Name",
+          username: "pixiv_account",
+          profile_url: "https://www.pixiv.net/users/100",
+          avatar_url: null,
+          status: "remote",
+          error_code: null,
+        },
+        {
+          source_creator_id: "200",
+          display_name: "Stored Pixiv Name",
+          username: null,
+          profile_url: "https://www.pixiv.net/users/200",
+          avatar_url: null,
+          status: "fallback",
+          error_code: "remote_unavailable",
+        },
+      ],
+      danbooru: {
+        artist_id: 300,
+        name: "danbooru_primary",
+        other_names: ["danbooru_alias", "second_alias"],
+        profile_url: "https://danbooru.donmai.us/artists/300",
+        status: "remote",
+      },
+    },
+  }));
+
+  await page.goto("/admin/creators/fixture-creator");
+  const references = page.getByRole("region", { name: "Name references" });
+  await expect(references.getByRole("heading", { name: "Pixiv" })).toBeVisible();
+  await expect(references.getByRole("heading", { name: "Danbooru" })).toBeVisible();
+  await expect(references.getByText("Current Pixiv Name")).toBeVisible();
+  await expect(references.getByText("Stored Pixiv Name")).toBeVisible();
+  await expect(references.getByText("Showing stored profile data or the user ID because the remote profile is unavailable.")).toBeVisible();
+  await expect(references.getByText("danbooru_primary")).toBeVisible();
+
+  await references.getByRole("button", { name: "@pixiv_account" }).click();
+  let edit = page.getByRole("dialog", { name: "Edit Creator" });
+  await expect(edit.getByRole("textbox").nth(1)).toHaveValue("pixiv_account");
+  await edit.getByRole("button", { name: "Cancel" }).click();
+
+  await references.getByRole("button", { name: "danbooru_alias" }).click();
+  edit = page.getByRole("dialog", { name: "Edit Creator" });
+  await expect(edit.getByRole("textbox").nth(1)).toHaveValue("danbooru_alias");
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  expect(mappingWrites).toEqual([]);
 });
 
 test("creator activity distinguishes a failed request from a genuinely empty year", async ({ page }) => {
@@ -1490,6 +1626,12 @@ test("data management charts preserve 100 ticks, exact values, hierarchy, and di
   await expect(page.getByTestId("storage-source-chart")).toContainText("Other");
   await expect(page.getByRole("heading", { name: "Unlinked repositories" })).toBeVisible();
 
+  const sourceSegment = page.getByTestId("storage-source-chart").locator('button[aria-pressed]').first();
+  await sourceSegment.click();
+  await expect(sourceSegment).toHaveAttribute("aria-pressed", "true");
+  await sourceSegment.click();
+  await expect(sourceSegment).toHaveAttribute("aria-pressed", "false");
+
   await page.getByRole("button", { name: "Expand Fixture Creator" }).click();
   await expect(page.getByRole("button", { name: "Collapse Fixture Creator" })).toBeVisible();
   await expect(page.getByRole("link", { name: /fixture-pixiv-repository/ })).toHaveAttribute(
@@ -1659,7 +1801,7 @@ test("system and source tabs fetch only their active data and retain provider to
   const pixivCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) });
   await pixivCard.getByRole("button", { name: /Try default URL/ }).click();
   await pixivCard.getByRole("textbox", { name: "Test URL Validation" }).press("Enter");
-  await expect(pixivCard.getByRole("status")).toContainText("matches expected Pixiv pattern");
+  await expect(pixivCard.getByRole("status")).toContainText("matches expected Pixiv format");
 
   const healthRequestsBeforeRefresh = healthRequests;
   const sourceRequestsBeforeRefresh = sourceRequests;
@@ -1676,6 +1818,352 @@ test("system and source tabs fetch only their active data and retain provider to
   expect(axe.violations).toEqual([]);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-system-sources.png", fullPage: true });
+});
+
+test("source registry localizes network failures and recovers on retry in English and Chinese", async ({ page }) => {
+  test.setTimeout(90_000);
+  const locales = [
+    { locale: "en", error: "Network error", retry: "Retry" },
+    { locale: "zh", error: "网络错误", retry: "重试" },
+  ] as const;
+
+  let recover = false;
+  await page.route("**/api/v1/sources", async (route) => {
+    if (!recover) {
+      await route.abort("failed");
+      return;
+    }
+    await route.fulfill({ json: { sources: providerFixtures } });
+  });
+
+  await page.goto("/admin");
+  for (const locale of locales) {
+    await page.evaluate((language) => {
+      window.localStorage.setItem("auto-gallery-lang", language);
+    }, locale.locale);
+    recover = false;
+    await page.goto("/admin/system?tab=sources");
+
+    const errorText = page.getByText(locale.error, { exact: true });
+    const errorState = errorText.locator("..");
+    await expect(errorText).toBeVisible();
+    if (locale.locale === "zh") await expect(page.getByText("Network error", { exact: true })).toHaveCount(0);
+    recover = true;
+    await errorState.getByRole("button", { name: locale.retry, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 3, name: "Pixiv" })).toBeVisible();
+    await expect(errorText).toHaveCount(0);
+  }
+});
+
+test("subscription creator picker pages with bounded retries and preserves inputs through failures", async ({ page }) => {
+  test.setTimeout(60_000);
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `creator-${String(index).padStart(3, "0")}`,
+    name: `creator_${String(index).padStart(3, "0")}`,
+    display_name: `Creator ${String(index).padStart(3, "0")}`,
+  }));
+  const laterCreator = { id: "creator-050", name: "creator_050", display_name: "Later Page Creator" };
+  let creatorRequests = 0;
+  let firstPageRequests = 0;
+  let laterPageRequests = 0;
+  let releaseInitialRequest: (() => void) | undefined;
+  const initialRequestHeld = new Promise<void>((resolve) => { releaseInitialRequest = resolve; });
+
+  await page.route("**/api/v1/creators?*", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset"));
+    expect(url.searchParams.get("limit")).toBe("50");
+    creatorRequests += 1;
+    if (offset === 0) {
+      firstPageRequests += 1;
+      if (firstPageRequests === 1) {
+        await initialRequestHeld;
+        await route.fulfill({ status: 503, json: { detail: "initial creator fixture failure" } });
+        return;
+      }
+      await route.fulfill({ json: { items: firstPage, total: 51 } });
+      return;
+    }
+    expect(offset).toBe(50);
+    laterPageRequests += 1;
+    if (laterPageRequests === 1) {
+      await route.fulfill({ status: 503, json: { detail: "later creator fixture failure" } });
+      return;
+    }
+    await route.fulfill({ json: { items: [laterCreator], total: 51 } });
+  });
+
+  let createRequests = 0;
+  let submittedBody: unknown;
+  await page.route("**/api/v1/subscriptions", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    createRequests += 1;
+    submittedBody = route.request().postDataJSON();
+    if (createRequests === 1) {
+      await route.fulfill({ status: 503, json: { detail: "subscription fixture failure" } });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      json: {
+        id: "subscription-later-page",
+        creator_id: laterCreator.id,
+        name: "Retained fixture label",
+        is_active: true,
+        sync_enabled: true,
+        sync_interval_hours: 24,
+        created_at: "2026-09-14T00:00:00Z",
+        updated_at: "2026-09-14T00:00:00Z",
+      },
+    });
+  });
+
+  await page.goto("/admin/subscriptions");
+  await page.getByRole("button", { name: "+ New", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New Subscription" });
+  await expect(dialog.getByRole("status")).toHaveText("Loading creators...");
+  await expect.poll(() => creatorRequests).toBe(1);
+  await page.waitForTimeout(100);
+  expect(creatorRequests).toBe(1);
+  releaseInitialRequest?.();
+
+  await expect(dialog.getByRole("alert")).toContainText("Could not load creators.");
+  await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+  const creatorSelect = dialog.getByLabel("Creator *");
+  await expect(creatorSelect).toBeEnabled();
+  await creatorSelect.selectOption(firstPage[0].id);
+  const labelInput = dialog.getByLabel("Label");
+  await labelInput.fill("Retained fixture label");
+
+  await dialog.getByRole("button", { name: "Load more", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Could not load more creators.");
+  await expect(creatorSelect).toHaveValue(firstPage[0].id);
+  await expect(labelInput).toHaveValue("Retained fixture label");
+  await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(creatorSelect.locator(`option[value="${laterCreator.id}"]`)).toHaveText(laterCreator.display_name);
+  await expect(dialog.getByRole("button", { name: "Load more", exact: true })).toHaveCount(0);
+  await creatorSelect.selectOption(laterCreator.id);
+  expect({ creatorRequests, firstPageRequests, laterPageRequests }).toEqual({
+    creatorRequests: 4,
+    firstPageRequests: 2,
+    laterPageRequests: 2,
+  });
+
+  await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
+  await expect(dialog).toContainText("subscription fixture failure");
+  await expect(creatorSelect).toHaveValue(laterCreator.id);
+  await expect(labelInput).toHaveValue("Retained fixture label");
+  await dialog.getByRole("button", { name: "Subscribe", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(submittedBody).toEqual({ creator_id: laterCreator.id, name: "Retained fixture label" });
+  expect(createRequests).toBe(2);
+});
+
+test("subscription detail resolves its creator by exact ID instead of the first creator page", async ({ page }) => {
+  let exactCreatorRequests = 0;
+  let creatorListRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/creators") creatorListRequests += 1;
+  });
+  await page.route("**/api/v1/subscriptions/subscription-later-page", (route) => route.fulfill({
+    json: {
+      id: "subscription-later-page",
+      creator_id: "creator-outside-first-page",
+      name: null,
+      is_active: true,
+      sync_enabled: true,
+      sync_interval_hours: 24,
+      source_count: 0,
+      enabled_source_count: 0,
+      running_job_count: 0,
+      failed_job_count: 0,
+      created_at: "2026-09-14T00:00:00Z",
+      updated_at: "2026-09-14T00:00:00Z",
+    },
+  }));
+  await page.route("**/api/v1/subscriptions/subscription-later-page/sources", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/system/scheduler-decisions?*", (route) => route.fulfill({
+    json: {
+      updated_at: "2026-09-14T00:00:00Z",
+      scheduler_enabled: true,
+      timezone: "UTC",
+      view: "all",
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+      suppressed_count: 0,
+      summary: { blocked_count: 0, overdue_count: 0, oldest_overdue_at: null },
+      items: [],
+    },
+  }));
+  await page.route("**/api/v1/creators/creator-outside-first-page", async (route) => {
+    exactCreatorRequests += 1;
+    await route.fulfill({
+      json: {
+        id: "creator-outside-first-page",
+        name: "outside_first_page",
+        display_name: "Creator Outside First Page",
+        is_active: true,
+      },
+    });
+  });
+
+  await page.goto("/admin/subscriptions/subscription-later-page");
+  await expect(page.getByRole("heading", { level: 1, name: "Creator Outside First Page" })).toBeVisible();
+  expect(exactCreatorRequests).toBe(1);
+  expect(creatorListRequests).toBe(0);
+});
+
+test("Danbooru link import can target a creator from a later bounded page", async ({ page }) => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `danbooru-creator-${String(index).padStart(3, "0")}`,
+    name: `danbooru_creator_${String(index).padStart(3, "0")}`,
+  }));
+  const laterCreator = { id: "danbooru-creator-050", name: "danbooru_creator_050", display_name: "Danbooru Later Creator" };
+  const creatorOffsets: number[] = [];
+  await page.route("**/api/v1/creators?*", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset"));
+    expect(url.searchParams.get("limit")).toBe("50");
+    creatorOffsets.push(offset);
+    await route.fulfill({
+      json: offset === 0
+        ? { items: firstPage, total: 51 }
+        : { items: [laterCreator], total: 51 },
+    });
+  });
+  await page.route("**/api/v1/reference/danbooru/artist/preview", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ name: "ask" });
+    await route.fulfill({
+      json: {
+        status: "ok",
+        found: true,
+        artist: { id: 100, name: "ask", other_names: [], urls: [] },
+        suggested_links: [{
+          url: "https://example.test/ask",
+          link_type: "website",
+          source: "danbooru",
+          confidence: 1,
+          is_verified: true,
+        }],
+      },
+    });
+  });
+  let importBody: unknown;
+  await page.route("**/api/v1/reference/danbooru/artist/import", async (route) => {
+    importBody = route.request().postDataJSON();
+    await route.fulfill({ json: { status: "ok", imported: 1, artist_name: "ask" } });
+  });
+
+  await page.goto("/admin/upload/danbooru");
+  const nameSearch = page.getByRole("heading", { name: "Search by Artist Name" }).locator("..");
+  await nameSearch.getByPlaceholder("ask (askzy)").fill("ask");
+  await nameSearch.getByRole("button", { name: "Search Danbooru" }).click();
+  const creatorSelect = page.getByLabel("Target Creator");
+  await expect(creatorSelect).toBeEnabled();
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  await creatorSelect.selectOption(laterCreator.id);
+  expect(creatorOffsets).toEqual([0, 50]);
+  const creatorRefresh = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/v1/creators" && url.searchParams.get("offset") === "0";
+  });
+  await page.getByRole("button", { name: "Import 1 Links", exact: true }).click();
+
+  await creatorRefresh;
+  await expect.poll(() => importBody).not.toBeUndefined();
+  expect(importBody).toEqual({ creator_id: laterCreator.id, name: "ask" });
+  await expect(creatorSelect).toHaveValue(laterCreator.id);
+  expect(creatorOffsets[2]).toBe(0);
+  expect(creatorOffsets.every((offset) => offset === 0 || offset === 50)).toBe(true);
+});
+
+test("source URL checker accepts every supported Pixiv format with localized results", async ({ page }) => {
+  await page.route("**/api/v1/sources", (route) => route.fulfill({
+    json: { sources: providerFixtures },
+  }));
+
+  const locales = [
+    {
+      locale: "en",
+      inputName: "Test URL Validation",
+      testName: "Test",
+      defaultName: /Try default URL/,
+      success: "URL matches expected Pixiv format.",
+      invalid: "URL does not match expected Pixiv pattern. Check the format and try again.",
+      empty: "Enter a URL to validate.",
+    },
+    {
+      locale: "zh",
+      inputName: "测试 URL 验证",
+      testName: "测试",
+      defaultName: /尝试默认 URL/,
+      success: "URL 匹配预期的 Pixiv 格式。",
+      invalid: "URL 不匹配预期的 Pixiv 模式。请检查格式后重试。",
+      empty: "请输入要验证的 URL。",
+    },
+  ] as const;
+
+  await page.goto("/admin/system?tab=sources");
+  for (const locale of locales) {
+    await page.evaluate((language) => {
+      window.localStorage.setItem("auto-gallery-lang", language);
+    }, locale.locale);
+    await page.reload();
+
+    const pixivCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Pixiv" }) });
+    const input = pixivCard.getByRole("textbox", { name: locale.inputName });
+    const testButton = pixivCard.getByRole("button", { name: locale.testName, exact: true });
+    const result = pixivCard.getByRole("status");
+
+    await input.fill("https://www.pixiv.net/artworks/12345678");
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/users/12345678");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/en/artworks/87654321");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/en/users/87654321");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/stacc/artist_name");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/stacc/Artist_123");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✓ ${locale.success}`);
+
+    await input.fill("https://www.pixiv.net/fanbox/artist-name");
+    await expect(result).toHaveCount(0);
+    await testButton.click();
+    await expect(result).toHaveText(`✗ ${locale.invalid}`);
+
+    await input.fill("   ");
+    await expect(result).toHaveCount(0);
+    await input.press("Enter");
+    await expect(result).toHaveText(`✗ ${locale.empty}`);
+
+    await pixivCard.getByRole("button", { name: locale.defaultName }).click();
+    await expect(input).toHaveValue("https://www.pixiv.net/artworks/12345678");
+    await expect(result).toHaveCount(0);
+  }
 });
 
 test("resource controller renders constrained compatibility state and authoritative concurrency", async ({ page }) => {
@@ -1834,6 +2322,87 @@ test("pending derivatives render the original and retain a recovery label", asyn
   await page.goto("/admin/works/fixture-work");
   await expect(page.getByText("Preview is being generated in the background").first()).toBeVisible();
   await expect.poll(() => originalRequests).toBeGreaterThan(0);
+});
+
+test("works page shows aggregate preview progress and refreshes it", async ({ page }) => {
+  let requests = 0;
+  let resumed = false;
+  await page.route("**/api/v1/works/derivative-progress", async (route) => {
+    requests += 1;
+    await route.fulfill({ json: !resumed ? {
+      total: 5150,
+      completed: 4362,
+      pending: 788,
+      processing: 0,
+      failed: 0,
+      remaining: 788,
+      affected_works: 504,
+      completion_percent: 84.7,
+      status: "stalled",
+      last_completed_at: "2026-08-29T03:44:01+08:00",
+      oldest_unfinished_at: "2026-08-27T20:08:23+08:00",
+      stall_after_seconds: 300,
+    } : {
+      total: 5150,
+      completed: 4363,
+      pending: 786,
+      processing: 1,
+      failed: 0,
+      remaining: 787,
+      affected_works: 503,
+      completion_percent: 84.7,
+      status: "running",
+      last_completed_at: "2026-08-30T12:20:00+08:00",
+      oldest_unfinished_at: "2026-08-27T20:08:23+08:00",
+      stall_after_seconds: 300,
+    } });
+  });
+
+  await page.goto("/admin/works");
+  const progress = page.getByRole("region", { name: "Preview generation progress" });
+  await expect(progress).toBeVisible();
+  await expect(progress.getByText("Generation appears stalled")).toBeVisible();
+  await expect(progress.getByText("4,362 / 5,150")).toBeVisible();
+  await expect(progress.getByText("788 remaining across 504 works")).toBeVisible();
+
+  resumed = true;
+  await progress.getByRole("button", { name: "Refresh progress" }).click();
+  await expect(progress.getByText("Generating previews")).toBeVisible();
+  await expect(progress.getByText("4,363 / 5,150")).toBeVisible();
+  await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
+});
+
+test("works route keeps the native page scrollbar and document scrolling", async ({ page }) => {
+  const works = Array.from({ length: 30 }, (_, index) => ({
+    id: `scroll-work-${index}`,
+    title: `Scroll work ${index}`,
+    description: null,
+    posted_at: "2026-08-11T00:00:00Z",
+    is_nsfw: false,
+    is_ai_generated: false,
+    asset_count: 0,
+    is_favorite: false,
+    created_at: "2026-08-11T00:00:00Z",
+    updated_at: "2026-08-11T00:00:00Z",
+  }));
+  await page.route("**/api/v1/search**", (route) => route.fulfill({ json: {
+    query: "",
+    canonical_query: "",
+    parsed: { raw: "", canonical: "", scope: "works", targets: ["works"], tokens: [] },
+    groups: { works: { items: works, total: works.length } },
+    total: works.length,
+    available_filters: {},
+  } }));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/admin/works");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+  await expect(page.locator("html")).not.toHaveClass(/works-scrollbar-hidden/);
+  await expect.poll(() => page.evaluate(
+    () => window.getComputedStyle(document.documentElement).scrollbarWidth,
+  )).not.toBe("none");
+  const before = await page.evaluate(() => window.scrollY);
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before);
 });
 
 test("system and source tabs preserve module-level permissions", async ({ page }) => {
@@ -2129,6 +2698,7 @@ test("subscription list uses one authoritative latest state and page-scoped summ
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(0);
     await expect(page.getByText("System default · Calendar · Daily at 22:00")).toBeVisible();
     await expectNoPageOverflow(page);
+    await expect(page.getByRole("list", { name: "Subscriptions" }).getByRole("listitem").last()).toBeVisible();
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -2280,8 +2850,8 @@ test("scheduler separates task controls from system status permissions", async (
   await expect(page.getByRole("heading", { level: 1, name: "Scheduler" })).toBeVisible();
   await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toBeVisible();
   expect(authRequests).toBe(0);
 
   authRequests = 0;
@@ -2294,9 +2864,9 @@ test("scheduler separates task controls from system status permissions", async (
     },
   }));
   await page.goto("/admin/scheduler");
-  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toBeVisible();
-  await expect(page.locator("#auth-status").getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run scheduler scan" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sync all enabled sources" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "You don't have permission to access this page" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auth & Cookie Status" })).toHaveCount(0);
   expect(authRequests).toBe(0);
 });
@@ -2325,16 +2895,12 @@ test("Danbooru refresh and scheduler sync-all send the bounded batch modes", asy
   });
   await page.route("**/api/v1/admin/scheduler/sync-now", async (route) => {
     schedulerPayload = JSON.parse(route.request().postData() || "{}");
-    await route.fulfill({ json: {
-      status: "ok",
-      message: "queued",
+    await route.fulfill({ status: 202, json: {
+      status: "enqueued",
       task_id: "sync-all-task",
+      job_id: "sync-all-rq",
+      operation_type: "subscription-sync-batch",
       mode: "manual_all_enabled",
-      candidate_count: 3,
-      enqueued_count: 2,
-      skipped_count: 1,
-      error_count: 0,
-      job_ids: ["one", "two"],
     } });
   });
 
@@ -2345,8 +2911,9 @@ test("Danbooru refresh and scheduler sync-all send the bounded batch modes", asy
 
   await page.goto("/admin/scheduler");
   await page.getByRole("button", { name: "Sync all enabled sources" }).click();
-  await expect.poll(() => schedulerPayload).toEqual({ mode: "manual_all_enabled" });
-  await expect(page.getByText("Checked 3 enabled sources: 2 queued, 1 skipped, 0 failed")).toBeVisible();
+  await expect.poll(() => schedulerPayload).toMatchObject({ mode: "manual_all_enabled" });
+  expect((schedulerPayload as { request_id?: string })?.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(page.getByRole("log").getByText("Batch accepted", { exact: true })).toBeVisible();
 });
 
 test("mobile data management switcher keeps curation and dedup reachable", async ({ page }) => {
@@ -2505,6 +3072,10 @@ test("slow administrator proxy failure exposes structured retry and the successf
   let postPending = false;
   let proxyStarts = 0;
   let taskPolls = 0;
+  let releaseInitialStart!: () => void;
+  const initialStartGate = new Promise<void>((resolve) => {
+    releaseInitialStart = resolve;
+  });
   await page.route("**/api/v1/admin/proxy/test/latest", (route) => route.fulfill({
     json: { snapshot: null },
   }));
@@ -2512,7 +3083,9 @@ test("slow administrator proxy failure exposes structured retry and the successf
     expect(route.request().method()).toBe("POST");
     proxyStarts += 1;
     postPending = true;
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (proxyStarts === 1) {
+      await initialStartGate;
+    }
     await route.fulfill({
       status: 202,
       json: {
@@ -2583,6 +3156,7 @@ test("slow administrator proxy failure exposes structured retry and the successf
   await start.click();
   await expect.poll(() => postPending).toBe(true);
   await expect(page.getByRole("button", { name: "Starting…" })).toBeDisabled();
+  releaseInitialStart();
   await expect(page.locator("[data-admin-operation='admin-proxy-test']").getByRole("alert"))
     .toContainText("Proxy probe worker exited unexpectedly");
   await expect(page.getByText("worker_crash")).toBeVisible();
@@ -3188,13 +3762,7 @@ test("proxy operation discovery starts with settings and reattaches across reloa
   let operationState: "running" | "failed" | "complete" = "running";
 
   await page.context().unroute("**/api/v1/**");
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
-  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
-  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
-    view: "attention", total: 0,
-    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
-    items: [],
-  } }));
+  await installAuthenticatedShellRoutes(page);
 
   await page.route("**/api/v1/admin/settings**", async (route) => {
     if (route.request().method() !== "GET") {
@@ -3291,13 +3859,7 @@ test("gallery-dl operation discovery is concurrent with its config request", asy
   let latestRequestedAt = 0;
   let configFulfilledAt = 0;
   await page.context().unroute("**/api/v1/**");
-  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: me }));
-  await page.route("**/api/v1/system/workbench", (route) => route.fulfill({ json: workbench }));
-  await page.route("**/api/v1/operations/overview**", (route) => route.fulfill({ json: {
-    view: "attention", total: 0,
-    summary: { attention: 0, critical: 0, warning: 0, resolved: 0, active: 0, resource_limited: 0 },
-    items: [],
-  } }));
+  await installAuthenticatedShellRoutes(page);
   await page.route("**/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv", async (route) => {
     latestRequestedAt = Date.now();
     await route.fulfill({ json: { snapshot: null, current: null } });
@@ -3419,7 +3981,7 @@ test("pathname navigation resets the viewport without hiding the page heading", 
   await page.screenshot({ path: "/tmp/auto-gallery-upload-top-fixed.png", fullPage: false });
 });
 
-test("tag map loads every tag and supports ctrl-wheel zoom without pagination", async ({ page }) => {
+test("tag map keeps every tag reachable through bounded pages and supports ctrl-wheel zoom", async ({ page }) => {
   const consoleIssues: string[] = [];
   page.on("console", (message) => {
     const text = message.text();
@@ -3478,11 +4040,18 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
       : [{ source: "pixiv", work_count: 1 }],
     created_at: "2026-08-14T00:00:00Z",
   }));
-  let includeAll = false;
-  await page.route("**/api/v1/tags?*", async (route) => {
+  const pageRequests: Array<{ offset: number; limit: number }> = [];
+  await page.route("**/api/v1/tags/page?*", async (route) => {
     const url = new URL(route.request().url());
-    includeAll = url.searchParams.get("include_all") === "true";
-    await route.fulfill({ json: tagFixtures });
+    const offset = Number(url.searchParams.get("offset") || 0);
+    const limit = Number(url.searchParams.get("limit") || 100);
+    pageRequests.push({ offset, limit });
+    await route.fulfill({ json: {
+      items: tagFixtures.slice(offset, offset + limit),
+      total: tagFixtures.length,
+      offset,
+      limit,
+    } });
   });
 
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -3494,8 +4063,8 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expect(page).toHaveTitle(/auto-gallery/i);
   await expect(page.getByRole("heading", { level: 1, name: "Tags" })).toBeVisible();
   await expect(page.locator("[data-nextjs-dialog-overlay]")).toHaveCount(0);
-  await expect(chart).toHaveAttribute("data-tag-count", String(fixtureCount));
-  expect(includeAll).toBe(true);
+  await expect(chart).toHaveAttribute("data-tag-count", String(Math.min(fixtureCount, 100)));
+  expect(pageRequests[0]).toEqual({ offset: 0, limit: 100 });
   await expect(page.getByText("Ctrl + wheel to zoom · Drag to pan")).toBeVisible();
   if (fixtureCount <= 1_000) {
     const metaBubble = page.getByRole("link", { name: /map_tag_000, meta, 999, pixiv 3, iwara 1/i });
@@ -3559,6 +4128,14 @@ test("tag map loads every tag and supports ctrl-wheel zoom without pagination", 
   await expectNoPageOverflow(page);
   expect(consoleIssues).toEqual([]);
   await page.screenshot({ path: "/tmp/auto-gallery-tag-map-zoomed.png", fullPage: false });
+
+  if (fixtureCount > 100) {
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect(page).toHaveURL(/(?:\?|&)page=2(?:&|$)/);
+    await expect(chart).toHaveAttribute("data-tag-count", String(Math.min(fixtureCount - 100, 100)));
+    await expect(page.getByRole("link", { name: /map_tag_100/i })).toBeVisible();
+    expect(pageRequests.at(-1)).toEqual({ offset: 100, limit: 100 });
+  }
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(chart).toBeVisible();
@@ -3858,4 +4435,49 @@ test("mobile drawer is discoverable, dismissible, and the task page stays in bou
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("main-content");
   await expectNoPageOverflow(page);
   await page.screenshot({ path: "/tmp/auto-gallery-jobs-mobile.png", fullPage: true });
+});
+
+test("Escape ignores a queued drawer autofocus after focus restoration", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/jobs?tab=downloads");
+  await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __drawerFocusFrames?: Map<number, FrameRequestCallback>;
+      __flushDrawerFocusFrames?: () => void;
+    };
+    let nextFrame = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    testWindow.__drawerFocusFrames = frames;
+    window.requestAnimationFrame = (callback) => {
+      const frame = ++nextFrame;
+      frames.set(frame, callback);
+      return frame;
+    };
+    window.cancelAnimationFrame = (frame) => {
+      frames.delete(frame);
+    };
+    testWindow.__flushDrawerFocusFrames = () => {
+      const queued = [...frames.values()];
+      frames.clear();
+      for (const callback of queued) callback(performance.now());
+    };
+  });
+
+  const trigger = page.locator("header button[aria-controls]").first();
+  const drawer = page.locator("#admin-mobile-sidebar");
+  await trigger.click();
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const testWindow = window as Window & { __drawerFocusFrames?: Map<number, FrameRequestCallback> };
+    return testWindow.__drawerFocusFrames?.size ?? 0;
+  })).toBe(1);
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveClass(/drawer-left-exit/);
+  await page.evaluate(() => {
+    const testWindow = window as Window & { __flushDrawerFocusFrames?: () => void };
+    testWindow.__flushDrawerFocusFrames?.();
+  });
+  await expect(drawer).toBeHidden();
+  await expect(trigger).toBeFocused();
 });

@@ -155,7 +155,7 @@ existing_source_paths() {
 
 source_digest() {
     existing_source_paths \
-        | sort -z \
+        | LC_ALL=C sort -z \
         | while IFS= read -r -d '' path; do
             printf '%s\0' "$path"
             if [[ -L "$path" ]]; then
@@ -247,6 +247,8 @@ build_local_candidate() {
     echo "Building immutable local candidates for source $CANDIDATE_SOURCE_DIGEST"
     builder_name="auto-gallery-local-${CANDIDATE_SOURCE_DIGEST:0:12}-$$"
     # A docker-container BuildKit worker gives local builds their own cgroup.
+    # Next/Turbopack uses native memory in addition to the bounded Node heap,
+    # so the builder needs more headroom than an application container.
     # memory-swap == memory prevents this project build from consuming host
     # swap. Older/minimal Docker installations may lack buildx; those devices
     # retain the serialized low-priority fallback instead of being rejected.
@@ -254,8 +256,8 @@ build_local_candidate() {
         && docker buildx version >/dev/null 2>&1 && docker buildx create \
         --name "$builder_name" \
         --driver docker-container \
-        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-1024m}" \
-        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-1024m}" \
+        --driver-opt "memory=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}" \
+        --driver-opt "memory-swap=${LOCAL_BUILD_MEMORY_LIMIT:-3072m}" \
         --driver-opt "cpu-period=100000" \
         --driver-opt "cpu-quota=${LOCAL_BUILD_CPU_QUOTA:-50000}" \
         >/dev/null; then
@@ -348,7 +350,7 @@ PY
 }
 
 prepare_rollback_point() {
-    local backend_id admin_id candidate_backend_id candidate_admin_id
+    local backend_id admin_id candidate_backend_id candidate_admin_id predeploy_git_head
 
     install -d -m 700 "$ROLLBACK_DIR"
     cp docker-compose.yaml "$ROLLBACK_DIR/docker-compose.candidate.yaml"
@@ -385,92 +387,30 @@ prepare_rollback_point() {
         'psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --tuples-only --no-align --command="SELECT version_num FROM alembic_version"')"
     PREDEPLOY_REVISION="${PREDEPLOY_REVISION//[[:space:]]/}"
     [[ "$PREDEPLOY_REVISION" =~ ^[a-f0-9]{12}$ ]]
+    predeploy_git_head="$(git rev-parse HEAD)"
 
-    cat >"$ROLLBACK_DIR/manifest.env" <<EOF
-DEPLOYMENT_ID=$DEPLOYMENT_ID
-PROJECT_ROOT=$PROJECT_ROOT
-PREDEPLOY_GIT_HEAD=$(git rev-parse HEAD)
-PREDEPLOY_ALEMBIC_REVISION=$PREDEPLOY_REVISION
-CANDIDATE_ALEMBIC_REVISION=$CANDIDATE_REVISION
-CANDIDATE_SOURCE_DIGEST=$CANDIDATE_SOURCE_DIGEST
-BACKEND_IMAGE_ID=$backend_id
-BACKEND_ROLLBACK_TAG=auto-gallery-backend:rollback-$DEPLOYMENT_ID
-ADMIN_IMAGE_ID=$admin_id
-ADMIN_ROLLBACK_TAG=auto-gallery-admin-web:rollback-$DEPLOYMENT_ID
-CANDIDATE_BACKEND_IMAGE=$CANDIDATE_BACKEND_IMAGE
-CANDIDATE_BACKEND_IMAGE_ID=$candidate_backend_id
-CANDIDATE_ADMIN_IMAGE=$CANDIDATE_ADMIN_IMAGE
-CANDIDATE_ADMIN_IMAGE_ID=$candidate_admin_id
-EOF
+    {
+        printf 'DEPLOYMENT_ID=%q\n' "$DEPLOYMENT_ID"
+        printf 'PROJECT_ROOT=%q\n' "$PROJECT_ROOT"
+        printf 'PREDEPLOY_GIT_HEAD=%q\n' "$predeploy_git_head"
+        printf 'PREDEPLOY_ALEMBIC_REVISION=%q\n' "$PREDEPLOY_REVISION"
+        printf 'CANDIDATE_ALEMBIC_REVISION=%q\n' "$CANDIDATE_REVISION"
+        printf 'CANDIDATE_SOURCE_DIGEST=%q\n' "$CANDIDATE_SOURCE_DIGEST"
+        printf 'BACKEND_IMAGE_ID=%q\n' "$backend_id"
+        printf 'BACKEND_ROLLBACK_TAG=%q\n' "auto-gallery-backend:rollback-$DEPLOYMENT_ID"
+        printf 'ADMIN_IMAGE_ID=%q\n' "$admin_id"
+        printf 'ADMIN_ROLLBACK_TAG=%q\n' "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID"
+        printf 'CANDIDATE_BACKEND_IMAGE=%q\n' "$CANDIDATE_BACKEND_IMAGE"
+        printf 'CANDIDATE_BACKEND_IMAGE_ID=%q\n' "$candidate_backend_id"
+        printf 'CANDIDATE_ADMIN_IMAGE=%q\n' "$CANDIDATE_ADMIN_IMAGE"
+        printf 'CANDIDATE_ADMIN_IMAGE_ID=%q\n' "$candidate_admin_id"
+        printf 'ROLLBACK_SCHEMA_POLICY=%q\n' "schema-forward"
+        printf 'ROLLBACK_SCHEMA_CURRENT_REVISION_AT_SNAPSHOT=%q\n' "$PREDEPLOY_REVISION"
+        printf 'ROLLBACK_SCHEMA_RETAIN_CANDIDATE=%q\n' "true"
+        printf 'ROLLBACK_OLD_MIGRATE_ONLY_AT_PREDEPLOY=%q\n' "true"
+    } >"$ROLLBACK_DIR/manifest.env"
     chmod 600 "$ROLLBACK_DIR/manifest.env"
-
-    cat >"$ROLLBACK_DIR/rollback.sh" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$PROJECT_ROOT"
-
-# The parent deploy process exports candidate image names.  A rollback must
-# resolve images from its frozen env file (and the rollback tags below), not
-# inherit those candidate overrides from the failed deploy process.
-unset BACKEND_IMAGE ADMIN_IMAGE
-
-# Preserve the new resource ceilings during rollback. Heavy workers stay
-# stopped; restore browsing first, then investigate before resuming work.
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  stop -t 120 migrate backend admin-web worker-download worker-import worker-operations scheduler || true
-
-current_revision="\$(docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  exec -T postgres sh -c \
-  'psql --username="\$POSTGRES_USER" --dbname="\$POSTGRES_DB" --tuples-only --no-align --command="SELECT version_num FROM alembic_version"')"
-current_revision="\${current_revision//[[:space:]]/}"
-case "\$current_revision" in
-  "$PREDEPLOY_REVISION")
-    ;;
-  "$CANDIDATE_REVISION")
-    docker image inspect "$CANDIDATE_BACKEND_IMAGE" >/dev/null
-    docker image tag "$CANDIDATE_BACKEND_IMAGE" auto-gallery-backend:latest
-    BACKEND_IMAGE="$candidate_backend_id" ADMIN_IMAGE="$candidate_admin_id" \
-      docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-      --env-file "$ROLLBACK_DIR/.env.predeploy" \
-      -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-      run --rm --no-deps migrate alembic downgrade $PREDEPLOY_REVISION
-    ;;
-  *)
-    echo "Refusing rollback from unexpected Alembic revision: \$current_revision" >&2
-    exit 2
-    ;;
-esac
-
-docker image tag "auto-gallery-backend:rollback-$DEPLOYMENT_ID" auto-gallery-backend:latest
-docker image tag "auto-gallery-admin-web:rollback-$DEPLOYMENT_ID" auto-gallery-admin-web:latest
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up --force-recreate --no-deps --no-build migrate
-BACKEND_IMAGE="$backend_id" ADMIN_IMAGE="$admin_id" \
-  docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  up -d --force-recreate --no-deps --no-build --wait --wait-timeout 180 \
-  backend admin-web
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" ps
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
-  --env-file "$ROLLBACK_DIR/.env.predeploy" \
-  -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-  exec -T backend curl -sf http://localhost:8000/api/v1/system/ready >/dev/null
-EOF
+    cp scripts/deploy-rollback.sh "$ROLLBACK_DIR/rollback.sh"
     chmod 700 "$ROLLBACK_DIR/rollback.sh"
 
     ROLLBACK_READY=1
@@ -512,8 +452,13 @@ backup_frozen_state() {
     fi
 
     cat >"$ROLLBACK_DIR/README.txt" <<'EOF'
-This directory is a deployment rollback point. Run rollback.sh for an ordinary
-code/migration rollback; it does not overwrite PostgreSQL or Redis data.
+This directory is a deployment rollback point. Run rollback.sh for a
+schema-forward application rollback; it never downgrades or overwrites
+PostgreSQL or Redis data. Inspect rollback-receipt.env after it exits.
+
+If the candidate schema is already applied, rollback.sh skips the old image's
+migrate service. Heavy workers stay stopped. If the old application cannot read
+the retained schema, restore the candidate image and ship a forward repair.
 
 Use postgres.dump only after confirmed data corruption and a separate restore
 review. To restore Redis after confirmed data loss, first stop Redis and move
@@ -555,12 +500,66 @@ all_services_ready() {
     done
 }
 
+wait_for_resource_recovery() {
+    local timeout_seconds interval_seconds probe_timeout_seconds
+    local connect_timeout_seconds curl_max_time_seconds
+    local deadline remaining sleep_seconds current_probe_timeout
+    timeout_seconds="${DEPLOY_RECOVERY_TIMEOUT_SECONDS:-180}"
+    interval_seconds="${DEPLOY_RECOVERY_POLL_SECONDS:-5}"
+    probe_timeout_seconds="${DEPLOY_RECOVERY_PROBE_TIMEOUT_SECONDS:-6}"
+    connect_timeout_seconds="${DEPLOY_RECOVERY_CONNECT_TIMEOUT_SECONDS:-2}"
+    curl_max_time_seconds="${DEPLOY_RECOVERY_CURL_MAX_TIME_SECONDS:-4}"
+    if [[ ! "$timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$interval_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$probe_timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$connect_timeout_seconds" =~ ^[1-9][0-9]*$ || \
+          ! "$curl_max_time_seconds" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Recovery timeouts and poll interval must be positive whole seconds" >&2
+        return 2
+    fi
+    if (( connect_timeout_seconds > curl_max_time_seconds || \
+          curl_max_time_seconds >= probe_timeout_seconds || \
+          probe_timeout_seconds > timeout_seconds )); then
+        echo "Recovery deadlines must satisfy connect <= curl max < probe <= overall timeout" >&2
+        return 2
+    fi
+
+    deadline=$((SECONDS + timeout_seconds))
+    while (( SECONDS < deadline )); do
+        remaining=$((deadline - SECONDS))
+        current_probe_timeout="$probe_timeout_seconds"
+        if (( current_probe_timeout > remaining )); then
+            current_probe_timeout="$remaining"
+        fi
+        if timeout --signal=TERM --kill-after=1s \
+            "${current_probe_timeout}s" \
+            env COMPOSE_ENV_FILE=.env \
+                RECOVERY_CURL_CONNECT_TIMEOUT_SECONDS="$connect_timeout_seconds" \
+                RECOVERY_CURL_MAX_TIME_SECONDS="$curl_max_time_seconds" \
+            bash scripts/probe-resource-recovery.sh; then
+            echo -e "${GREEN}  Controller-enforced hard recovery complete${NC}"
+            return 0
+        fi
+        remaining=$((deadline - SECONDS))
+        (( remaining > 0 )) || break
+        sleep_seconds="$interval_seconds"
+        if (( sleep_seconds > remaining )); then
+            sleep_seconds="$remaining"
+        fi
+        echo "  Waiting for the controller to clear its hard latch naturally (${remaining}s remaining)..."
+        sleep "$sleep_seconds"
+    done
+
+    echo "Timed out waiting for controller-enforced hard recovery; workers remain stopped" >&2
+    return 1
+}
+
 deploy_failed() {
     local status=$?
     trap - ERR
     echo -e "${RED}Deployment did not complete successfully.${NC}" >&2
     if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 ]]; then
-        compose stop -t 60 migrate worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
+        compose stop -t 60 migrate worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true
     fi
     if [[ "$DEPLOY_MUTATION_STARTED" -eq 1 && "$ROLLBACK_READY" -eq 1 && -x "$ROLLBACK_DIR/rollback.sh" ]]; then
         echo "Attempting fail-closed foreground rollback; heavy workers stay stopped..." >&2
@@ -591,6 +590,7 @@ if (( (8#$env_mode & 8#022) != 0 )); then
     false
 fi
 command -v docker >/dev/null
+command -v timeout >/dev/null
 docker info >/dev/null
 compose config --quiet
 install -d -m 700 "$ROLLBACK_ROOT"
@@ -618,7 +618,7 @@ echo -e "${GREEN}  Resource contract OK${NC}"
 echo -e "${YELLOW}[3/7] Protecting live images and freezing background writers...${NC}"
 prepare_rollback_point
 DEPLOY_MUTATION_STARTED=1
-compose stop -t 120 worker-download worker-import worker-operations scheduler
+compose stop -t 120 worker-download worker-import worker-operations worker-discovery scheduler
 persist_runtime_env
 
 # ── 4. Reuse the exact candidate images ──────────────────────────────
@@ -635,7 +635,7 @@ compose up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
 compose up --force-recreate --no-deps --no-build migrate
 COMPOSE_PARALLEL_LIMIT=1 compose up -d --force-recreate --no-deps --no-build \
     backend admin-web
-compose stop -t 60 worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
+compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true
 
 # ── 6. Wait for healthy ───────────────────────────────────────────────
 echo -e "${YELLOW}[6/7] Waiting up to 180 seconds for every service...${NC}"
@@ -656,8 +656,11 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 # ── 7. Project-local verification and background startup ─────────────
+echo -e "${YELLOW}[7/7] Waiting for controller-enforced recovery...${NC}"
+wait_for_resource_recovery
+
 echo -e "${YELLOW}[7/7] Verifying project runtime behavior...${NC}"
-VERIFY_SCOPE=core VERIFY_ALLOW_CRITICAL_PRESSURE=1 \
+VERIFY_SCOPE=core \
     VERIFY_EXPECT_GOVERNANCE_MODE=enforce \
     VERIFY_EXPECT_ENFORCED_PROFILES="$GOVERNED_PROFILES" \
     bash scripts/verify-runtime.sh
@@ -665,10 +668,10 @@ VERIFY_SCOPE=core VERIFY_ALLOW_CRITICAL_PRESSURE=1 \
 if [[ "$CORE_ONLY" -eq 0 ]]; then
     echo -e "${YELLOW}[7/7] Starting adaptive background workers...${NC}"
     compose up -d --force-recreate --no-build \
-        worker-download worker-import worker-operations scheduler
+        worker-download worker-import worker-operations worker-discovery scheduler
     ready=0
     for attempt in $(seq 1 36); do
-        if all_services_ready worker-download worker-import worker-operations scheduler; then
+        if all_services_ready worker-download worker-import worker-operations worker-discovery scheduler; then
             ready=1
             break
         fi
@@ -677,10 +680,10 @@ if [[ "$CORE_ONLY" -eq 0 ]]; then
     done
     [[ "$ready" -eq 1 ]] || {
         compose ps >&2
-        compose logs --tail=50 worker-download worker-import worker-operations scheduler >&2 || true
+        compose logs --tail=50 worker-download worker-import worker-operations worker-discovery scheduler >&2 || true
         false
     }
-    VERIFY_SCOPE=full VERIFY_ALLOW_CRITICAL_PRESSURE=1 \
+    VERIFY_SCOPE=full \
         VERIFY_EXPECT_GOVERNANCE_MODE=enforce \
         VERIFY_EXPECT_ENFORCED_PROFILES="$GOVERNED_PROFILES" \
         bash scripts/verify-runtime.sh

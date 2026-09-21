@@ -433,25 +433,33 @@ async def test_creator_refresh_is_keyset_bounded_fenced_and_resumable(monkeypatc
     """A large sweep persists one bounded page and resumes aggregate counters."""
     from app.database import async_session, engine
     from app.models import Creator, TaskRun
-    from app.services import creator_enrichment, operations
+    from app.services import creator_aliases, creator_enrichment, operations
     from app.services.creator import CreatorService
 
     page_size = 100
     total = page_size * 2 + 37
     run_key = uuid4().hex
     name_prefix = f"{PREFIX}refresh_{run_key}_"
+    marker = f"mapped-by-{run_key}"
     task_id: UUID | None = None
     rotated = False
+    expected_first_count = 0
+    expected_snapshot_total = 0
 
     async def refresh(_db, creator):
-        creator.description = "mapped-by-current-attempt"
+        if creator.name.startswith(name_prefix):
+            creator.description = marker
         return {"status": creator_enrichment.STATUS_FOUND, "artist_id": 1}
 
     async def no_projection(*_args, **_kwargs):
         return None
 
+    async def no_alias_backfill(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(creator_enrichment, "CREATOR_REFRESH_PAGE_SIZE", page_size, raising=False)
     monkeypatch.setattr(creator_enrichment, "refresh_creator_mapping", refresh)
+    monkeypatch.setattr(creator_aliases, "backfill_creator_alias_batch", no_alias_backfill)
     monkeypatch.setattr(CreatorService, "_request_creator_projection", no_projection)
     try:
         async with async_session() as db:
@@ -459,6 +467,22 @@ async def test_creator_refresh_is_keyset_bounded_fenced_and_resumable(monkeypatc
             db.add_all(
                 Creator(name=f"{name_prefix}{index:04d}", display_name=f"Creator {index}")
                 for index in range(total)
+            )
+            await db.flush()
+            first_page_names = list(
+                (
+                    await db.execute(
+                        select(Creator.name)
+                        .order_by(Creator.created_at, Creator.id)
+                        .limit(page_size)
+                    )
+                ).scalars()
+            )
+            expected_first_count = sum(
+                name.startswith(name_prefix) for name in first_page_names
+            )
+            expected_snapshot_total = int(
+                await db.scalar(select(func.count()).select_from(Creator)) or 0
             )
             prepared = await operations.prepare_admin_operation(
                 db,
@@ -500,20 +524,29 @@ async def test_creator_refresh_is_keyset_bounded_fenced_and_resumable(monkeypatc
                 .select_from(Creator)
                 .where(
                     Creator.name.startswith(name_prefix),
-                    Creator.description == "mapped-by-current-attempt",
+                    Creator.description == marker,
                 )
             )
-            assert first_attempt_count == page_size
+            assert first_attempt_count == expected_first_count
 
         with operations.admin_operation_attempt_context(task_id, 2):
             async with async_session() as db:
                 resumed = await creator_enrichment.refresh_all_creator_mappings(db)
 
-        assert resumed["scanned"] == total
-        assert resumed["found"] == total
+        assert resumed["scanned"] == expected_snapshot_total
+        assert resumed["found"] == expected_snapshot_total
         assert len(resumed["items"]) <= 100
         assert resumed["details_truncated"] is True
         async with async_session() as db:
+            refreshed_test_creators = await db.scalar(
+                select(func.count())
+                .select_from(Creator)
+                .where(
+                    Creator.name.startswith(name_prefix),
+                    Creator.description == marker,
+                )
+            )
+            assert refreshed_test_creators == total
             task = await db.get(TaskRun, task_id)
             checkpoint = task.meta[operations.ADMIN_DISPATCH_META_KEY].get(
                 "checkpoints", {}

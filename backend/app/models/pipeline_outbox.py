@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 
 
-OUTBOX_STATES = ("pending", "processing", "complete", "failed")
+OUTBOX_STATES = ("pending", "processing", "complete", "failed", "cancelled")
 
 
 class MediaDerivativeOutbox(TimestampMixin, Base):
@@ -42,7 +42,7 @@ class MediaDerivativeOutbox(TimestampMixin, Base):
     __tablename__ = "media_derivative_outbox"
     __table_args__ = (
         CheckConstraint(
-            "state IN ('pending', 'processing', 'complete', 'failed')",
+            "state IN ('pending', 'processing', 'complete', 'failed', 'cancelled')",
             name="ck_media_derivative_outbox_state",
         ),
         Index(

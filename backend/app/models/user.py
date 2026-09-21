@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
@@ -27,3 +27,6 @@ class User(Base):
     upload_quota_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     upload_used_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user_subscriptions = relationship("UserSubscription", back_populates="user")
+    remote_accounts = relationship("RemoteAccount", back_populates="user")

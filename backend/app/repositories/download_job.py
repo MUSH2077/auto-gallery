@@ -46,7 +46,45 @@ class DownloadJobRepository:
         return await self.session.get(DownloadJob, job_id)
 
     async def create(self, data: dict) -> DownloadJob:
-        job = DownloadJob(**data)
+        from app.models import RemoteAccount, UserSubscription
+
+        values = dict(data)
+        candidates = []
+        explicit_owner = values.get("owner_user_id")
+        if explicit_owner is not None:
+            if not isinstance(explicit_owner, int) or explicit_owner < 1:
+                raise ValueError("owner_user_id must be a positive audit identifier")
+            candidates.append(explicit_owner)
+        membership_id = values.get("triggering_user_subscription_id")
+        if membership_id is not None:
+            membership_owner = (
+                await self.session.execute(
+                    select(UserSubscription.user_id).where(
+                        UserSubscription.id == membership_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership_owner is None:
+                raise ValueError("triggering membership does not exist")
+            candidates.append(membership_owner)
+        account_id = values.get("triggering_remote_account_id")
+        if account_id is not None:
+            account_owner = (
+                await self.session.execute(
+                    select(RemoteAccount.user_id).where(RemoteAccount.id == account_id)
+                )
+            ).scalar_one_or_none()
+            if account_owner is None:
+                raise ValueError("triggering remote account does not exist")
+            candidates.append(account_owner)
+        owners = set(candidates)
+        if len(owners) > 1:
+            raise ValueError("download job provenance resolves to mixed owners")
+        owner = next(iter(owners), None)
+        if (membership_id is not None or account_id is not None) and owner is None:
+            raise ValueError("private download provenance requires an owner")
+        values["owner_user_id"] = owner
+        job = DownloadJob(**values)
         self.session.add(job)
         await self.session.flush()
         if job.subscription_id:

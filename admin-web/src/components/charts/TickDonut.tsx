@@ -44,7 +44,9 @@ export default function TickDonut({
   const t = useT();
   const fmt = useI18nFormat();
   const theme = useChartTheme();
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const total = data.reduce((sum, item) => sum + item.value, 0);
   const segments = useMemo(() => {
     const { top, remainder } = stableTopWithOther(data, (item) => item.value, 5);
@@ -73,7 +75,8 @@ export default function TickDonut({
     return result;
   }, [segments]);
 
-  const selected = segments.find((segment) => segment.id === activeId) || null;
+  const activeId = hoveredId ?? focusedId ?? selectedId;
+  const selectedSegment = segments.find((segment) => segment.id === activeId) || null;
 
   return (
     <div className="grid items-center gap-5 2xl:grid-cols-[minmax(15rem,0.9fr)_minmax(12rem,1.1fr)]" data-chart-kind="tick-donut">
@@ -100,10 +103,10 @@ export default function TickDonut({
           })}
           <circle cx="160" cy="160" r="88" fill={theme.subtle} stroke={theme.border} />
           <text x="160" y="153" textAnchor="middle" fill={theme.text} fontSize="24" fontWeight="800">
-            {selected ? fmt.number(selected.percent, { maximumFractionDigits: 1 }) : formatValue(total)}
+            {selectedSegment ? fmt.number(selectedSegment.percent, { maximumFractionDigits: 1 }) : formatValue(total)}
           </text>
           <text x="160" y="176" textAnchor="middle" fill={theme.muted} fontSize="11" fontWeight="600">
-            {selected ? `${selected.label} · %` : t("charts.hundred_ticks")}
+            {selectedSegment ? `${selectedSegment.label} · %` : t("charts.hundred_ticks")}
           </text>
         </svg>
       </div>
@@ -114,12 +117,12 @@ export default function TickDonut({
             key={segment.id}
             type="button"
             className="grid min-h-11 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 text-left hover:bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-            onPointerEnter={() => setActiveId(segment.id)}
-            onPointerLeave={() => setActiveId(null)}
-            onFocus={() => setActiveId(segment.id)}
-            onBlur={() => setActiveId(null)}
-            onClick={() => setActiveId((current) => current === segment.id ? null : segment.id)}
-            aria-pressed={activeId === segment.id}
+            onPointerEnter={() => setHoveredId(segment.id)}
+            onPointerLeave={() => setHoveredId(null)}
+            onFocus={() => setFocusedId(segment.id)}
+            onBlur={() => setFocusedId(null)}
+            onClick={() => setSelectedId((current) => current === segment.id ? null : segment.id)}
+            aria-pressed={selectedId === segment.id}
             title={segment.description}
           >
             <span className="h-3 w-3 rounded-full" style={{ backgroundColor: theme.colorFor(segment.colorRole) }} aria-hidden />

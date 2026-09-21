@@ -4,10 +4,13 @@ import logging
 from uuid import UUID
 
 from sqlalchemy import and_, select, or_
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Creator,
+    CreatorAlias,
+    CreatorCurationState,
     CreatorLink,
     SourceCreator,
     Subscription,
@@ -88,8 +91,12 @@ async def find_merge_candidates(db: AsyncSession, limit: int = 50) -> list[dict]
         select(
             Creator.danbooru_artist_id,
             func.count(Creator.id).label("cnt"),
-            func.array_agg(Creator.id).label("ids"),
-            func.array_agg(Creator.name).label("names"),
+            func.array_agg(
+                aggregate_order_by(Creator.id, Creator.created_at, Creator.id)
+            ).label("ids"),
+            func.array_agg(
+                aggregate_order_by(Creator.name, Creator.created_at, Creator.id)
+            ).label("names"),
         )
         .where(Creator.danbooru_artist_id.isnot(None))
         .group_by(Creator.danbooru_artist_id)
@@ -139,7 +146,7 @@ async def find_merge_candidates(db: AsyncSession, limit: int = 50) -> list[dict]
 async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> dict:
     """Merge source creator into target creator.
 
-    Moves all links, source_creators, and subscriptions to target.
+    Moves all aliases, links, source creators, and the source subscription to target.
     Deletes source creator after merge.
     """
     if target_id == source_id:
@@ -149,6 +156,15 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
     source = await db.get(Creator, source_id)
     if not target or not source:
         raise ValueError("One or both creators not found")
+
+    target_subscription = (await db.execute(
+        select(Subscription).where(Subscription.creator_id == target_id)
+    )).scalar_one_or_none()
+    source_subscription = (await db.execute(
+        select(Subscription).where(Subscription.creator_id == source_id)
+    )).scalar_one_or_none()
+    if target_subscription is not None and source_subscription is not None:
+        raise ValueError("Both creators have subscriptions")
 
     affected_work_ids = set((await db.execute(
         select(WorkSource.work_id)
@@ -173,7 +189,31 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
         .where(Subscription.creator_id.in_([target_id, source_id]))
     )).scalars().all())
 
-    stats = {"links_moved": 0, "source_creators_moved": 0, "subscriptions_moved": 0}
+    stats = {
+        "aliases_moved": 0,
+        "links_moved": 0,
+        "source_creators_moved": 0,
+        "subscriptions_moved": 0,
+    }
+
+    # Move aliases, dropping identities already present on the target.
+    result = await db.execute(
+        select(CreatorAlias).where(CreatorAlias.creator_id == source_id)
+    )
+    for alias in result.scalars().all():
+        existing = await db.execute(
+            select(CreatorAlias).where(
+                CreatorAlias.creator_id == target_id,
+                CreatorAlias.source == alias.source,
+                CreatorAlias.kind == alias.kind,
+                CreatorAlias.normalized_value == alias.normalized_value,
+            )
+        )
+        if existing.scalar_one_or_none():
+            await db.delete(alias)
+            continue
+        alias.creator_id = target_id
+        stats["aliases_moved"] += 1
 
     # Move creator_links
     result = await db.execute(
@@ -211,13 +251,31 @@ async def merge_creators(db: AsyncSession, target_id: UUID, source_id: UUID) -> 
         sc.creator_id = target_id
         stats["source_creators_moved"] += 1
 
+    if source_subscription is not None:
+        source_subscription.creator_id = target_id
+        stats["subscriptions_moved"] += 1
+
     # Transfer danbooru_artist_id if target doesn't have one
     if not target.danbooru_artist_id and source.danbooru_artist_id:
         target.danbooru_artist_id = source.danbooru_artist_id
 
     # Merge description
     if source.description and source.description not in (target.description or ""):
-        target.description = (target.description or "") + "\n" + source.description
+        target.description = "\n".join(
+            part.strip()
+            for part in (target.description, source.description)
+            if part and part.strip()
+        )
+
+    target.is_favorite = target.is_favorite or source.is_favorite
+
+    source_curation_state = (await db.execute(
+        select(CreatorCurationState).where(
+            CreatorCurationState.creator_id == source_id
+        )
+    )).scalar_one_or_none()
+    if source_curation_state is not None:
+        await db.delete(source_curation_state)
 
     # Delete source creator
     await db.delete(source)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -19,7 +19,11 @@ from sqlalchemy import DateTime, cast, func as sql_func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.redis_client import get_redis
-from app.services.queue_admission import QueueAdmissionError, checked_enqueue
+from app.services.queue_admission import (
+    QueueAdmissionError,
+    checked_enqueue,
+    notify_queue_worker,
+)
 
 # Long adaptive rebuilds can legitimately spend several days yielding at the
 # 10% budget floor.  Their single-flight/status records must outlive the RQ
@@ -40,23 +44,28 @@ ADMIN_DISPATCH_RETRY_MIN_SECONDS = 30
 ADMIN_DISPATCH_RETRY_MAX_SECONDS = 15 * 60
 ADMIN_RQ_FUNCTION = "app.jobs.admin_operations.run_registered_admin_operation"
 _ACTIVE_ADMIN_STATUSES = frozenset({"enqueued", "running", "paused", "recovering"})
+ADMIN_PARENT_ADMISSION_OPERATION_TYPES = frozenset({
+    "admin-integrity-scan",
+    "admin-backup-estimate",
+    "admin-backup-create",
+    "admin-restore-validate",
+    "admin-proxy-test",
+    "admin-gallerydl-connectivity-test",
+})
 _ADMIN_INTERNAL_RESOURCE_PROFILES = {
+    "subscription-sync-batch": "download",
+    "subscription-sync-batch-cleanup": "download",
     "admin-clear": "maintenance",
     "admin-rebuild": "maintenance",
     "admin-disk-import": "maintenance",
     "admin-creator-reenrich": "maintenance",
+    "admin-creator-alias-backfill": "maintenance",
     "danbooru-mapping-refresh": "maintenance",
     "admin-search-reindex": "search_index",
     "admin-curation-backfill": "import_db",
     "admin-gitllery-sync": "git_projection",
     "hierarchy-delete": "maintenance",
     "asset-dedup-scan": "image_derive",
-    "admin-integrity-scan": "maintenance",
-    "admin-backup-estimate": "maintenance",
-    "admin-backup-create": "maintenance",
-    "admin-restore-validate": "maintenance",
-    "admin-proxy-test": "maintenance",
-    "admin-gallerydl-connectivity-test": "maintenance",
 }
 _ADMIN_OPERATION_ATTEMPT: ContextVar[tuple[UUID, int] | None] = ContextVar(
     "admin_operation_attempt",
@@ -127,6 +136,18 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
     spec.operation_type: spec
     for spec in (
         _spec(
+            "subscription-sync-batch-cleanup",
+            "app.jobs.admin_operations.run_subscription_sync_batch_cleanup",
+            queues=("operations",), scopes=("library:subscription-sync-cancel:",),
+            timeout=120, permission="system",
+        ),
+        _spec(
+            "subscription-sync-batch",
+            "app.jobs.admin_operations.run_subscription_sync_batch",
+            queues=("operations",), scopes=("library:subscription-sync-batch:active",),
+            timeout=120, permission="system",
+        ),
+        _spec(
             "admin-clear",
             "app.jobs.admin_operations.run_clear_operation",
             scopes=("library:clear:",),
@@ -152,6 +173,12 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "admin-creator-reenrich",
             "app.jobs.admin_operations.run_creator_reenrich_operation",
             scopes=("library:creator-reenrich:active",),
+            timeout=7200,
+        ),
+        _spec(
+            "admin-creator-alias-backfill",
+            "app.jobs.admin_operations.run_creator_alias_backfill_operation",
+            scopes=("library:creator-alias-backfill:active",),
             timeout=7200,
         ),
         _spec(
@@ -304,6 +331,10 @@ def inaccessible_admin_operation_types_for_permissions(
         operation_type
         for operation_type, spec in ADMIN_OPERATION_REGISTRY.items()
         if spec.required_permission not in permission_set
+        # Private member batches share this historical operation name. Their
+        # ownership/global visibility predicate, not a type-only filter, is
+        # authoritative on generic task surfaces.
+        and operation_type != "subscription-sync-batch"
     )
 
 
@@ -1607,7 +1638,7 @@ async def publish_admin_operation(
     from app.services.tasks import TaskService
 
     task_uuid = UUID(str(task_id))
-    async with async_session() as db:
+    async with async_session() as db, AsyncExitStack() as redis_budget_scope:
         task = (
             await db.execute(
                 select(TaskRun)
@@ -1627,6 +1658,10 @@ async def publish_admin_operation(
         ):
             await db.rollback()
             return "skipped"
+        if task.operation_type in {"subscription-sync-batch", "subscription-sync-batch-cleanup"}:
+            from app.services.redis_budget import budget_redis
+            redis_budget_scope.enter_context(budget_redis(seconds=3, reserve_seconds=0))
+            redis_client = get_redis()
         rq_job_id = str(dispatch["rq_job_id"])
         try:
             existing = await asyncio.to_thread(
@@ -1636,6 +1671,37 @@ async def publish_admin_operation(
             )
             if existing is not None:
                 status = await asyncio.to_thread(_rq_status, existing)
+                if status == "queued":
+                    await asyncio.to_thread(
+                        notify_queue_worker,
+                        str(dispatch["queue_name"]),
+                        redis_client if redis_client is not None else get_redis(),
+                    )
+                if (
+                    task.operation_type in {"subscription-sync-batch", "subscription-sync-batch-cleanup"}
+                    and task.status == "running"
+                    and status not in {"queued", "deferred", "scheduled"}
+                ):
+                    # RQ can retain STARTED after its workhorse dies, or mark
+                    # that abandoned delivery terminal without a callback.
+                    # Neither proves that the durable batch has finished.
+                    # Nominate only: the recovery transaction must still take
+                    # the scope/execution leases and recheck attempt/status.
+                    checked_at = _utcnow()
+                    heartbeat_at = task.last_heartbeat_at
+                    heartbeat_fresh = heartbeat_at is not None and heartbeat_at > (
+                        checked_at - timedelta(seconds=ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS)
+                    )
+                    dispatch.update(
+                        next_probe_at=(checked_at + timedelta(seconds=ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS)).isoformat(),
+                        last_error=f"RQ attempt {status} while durable batch is running; checking execution lease",
+                        updated_at=checked_at.isoformat(),
+                    )
+                    task.meta = {**(task.meta or {}), ADMIN_DISPATCH_META_KEY: dispatch}
+                    # Release this TaskRun row lock before the coordinator
+                    # opens the separate scope -> execution -> TaskRun path.
+                    await db.commit()
+                    return "active" if heartbeat_fresh else "orphaned"
                 if status not in {"queued", "started", "deferred", "scheduled"}:
                     message = f"RQ attempt ended as {status} without a current TaskRun callback"
                     dispatch["publication_state"] = ADMIN_DISPATCH_FAILED
@@ -1818,8 +1884,9 @@ async def latest_successful_admin_operation(
     *,
     operation_type: str,
     scope_key: str,
+    include_retryable: bool = False,
 ) -> dict[str, Any]:
-    """Return the latest completed TaskRun result for one registered scope."""
+    """Return the durable result and current/retryable task for one scope."""
 
     from app.models.task_run import TaskRun
 
@@ -1843,13 +1910,16 @@ async def latest_successful_admin_operation(
             .limit(1)
         )
     ).scalar_one_or_none()
+    current_statuses = set(_ACTIVE_ADMIN_STATUSES)
+    if include_retryable:
+        current_statuses.update({"failed", "stale", "cancelled"})
     current_task = (
         await db.execute(
             select(TaskRun)
             .where(
                 TaskRun.kind == "admin",
                 TaskRun.operation_type == operation_type,
-                TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
+                TaskRun.status.in_(current_statuses),
                 scope_text == scope_key,
             )
             .order_by(TaskRun.created_at.desc(), TaskRun.id.desc())
@@ -1986,7 +2056,7 @@ async def recover_admin_operation_dispatches(
             attempt,
             redis_client=redis_client,
         )
-        if outcome == "missing":
+        if outcome in {"missing", "orphaned"}:
             recovered = await prepare_admin_operation_recovery(
                 candidate_id,
                 attempt,

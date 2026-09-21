@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { adminRoutes } from "@/lib/adminRoutes";
-import { usePresence } from "@/lib/motion";
+import { motionConfig, usePresence } from "@/lib/motion";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AppSidebar from "@/components/AppSidebar";
 import AppTopBar from "@/components/AppTopBar";
@@ -72,6 +72,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const previousPathRef = useRef(pathname);
   const restoreDrawerFocusRef = useRef(true);
 
+  useEffect(() => {
+    const disabled = !motionConfig.shouldAnimate();
+    document.documentElement.classList.toggle("media-motion-disabled", disabled);
+    return () => document.documentElement.classList.remove("media-motion-disabled");
+  }, []);
+
   useLayoutEffect(() => {
     try {
       const legacy = localStorage.getItem(LEGACY_SIDEBAR_KEY);
@@ -111,7 +117,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => {
+    const initialFocusFrame = window.requestAnimationFrame(() => {
       document.querySelector<HTMLElement>("#admin-mobile-sidebar button, #admin-mobile-sidebar a")?.focus();
     });
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -139,6 +145,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(initialFocusFrame);
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
       if (restoreDrawerFocusRef.current) {

@@ -25,6 +25,8 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { POLL_ACTIVE_MS, POLL_IDLE_MS } from "@/lib/polling";
+import { actionErrorReason, hasTaskAction, partitionTaskAction } from "@/lib/task-actions";
+import { writeClipboardText } from "@/lib/clipboard";
 
 const TaskDetailDrawer = dynamic(
   () => import("@/components/JobDrawers").then((module) => module.TaskDetailDrawer),
@@ -55,7 +57,7 @@ function reasonLabel(t: ReturnType<typeof useT>, code?: string | null) {
 function groupItems(items: OperationAttentionItem[]) {
   const groups = new Map<string, OperationAttentionItem[]>();
   for (const item of items) {
-    const key = [item.repository_id || item.task?.subject_id || item.id, item.reason_code || item.title].join(":");
+    const key = [item.repository_id || (item.type === "task" ? item.task?.subject_id : null) || item.id, item.reason_code || item.title].join(":");
     groups.set(key, [...(groups.get(key) || []), item]);
   }
   return [...groups.values()];
@@ -83,6 +85,8 @@ export default function OperationsAttentionCenter() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(params.get("task"));
   const [batchMode, setBatchMode] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [copyingId, setCopyingId] = useState<string | null>(null);
+  const [batchFailures, setBatchFailures] = useState<Array<{ id: string; reason: string }>>([]);
 
   useEffect(() => {
     setSearch(params.get("q") || "");
@@ -113,11 +117,16 @@ export default function OperationsAttentionCenter() {
   });
 
   const invalidate = async () => {
-    await qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }),
+      qc.invalidateQueries({ queryKey: queryKeys.workbench }),
+    ]);
   };
   const action = useMutation({
     mutationFn: async ({ item, name }: { item: OperationAttentionItem; name: "retry" | "pause" | "resume" | "acknowledge" }) => {
-      if (!item.task_id) throw new Error(t("operations.no_task_action"));
+      if (item.type !== "task" || !item.task_id) throw new Error(t("operations.no_task_action"));
       if (name === "retry") return api.retryTask(item.task_id);
       if (name === "pause") return api.pauseTask(item.task_id);
       if (name === "resume") return api.resumeTask(item.task_id);
@@ -127,30 +136,42 @@ export default function OperationsAttentionCenter() {
       toast.success(t("operations.action_complete"));
       await invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error) => toast.error(actionErrorReason(error)),
+    onSettled: () => { void invalidate(); },
   });
   const batchAction = useMutation({
     mutationFn: async (name: "retry" | "acknowledge") => {
-      const selected = (overview.data?.items || []).filter((item) => item.task_id && selectedTaskIds.has(item.task_id));
-      const eligible = selected.filter((item) => (
-        name === "retry"
-          ? item.available_actions.includes("retry")
-          : item.status === "open"
-      ));
-      for (const item of eligible) {
-        if (!item.task_id) continue;
-        if (name === "retry") await api.retryTask(item.task_id);
-        else await api.acknowledgeTask(item.task_id);
-      }
-      return eligible.length;
+      const selected = (overview.data?.items || []).flatMap((item) => item.type === "task" && item.task_id ? [{ ...item, id: item.task_id }] : []);
+      const preview = partitionTaskAction(selected, selectedTaskIds, name);
+      if (!preview.eligible.length) return { succeeded: [] as string[], failed: preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })) };
+      const settled = await Promise.allSettled(preview.eligible.map((item) => name === "retry" ? api.retryTask(item.id) : api.acknowledgeTask(item.id)));
+      return {
+        succeeded: settled.flatMap((result, index) => result.status === "fulfilled" ? [preview.eligible[index].id] : []),
+        failed: [...preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })), ...settled.flatMap((result, index) => result.status === "rejected" ? [{ id: preview.eligible[index].id, reason: actionErrorReason(result.reason) }] : [])],
+      };
     },
-    onSuccess: async (count) => {
-      setSelectedTaskIds(new Set());
-      toast.success(t("operations.batch_complete", { count }));
+    onSuccess: async (result) => {
+      setSelectedTaskIds((current) => {
+        const succeeded = new Set(result.succeeded);
+        return new Set([...current].filter((id) => !succeeded.has(id)));
+      });
+      setBatchFailures(result.failed);
+      if (result.succeeded.length) toast.success(t("operations.batch_complete", { count: result.succeeded.length }));
       await invalidate();
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const confirmBatch = (name: "retry" | "acknowledge") => {
+    const rows = (overview.data?.items || []).flatMap((item) => item.type === "task" && item.task_id ? [{ ...item, id: item.task_id }] : []);
+    const preview = partitionTaskAction(rows, selectedTaskIds, name);
+    if (!preview.eligible.length) {
+      setBatchFailures(preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })));
+      toast.warning(t("jobs.batch_no_eligible"));
+      return;
+    }
+    if (confirm(t("jobs.batch_confirm", { eligible: preview.eligible.length, ineligible: preview.ineligible.length }))) batchAction.mutate(name);
+  };
 
   const filteredGroups = useMemo(() => {
     let items = [...(overview.data?.items || [])];
@@ -274,7 +295,7 @@ export default function OperationsAttentionCenter() {
             type="button"
             className="btn-ghost min-h-11 px-3"
             disabled={!selectedTaskIds.size || batchAction.isPending}
-            onClick={() => batchAction.mutate("retry")}
+            onClick={() => confirmBatch("retry")}
           >
             {t("operations.batch_retry")}
           </button>
@@ -282,12 +303,15 @@ export default function OperationsAttentionCenter() {
             type="button"
             className="btn-primary min-h-11 px-3"
             disabled={!selectedTaskIds.size || batchAction.isPending}
-            onClick={() => batchAction.mutate("acknowledge")}
+            onClick={() => confirmBatch("acknowledge")}
           >
             {t("operations.batch_acknowledge")}
           </button>
         </div>
       )}
+      {batchFailures.length > 0 && <div role="alert" className="mb-4 rounded-md border border-danger/30 bg-danger-subtle p-3 text-sm text-danger">
+        {batchFailures.map((failure) => <p key={failure.id}>{failure.id.slice(0, 8)}: {reasonLabel(t, failure.reason)}</p>)}
+      </div>}
 
       {overview.isLoading && (
         <div className="space-y-2" aria-hidden="true">
@@ -306,10 +330,18 @@ export default function OperationsAttentionCenter() {
       <div className="space-y-2" aria-live="polite" aria-busy={overview.isFetching}>
         {filteredGroups.map((group) => {
           const item = group[0];
-          const task = item.task;
-          const retryable = item.available_actions.includes("retry");
-          const pausable = !!task && ["enqueued", "running", "recovering"].includes(task.status);
-          const groupTaskIds = group.flatMap((candidate) => candidate.task_id ? [candidate.task_id] : []);
+          const task = item.type === "task" ? item.task : null;
+          const retryable = item.type === "task" && hasTaskAction(item, "retry");
+          const pausable = item.type === "task" && hasTaskAction(item, "pause");
+          const resumable = item.type === "task" && hasTaskAction(item, "resume");
+          const acknowledgeable = item.type === "task" && hasTaskAction(item, "acknowledge");
+          const canOpenRepository = item.type === "repository"
+            ? item.available_actions.includes("open_repository")
+            : item.navigation_actions.includes("open_repository");
+          const canCopyDiagnostics = item.type === "repository"
+            ? item.available_actions.includes("copy_diagnostics")
+            : item.navigation_actions.includes("copy_diagnostics");
+          const groupTaskIds = group.flatMap((candidate) => candidate.type === "task" && candidate.task_id ? [candidate.task_id] : []);
           return (
             <article key={`${item.repository_id || item.id}:${item.reason_code || item.title}`} className={`rounded-md border bg-surface p-4 ${item.severity === "critical" ? "border-danger/40" : "border-border"}`}>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -348,21 +380,30 @@ export default function OperationsAttentionCenter() {
                   </div>
                 </button>
                 <div className="flex flex-wrap items-center gap-2 sm:max-w-[48%] sm:justify-end">
-                  {retryable && <button type="button" className="btn-primary min-h-11 px-4" onClick={() => action.mutate({ item, name: "retry" })}>{t("jobs.retry")}</button>}
-                  {pausable && task?.status !== "paused" && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "pause" })}>{t("jobs.pause")}</button>}
-                  {task?.status === "paused" && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "resume" })}>{t("jobs.resume")}</button>}
-                  {item.status === "open" && item.task_id && <button type="button" className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "acknowledge" })}>{t("operations.acknowledge")}</button>}
-                  {item.repository_id && <Link href={adminRoutes.repository(item.repository_id)} className="btn-ghost min-h-11 px-3">{t("operations.open_repository")}</Link>}
-                  <button
+                  {retryable && <button type="button" disabled={action.isPending} className="btn-primary min-h-11 px-4" onClick={() => action.mutate({ item, name: "retry" })}>{t("jobs.retry")}</button>}
+                  {pausable && task?.status !== "paused" && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "pause" })}>{t("jobs.pause")}</button>}
+                  {resumable && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "resume" })}>{t("jobs.resume")}</button>}
+                  {acknowledgeable && item.task_id && <button type="button" disabled={action.isPending} className="btn-ghost min-h-11 px-3" onClick={() => action.mutate({ item, name: "acknowledge" })}>{t("operations.acknowledge")}</button>}
+                  {canOpenRepository && item.repository_id && <Link href={adminRoutes.repository(item.repository_id)} className="btn-ghost min-h-11 px-3">{t("operations.open_repository")}</Link>}
+                  {canCopyDiagnostics && <button
                     type="button"
                     className="btn-ghost min-h-11 px-3"
+                    disabled={copyingId === item.id}
                     onClick={async () => {
-                      await navigator.clipboard.writeText(JSON.stringify(item, null, 2));
-                      toast.success(t("operations.diagnostics_copied"));
+                      if (copyingId) return;
+                      setCopyingId(item.id);
+                      try {
+                        await writeClipboardText(JSON.stringify(item, null, 2));
+                        toast.success(t("operations.diagnostics_copied"));
+                      } catch (error) {
+                        toast.error(`${t("common.copy_failed")}: ${actionErrorReason(error)}`);
+                      } finally {
+                        setCopyingId(null);
+                      }
                     }}
                   >
                     {t("operations.copy_diagnostics")}
-                  </button>
+                  </button>}
                 </div>
               </div>
             </article>
@@ -379,6 +420,9 @@ export default function OperationsAttentionCenter() {
         }}
         onOpenDownload={openSelectedRepository}
         onOpenImport={openSelectedRepository}
+        actionPending={action.isPending}
+        actionError={action.error}
+        onRepeatAccepted={(jobId) => router.push(`${adminRoutes.jobs}?tab=downloads&job=${encodeURIComponent(jobId)}`)}
       />
       <DomainDangerZone
         entity="jobs"

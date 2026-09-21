@@ -1,5 +1,5 @@
-import { request, ApiError, clearAuthOn401 } from "./client";
-import { worksApi } from "./endpoints";
+import { assertBackupArchiveResponse, request, requestBlob, ApiError, clearAuthOn401 } from "./client";
+import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
 export * from "./types";
@@ -46,6 +46,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
 // ── API ──
 
 export const api = {
+  ...remoteDiscoveryApi,
   // System
   health: () => request<T.HealthResponse>("/api/v1/system/health"),
 
@@ -53,15 +54,16 @@ export const api = {
   refreshWorkbench: () => request<T.WorkbenchSummary>("/api/v1/system/workbench?refresh=true"),
 
   schedulerDecisions: () => request<T.SchedulerDecisionsResponse>("/api/v1/system/scheduler-decisions"),
-  schedulerDecisionsView: (view: "attention" | "all", offset = 0, limit = 100) =>
+  schedulerDecisionsView: (view: "attention" | "all", offset = 0, limit = 100, filters?: { q?: string; state?: "all" | "due" | "manual" | "disabled" }) =>
     request<T.SchedulerDecisionsResponse>(
-      `/api/v1/system/scheduler-decisions?view=${view}&offset=${offset}&limit=${limit}`,
+      `/api/v1/system/scheduler-decisions?${new URLSearchParams({ view, offset: String(offset), limit: String(limit), ...(filters?.q ? { q: filters.q } : {}), ...(filters?.state && filters.state !== "all" ? { state: filters.state } : {}) })}`,
     ),
-  schedulerDecisionsForSubscriptions: (ids: string[]) => {
+  schedulerDecisionsForSubscriptions: (ids: string[], offset = 0, limit = 100) => {
     const params = new URLSearchParams({
       view: "all",
       subscription_ids: ids.join(","),
-      limit: "500",
+      offset: String(offset),
+      limit: String(Math.min(limit, 500)),
     });
     return request<T.SchedulerDecisionsResponse>(`/api/v1/system/scheduler-decisions?${params.toString()}`);
   },
@@ -100,8 +102,8 @@ export const api = {
   getTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}`),
   getDownloadConflicts: (id: string) =>
     request<T.DownloadConflictCase>(`/api/v1/tasks/${id}/conflicts`),
-  downloadConflictMediaUrl: (id: string, relativePath: string, side: "canonical" | "staged") =>
-    `/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`,
+  downloadConflictMedia: (id: string, relativePath: string, side: "canonical" | "staged") =>
+    requestBlob(`/api/v1/tasks/${id}/conflicts/media?relative_path=${encodeURIComponent(relativePath)}&side=${side}`),
   resolveDownloadConflicts: (
     id: string,
     decisions: Array<{ relative_path: string; winner: T.DownloadConflictWinner }>,
@@ -115,7 +117,7 @@ export const api = {
     }),
   retryTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/retry`, { method: "POST" }),
   cancelTask: (id: string, note?: string) =>
-    request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/cancel`, {
+    request<T.TaskControlResponse>(`/api/v1/tasks/${id}/cancel`, {
       method: "POST",
       body: note ? JSON.stringify({ note }) : undefined,
     }),
@@ -126,10 +128,18 @@ export const api = {
     }),
   resumeTask: (id: string) => request<{ task_id: string; status: string }>(`/api/v1/tasks/${id}/resume`, { method: "POST" }),
   acknowledgeTask: (id: string) => request<T.TaskRun>(`/api/v1/tasks/${id}/acknowledge`, { method: "POST" }),
-  compactTasks: (dryRun = true, limit = 1000) =>
-    request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number }>(
+  deleteTask: (id: string) => request<{ status: string }>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
+  compactTasks: (dryRun = true, limit = 1000, previewToken?: string) =>
+    request<{ dry_run: boolean; matched: number; deleted_tasks: number; deleted_download_jobs: number; deleted_import_jobs: number; skipped_without_receipt: number; preview_token: string }>(
       "/api/v1/tasks/compact",
-      { method: "POST", body: JSON.stringify({ dry_run: dryRun, limit }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          dry_run: dryRun,
+          limit,
+          ...(previewToken ? { preview_token: previewToken } : {}),
+        }),
+      },
     ),
   operationsOverview: (view: T.OperationsView, signal?: AbortSignal) =>
     request<T.OperationsOverviewResponse>(
@@ -151,6 +161,10 @@ export const api = {
   },
 
   getCreator: (id: string) => request<T.Creator>(`/api/v1/creators/${id}`),
+  listCreatorAliases: (id: string, includeHistory = true) =>
+    request<T.CreatorAlias[]>(
+      `/api/v1/creators/${id}/aliases?include_history=${includeHistory}`,
+    ),
   getCreatorTimeline: (creatorId: string, fromDate?: string, toDate?: string) => {
       const q = new URLSearchParams();
       if (fromDate) q.set("from_date", fromDate);
@@ -199,14 +213,17 @@ export const api = {
     request<{ duplicates: { reason: string; description: string; creator_ids: string[]; creator_names: string[] }[]; total: number }>("/api/v1/creators/duplicates"),
 
   mergeCreators: (targetId: string, sourceIds: string[]) =>
-    request<{ status: string; results: { source_id: string; status: string; links_moved?: number; source_creators_moved?: number; subscriptions_moved?: number; error?: string }[] }>(
+    request<{ status: string; results: { source_id: string; status: string; aliases_moved?: number; links_moved?: number; source_creators_moved?: number; subscriptions_moved?: number; error?: string }[] }>(
       "/api/v1/creators/merge", { method: "POST", body: JSON.stringify({ target_id: targetId, source_ids: sourceIds }) }),
 
   listCreatorLinks: (creatorId: string) =>
     request<T.CreatorLink[]>(`/api/v1/creators/${creatorId}/links`),
 
   createCreatorLink: (creatorId: string, data: { url: string; link_type: string; source?: string; confidence?: number }) =>
-    request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links`, { method: "POST", body: JSON.stringify(data) }),
+    request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links`, {
+      method: "POST",
+      body: JSON.stringify({ ...data, creator_id: creatorId }),
+    }),
 
   updateCreatorLink: (creatorId: string, linkId: string, data: Record<string, unknown>) =>
     request<T.CreatorLink>(`/api/v1/creators/${creatorId}/links/${linkId}`, { method: "PATCH", body: JSON.stringify(data) }),
@@ -318,7 +335,7 @@ export const api = {
     }),
 
   batchDownloadJobsByFilter: (filters: Record<string, string>, action: string, note?: string) =>
-    request<{ total_matched: number; succeeded: number; failed: number }>(`/api/v1/download-jobs/batch-by-filter`, {
+    request<T.TaskBulkResult>(`/api/v1/download-jobs/batch-by-filter`, {
       method: "POST",
       body: JSON.stringify({ filters, action, note }),
     }),
@@ -335,17 +352,23 @@ export const api = {
   retryDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/retry`, { method: "POST" }),
 
+  repeatDownloadJob: (id: string, requestId: string) =>
+    request<T.RepeatSyncAccepted>(`/api/v1/download-jobs/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
+
+  repeatTask: (id: string, requestId: string) =>
+    request<T.RepeatSyncAccepted>(`/api/v1/tasks/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
+
   getDownloadJobImports: (jobId: string) =>
     request<any[]>(`/api/v1/download-jobs/${jobId}/imports`),
 
   clearDownloadJobs: (statuses: string[]) =>
-    request<{ status: string; deleted: number }>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
+    request<T.TaskBulkClearResult>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
 
   killStuckJobs: () =>
     request<{ status: string; killed: number }>(`/api/v1/download-jobs/kill-stuck`, { method: "POST" }),
 
   retryAllFailedJobs: () =>
-    request<{ status: string; succeeded: number; failed: number }>(`/api/v1/download-jobs/retry-all`, { method: "POST" }),
+    request<T.TaskBulkStatusResult>(`/api/v1/download-jobs/retry-all`, { method: "POST" }),
 
   pauseDownloadJob: (id: string) =>
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/pause`, { method: "POST" }),
@@ -354,7 +377,7 @@ export const api = {
     request<{ job_id: string; status: string }>(`/api/v1/download-jobs/${id}/resume`, { method: "POST" }),
 
   batchDownloadJobs: (ids: string[], action: string) =>
-    request<{ succeeded: number; failed: number; errors?: { id: string; error: string }[] }>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
+    request<T.TaskBulkResult>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
 
   listDownloadJobImports: (jobId: string) =>
     request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
@@ -424,7 +447,10 @@ export const api = {
     request<T.CurationBackfillStatus>("/api/v1/curation/backfill/status"),
 
   runCurationBackfill: () =>
-    request<{ status: string; job_id: string }>("/api/v1/curation/backfill", { method: "POST" }),
+    request<T.AdminOperationAccepted>("/api/v1/curation/backfill", { method: "POST" }),
+
+  getLatestCurationBackfill: <TResult = Record<string, unknown>>() =>
+    request<T.AdminOperationSnapshotResponse<TResult>>("/api/v1/curation/backfill/latest"),
 
   // Gitllery (on-disk curation history projection)
   getGitllerySettings: () =>
@@ -467,6 +493,13 @@ export const api = {
   listAllTags: (sortBy = "usage_count", sortOrder = "desc") =>
     request<T.Tag[]>(`/api/v1/tags?include_all=true&sort_by=${sortBy}&sort_order=${sortOrder}`),
 
+  listTagsPage: (params: { offset?: number; limit?: number; q?: string; category?: string; sort_by?: "name" | "usage_count"; sort_order?: "asc" | "desc" } = {}) => {
+    const query = new URLSearchParams({ offset: String(params.offset || 0), limit: String(Math.min(params.limit || 100, 200)), sort_by: params.sort_by || "usage_count", sort_order: params.sort_order || "desc" });
+    if (params.q) query.set("q", params.q);
+    if (params.category) query.set("category", params.category);
+    return request<T.TagPage>(`/api/v1/tags/page?${query}`);
+  },
+
   createTag: (data: { normalized_name: string; category?: string }) =>
     request<T.Tag>("/api/v1/tags", { method: "POST", body: JSON.stringify(data) }),
 
@@ -488,6 +521,18 @@ export const api = {
     const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit), scope });
     if (cursor) params.set("cursor", cursor);
     return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`, { signal });
+  },
+
+  referenceNameAnchors: (
+    scope: "creators" | "subscriptions",
+    q: string,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({ scope, q });
+    return request<T.ReferenceNameAnchorsRead>(
+      `/api/v1/search/name-anchors?${params.toString()}`,
+      { signal },
+    );
   },
 
   assistSearch: (data: {
@@ -544,7 +589,7 @@ export const api = {
     }),
 
   batchImportJobsByFilter: (filters: Record<string, string | string[]>, action: string, note?: string) =>
-    request<{ total_matched: number; succeeded: number; failed: number; errors?: { id: string; error: string }[] }>(
+    request<T.TaskBulkResult>(
       `/api/v1/import-jobs/batch-by-filter`,
       {
         method: "POST",
@@ -595,7 +640,7 @@ export const api = {
   }) =>
     request<{ status: string; message: string }>("/api/v1/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
 
-  reindexSearch: () => request<{ status: string; job_id: string; message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
+  reindexSearch: () => request<T.AdminOperationAccepted & { message?: string }>("/api/v1/admin/search/reindex", { method: "POST" }),
 
   getAuthStatus: () => request<T.AuthStatusResponse>("/api/v1/admin/auth-status"),
 
@@ -611,7 +656,16 @@ export const api = {
 
   getSystemInfo: () => request<T.SystemInfoResponse>("/api/v1/admin/system-info"),
   getImportProgress: () => request<{ running: number; pending: number; complete: number; failed: number; recent: { id: string; status: string; error: string }[] }>("/api/v1/admin/import-progress"),
-  cleanupMetadataJSONs: () => request<{ status: string; removed: number }>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
+  cleanupMetadataJSONs: () => request<T.AdminOperationAccepted>("/api/v1/admin/cleanup-metadata-jsons", { method: "POST" }),
+  getLatestMetadataJSONCleanup: () => request<T.AdminOperationSnapshotResponse<{
+    status: string;
+    removed: number;
+    skipped: number;
+    failed: number;
+    skipped_by_reason?: Record<string, number>;
+    errors?: { path?: string; reason?: string }[];
+    message?: string;
+  }>>("/api/v1/admin/cleanup-metadata-jsons/latest"),
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
@@ -630,21 +684,30 @@ export const api = {
     request<T.ClearImpactPreview>(`/api/v1/admin/clear/preview/${entity}`),
 
   rebuildLibrary: (options: { mode?: "repair" | "full"; source?: string; creator_id?: string; work_id?: string; resume?: boolean } = {}) =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/rebuild", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/library/rebuild", {
       method: "POST",
       body: JSON.stringify(options),
     }),
+  getLatestLibraryRebuild: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/library/rebuild/latest",
+  ),
 
   importFromDisk: (options: T.ImportFromDiskRequest = {}) =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/library/import-from-disk", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/library/import-from-disk", {
       method: "POST",
       body: JSON.stringify(options),
     }),
+  getLatestImportFromDisk: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/library/import-from-disk/latest",
+  ),
 
   reenrichCreators: () =>
-    request<{ job_id: string; status: string; message: string }>("/api/v1/admin/creators/re-enrich", {
+    request<T.AdminOperationAccepted & { message: string }>("/api/v1/admin/creators/re-enrich", {
       method: "POST",
     }),
+  getLatestCreatorReenrichment: () => request<T.AdminOperationSnapshotResponse<{ message?: string }>>(
+    "/api/v1/admin/creators/re-enrich/latest",
+  ),
 
   enrichCreator: (creatorId: string) =>
     request<{ status: string; artist_id?: number; artist_name?: string }>(`/api/v1/creators/${creatorId}/enrich`, {
@@ -655,14 +718,20 @@ export const api = {
     request<{ operations: { job_id: string; status: string; operation_type: string; progress?: { phase: string; label: string }; error?: string; updated_at: number }[] }>("/api/v1/admin/operations"),
 
   startClearOperation: (entity: T.ClearEntity, confirmation: string) =>
-    request<{ job_id: string; status: "queued" | "enqueued" }>("/api/v1/admin/operations/clear", {
+    request<T.AdminOperationAccepted>("/api/v1/admin/operations/clear", {
       method: "POST",
       body: JSON.stringify({ entity, confirmation }),
     }),
+  getLatestClearOperation: (entity: T.ClearEntity) =>
+    request<T.AdminOperationSnapshotResponse<{ status: string; message?: string; deleted?: Record<string, number> }>>(
+      `/api/v1/admin/operations/clear/latest?entity=${encodeURIComponent(entity)}`,
+    ),
 
   getAdminOperationStatus: (jobId: string) =>
     request<{
+      task_id?: string | null;
       job_id: string;
+      rq_job_id?: string | null;
       status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "admin-clear" | "danbooru-import-all" | string;
       progress?: { phase?: string; label?: string; current?: number; total?: number };
@@ -681,13 +750,16 @@ export const api = {
   resetSettings: () =>
     request<{ status: string; message: string }>("/api/v1/admin/reset-settings", { method: "POST" }),
 
-  triggerSyncNow: (mode: "force_eligible" | "due_scan" | "manual_all_enabled" = "force_eligible") =>
-    request<{
-      status: string; message: string; task_id: string; mode: "force_eligible" | "due_scan" | "manual_all_enabled";
-      candidate_count?: number;
-      enqueued_count: number; skipped_count: number; error_count?: number;
-      skipped_reasons?: Record<string, number>; job_ids: string[]; task_ids?: string[];
-    }>("/api/v1/admin/scheduler/sync-now", { method: "POST", body: JSON.stringify({ mode }) }),
+  triggerSyncNow: (mode: T.SchedulerSyncMode = "force_eligible", requestId?: string) =>
+    request<T.SchedulerSyncAcceptance>("/api/v1/admin/scheduler/sync-now", {
+      method: "POST",
+      body: JSON.stringify({ mode, request_id: requestId }),
+    }),
+
+  getSchedulerBatchItems: (taskId: string, offset = 0, limit = 50) =>
+    request<T.SchedulerBatchItemPage>(
+      `/api/v1/admin/scheduler/batches/${encodeURIComponent(taskId)}/items?offset=${offset}&limit=${limit}`,
+    ),
 
   clearFailedJobs: () =>
     request<{ status: string; message: string }>("/api/v1/system/clear-failed-jobs", { method: "POST" }),
@@ -713,10 +785,12 @@ export const api = {
       body: JSON.stringify(data),
     }),
   startAssetDedupScan: (autoApply = true) =>
-    request<{ scan_id: string; job_id: string; status: string }>("/api/v1/admin/dedup/scans", {
+    request<T.AdminOperationAccepted & { scan_id: string }>("/api/v1/admin/dedup/scans", {
       method: "POST",
       body: JSON.stringify({ auto_apply: autoApply, batch_size: 100 }),
     }),
+  getLatestAssetDedupScan: <TResult = Record<string, unknown>>() =>
+    request<T.AdminOperationSnapshotResponse<TResult>>("/api/v1/admin/dedup/scans/latest"),
   getAssetDedupScan: (id: string) =>
     request<{
       scan_id: string;
@@ -732,15 +806,19 @@ export const api = {
   // Danbooru Reference
   refreshAllDanbooruMappings: () =>
     request<{
+      task_id: string;
       status: "enqueued";
       job_id: string;
+      rq_job_id: string;
       operation_type: "danbooru-mapping-refresh";
       message: string;
     }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
 
   getDanbooruMappingRefreshStatus: (jobId: string) =>
     request<{
+      task_id?: string | null;
       job_id: string;
+      rq_job_id?: string | null;
       status: "queued" | "enqueued" | "running" | "complete" | "failed";
       operation_type: "danbooru-mapping-refresh";
       progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };
@@ -775,7 +853,7 @@ export const api = {
     request<{ status: string; found?: boolean; creator_id?: string; artist_name?: string; links_imported: number; sources_created: number; subscription_id?: string }>("/api/v1/reference/danbooru/artist/import-all", { method: "POST", body: JSON.stringify(params) }),
 
   importAllDanbooruAsync: (params: { creator_id?: string; creator_name?: string; url?: string; pixiv_id?: string; name?: string }) =>
-    request<{ job_id: string; status: "queued" }>("/api/v1/reference/danbooru/artist/import-all/async", { method: "POST", body: JSON.stringify(params) }),
+    request<{ task_id: string; job_id: string; status: "queued" | "enqueued" }>("/api/v1/reference/danbooru/artist/import-all/async", { method: "POST", body: JSON.stringify(params) }),
 
   previewBatchImport: (pixivIds: string[]) =>
     request<{
@@ -806,6 +884,7 @@ export const api = {
   urlBatchImportDanbooru: (urls: string[]) =>
     request<{
       status: string; message: string; job_id: string; batch_id: string; total: number;
+      duplicates_removed?: number;
     }>(
       "/api/v1/reference/danbooru/url-batch-import",
       { method: "POST", body: JSON.stringify({ urls }) }),
@@ -924,9 +1003,12 @@ export const api = {
   deleteBackup: (filename: string) =>
     request<{ status: string; message: string }>(`/api/v1/admin/backup/${encodeURIComponent(filename)}`, { method: "DELETE" }),
 
-  downloadBackup: (filename?: string) => {
+  downloadBackup: async (filename?: string) => {
     const params = filename ? `?filename=${encodeURIComponent(filename)}` : "";
-    return `/api/v1/admin/backup/download${params}`;
+    const response = await assertBackupArchiveResponse(await requestBlob(`/api/v1/admin/backup/download${params}`));
+    const encoded = response.contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const quoted = response.contentDisposition?.match(/filename="?([^";]+)"?/i)?.[1];
+    return { blob: response.blob, filename: encoded ? decodeURIComponent(encoded) : quoted || filename || "auto-gallery-backup.tar.gz" };
   },
 };
 
@@ -957,6 +1039,31 @@ export const queryKeys = {
     detail: (id: string) => ["subscriptions", id] as const,
     sources: (id: string) => ["subscriptions", id, "sources"] as const,
     summaries: (ids: string[]) => ["subscriptions", "summaries", ids.join(",")] as const,
+  },
+  remoteAccounts: {
+    all: (userId: number) => ["remote-discovery-private", userId, "remote-accounts"] as const,
+    detail: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id] as const,
+    collections: (userId: number, id: string) => ["remote-discovery-private", userId, "remote-accounts", id, "collections"] as const,
+  },
+  discovery: {
+    privateScope: (userId: number) => ["remote-discovery-private", userId] as const,
+    all: (userId: number) => ["remote-discovery-private", userId, "discovery"] as const,
+    mutation: (userId: number, operation: string) => ["remote-discovery-private", userId, "mutation", operation] as const,
+    scans: (userId: number, accountId?: string) => ["remote-discovery-private", userId, "discovery", "scans", accountId || "all"] as const,
+    candidates: (userId: number, filters?: T.DiscoveryCandidateFilters) => [
+      "remote-discovery-private",
+      userId,
+      "discovery",
+      "candidates",
+      filters?.accountId || "all",
+      filters?.state || "all",
+      filters?.confidence || "all",
+      filters?.isFollowing === undefined ? "all" : filters.isFollowing,
+      filters?.localMatch === undefined ? "all" : filters.localMatch,
+      filters?.evidenceStatus || "all",
+      filters?.offset || 0,
+      filters?.limit || 25,
+    ] as const,
   },
   repositories: {
     detail: (id: string) => ["repositories", id] as const,
@@ -990,8 +1097,10 @@ export const queryKeys = {
   },
   works: {
     all: ["works"] as const,
+    derivativeProgress: ["works", "derivative-progress"] as const,
     detail: (id: string) => ["works", id] as const,
     sources: (id: string) => ["works", id, "sources"] as const,
+    remoteState: (id: string) => ["works", id, "remote-state"] as const,
     assets: (id: string) => ["works", id, "assets"] as const,
     tags: (id: string) => ["works", id, "tags"] as const,
   },

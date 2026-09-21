@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -58,6 +58,7 @@ from app.services.redis_pubsub import TaskChannel, TaskEventPublisher
 from app.services.redis_client import get_redis
 from app.services.sync_outcome import clear_download_job_outcome
 from app.services.search_projection_outbox import request_search_projection
+from app.services.task_actions import require_job_action
 from app.services.tasks import TaskService
 from app.services.import_lifecycle import project_import_pipeline_state
 
@@ -192,6 +193,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Pause a download job. Sends SIGTERM signal to the running process group."""
         job = await self._get_download(job_id)
+        await require_job_action(self.db, job, "download", "pause")
 
         if job.status == "importing":
             child = await self._latest_import_for_download(
@@ -233,6 +235,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Pause an import job. The import loop checks for pause between works."""
         job = await self._get_import(job_id)
+        await require_job_action(self.db, job, "import", "pause")
 
         if job.status not in IMPORT_PAUSABLE_STATUSES:
             raise TaskEngineError(
@@ -268,6 +271,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Resume a paused download job by re-enqueuing it."""
         job = await self._get_download(job_id)
+        await require_job_action(self.db, job, "download", "resume")
 
         if job.status == DOWNLOAD_PAUSED:
             child = await self._latest_import_for_download(
@@ -321,6 +325,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Resume a paused import job by re-enqueuing it."""
         job = await self._get_import(job_id)
+        await require_job_action(self.db, job, "import", "resume")
 
         if job.status != IMPORT_PAUSED:
             raise TaskEngineError(
@@ -365,6 +370,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Cancel a download job. Terminal — cannot be retried."""
         job = await self._get_download(job_id)
+        await require_job_action(self.db, job, "download", "cancel")
 
         if job.status in {"importing", DOWNLOAD_PAUSED}:
             child = await self._latest_import_for_download(
@@ -406,6 +412,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Cancel an import job. Terminal — cannot be retried."""
         job = await self._get_import(job_id)
+        await require_job_action(self.db, job, "import", "cancel")
 
         if job.status not in IMPORT_CANCELLABLE_STATUSES:
             raise TaskEngineError(
@@ -441,6 +448,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Retry a download job. Resets retry_count and clears error_log."""
         job = await self._get_download(job_id)
+        await require_job_action(self.db, job, "download", "retry")
 
         manifest_events = list((job.manifest or {}).get("events") or [])
         conflict_indices = [
@@ -526,6 +534,7 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Retry a failed or stale import job."""
         job = await self._get_import(job_id)
+        await require_job_action(self.db, job, "import", "retry")
 
         if job.status in {IMPORT_ENQUEUED, IMPORT_RUNNING, IMPORT_PAUSED, IMPORT_CANCELLED}:
             raise TaskEngineError(
@@ -578,44 +587,12 @@ class TaskEngine:
     # ── Delete ────────────────────────────────
 
     async def delete_download(self, job_id: UUID) -> None:
-        """Delete a download job. Refuses if currently importing."""
-        job = await self._get_download(job_id)
-
-        if job.status == "importing":
-            raise TaskEngineError(
-                "Cannot delete download job while import is in progress. Cancel it first."
-            )
-
-        task_id = str(job.id)
-        subscription_id = job.subscription_id
-        await self.db.delete(job)
-        await request_search_projection(
-            self.db,
-            subscription_ids=[subscription_id] if subscription_id else (),
-        )
-        await self.db.commit()
-
-        TaskEventPublisher.publish_status_change(
-            task_id, "download", job.status, "deleted",
-        )
-        logger.info("Download job %s deleted", task_id)
+        from app.services.task_history import delete_history
+        await delete_history(self.db, job_id, "download")
 
     async def delete_import(self, job_id: UUID) -> None:
-        """Delete an import job. Refuses if enqueued or running."""
-        job = await self._get_import(job_id)
-
-        if job.status in {IMPORT_ENQUEUED, IMPORT_RUNNING}:
-            raise TaskEngineError(
-                "Cannot delete import job while it is enqueued or running. Cancel it first."
-            )
-
-        task_id = str(job.id)
-        await self.db.delete(job)
-        await self.db.commit()
-
-        TaskEventPublisher.publish_status_change(
-            task_id, "import", job.status, "deleted",
-        )
+        from app.services.task_history import delete_history
+        await delete_history(self.db, job_id, "import")
 
     # ── Priority ──────────────────────────────
 
@@ -964,9 +941,12 @@ class TaskEngine:
         else:
             raise TaskEngineError(f"Invalid task_type '{task_type}'.")
 
-        if filters.get("ids"):
+        if "ids" in filters:
             ids = [UUID(i) for i in filters["ids"]]
-            stmt = stmt.where(model.id.in_(ids))
+            # An explicitly empty ownership intersection must match nothing;
+            # treating it as an absent filter would operate on every user's
+            # task.
+            stmt = stmt.where(model.id.in_(ids) if ids else false())
         if filters.get("status"):
             stmt = stmt.where(model.status == filters["status"])
         if filters.get("source") and task_type == "download":
@@ -974,14 +954,14 @@ class TaskEngine:
         if filters.get("subscription_id") and task_type == "download":
             stmt = stmt.where(model.subscription_id == filters["subscription_id"])
 
-        result = await self.db.execute(stmt)
-        tasks = list(result.scalars().all())
+        result = await self.db.execute(stmt.order_by(model.created_at, model.id))
+        task_ids = [task.id for task in result.scalars().all()]
 
         results: dict[str, Any] = {
             "action": action,
             "task_type": task_type,
             "filters": filters,
-            "total_matched": len(tasks),
+            "total_matched": len(task_ids),
             "succeeded": 0,
             "failed": 0,
             "errors": [],
@@ -1006,8 +986,7 @@ class TaskEngine:
         }
         handler = handlers[task_type][action]
 
-        for task in tasks:
-            task_id = task.id
+        for task_id in task_ids:
             try:
                 kwargs: dict[str, Any] = {"operator": operator}
                 if action in {"pause", "cancel"} and note:
@@ -1019,10 +998,12 @@ class TaskEngine:
                     # handler returns dict for non-delete, None for delete
                     if result_item:
                         pass
+                await self.db.commit()
                 results["succeeded"] += 1
             except Exception as exc:
+                await self.db.rollback()
                 results["failed"] += 1
-                results["errors"].append({"id": str(task_id), "error": str(exc)})
+                results["errors"].append({"id": str(task_id), "error": getattr(exc, "detail", str(exc))})
 
         await self.db.commit()
         return results

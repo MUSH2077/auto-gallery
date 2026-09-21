@@ -30,7 +30,30 @@ function MediaSide({
 }) {
   const t = useT();
   const isCanonical = side === "canonical";
-  const url = api.downloadConflictMediaUrl(taskId, item.relative_path, side);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const media = useQuery({
+    queryKey: ["download-conflict-media", taskId, item.relative_path, side],
+    queryFn: () => api.downloadConflictMedia(taskId, item.relative_path, side),
+    staleTime: Infinity,
+  });
+  const url = useMemo(
+    () => media.data ? URL.createObjectURL(media.data.blob) : null,
+    [media.data],
+  );
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      onZoom(Math.max(0.25, Math.min(4, zoom + (event.deltaY < 0 ? 0.15 : -0.15))));
+    };
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, [onZoom, zoom]);
   const size = isCanonical ? item.canonical_size : item.staged_size;
   const sha = isCanonical ? item.canonical_sha256 : item.staged_sha256;
   const label = t(`jobs.conflict.${side}`);
@@ -42,14 +65,14 @@ function MediaSide({
         <span className="text-muted">{typeof size === "number" ? `${(size / 1024).toFixed(1)} KiB` : "—"}</span>
       </div>
       <div
+        ref={viewportRef}
         className="h-[44vh] overflow-auto bg-black/90 p-3"
-        onWheel={(event) => {
-          if (!event.ctrlKey) return;
-          event.preventDefault();
-          onZoom(Math.max(0.25, Math.min(4, zoom + (event.deltaY < 0 ? 0.15 : -0.15))));
-        }}
       >
-        {item.mime_type.startsWith("image/") ? (
+        {media.isLoading ? (
+          <div className="h-full animate-pulse rounded bg-subtle" />
+        ) : media.error ? (
+          <p role="alert" className="text-sm text-danger">{media.error.message}</p>
+        ) : item.mime_type.startsWith("image/") && url ? (
           <img
             src={url}
             alt={t("jobs.conflict.preview_alt", { side: label, path: item.relative_path })}
@@ -57,7 +80,7 @@ function MediaSide({
             style={{ transform: `scale(${zoom})` }}
             draggable={false}
           />
-        ) : item.mime_type.startsWith("video/") ? (
+        ) : item.mime_type.startsWith("video/") && url ? (
           <DirectVideoPlayer
             src={url}
             label={t("jobs.conflict.preview_alt", { side: label, path: item.relative_path })}

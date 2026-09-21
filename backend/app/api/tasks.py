@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import RequireAdminUser, RequirePermission, get_admin_key
+from app.auth import RequireAdminUser, RequirePermission, RequireAnyPermission, get_admin_key
 from app.database import get_db
 from app.services.operations import (
+    admin_operation_required_permission,
     admin_operation_permissions_for_user,
     inaccessible_admin_operation_types,
     get_operation_status,
@@ -26,9 +27,18 @@ from app.services.queue_admission import checked_enqueue, ensure_redis_enqueue_c
 from app.services.search import SearchService
 from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.backpressure import DownloadAdmissionError
+from app.services.task_actions import enrich_actions, require_action
+from app.schemas.task_actions import RepeatSyncRequest, RepeatSyncAccepted, TaskRead, TaskPage
+from app.schemas.operation_attention import OperationsOverview
 from app.services.task_engine import TaskEngine, TaskEngineError
-from app.services.tasks import TaskService, task_payload
+from app.services.tasks import (
+    TaskService,
+    can_access_global_subscription_batch,
+    is_global_subscription_batch,
+    task_payload,
+)
 from app.services.operation_attention import (
+    CompactionPreviewChanged,
     compact_terminal_tasks,
     operations_overview,
     reconcile_task_truth,
@@ -36,7 +46,8 @@ from app.services.operation_attention import (
 )
 
 _require_tasks = RequirePermission("tasks")
-router = APIRouter(dependencies=[_require_tasks])
+_require_task_surface = RequireAnyPermission("tasks", "system")
+router = APIRouter(dependencies=[_require_task_surface])
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +67,12 @@ class ReconcileTasksRequest(BaseModel):
 class CompactTasksRequest(BaseModel):
     dry_run: bool = True
     limit: int = Field(200, ge=1, le=1000)
+    preview_token: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
 
 class RestoreSubscriptionSlotRequest(BaseModel):
@@ -74,7 +91,7 @@ class ResolveDownloadConflictRequest(BaseModel):
     resolution_id: str | None = Field(default=None, max_length=128)
 
 
-@router.get("")
+@router.get("", response_model=TaskPage)
 async def list_tasks(
     kind: str | None = None,
     status: str | None = None,
@@ -86,8 +103,31 @@ async def list_tasks(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    user=_require_tasks,
+    user=_require_task_surface,
 ):
+    if not user.is_admin and "tasks" not in (user.permissions or []):
+        # System-only access is restricted to the global batch surface. It
+        # does not grant private task or credential visibility, even for self.
+        from app.models import TaskRun
+        from app.services.tasks import _global_subscription_batch_condition
+        from sqlalchemy import func
+        filters = [_global_subscription_batch_condition()]
+        if kind:
+            filters.append(TaskRun.kind == kind)
+        if status:
+            filters.append(TaskRun.status == status)
+        if operation_type:
+            filters.append(TaskRun.operation_type == operation_type)
+        if source:
+            filters.append(TaskRun.source == source)
+        if q:
+            filters.append(TaskRun.title.icontains(q, autoescape=True))
+        total = (await db.execute(select(func.count()).select_from(TaskRun).where(*filters))).scalar_one()
+        rows = (await db.execute(select(TaskRun).where(*filters).order_by(TaskRun.created_at.desc())
+            .offset(max(0, offset)).limit(max(1, min(100, limit))))).scalars()
+        rows = list(rows)
+        await enrich_actions(db, rows, user=user)
+        return {"total": total, "items": [task_payload(task) for task in rows]}
     excluded_operation_types = inaccessible_admin_operation_types(user)
     if include_account:
         svc = TaskService(db)
@@ -97,11 +137,15 @@ async def list_tasks(
             operation_type=operation_type,
             source=source,
             include_account=True,
+            q=q,
             visibility=visibility,
             offset=offset,
             limit=limit,
             excluded_admin_operation_types=excluded_operation_types,
+            user_id=user.id,
+            include_global_system_tasks=can_access_global_subscription_batch(user),
         )
+        await enrich_actions(db, tasks, user=user)
         return {"total": total, "items": [task_payload(task) for task in tasks]}
     canonical = q or ""
     for key, value in (("kind", kind), ("status", status), ("source", source)):
@@ -113,22 +157,22 @@ async def list_tasks(
                 value=value,
                 operation="add",
             ).canonical
-    if operation_type:
-        canonical = f'{canonical} "{operation_type}"'.strip()
     try:
         result = await SearchService(db).search_tasks(
             canonical,
+            operation_type=operation_type,
             offset=offset,
             limit=limit,
             visibility=visibility,
             permissions=admin_operation_permissions_for_user(user),
+            user_id=user.id,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc
     return result
 
 
-@router.get("/anomalies")
+@router.get("/anomalies", response_model=OperationsOverview)
 async def list_task_anomalies(
     offset: int = 0,
     limit: int = 50,
@@ -143,10 +187,12 @@ async def list_task_anomalies(
         offset=max(0, offset),
         limit=max(1, min(limit, 100)),
         excluded_admin_operation_types=inaccessible_admin_operation_types(user),
+        user_id=user.id,
+        include_global_system_tasks=can_access_global_subscription_batch(user),
     )
 
 
-@router.post("/reconcile")
+@router.post("/reconcile", dependencies=[RequirePermission("system")])
 async def reconcile_tasks(
     data: ReconcileTasksRequest,
     db: AsyncSession = Depends(get_db),
@@ -159,7 +205,30 @@ async def compact_tasks(
     data: CompactTasksRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    return await compact_terminal_tasks(db, dry_run=data.dry_run, limit=data.limit)
+    if not data.dry_run and data.preview_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "compaction_preview_required",
+                "message": "Preview task compaction before applying it.",
+            },
+        )
+    try:
+        return await compact_terminal_tasks(
+            db,
+            dry_run=data.dry_run,
+            limit=data.limit,
+            expected_preview_token=data.preview_token,
+        )
+    except CompactionPreviewChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "compaction_preview_changed",
+                "message": "Task compaction scope changed. Run the preview again.",
+                "preview_token": exc.actual_preview_token,
+            },
+        ) from exc
 
 
 @router.post("/reconcile-subscription-slot", dependencies=[RequirePermission("system")])
@@ -175,30 +244,68 @@ async def reconcile_subscription_slot(
     )
 
 
-@router.get("/{task_id}")
+async def _authorized_task(db, task_id, user):
+    svc = TaskService(db)
+    task = await svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, detail="Task not found")
+    global_batch = is_global_subscription_batch(task)
+    # Historical member aggregates share the registered global operation name.
+    # Their durable provenance, not that name, determines the permission boundary.
+    private_batch = (task.kind == "admin" and task.operation_type == "subscription-sync-batch"
+                     and not global_batch)
+    if task.owner_user_id is not None:
+        if user is None or not await svc.is_visible_to_user(task, user.id):
+            raise HTTPException(404, detail="Task not found")
+    elif global_batch:
+        if not can_access_global_subscription_batch(user):
+            raise HTTPException(403, detail="Missing permission: system")
+    elif private_batch or task.kind != "admin" or not admin_operation_required_permission(task.operation_type):
+        if user is None or not await svc.is_visible_to_user(task, user.id):
+            raise HTTPException(404, detail="Task not found")
+    if (not getattr(user, "is_admin", False) and "tasks" not in (getattr(user, "permissions", None) or [])
+            and not global_batch):
+        raise HTTPException(403, detail="Missing permission: tasks")
+    if task.kind == "admin" and not private_batch and admin_operation_required_permission(task.operation_type):
+        require_admin_operation_access(user, task.operation_type)
+    return task
+
+
+@router.get("/{task_id}", response_model=TaskRead)
 async def get_task(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user=_require_tasks,
+    user=_require_task_surface,
+):
+    svc = TaskService(db)
+    task = await _authorized_task(db, task_id, user)
+    events = await svc.task_events(task_id)
+    await enrich_actions(db, [task], user=user)
+    return task_payload(task, events)
+
+
+async def _require_visible_task(
+    db: AsyncSession,
+    task_id: UUID,
+    user,
 ):
     svc = TaskService(db)
     task = await svc.get(task_id)
-    if not task:
+    if task is None or not await svc.is_visible_to_user(task, user.id):
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin":
-        require_admin_operation_access(user, task.operation_type)
-    events = await svc.task_events(task_id)
-    return task_payload(task, events)
+    return task
 
 
 @router.get("/{task_id}/conflicts")
 async def get_download_conflicts(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, user)
         return await DownloadConflictService(db).inspect(task_id)
     except DownloadConflictError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -210,10 +317,12 @@ async def get_download_conflict_media(
     relative_path: str = Query(min_length=1, max_length=2000),
     side: Literal["canonical", "staged"] = Query(),
     db: AsyncSession = Depends(get_db),
+    user=_require_tasks,
 ):
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, user)
         handle, stored_relative = await DownloadConflictService(db).open_media(
             task_id,
             relative_path,
@@ -244,6 +353,7 @@ async def resolve_download_conflicts(
     if len(decisions) != len(data.decisions):
         raise HTTPException(status_code=422, detail="Each conflict path must appear exactly once")
     try:
+        await _require_visible_task(db, task_id, _admin)
         result = await DownloadConflictService(db).resolve(
             task_id,
             decisions,
@@ -291,6 +401,7 @@ async def rollback_download_conflict_resolution(
     from app.services.download_conflicts import DownloadConflictError, DownloadConflictService
 
     try:
+        await _require_visible_task(db, task_id, _admin)
         result = await DownloadConflictService(db).rollback(
             task_id,
             resolution_id,
@@ -311,13 +422,9 @@ async def acknowledge_task(
     user=_require_tasks,
 ):
     svc = TaskService(db)
-    task = await svc.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task.kind == "admin":
-        require_admin_operation_access(user, task.operation_type)
-    if task.attention_state not in {"open", "resolved"}:
-        raise HTTPException(status_code=409, detail="Task is not an actionable anomaly")
+    task = await _authorized_task(db, task_id, user)
+    await enrich_actions(db, [task], user=user)
+    require_action(task, "acknowledge")
     await svc.update_task(task, attention_state="acknowledged")
     await svc.add_event(
         task,
@@ -327,6 +434,7 @@ async def acknowledge_task(
         payload={"operator": operator},
     )
     await db.commit()
+    await enrich_actions(db, [task], user=user)
     return task_payload(task)
 
 
@@ -339,34 +447,24 @@ async def _control_task(
     user=None,
 ):
     svc = TaskService(db)
-    task = await svc.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = await _authorized_task(db, task_id, user)
+    await enrich_actions(db, [task], user=user)
+    require_action(task, action)
     if task.kind == "admin":
-        require_admin_operation_access(user, task.operation_type)
-        if action != "retry":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "invalid_task_action",
-                    "action": action,
-                    "message": "This admin task only supports retry",
-                },
-            )
-        return await _retry_admin_task(task, svc)
+        if is_global_subscription_batch(task) and action == "cancel":
+            from app.services.scheduler_batches import cancel_batch
+            return await cancel_batch(db, task_id, operator=operator, note=note)
+        if action == "retry":
+            return await _retry_admin_task(task, svc)
     if not task.subject_id or task.subject_type not in {"download_job", "import_job"}:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "invalid_task_action",
-                "action": action,
-                "message": "This task type does not support direct control yet",
-            },
-        )
+        raise HTTPException(409, detail={"code": "invalid_task_action", "action": action, "reason": "operation_not_supported"})
 
     engine = TaskEngine(db)
     try:
         if task.subject_type == "download_job":
+            if action == "delete":
+                await engine.delete_download(task.subject_id)
+                return {"status": "ok"}
             if action == "retry":
                 result = await engine.retry_download(task.subject_id, operator=operator)
             elif action == "pause":
@@ -379,6 +477,9 @@ async def _control_task(
                 raise HTTPException(status_code=400, detail="Unknown action")
             await svc.update_task(task, status=result.get("status"))
         else:
+            if action == "delete":
+                await engine.delete_import(task.subject_id)
+                return {"status": "ok"}
             if action == "retry":
                 result = await engine.retry_import(task.subject_id, operator=operator)
             elif action == "pause":
@@ -984,7 +1085,7 @@ async def cancel_task(
     data: dict | None = None,
     db: AsyncSession = Depends(get_db),
     operator: str = Depends(get_admin_key),
-    user=_require_tasks,
+    user=_require_task_surface,
 ):
     return await _control_task(
         task_id,
@@ -994,3 +1095,14 @@ async def cancel_task(
         note=(data or {}).get("note"),
         user=user,
     )
+
+
+@router.post("/{task_id}/repeat-sync", status_code=202, response_model=RepeatSyncAccepted)
+async def repeat_task_sync(task_id: UUID, data: RepeatSyncRequest, db: AsyncSession = Depends(get_db), user=_require_tasks):
+    from app.services.download_repeat import repeat_sync
+    return await repeat_sync(db, user, data.request_id, task_id=task_id)
+
+
+@router.delete("/{task_id}")
+async def delete_task_history(task_id: UUID, db: AsyncSession = Depends(get_db), user=_require_tasks):
+    return await _control_task(task_id, "delete", db, user.username, user=user)

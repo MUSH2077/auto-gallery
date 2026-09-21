@@ -49,17 +49,18 @@ All models use source-agnostic naming. Shared data vs user-scoped data:
 (shared across users)
 creator ──< source_creator
 creator ──< creator_link
+creator ──< subscription ──< subscription_source
 work ──< work_source
 work ──< work_tag
 work_source ──< work_source_tag
 asset ──< asset_source
 tag
 
-(user-scoped)
-user ──< subscription ──< subscription_source
+(user-scoped intent)
+user ──< user_subscription >── subscription
+user_subscription ──< user_subscription_source >── subscription_source
+user ──< remote_account ──< discovery_candidate
 user ──< album ──< album_work ── work
-user ──< download_job
-import_job (inherits scope via subscription)
 
 (operational / cross-cutting)
 task_run ──< task_event        # unified task envelope — see "Unified Task System"
@@ -76,8 +77,15 @@ storage_artifact               # download → import ledger — see "Job Queue"
 - **work_source**: A source-specific work record with original metadata
 - **asset**: A local file
 - **asset_source**: A source-specific file record
-- **subscription**: A user's intent to follow a creator
-- **subscription_source**: Per-source toggle for a subscription
+- **subscription**: The canonical, globally shared repository for one creator
+- **subscription_source**: A globally shared source identity whose enabled/due
+  fields are aggregate compatibility caches
+- **user_subscription**: One user's private name, enabled state, and schedule
+  for a canonical subscription
+- **user_subscription_source**: One user's private source enablement, due time,
+  authentication health, and optional remote-account binding
+- **remote_account** / **discovery_candidate**: Account-private discovery
+  configuration and scan results
 - **album**: A user-created collection of works (Phase 6+)
 - **album_work**: Many-to-many join between album and work
 
@@ -87,8 +95,12 @@ storage_artifact               # download → import ledger — see "Job Queue"
 - `(source, source_work_id)` on work_sources
 - `(source, source_asset_id)` on asset_sources
 - `(normalized_name)` on tags
-- `(user_id, creator_id)` on subscriptions (multiple users may subscribe to same creator)
-- `(subscription_id, source)` on subscription_sources
+- `(creator_id)` on subscriptions
+- `(subscription_id, source_url)` on subscription_sources
+- `(user_id, subscription_id)` on user_subscriptions
+- `(user_subscription_id, subscription_source_id)` on user_subscription_sources
+- `(user_id, source)` on remote_accounts
+- `(remote_account_id, source_creator_id)` on discovery_candidates
 - `(username)` on users
 - `(album_id, work_id)` on album_works
 
@@ -109,6 +121,10 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
+- **Remote discovery queue**: `worker-discovery` exclusively supervises the independent
+  `discovery` child queue. The scheduler only admits due remote accounts;
+  provider pagination and cursor checkpoints run in the child worker. Jobs
+  carry opaque task/account IDs and never credential material.
 - **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
 - **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
@@ -126,6 +142,12 @@ Downloads, imports, and admin operations (backup, reindex, disk import) are all 
 - **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
 
 ## Data Flow
+
+Private intent is stored in `user_subscriptions`,
+`user_subscription_sources`, `remote_accounts`, and `discovery_candidates`.
+Canonical `subscription`/`subscription_source`, creators, works, assets, and
+files remain globally shared and deduplicated. A canonical source's aggregate
+enabled/due fields are compatibility caches derived from its private members.
 
 ### Download Flow
 ```
@@ -272,8 +294,9 @@ Application code uses only these env-var-driven paths:
 |---|---|---|
 | `DOWNLOAD_ROOT` | `/downloads` | Original Media Store: long-term original files, organized by source/creator/work |
 | `LIBRARY_ROOT` | `/library` | Library Index: per-work metadata + thumbnails |
-| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl configs, cookies, and short-lived per-job configs |
+| `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | Durable gallery-dl configs/cookies and non-secret per-job configs |
 | `APP_CONFIG_ROOT` | `/app-config` | Application runtime config |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | `worker-download`-only tmpfs for mode-0600 personal auth overlays; never backed up |
 
 NAS host paths are mapped in `docker-compose.yaml` only.
 
@@ -299,7 +322,7 @@ NAS host paths are mapped in `docker-compose.yaml` only.
 │   ├── gallery-dl/                     # GALLERYDL_CONFIG_ROOT
 │   │   ├── config.json                 # gallery-dl base config
 │   │   ├── cookies/                    # Auth cookies per source
-│   │   └── jobs/                       # Short-lived worker job configs (auto-cleaned)
+│   │   └── jobs/                       # Non-secret per-job configs; excluded from backup
 │   └── app/                            # APP_CONFIG_ROOT — runtime configs
 │
 ├── docker/                             # Persistent volumes
@@ -312,6 +335,10 @@ NAS host paths are mapped in `docker-compose.yaml` only.
     ├── config/                         # Config backups
     └── metadata/                       # metadata.json copies
 ```
+
+Personal account authentication overlays are not part of the NAS tree. The
+download worker writes them under `/run/auto-gallery-secrets`, a dedicated
+nonpersistent tmpfs, and validates that boundary before use.
 
 ### Storage rules
 
@@ -345,6 +372,7 @@ Key environment variables used by the application:
 | `LIBRARY_ROOT` | `/library` | Metadata + thumbnail storage path |
 | `GALLERYDL_CONFIG_ROOT` | `/gallerydl-config` | gallery-dl configuration path |
 | `APP_CONFIG_ROOT` | `/app-config` | Application config path |
+| `PERSONAL_AUTH_TMP_ROOT` | `/run/auto-gallery-secrets` | worker-download tmpfs for personal authentication overlays |
 
 ## API Route Groups
 

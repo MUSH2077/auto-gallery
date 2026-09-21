@@ -52,9 +52,32 @@ _TEST_MEILI_INDEX_PREFIX = f"ag_test_{os.getpid()}_{uuid4().hex[:10]}_"
 os.environ["MEILI_INDEX_PREFIX"] = _TEST_MEILI_INDEX_PREFIX
 os.environ.setdefault("SECRET_KEY", "test-secret-key-with-at-least-32-bytes")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
-os.environ.setdefault("APP_CONFIG_ROOT", "/tmp/auto-gallery-test-config")
+os.environ["APP_CONFIG_ROOT"] = "/tmp/auto-gallery-test-config"
 # Never let tests create or mutate the runtime gallery-dl config mount.
 os.environ["GALLERYDL_CONFIG_ROOT"] = "/tmp/auto-gallery-test-gallerydl-config"
+# Filesystem-backed coordination and artifact paths must also stay writable and
+# disposable when the suite runs directly on an unprivileged CI host.
+os.environ["DOWNLOAD_ROOT"] = "/tmp/auto-gallery-test-downloads"
+os.environ["LIBRARY_ROOT"] = "/tmp/auto-gallery-test-library"
+os.environ["RESTORE_STAGING_ROOT"] = "/tmp/auto-gallery-test-restore-staging"
+os.environ["RESTORE_RECEIPTS_ROOT"] = "/tmp/auto-gallery-test-restore-receipts"
+os.environ["PERSONAL_AUTH_TMP_ROOT"] = "/tmp/auto-gallery-test-auth"
+# Remote discovery feature tests exercise the implemented provider slices.
+# Production defaults remain fail-closed; tests that verify closed rollout
+# behavior override the live Settings object explicitly.
+for _rollout_flag in (
+    "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED",
+    "REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED",
+    "REMOTE_DISCOVERY_PIXIV_AUTO_IMPORT_ENABLED",
+    "REMOTE_DISCOVERY_X_ENABLED",
+    "REMOTE_DISCOVERY_X_AUTO_IMPORT_ENABLED",
+    "REMOTE_DISCOVERY_BILIBILI_ENABLED",
+    "REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED",
+):
+    # Compose deliberately injects the production-safe false defaults. Tests
+    # must override those inherited values so feature fixtures remain
+    # deterministic in both host and container runners.
+    os.environ[_rollout_flag] = "true"
 
 
 def _provision_main_test_database() -> None:

@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 
 async def _clear(db):
@@ -205,6 +205,84 @@ async def test_preload_work_sources_scoped(tmp_path, monkeypatch):
             r2 = RepoResolver(db)
             await r2.preload_work_sources(work_ids=[])
             assert await r2.slice_changes([change(w1.id)]) == {}
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repository_page_hydrates_a_bounded_page_without_per_key_queries():
+    """A page costs a fixed number of queries even when every key is distinct."""
+    from app.database import async_session, engine
+    from app.models import (
+        Creator,
+        SourceCreator,
+        Subscription,
+        SubscriptionSource,
+        Work,
+        WorkSource,
+    )
+    from app.services.gitllery.slicing import RepoResolver
+
+    observed: list[str] = []
+
+    def record_query(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            observed.append(statement)
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            creator = Creator(name="bounded-page")
+            db.add(creator)
+            await db.flush()
+            subscription = Subscription(creator_id=creator.id, name="bounded-page")
+            db.add(subscription)
+            await db.flush()
+
+            for index in range(8):
+                source_creator_id = f"page-{index:02d}"
+                db.add(
+                    SourceCreator(
+                        creator_id=creator.id,
+                        source="pixiv",
+                        source_creator_id=source_creator_id,
+                        display_name=source_creator_id,
+                    )
+                )
+                if index < 4:
+                    db.add(
+                        SubscriptionSource(
+                            subscription_id=subscription.id,
+                            source="pixiv",
+                            source_creator_id=source_creator_id,
+                            source_url=f"https://www.pixiv.net/users/{index}",
+                        )
+                    )
+                work = Work(title=f"work-{index}")
+                db.add(work)
+                await db.flush()
+                db.add(
+                    WorkSource(
+                        work_id=work.id,
+                        source="pixiv",
+                        source_work_id=f"work-{index}",
+                        source_creator_id=source_creator_id,
+                        raw_metadata={"user": {"id": source_creator_id}},
+                    )
+                )
+            await db.commit()
+
+            event.listen(engine.sync_engine, "before_cursor_execute", record_query)
+            try:
+                descriptors = await RepoResolver(db).repository_page(limit=25)
+            finally:
+                event.remove(engine.sync_engine, "before_cursor_execute", record_query)
+
+            assert len(descriptors) == 8
+            assert len(observed) <= 5, "Repository page hydration must stay O(1) in page size"
     finally:
         async with async_session() as db:
             await _clear(db)

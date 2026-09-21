@@ -18,7 +18,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,7 +30,13 @@ from app.database import async_session, get_db
 from app.services.redis_client import get_redis
 from app.services.operations import get_operation_status
 from app.services.settings import source_key_for_extractor
-from app.schemas.admin_operations import AdminOperationAccepted
+from app.schemas.admin_operations import (
+    AdminOperationAccepted,
+    AdminOperationAcceptedMessage,
+    AdminOperationPage,
+    AdminOperationRead,
+    AdminOperationSnapshotResponse,
+)
 from app.services.admin_data import CONFIRMATION_PHRASES, preview_clear_entity_data
 
 from ._routers import _clear_files, router
@@ -53,9 +59,13 @@ DEFAULT_DL = {"timeout_seconds": 600, "max_retries": 3, "retry_backoff_base_seco
 
 
 
-@router.post("/cleanup-metadata-jsons", status_code=202)
+@router.post(
+    "/cleanup-metadata-jsons",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def cleanup_metadata_jsons():
-    """Remove all gallery-dl metadata JSON files from downloads directory."""
+    """Queue evidence-based cleanup of successfully imported gallery-dl sidecars."""
     from app.services.operations import enqueue_admin_operation
 
     return await enqueue_admin_operation(
@@ -67,6 +77,22 @@ async def cleanup_metadata_jsons():
         options={},
         job_timeout=7200,
         queue_name="maintenance",
+    )
+
+
+@router.get(
+    "/cleanup-metadata-jsons/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_cleanup_metadata_jsons(db: AsyncSession = Depends(get_db)):
+    """Restore the latest completed or retryable metadata cleanup."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-cleanup-metadata-jsons",
+        scope_key="library:cleanup-metadata-jsons:active",
+        include_retryable=True,
     )
 
 
@@ -150,7 +176,11 @@ def _validate_clear_confirmation(data: ClearOperationRequest) -> None:
 async def preview_clear_entity(entity: ClearEntity, db: AsyncSession = Depends(get_db)):
     return await preview_clear_entity_data(entity, db)
 
-@router.post("/clear/{entity}", status_code=202)
+@router.post(
+    "/clear/{entity}",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def clear_entity(entity: ClearEntity, data: ClearOperationRequest, db: AsyncSession = Depends(get_db)):
     """Compatibility route for the registered asynchronous clear operation."""
     if data.entity != entity:
@@ -171,7 +201,11 @@ async def clear_entity(entity: ClearEntity, data: ClearOperationRequest, db: Asy
     )
 
 
-@router.post("/operations/clear", status_code=202)
+@router.post(
+    "/operations/clear",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
 async def start_clear_operation(data: ClearOperationRequest, db: AsyncSession = Depends(get_db)):
     """Enqueue a data-management clear operation and return immediately."""
     from app.services.operations import enqueue_admin_operation
@@ -191,8 +225,27 @@ async def start_clear_operation(data: ClearOperationRequest, db: AsyncSession = 
     )
 
 
-@router.get("/operations/{job_id}")
-async def get_admin_operation(job_id: str):
+@router.get(
+    "/operations/clear/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_clear_operation(
+    entity: ClearEntity,
+    db: AsyncSession = Depends(get_db),
+):
+    """Restore the latest completed or retryable clear for one domain."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-clear",
+        scope_key=f"library:clear:{entity}",
+        include_retryable=True,
+    )
+
+
+@router.get("/operations/{job_id}", response_model=AdminOperationRead)
+async def get_admin_operation(job_id: str, user=RequirePermission("system")):
     from app.services.tasks import TaskService, task_payload
 
     task_id_text = job_id
@@ -206,8 +259,13 @@ async def get_admin_operation(job_id: str):
         async with async_session() as db:
             task = await TaskService(db).get(task_id)
             if task and task.kind == "admin":
+                from app.services.task_actions import enrich_actions, require_admin_surface_access
+                await require_admin_surface_access(db, task, user)
+                await enrich_actions(db, [task], user=user)
                 payload = task_payload(task)
                 return {
+                    "available_actions": payload["available_actions"],
+                    "disabled_reasons": payload["disabled_reasons"],
                     "task_id": payload["id"],
                     # Keep the historical logical-id field for polling clients;
                     # the durable RQ transport id is explicit below.
@@ -230,6 +288,8 @@ async def get_admin_operation(job_id: str):
     except Exception:
         status = None
     if status:
+        from app.services.operations import require_admin_operation_access
+        require_admin_operation_access(user, status.get("operation_type"))
         return status
     raise HTTPException(status_code=404, detail="Operation not found")
 
@@ -239,18 +299,28 @@ async def get_admin_operation(job_id: str):
     status_code=202,
     response_model=AdminOperationAccepted,
 )
-async def retry_registered_admin_operation(task_id: UUID):
+async def retry_registered_admin_operation(task_id: UUID, user=RequirePermission("system")):
     """Retry a failed registered administrator operation on the same TaskRun."""
     from app.services.operations import retry_admin_operation
 
+    from app.services.tasks import TaskService
+    from app.services.task_actions import enrich_actions, require_action, require_admin_surface_access
+    async with async_session() as db:
+        task = await TaskService(db).get(task_id)
+        if task is None or task.kind != "admin":
+            raise HTTPException(404, detail="Operation not found")
+        await require_admin_surface_access(db, task, user)
+        await enrich_actions(db, [task], user=user)
+        require_action(task, "retry")
     return await retry_admin_operation(task_id)
 
 
-@router.get("/operations")
-async def list_active_operations():
+@router.get("/operations", response_model=AdminOperationPage)
+async def list_active_operations(user=RequirePermission("system")):
     """List all active (running + enqueued) admin operations."""
     from app.models.task_run import TaskRun
-    from app.services.tasks import task_payload
+    from app.services.tasks import task_payload, task_surface_visibility_condition, can_access_global_subscription_batch
+    from app.services.operations import inaccessible_admin_operation_types
 
     async with async_session() as db:
         tasks = list(
@@ -259,6 +329,8 @@ async def list_active_operations():
                     select(TaskRun)
                     .where(
                         TaskRun.kind == "admin",
+                        task_surface_visibility_condition(user.id, include_global_system_tasks=can_access_global_subscription_batch(user)),
+                        or_(TaskRun.operation_type.is_(None), TaskRun.operation_type.not_in(inaccessible_admin_operation_types(user))),
                         TaskRun.status.in_({"enqueued", "running", "recovering", "paused"}),
                     )
                     .order_by(TaskRun.created_at.desc())
@@ -266,11 +338,15 @@ async def list_active_operations():
                 )
             ).scalars()
         )
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(db, tasks, user=user)
         ops = []
         for task in tasks:
             payload = task_payload(task)
             ops.append(
                 {
+                    "available_actions": payload["available_actions"],
+                    "disabled_reasons": payload["disabled_reasons"],
                     "task_id": payload["id"],
                     "job_id": payload["id"],
                     "rq_job_id": payload["rq_job_id"],
@@ -296,7 +372,8 @@ async def list_active_operations():
             if legacy_id in known:
                 continue
             payload = get_operation_status(legacy_id, redis_client=r)
-            if payload and payload.get("status") in ("queued", "enqueued", "running"):
+            from app.services.operations import can_access_admin_operation
+            if payload and payload.get("status") in ("queued", "enqueued", "running") and can_access_admin_operation(user, payload.get("operation_type")):
                 ops.append(payload)
     except Exception:
         pass
@@ -324,6 +401,28 @@ async def reindex_search():
     )
 
 
+@router.post(
+    "/data/creator-aliases/backfill",
+    status_code=202,
+    response_model=AdminOperationAccepted,
+)
+async def backfill_creator_aliases_operation():
+    """Enqueue the resumable projection of stored creator identity evidence."""
+
+    from app.services.operations import enqueue_admin_operation
+
+    return await enqueue_admin_operation(
+        lock_key="library:creator-alias-backfill:active",
+        operation_type="admin-creator-alias-backfill",
+        title="Backfill creator identity aliases",
+        entity="creator-aliases",
+        func="app.jobs.admin_operations.run_creator_alias_backfill_operation",
+        options={},
+        job_timeout=7200,
+        queue_name="maintenance",
+    )
+
+
 # ── Library ──
 
 class RebuildLibraryRequest(BaseModel):
@@ -334,7 +433,11 @@ class RebuildLibraryRequest(BaseModel):
     resume: bool = True
 
 
-@router.post("/library/rebuild", status_code=202)
+@router.post(
+    "/library/rebuild",
+    status_code=202,
+    response_model=AdminOperationAcceptedMessage,
+)
 async def rebuild_library(data: RebuildLibraryRequest | None = None):
     """Enqueue a library rebuild operation and return immediately."""
     from app.services.operations import enqueue_admin_operation
@@ -353,6 +456,22 @@ async def rebuild_library(data: RebuildLibraryRequest | None = None):
     return {**operation, "message": "Library rebuild queued", "options": options}
 
 
+@router.get(
+    "/library/rebuild/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_library_rebuild(db: AsyncSession = Depends(get_db)):
+    """Restore the latest completed or retryable library rebuild."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-rebuild",
+        scope_key="library:rebuild:active",
+        include_retryable=True,
+    )
+
+
 class ImportFromDiskRequest(BaseModel):
     source: str | None = None
     repository_id: UUID | None = None
@@ -362,7 +481,11 @@ class ImportFromDiskRequest(BaseModel):
     reset_ledger: bool = False
 
 
-@router.post("/library/import-from-disk", status_code=202)
+@router.post(
+    "/library/import-from-disk",
+    status_code=202,
+    response_model=AdminOperationAcceptedMessage,
+)
 async def import_from_disk(
     data: ImportFromDiskRequest | None = None,
     db: AsyncSession = Depends(get_db),
@@ -406,7 +529,27 @@ async def import_from_disk(
     return {**operation, "message": "Disk import queued", "options": options}
 
 
-@router.post("/creators/re-enrich", status_code=202)
+@router.get(
+    "/library/import-from-disk/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_import_from_disk(db: AsyncSession = Depends(get_db)):
+    """Restore the latest completed or retryable disk import."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-disk-import",
+        scope_key="library:disk-import:active",
+        include_retryable=True,
+    )
+
+
+@router.post(
+    "/creators/re-enrich",
+    status_code=202,
+    response_model=AdminOperationAcceptedMessage,
+)
 async def reenrich_creators():
     """Enqueue a Danbooru re-enrichment sweep for creators flagged needs_enrichment."""
     from app.services.operations import enqueue_admin_operation
@@ -422,6 +565,22 @@ async def reenrich_creators():
         queue_name="maintenance",
     )
     return {**operation, "message": "Creator re-enrichment queued"}
+
+
+@router.get(
+    "/creators/re-enrich/latest",
+    response_model=AdminOperationSnapshotResponse,
+)
+async def latest_reenrich_creators(db: AsyncSession = Depends(get_db)):
+    """Restore the latest completed or retryable creator re-enrichment."""
+    from app.services.operations import latest_successful_admin_operation
+
+    return await latest_successful_admin_operation(
+        db,
+        operation_type="admin-creator-reenrich",
+        scope_key="library:creator-reenrich:active",
+        include_retryable=True,
+    )
 
 
 # ── gallery-dl Config ──

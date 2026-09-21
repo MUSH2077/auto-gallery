@@ -2,7 +2,7 @@ import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 from app.config import settings
 from app.models.creator import Creator
@@ -29,31 +29,46 @@ class DownloadService:
         self.sub_repo = SubscriptionRepository(db)
         self.db = db
 
-    async def _enrich_job_context(self, jobs):
+    async def _enrich_job_context(self, jobs, *, user_id: int | None = None):
         if not jobs:
             return jobs
         sub_ids = {job.subscription_id for job in jobs if job.subscription_id}
         if not sub_ids:
             return jobs
 
-        result = await self.db.execute(
-            select(
+        from app.models.remote_discovery import UserSubscription
+
+        columns = [
                 Subscription.id,
                 Subscription.name,
                 Subscription.creator_id,
                 Creator.display_name,
                 Creator.name,
-            )
+        ]
+        if user_id is not None:
+            columns.append(UserSubscription.name)
+        stmt = (
+            select(*columns)
             .join(Creator, Creator.id == Subscription.creator_id)
             .where(Subscription.id.in_(sub_ids))
         )
+        if user_id is not None:
+            stmt = stmt.join(
+                UserSubscription,
+                and_(
+                    UserSubscription.subscription_id == Subscription.id,
+                    UserSubscription.user_id == user_id,
+                ),
+            )
+        result = await self.db.execute(stmt)
         context = {
             sub_id: {
-                "subscription_name": sub_name,
+                "subscription_name": row[5] if user_id is not None else sub_name,
                 "creator_id": creator_id,
                 "creator_name": creator_display_name or creator_name,
             }
-            for sub_id, sub_name, creator_id, creator_display_name, creator_name in result.all()
+            for row in result.all()
+            for sub_id, sub_name, creator_id, creator_display_name, creator_name in [row[:5]]
         }
         for job in jobs:
             item = context.get(job.subscription_id)
@@ -73,7 +88,8 @@ class DownloadService:
                 continue
             progress = ProgressTracker.get(str(job.id))
             if progress:
-                job.progress_data = progress
+                from sqlalchemy.orm.attributes import set_committed_value
+                set_committed_value(job, "progress_data", progress)
         return jobs
 
     async def list_jobs(self, status: str | None = None, source: str | None = None,
@@ -82,7 +98,8 @@ class DownloadService:
                         q: str | None = None,
                         visibility: str = "all",
                         sort_by: str = "created_at", sort_order: str = "desc",
-                        offset: int = 0, limit: int = 50):
+                        offset: int = 0, limit: int = 50,
+                        user_id: int | None = None):
         canonical = q or ""
         for key, value in (
             ("status", status),
@@ -111,25 +128,45 @@ class DownloadService:
             offset=offset,
             limit=limit,
             visibility=visibility,
+            user_id=user_id,
+            subscription_id=subscription_id,
         )
-        # Kept only for legacy API callers. New UI deep-links use ``repo:``.
-        if subscription_id:
-            jobs = [job for job in jobs if str(job.subscription_id) == str(subscription_id)]
-        jobs = await self._enrich_job_context(jobs)
+        jobs = await self._enrich_job_context(jobs, user_id=user_id)
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, jobs, user_id=user_id, domain_kind="download")
         self._enrich_progress(jobs)
         return jobs
 
-    async def get_job(self, job_id: UUID):
-        job = await self.repo.get(job_id)
+    async def get_job(self, job_id: UUID, *, user_id: int | None = None):
+        if user_id is None:
+            job = await self.repo.get(job_id)
+        else:
+            from app.models.download_job import DownloadJob
+            from app.services.tasks import download_job_visibility_condition
+
+            job = (
+                await self.db.execute(
+                    select(DownloadJob).where(
+                        DownloadJob.id == job_id,
+                        download_job_visibility_condition(user_id),
+                    )
+                )
+            ).scalar_one_or_none()
         if not job:
             raise ValueError("DownloadJob not found")
-        enriched = await self._enrich_job_context([job])
+        enriched = await self._enrich_job_context([job], user_id=user_id)
+        from app.services.task_actions import enrich_actions
+        await enrich_actions(self.db, enriched, user_id=user_id, domain_kind="download")
         self._enrich_progress(enriched)
         return enriched[0]
 
-    async def create_job(self, data: dict) -> dict:
+    async def create_job(self, data: dict, *, user_id: int | None = None) -> dict:
         from app.services.download_orchestrator import DownloadOrchestrator
-        return await DownloadOrchestrator(self.db).create(data, self.repo)
+        return await DownloadOrchestrator(self.db).create(
+            data,
+            self.repo,
+            user_id=user_id,
+        )
 
     async def retry_job(self, job_id: UUID):
         from app.services.task_engine import TaskEngine
@@ -137,11 +174,8 @@ class DownloadService:
         return await engine.retry_download(job_id)
 
     async def delete_job(self, job_id: UUID):
-        job = await self.get_job(job_id)
-        if job.status in ("importing",):
-            raise ValueError(f"Cannot delete job with status '{job.status}' — import is in progress")
-        await self.db.delete(job)
-        await self.db.commit()
+        from app.services.task_engine import TaskEngine
+        await TaskEngine(self.db).delete_download(job_id)
 
     async def pause_job(self, job_id: UUID):
         from app.services.task_engine import TaskEngine
@@ -158,11 +192,15 @@ class DownloadService:
         engine = TaskEngine(self.db)
         return await engine.batch_by_filter("download", {"ids": [str(i) for i in ids]}, action)
 
-    async def clear_completed(self, statuses: list[str]) -> int:
+    async def clear_completed(self, statuses: list[str], *, user_id: int | None = None) -> dict:
         """Delete all jobs matching given statuses (e.g. complete, failed, stale)."""
-        count = await self.repo.delete_by_status(statuses)
-        await self.db.commit()
-        return count
+        from app.services.task_bulk import owned_batch_ids
+        from app.services.task_engine import TaskEngine
+        if user_id is None:
+            raise ValueError("History deletion requires an actor")
+        ids = await owned_batch_ids(self.db, "download", {"statuses": statuses}, user_id)
+        result = await TaskEngine(self.db).batch_by_filter("download", {"ids": [str(i) for i in ids]}, "delete")
+        return result
 
     async def kill_stuck_jobs(self) -> int:
         """Detect stale tasks via heartbeat timeout."""

@@ -115,6 +115,15 @@ class ArtifactLedger:
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_storage_artifacts_root_path",
                 set_={
+                    "metadata_completion_proof": case(
+                        (should_refresh | StorageArtifact.file_size.is_distinct_from(stmt.excluded.file_size)
+                         | StorageArtifact.source.is_distinct_from(stmt.excluded.source)
+                         | StorageArtifact.creator_dir.is_distinct_from(stmt.excluded.creator_dir)
+                         | StorageArtifact.source_work_id.is_distinct_from(stmt.excluded.source_work_id)
+                         | StorageArtifact.file_name.is_distinct_from(stmt.excluded.file_name)
+                         | StorageArtifact.artifact_type.is_distinct_from(stmt.excluded.artifact_type), None),
+                        else_=StorageArtifact.metadata_completion_proof,
+                    ),
                     "source": stmt.excluded.source,
                     "creator_dir": stmt.excluded.creator_dir,
                     "source_work_id": stmt.excluded.source_work_id,
@@ -225,6 +234,7 @@ class ArtifactLedger:
             .with_for_update(of=StorageArtifact)
         )).scalars())
         for row in rows:
+            row.metadata_completion_proof = None
             row.state = "new"
             row.lease_token = None
             row.lease_expires_at = None
@@ -382,7 +392,7 @@ class ArtifactLedger:
                     StorageArtifact.source_work_id.in_(claimed),
                     eligible,
                 )
-                .values(
+                .values(metadata_completion_proof=None,
                     state="importing",
                     import_job_id=import_job_id,
                     lease_token=lease_token,
@@ -497,7 +507,7 @@ class ArtifactLedger:
                 StorageArtifact.lease_expires_at.is_not(None),
                 StorageArtifact.lease_expires_at > now,
             )
-            .values(lease_expires_at=now + timedelta(seconds=lease_seconds))
+            .values(metadata_completion_proof=None, lease_expires_at=now + timedelta(seconds=lease_seconds))
             .returning(StorageArtifact.source_work_id)
         )
         # Claim eligibility is represented by metadata rows, so renewing those
@@ -512,7 +522,7 @@ class ArtifactLedger:
                 StorageArtifact.download_job_id == download_job_id,
                 StorageArtifact.source_work_id == source_work_id,
             )
-            .values(
+            .values(metadata_completion_proof=None,
                 state=state,
                 lease_token=None,
                 lease_expires_at=None,
@@ -577,7 +587,7 @@ class ArtifactLedger:
             result = await self.db.execute(
                 update(StorageArtifact)
                 .where(*conditions)
-                .values(
+                .values(metadata_completion_proof=None,
                     state=state,
                     lease_token=None,
                     lease_expires_at=None,
@@ -638,7 +648,7 @@ class ArtifactLedger:
             result = await self.db.execute(
                 update(StorageArtifact)
                 .where(*conditions)
-                .values(
+                .values(metadata_completion_proof=None,
                     state=case(
                         *(
                             (StorageArtifact.source_work_id == source_work_id, state)
@@ -676,7 +686,7 @@ class ArtifactLedger:
                 StorageArtifact.lease_token == lease_token,
                 StorageArtifact.state == "importing",
             )
-            .values(
+            .values(metadata_completion_proof=None,
                 state="new",
                 lease_token=None,
                 lease_expires_at=None,

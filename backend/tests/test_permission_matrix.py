@@ -12,9 +12,12 @@ app.main.app (not a probe app) so the actual router-level dependency swap
 
 For each module-scoped user (permissions=[<module>]), the representative
 endpoint of their own module must return 200, and every other module's
-endpoint must return 403. The admin user must get 200 on all five.
+endpoint must return 403. The one intentional overlap is ``system`` access to
+the task list, which exposes only global scheduler batches. The admin user
+must get 200 on all five.
 """
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -79,7 +82,12 @@ async def test_module_user_gets_own_module_and_403_on_others():
                 headers = _headers(f"{PREFIX}{own_module}")
                 for module, path in MODULE_ENDPOINTS.items():
                     r = await client.get(path, headers=headers)
-                    expected = 200 if module == own_module else 403
+                    expected = (
+                        200
+                        if module == own_module
+                        or (own_module == "system" and module == "tasks")
+                        else 403
+                    )
                     assert r.status_code == expected, (
                         f"user with permissions=[{own_module}] -> {path}: "
                         f"expected {expected}, got {r.status_code} ({r.text})"
@@ -125,17 +133,17 @@ async def test_unauthenticated_is_401_on_every_module():
             for module, path in MODULE_ENDPOINTS.items():
                 r = await client.get(path)
                 assert r.status_code == 401, f"anon -> {path}: {r.status_code} {r.text}"
+            r = await client.get(f"/api/v1/works/{uuid4()}/remote-state")
+            assert r.status_code == 401, f"anon -> work remote state: {r.status_code} {r.text}"
     finally:
         await engine.dispose()
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_moved_endpoints_pinned_to_curation_and_tasks():
-    """Regression pin (Task 6 fix round 1): dedup/merge-candidates were moved
-    from `system` to `curation`, and scheduler/queue-stats operations from
-    `system` to `tasks`, per spec §A2. Verify the new module boundary holds
-    and the old `system` permission no longer grants access.
+async def test_moved_endpoints_follow_current_curation_and_scheduler_boundaries():
+    """Curation writes stay with curation while the scheduler surface stays
+    internally consistent for system-only users.
     """
     from app.database import async_session, engine
     from app.main import app
@@ -158,10 +166,15 @@ async def test_moved_endpoints_pinned_to_curation_and_tasks():
             r = await client.get("/api/v1/admin/dedup/duplicates", headers=system_headers)
             assert r.status_code == 403, f"system -> dedup/duplicates: {r.status_code} {r.text}"
 
-            r = await client.get("/api/v1/system/queue-stats", headers=tasks_headers)
-            assert r.status_code == 200, f"tasks -> queue-stats: {r.status_code} {r.text}"
             r = await client.get("/api/v1/system/queue-stats", headers=system_headers)
-            assert r.status_code == 403, f"system -> queue-stats: {r.status_code} {r.text}"
+            assert r.status_code == 200, f"system -> queue-stats: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/system/queue-stats", headers=tasks_headers)
+            assert r.status_code == 403, f"tasks -> queue-stats: {r.status_code} {r.text}"
+
+            r = await client.get("/api/v1/system/scheduler-decisions", headers=system_headers)
+            assert r.status_code == 200, f"system -> scheduler-decisions: {r.status_code} {r.text}"
+            r = await client.get("/api/v1/system/scheduler-decisions", headers=tasks_headers)
+            assert r.status_code == 403, f"tasks -> scheduler-decisions: {r.status_code} {r.text}"
     finally:
         async with async_session() as db:
             await _clear(db)
@@ -182,7 +195,6 @@ async def test_library_permission_blocked_from_curation_write_routes():
     nonexistent work id, not 403, proving the permission check itself no
     longer blocks it.
     """
-    from uuid import uuid4
     from app.database import async_session, engine
     from app.main import app
 
@@ -229,6 +241,11 @@ async def test_library_permission_blocked_from_curation_write_routes():
             r = await client.post(f"/api/v1/works/{random_id}/favorite", headers=curation_headers)
             assert r.status_code == 404, (
                 f"curation -> POST /works/{{id}}/favorite: {r.status_code} {r.text}"
+            )
+
+            r = await client.get(f"/api/v1/works/{random_id}/remote-state", headers=curation_headers)
+            assert r.status_code == 403, (
+                f"curation -> GET /works/{{id}}/remote-state: {r.status_code} {r.text}"
             )
     finally:
         async with async_session() as db:

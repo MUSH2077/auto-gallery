@@ -39,7 +39,7 @@ class LofterProvider(BaseProvider):
 
     def parse_search_url(self, input_text: str) -> ProviderSearchURL | None:
         normalized = self.normalize_url(input_text)
-        if not normalized:
+        if not normalized or not self.validate_url(normalized):
             return None
         return ProviderSearchURL(
             kind="work" if "/post/" in normalized else "creator",

@@ -477,8 +477,10 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
     """Build the Data Center hierarchy from durable artifact rows only."""
     from app.models.creator import Creator
     from app.models.source_creator import SourceCreator
+    from app.models.storage_artifact import StorageArtifact
     from app.models.subscription import Subscription
     from app.models.subscription_source import SubscriptionSource
+    from app.models.work_source import WorkSource
     from app.providers import registry
     from app.services.settings import extractor_key_for_source
 
@@ -491,6 +493,29 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
     source_creators = list((await db.execute(
         select(SourceCreator, Creator)
         .outerjoin(Creator, Creator.id == SourceCreator.creator_id)
+    )).all())
+    work_source_identities = list((await db.execute(
+        select(
+            StorageArtifact.source,
+            StorageArtifact.creator_dir,
+            WorkSource.source_creator_id,
+        )
+        .join(
+            WorkSource,
+            and_(
+                WorkSource.source == StorageArtifact.source,
+                WorkSource.source_work_id == StorageArtifact.source_work_id,
+            ),
+        )
+        .where(
+            StorageArtifact.storage_root == "downloads",
+            WorkSource.source_creator_id.is_not(None),
+        )
+        .group_by(
+            StorageArtifact.source,
+            StorageArtifact.creator_dir,
+            WorkSource.source_creator_id,
+        )
     )).all())
 
     creators_by_id: dict[str, Creator] = {}
@@ -545,6 +570,15 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
                 )
             if creator:
                 creators_by_id[str(creator.id)] = creator
+
+    work_identity_by_directory: dict[tuple[str, str], object] = {}
+    for source, directory, source_creator_id in work_source_identities:
+        add_unique(
+            work_identity_by_directory,
+            (source, directory),
+            source_creator_id,
+            source_creator_id,
+        )
 
     repositories_by_source_creator: dict[tuple[str, str], object] = {}
     repositories_by_provider_directory: dict[tuple[str, str], object] = {}
@@ -601,23 +635,43 @@ async def _ledger_storage_breakdown(db: AsyncSession) -> dict:
         source_total["creator_count"] += 1
         source_total["work_count"] += work_count
 
-        owner_match = owner_by_directory.get((source, directory_name), missing)
-        owner_id = (
-            owner_match[1]
-            if owner_match is not missing and owner_match is not ambiguous
+        work_identity_match = work_identity_by_directory.get(
+            (source, directory_name),
+            missing,
+        )
+        work_identity = (
+            work_identity_match[1]
+            if work_identity_match is not missing
+            and work_identity_match is not ambiguous
             else None
         )
-        best_context = unique_repository_context(source, directory_name)
+        identity_keys: list[str] = []
+        if work_identity_match is not ambiguous:
+            identity_keys.append(directory_name)
+            if work_identity and work_identity != directory_name:
+                identity_keys.append(work_identity)
 
-        creator_id = owner_id
+        owner_ids: set[str] = set()
+        repository_context_by_id: dict[str, tuple] = {}
+        for identity_key in identity_keys:
+            owner_match = owner_by_directory.get((source, identity_key), missing)
+            if owner_match is not missing and owner_match is not ambiguous:
+                owner_ids.add(owner_match[1])
+            repository_context = unique_repository_context(source, identity_key)
+            if repository_context:
+                repository, creator = repository_context
+                owner_ids.add(str(creator.id))
+                repository_context_by_id[str(repository.id)] = repository_context
+
+        creator_id = next(iter(owner_ids)) if len(owner_ids) == 1 else None
         repository_id: str | None = None
         display_name = directory_name
-        if best_context:
-            repository, creator = best_context
-            creator_id = str(creator.id)
-            repository_id = str(repository.id)
-            display_name = creator.display_name or creator.name or display_name
-        elif creator_id and creator_id in creators_by_id:
+        if creator_id and len(repository_context_by_id) == 1:
+            repository, creator = next(iter(repository_context_by_id.values()))
+            if str(creator.id) == creator_id:
+                repository_id = str(repository.id)
+                display_name = creator.display_name or creator.name or display_name
+        if not repository_id and creator_id and creator_id in creators_by_id:
             creator = creators_by_id[creator_id]
             display_name = creator.display_name or creator.name or display_name
 
@@ -762,6 +816,7 @@ async def latest_integrity_check(db: AsyncSession = Depends(get_db)):
         db,
         operation_type="admin-integrity-scan",
         scope_key="diagnostics:integrity:active",
+        include_retryable=True,
     )
 
 
@@ -817,9 +872,12 @@ async def _run_integrity_check(db: AsyncSession):
     # 2. Missing thumbnails (works with asset but no thumbnail)
     try:
         result = await db.execute(text(
-            "SELECT a.id, a.file_name, ws.source, ws.source_work_id FROM assets a "
-            "JOIN work_sources ws ON a.work_id = ws.work_id "
-            "WHERE a.thumb_sm_path IS NULL OR a.thumb_sm_path = ''"
+            "SELECT DISTINCT ON (a.id) "
+            "a.id, a.file_name, ws.source, ws.source_work_id FROM assets a "
+            "JOIN asset_sources ars ON ars.asset_id = a.id "
+            "JOIN work_sources ws ON ws.id = ars.work_source_id "
+            "WHERE a.thumb_sm_path IS NULL OR a.thumb_sm_path = '' "
+            "ORDER BY a.id, ws.source, ws.source_work_id"
         ))
         missing_thumbs = []
         for row in result.fetchall():
@@ -842,14 +900,15 @@ async def _run_integrity_check(db: AsyncSession):
         logger.exception("Integrity check failed while scanning missing thumbnails")
         raise
 
-    # 3. Orphaned creators (no works, no subscriptions, no source_creators)
+    # 3. Orphaned creators (no subscriptions and no source identities). Works
+    # are linked to creators through source_creators -> work_sources in the
+    # current schema, so a creator without a source identity cannot own one.
     try:
         result = await db.execute(text(
             "SELECT c.id, c.name FROM creators c "
-            "LEFT JOIN works w ON w.creator_id = c.id "
             "LEFT JOIN subscriptions s ON s.creator_id = c.id "
             "LEFT JOIN source_creators sc ON sc.creator_id = c.id "
-            "WHERE w.id IS NULL AND s.id IS NULL AND sc.id IS NULL"
+            "WHERE s.id IS NULL AND sc.id IS NULL"
         ))
         orphaned_creators = [{"id": str(row[0]), "name": row[1]} for row in result.fetchall()]
         if orphaned_creators:
@@ -912,7 +971,10 @@ async def _run_integrity_check(db: AsyncSession):
                 found = []
                 for row in rows:
                     fpath = row[1]
-                    if fpath and not os.path.exists(fpath):
+                    candidate = Path(fpath) if fpath else None
+                    if candidate is not None and not candidate.is_absolute():
+                        candidate = Path(settings.download_root) / candidate
+                    if candidate is not None and not candidate.exists():
                         found.append({
                             "asset_id": str(row[0]),
                             "file_path": fpath,

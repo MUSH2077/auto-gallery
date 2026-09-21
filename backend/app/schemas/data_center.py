@@ -80,3 +80,22 @@ class StorageBreakdownResponse(BaseModel):
     inventory_source: Literal["storage_artifacts"]
     pipeline_stats: DataCenterPipelineStats
     layers: dict[str, StorageLayer]
+
+
+class MetadataCleanupError(BaseModel):
+    artifact_id: str
+    reason: str
+
+
+class MetadataCleanupResult(BaseModel):
+    status: Literal['complete', 'partial']
+    scope: Literal['managed_download_metadata']
+    removed: int
+    scanned: int
+    skipped: int
+    failed: int
+    skipped_by_reason: dict[str, int]
+    failed_by_reason: dict[str, int]
+    errors: list[MetadataCleanupError]
+    errors_truncated: int
+    message: str

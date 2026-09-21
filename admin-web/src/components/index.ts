@@ -2,6 +2,7 @@ export { default as StatusBadge } from "./StatusBadge";
 export { getStatusTone } from "./StatusBadge";
 export { SyncOutcomeBadge, SyncOutcomeNotice } from "./SyncOutcomeBadge";
 export { default as SourceBadge } from "./SourceBadge";
+export { default as MatchedIdentityBadge } from "./MatchedIdentityBadge";
 export { default as Banner } from "./Banner";
 export { default as PageHeader } from "./PageHeader";
 export { default as PageContextNav } from "./PageContextNav";
@@ -17,6 +18,15 @@ export { default as StatCard } from "./StatCard";
 export { default as IconButton } from "./IconButton";
 export { EntityList, EntityRow } from "./EntityList";
 export type { EntityEntranceProps } from "./EntityList";
+export { default as CompactSelectionCheckbox } from "./CompactSelectionCheckbox";
+export { default as ReferenceSortControl } from "./ReferenceSortControl";
+export { default as ReferenceNameRail, ReferenceListLayout } from "./ReferenceNameRail";
+export { default as VirtualReferenceList } from "./VirtualReferenceList";
+export type {
+  VirtualReferenceListHandle,
+  VirtualReferenceListState,
+  VirtualReferencePage,
+} from "./VirtualReferenceList";
 export { default as RowActionMenu } from "./RowActionMenu";
 export type { RowActionItem } from "./RowActionMenu";
 export { default as EmptyState } from "./EmptyState";

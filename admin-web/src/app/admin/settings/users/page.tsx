@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal, EntityList, EntityRow, RowActionMenu } from "@/components";
+import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal, EntityList, EntityRow, RowActionMenu, PermissionGuard } from "@/components";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat, userModuleLabel } from "@/lib/i18n-format";
@@ -74,7 +74,7 @@ function CreateForm({ isPending, error, modules, onSubmit, onClose }: {
   );
 }
 
-export default function UsersPage() {
+function UsersContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
@@ -176,4 +176,8 @@ export default function UsersPage() {
       )}
     </PageShell>
   );
+}
+
+export default function UsersPage() {
+  return <PermissionGuard adminOnly><UsersContent /></PermissionGuard>;
 }

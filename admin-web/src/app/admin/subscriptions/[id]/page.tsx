@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CalendarScheduleRule, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
 import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
 import { useToast } from "@/components/Toast";
@@ -86,13 +86,19 @@ export default function SubscriptionDetailPage() {
     refetchInterval: 15000,
   });
   const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
-  const decisions = useQuery({
+  const decisions = useInfiniteQuery({
     queryKey: [...queryKeys.schedulerDecisions, "subscription", id],
-    queryFn: () => api.schedulerDecisionsForSubscriptions([id]),
+    queryFn: ({ pageParam }) => api.schedulerDecisionsForSubscriptions([id], pageParam, 100),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_offset ?? undefined,
     refetchInterval: 15000,
   });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
-  const creators = useQuery({ queryKey: queryKeys.creators.all, queryFn: () => api.listCreators() });
+  const creator = useQuery({
+    queryKey: queryKeys.creators.detail(sub.data?.creator_id || ""),
+    queryFn: () => api.getCreator(sub.data!.creator_id),
+    enabled: !!sub.data?.creator_id,
+  });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
   const [editMode, setEditMode] = useState<"inherit" | "interval" | "calendar" | "manual">("inherit"); const [editInterval, setEditInterval] = useState(0);
@@ -139,12 +145,12 @@ export default function SubscriptionDetailPage() {
     mutationFn: (ssId: string) => api.deleteSubscriptionSource(id, ssId, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscription_detail.remove_source"), {
           entity: "hierarchy-delete", entity_type: "repository", entity_ids: [deleteSsId],
         });
-        toast.success(t("deletion.queued"));
+        toast.success(t("subscription_detail.remove_source_queued"));
       } else {
-        toast.success(t("deletion.soft_deleted"));
+        toast.success(t("subscription_detail.source_removed"));
       }
       sources.refetch();
       setDeleteSsId(null);
@@ -156,12 +162,12 @@ export default function SubscriptionDetailPage() {
     mutationFn: () => api.deleteSubscription(id, deleteFiles),
     onSuccess: (result) => {
       if (result.task_id) {
-        notify.startOperationJob(result.task_id, "hierarchy-delete", t("deletion.permanent_title"), {
+        notify.startOperationJob(result.task_id, "hierarchy-delete", t("subscriptions.remove_title"), {
           entity: "hierarchy-delete", entity_type: "subscription", entity_ids: [id],
         });
-        toast.success(t("deletion.queued"));
+        toast.success(t("subscriptions.remove_queued"));
       } else {
-        toast.success(t("deletion.soft_deleted"));
+        toast.success(t("subscriptions.removed"));
       }
       qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
       qc.invalidateQueries({ queryKey: queryKeys.creators.all });
@@ -187,9 +193,12 @@ export default function SubscriptionDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const decisionBySource = useMemo(
-    () => new Map((decisions.data?.items || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
-    [decisions.data?.items, id],
+    () => new Map((decisions.data?.pages.flatMap((page) => page.items) || []).filter((item) => item.subscription_id === id).map((item) => [item.source_id, item])),
+    [decisions.data?.pages, id],
   );
+  const decisionTotal = decisions.data?.pages[0]?.total || 0;
+  const decisionsComplete = !!decisions.data && !decisions.hasNextPage && decisionBySource.size >= decisionTotal;
+  const authoritativeBlocked = decisions.data?.pages[0]?.summary?.blocked_count;
   const detailStats = useMemo(() => {
     const sourceRows = sources.data || [];
     const decisionRows = [...decisionBySource.values()];
@@ -198,16 +207,16 @@ export default function SubscriptionDetailPage() {
       total: sourceRows.length,
       enabled: sourceRows.filter((item) => item.is_enabled).length,
       due: decisionRows.filter((item) => item.due).length,
-      blocked: decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
+      blocked: authoritativeBlocked ?? decisionRows.filter((item) => ["auth_unhealthy", "url_invalid", "unknown_provider", "provider_not_downloadable"].includes(item.reason)).length,
       running: jobRows.filter((job) => ["enqueued", "pending", "downloading", "downloaded", "importing"].includes(job.status)).length,
       failed: jobRows.filter((job) => ["failed", "stale"].includes(job.status)).length,
       nextDueAt: decisionRows.map((item) => item.next_due_at).filter(Boolean).sort()[0] || null,
     };
-  }, [decisionBySource, jobs.data, sources.data]);
+  }, [authoritativeBlocked, decisionBySource, jobs.data, sources.data]);
 
   const getCreatorName = (creatorId: string) => {
-    const c = creators.data?.items.find((c) => c.id === creatorId);
-    return c ? (c.display_name || c.name) : creatorId.slice(0, 8);
+    const value = creator.data?.id === creatorId ? creator.data : null;
+    return value ? (value.display_name || value.name) : creatorId.slice(0, 8);
   };
 
   if (sub.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;
@@ -249,11 +258,11 @@ export default function SubscriptionDetailPage() {
     <PageShell>
       <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
         <div className="flex gap-2">
-          {!isAdmin && !s.is_active ? (
+          {!s.is_active ? (
             <button onClick={() => update.mutate({ is_active: true })} disabled={update.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
           ) : (
             <button onClick={() => { setDeleteFiles(false); setShowDeleteSubscription(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-              {isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+              {t("subscriptions.remove_title")}
             </button>
           )}
           <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditRule(s.schedule_rule || defaultCalendarRule()); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
@@ -262,11 +271,11 @@ export default function SubscriptionDetailPage() {
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
         <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources")}</div></div>
-        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_due")}</div></div>
+        <div className="card p-3"><div className="text-lg font-semibold text-accent">{detailStats.due}</div><div className="text-xs uppercase text-muted">{t(decisionsComplete ? "scheduler.filter_due" : "subscriptions.loaded_due")}</div></div>
         <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.blocked ? "text-danger" : "text-fg"}`}>{detailStats.blocked}</div><div className="text-xs uppercase text-muted">{t("scheduler.filter_blocked")}</div></div>
         <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.running}</div><div className="text-xs uppercase text-muted">{t("subscriptions.running")}</div></div>
         <div className="card p-3"><div className={`text-lg font-semibold ${detailStats.failed ? "text-danger" : "text-fg"}`}>{detailStats.failed}</div><div className="text-xs uppercase text-muted">{t("subscriptions.failed")}</div></div>
-        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t("subscriptions.next_due_short")}</div></div>
+        <div className="card p-3"><div className="truncate text-sm font-semibold text-fg">{fmt.dateTime(detailStats.nextDueAt)}</div><div className="text-xs uppercase text-muted">{t(decisionsComplete ? "subscriptions.next_due_short" : "subscriptions.loaded_next_due")}</div></div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -320,13 +329,19 @@ export default function SubscriptionDetailPage() {
                     onDelete={() => { setDeleteFiles(false); setDeleteSsId(ss.id); }}
                     syncPending={startSync.isPending}
                     togglePending={toggleSource.isPending}
-                    decision={decisionBySource.get(ss.id)} />
+                    decision={decisionBySource.get(ss.id)} decisionLoaded={decisionsComplete || decisionBySource.has(ss.id)} />
                 ))}
               </div>
             ) : (
               <EmptyState title={t("subscription_detail.no_sources")} description={t("subscription_detail.no_sources_desc")} />
             )}
             {startSync.error && <p className="text-red-600 text-sm mt-2">{(startSync.error as Error).message}</p>}
+            {decisions.isLoading && <p role="status" className="mt-2 text-xs text-muted">{t("subscriptions.decisions_loading")}</p>}
+            {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
+            {decisions.data && <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted">
+              <span>{t("subscriptions.decisions_loaded", { loaded: decisionBySource.size, total: decisions.data.pages[0]?.total || 0 })}</span>
+              {decisions.hasNextPage && <button className="btn-ghost" disabled={decisions.isFetchingNextPage} onClick={() => void decisions.fetchNextPage()}>{decisions.isFetchingNextPage ? t("common.loading") : t("common.load_more")}</button>}
+            </div>}
           </div>
         </div>
 
@@ -384,7 +399,8 @@ export default function SubscriptionDetailPage() {
       {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? t("subscription_detail.disable_source_title") : t("subscription_detail.enable_source_title")} message={t("subscription_detail.toggle_source_msg")} onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
       <HierarchyDeletionDialog
         open={showDeleteSubscription}
-        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        title={t("subscriptions.remove_title")}
+        message={t("subscriptions.remove_message")}
         confirmationPhrase={s.name || s.creator_display_name || s.creator_name || id}
         preview={subscriptionDeletionPreview.data}
         previewLoading={subscriptionDeletionPreview.isLoading}
@@ -397,7 +413,8 @@ export default function SubscriptionDetailPage() {
       />
       <HierarchyDeletionDialog
         open={!!deleteSsId}
-        title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
+        title={t("subscription_detail.remove_source")}
+        message={t("subscription_detail.remove_source_message")}
         confirmationPhrase={(() => {
           const source = sources.data?.find((item: SS) => item.id === deleteSsId);
           return source ? `${source.source}/${source.source_creator_id || source.id}` : (deleteSsId || "");

@@ -199,7 +199,21 @@ async def _ensure_source_creator(
             existing.creator_id = creator.id
         existing.source_url = existing.source_url or identity.source_url
         existing.display_name = existing.display_name or identity.display_name
-        existing.raw_metadata = existing.raw_metadata or raw
+        stored_metadata = (
+            existing.raw_metadata
+            if isinstance(existing.raw_metadata, dict)
+            else {}
+        )
+        incoming_metadata = (
+            identity.raw_metadata
+            if isinstance(identity.raw_metadata, dict)
+            else {}
+        )
+        existing.raw_metadata = {
+            **stored_metadata,
+            **incoming_metadata,
+            "_disk_import": raw["_disk_import"],
+        }
         return existing
     sc = SourceCreator(
         creator_id=creator.id,
@@ -383,6 +397,13 @@ async def provision_identity_for_disk_import(
         identity,
         needs_enrichment=not bool(artist),
         enrichment_status=enrichment_status,
+    )
+    from app.services.creator_aliases import backfill_creator_alias_batch
+
+    await backfill_creator_alias_batch(
+        db,
+        (creator.id,),
+        request_projection=False,
     )
     return ProvisionedIdentity(
         creator=creator,

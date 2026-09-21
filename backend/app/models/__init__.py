@@ -2,6 +2,7 @@ from app.models.base import Base, TimestampMixin
 from app.models.creator import Creator
 from app.models.source_creator import SourceCreator
 from app.models.creator_link import CreatorLink
+from app.models.creator_alias import CreatorAlias
 from app.models.work import Work
 from app.models.work_source import WorkSource
 from app.models.asset import Asset
@@ -11,6 +12,8 @@ from app.models.work_tag import WorkTag
 from app.models.work_source_tag import WorkSourceTag
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
+from app.models.remote_discovery import DiscoveryCandidate, RemoteAccount, UserSubscription, UserSubscriptionSource
+from app.models.download_repeat import DownloadRepeatIntent
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.system_setting import SystemSetting
@@ -50,6 +53,7 @@ __all__ = [
     "Creator",
     "SourceCreator",
     "CreatorLink",
+    "CreatorAlias",
     "Work",
     "WorkSource",
     "Asset",
@@ -59,7 +63,12 @@ __all__ = [
     "WorkSourceTag",
     "Subscription",
     "SubscriptionSource",
+    "UserSubscription",
+    "UserSubscriptionSource",
+    "RemoteAccount",
+    "DiscoveryCandidate",
     "DownloadJob",
+    "DownloadRepeatIntent",
     "ImportJob",
     "SystemSetting",
     "StorageArtifact",
@@ -85,7 +94,14 @@ __all__ = [
     "ImportCurationOutbox",
     "MediaDerivativeOutbox",
     "SearchProjectionOutbox",
+    "SearchDeliveryReceipt",
+    "SearchRebuild",
+    "SearchRebuildReplay",
     "RepositorySyncReceipt",
     "SearchIndexState",
     "MaintenanceAuditEvent",
 ]
+
+from app.models.search_delivery_receipt import SearchDeliveryReceipt
+from app.models.search_rebuild import SearchRebuild, SearchRebuildReplay
+from app.models.scheduler_batch import SchedulerBatch, SchedulerBatchItem

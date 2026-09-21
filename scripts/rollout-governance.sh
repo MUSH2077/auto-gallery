@@ -58,7 +58,7 @@ rollout_failed() {
   if [[ "$committed" -ne 1 ]]; then
     cp "$env_backup" .env
     chmod 600 .env
-    docker compose stop -t 60 worker-download worker-import worker-operations scheduler >/dev/null 2>&1 || true
+    docker compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true
     docker compose up -d --no-deps --force-recreate backend admin-web >/dev/null 2>&1 || true
     echo "Rollout failed closed; previous .env restored and heavy workers stopped" >&2
   fi
@@ -107,17 +107,17 @@ PY
 
 case "$stage" in
   shadow)
-    docker compose stop -t 60 worker-download worker-import worker-operations scheduler || true
+    docker compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler || true
     docker compose up -d --no-deps --force-recreate backend admin-web
     ;;
   import|search)
-    docker compose stop -t 60 worker-download scheduler || true
+    docker compose stop -t 60 worker-download worker-discovery scheduler || true
     docker compose up -d --no-deps --force-recreate \
       backend admin-web worker-import worker-operations
     ;;
   download)
     docker compose up -d --no-deps --force-recreate \
-      backend admin-web worker-download worker-import worker-operations scheduler
+      backend admin-web worker-download worker-import worker-operations worker-discovery scheduler
     ;;
 esac
 

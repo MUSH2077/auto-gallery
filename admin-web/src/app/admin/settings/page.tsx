@@ -7,16 +7,39 @@ import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import { useRouter } from "next/navigation";
+import { useNotifications } from "@/components/NotificationCenter";
+import { usePermissions } from "@/lib/usePermissions";
 
-export default function SettingsPage() {
+function SettingsContent() {
   const toast = useToast();
   const t = useT();
   const qc = useQueryClient();
+  const router = useRouter();
+  const notify = useNotifications();
+  const { has } = usePermissions();
   const settings = useQuery({ queryKey: queryKeys.admin.settings, queryFn: api.getAdminSettings });
   const reindex = useMutation({
     mutationFn: api.reindexSearch,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.admin.settings }); setConfirmReindex(false); toast.success({ message: t("settings.reindex_started") }); },
-    onError: (e: Error) => { setConfirmReindex(false); toast.error({ message: e.message }); },
+    onSuccess: (accepted) => {
+      qc.invalidateQueries({ queryKey: queryKeys.admin.settings });
+      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+      setConfirmReindex(false);
+      notify.startOperationJob(
+        accepted.job_id,
+        accepted.operation_type,
+        t("settings.reindex_confirm_title"),
+        { entity: "search" },
+        accepted.task_id,
+      );
+      toast.success({
+        message: t("settings.reindex_started"),
+        action: has("tasks")
+          ? { label: t("jobs.task_detail"), onClick: () => router.push(`/admin/jobs?tab=admin&task=${accepted.task_id}`) }
+          : undefined,
+      });
+    },
+    onError: (e: Error) => { toast.error({ message: e.message }); },
   });
   const [confirmReindex, setConfirmReindex] = useState(false);
 
@@ -35,7 +58,6 @@ export default function SettingsPage() {
   ];
 
   return (
-    <PermissionGuard module="system">
     <PageShell>
       <PageHeader title={t("settings.title")} description={t("settings.desc_default")} />
 
@@ -109,6 +131,13 @@ export default function SettingsPage() {
         description={t("datamgmt.danger_reset_settings_desc")}
       />
     </PageShell>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <PermissionGuard module="system">
+      <SettingsContent />
     </PermissionGuard>
   );
 }

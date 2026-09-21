@@ -1,5 +1,9 @@
 # auto-gallery 稳定性审计报告
 
+> **历史快照，非当前运行手册。** 本报告记录 2026-06-23 当日的只读审计结果，
+> 其容器资源上限、服务拓扑与改进状态可能已过期。当前部署合同以
+> `docker-compose.yaml`、`docs/deployment-profiles.md` 和 `docs/RUNBOOK.md` 为准。
+
 **审计日期**: 2026-06-23  
 **审计分支**: `gitlike-gallery`  
 **审计范围**: 全项目（只读，未修改任何文件）

@@ -84,6 +84,48 @@ ADMIN_PASSWORD=change-me-admin
 
 如果 backend 日志出现 `auto-gallery refused to start — insecure defaults detected`，请确认 Docker Compose 读取的是正确的 `.env`、上面的服务密钥已经不再是 `change-me-*`，并且更新代码后已重新 build backend 镜像。
 
+### 远端账号凭据密钥
+
+远端关注发现需要独立的 32 字节 URL-safe base64 密钥，禁止复用 `SECRET_KEY`：
+
+```bash
+python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+```
+
+把输出写入 `.env` 的 `REMOTE_CREDENTIAL_KEY`。使用与数据库凭据相同的加密运维密钥
+备份流程保存它，并与数据库/媒体备份分开管理。密钥丢失会使所有已存远端凭据无法解密；
+错误密钥、错误的用户/来源/账号 AAD 或被篡改的密文都会导致认证解密失败。当前不支持在线
+轮换：更换前必须安排停机，并原子迁移全部凭据；禁止混合密钥部署。
+
+配置 X OAuth 时，provider 回调地址必须注册为公开的管理端页面，而不是后端 API，
+并把同一个绝对 URL 写入 `.env`：
+
+```bash
+X_OAUTH_CLIENT_ID=<公开客户端 ID>
+X_OAUTH_REDIRECT_URI=https://autogallery.example.com/admin/discovery
+```
+
+管理端文档 `<head>` 中的脚本会在 hydration 前从浏览器历史同步删除 `code` 与
+`state`，再把它们仅一次放入
+`POST /api/v1/remote-accounts/x/oauth/callback` 的 JSON body；后端刻意不提供 GET
+callback 契约。管理端应用会抑制 `/admin/discovery` 的入站请求日志，但边缘反向代理
+会在 JavaScript 清理 URL 之前先收到原始请求。必须让反向代理对此路径省略或脱敏 query；
+例如 Nginx access log 可对 `/admin/discovery`（或全部路径）记录 `$uri`，不要记录
+`$request_uri`。禁止记录 OAuth callback 的请求 header 或 body。
+
+除 AES-GCM 密文外，明文凭据不得进入其他 PostgreSQL 字段、Redis、`TaskRun`、manifest、
+API 响应或日志。下载 worker 只在权限 `0700` 的 `PERSONAL_AUTH_TMP_ROOT` 中生成权限
+`0600` 的认证覆盖文件。Compose 仅在 `worker-download` 内把该路径挂载为专用 `tmpfs`；
+worker 启动及每次私有任务前会清理崩溃残留，正常和错误退出均删除本任务文件。若该路径可持久化、
+不可用、经过符号链接或与备份根目录重叠，worker 会拒绝启动。作为纵深防御，备份估算与归档
+还会排除 `gallerydl-config/jobs`。删除远端账号会立即清除密文和未导入候选；已导入成员关系与
+共享作品继续保留。
+
+`.env.example` 中所有 discovery rollout 开关默认 `false`。按“私有成员 → Pixiv 预览 →
+Pixiv 自动导入 → X 预览 → X 自动导入 → Bilibili 预览 → Bilibili 自动导入”顺序启用。
+自动开关只有在对应预览开关与私有成员底座同时开启时才有效。关闭开关会停止新的发现执行，
+但不会删除账号、候选、成员、订阅或媒体。
+
 设置时区：
 
 ```bash

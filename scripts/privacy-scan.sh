@@ -54,7 +54,9 @@ while IFS= read -r -d '' file; do
     if [[ -n "$forbidden_namespace" ]] && grep -nF "$forbidden_namespace" "$file"; then
       report "$file contains a forbidden private namespace"
     fi
-    if grep -nE '(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})' "$file"; then
+    # Require a token boundary so ordinary slugs such as ``task-5-report``
+    # cannot be misread from their trailing ``sk-`` substring.
+    if grep -nE '(^|[^[:alnum:]_-])(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})' "$file"; then
       report "$file contains a token-like secret"
     fi
   fi

@@ -101,7 +101,6 @@ async def _load_subscription_source_batch(
                 SubscriptionSource.next_sync_at.is_(None),
                 SubscriptionSource.next_sync_at <= now,
             ),
-            _automatic_mode_predicate(system_config),
         )
         .order_by(
             SubscriptionSource.next_sync_at.asc().nullsfirst(),
@@ -716,38 +715,28 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                 )
                 coverage_count = len(source_rows)
 
-                # This short transaction is the only row-locking phase.  Due
-                # rows retain an expired timestamp as a persistent backlog;
-                # non-due rows move directly to their computed next check.
-                # Commit before any provider/Redis enqueue I/O.
+                # UserSubscriptionSource is the authoritative scheduling row;
+                # every canonical row selected above is already an aggregate
+                # due cache. Commit the short fair-claim transaction before
+                # any provider/Redis enqueue I/O.
                 for ss, sub in source_rows:
-                    decision = _schedule_decision(
-                        sub,
-                        config,
-                        ss.last_synced_at,
-                        ss.last_attempted_at,
-                        now,
-                        tz,
-                        ss.next_sync_at,
-                    )
+                    decision = {
+                        "due": True,
+                        "mode": "membership",
+                        "reason": "member_due_cache",
+                        "scheduled_for": (
+                            _as_tz(ss.next_sync_at, tz).isoformat()
+                            if ss.next_sync_at is not None
+                            else None
+                        ),
+                    }
                     decisions.append(decision)
-                    if decision["due"]:
-                        due_count += 1
-                        # Preserve an expired persisted timestamp: it is the
-                        # durable proof that this source still owes work from a
-                        # previous fixed-time slot. NULL rows use now only as a
-                        # fair initial claim cursor.
-                        if ss.next_sync_at is None:
-                            ss.next_sync_at = _utc(now)
-                    else:
-                        ss.next_sync_at = next_subscription_check_at(
-                            sub,
-                            config,
-                            ss.last_synced_at,
-                            ss.last_attempted_at,
-                            now,
-                            tz,
-                        )
+                    due_count += 1
+                    # Preserve an expired persisted timestamp: it is the
+                    # durable proof that this source still owes work. NULL rows
+                    # use now only as a fair initial claim cursor.
+                    if ss.next_sync_at is None:
+                        ss.next_sync_at = _utc(now)
                 if source_rows:
                     await db.commit()
 
@@ -819,6 +808,15 @@ async def _sync_subscriptions_locked(parent_task_id=None):
     except Exception:
         logger.debug("source_creator reconcile skipped", exc_info=True)
 
+    discovery_admission = {"created": 0, "published": 0, "task_ids": []}
+    try:
+        from app.services.remote_discovery import admit_due_remote_accounts
+
+        async with async_session() as discovery_db:
+            discovery_admission = await admit_due_remote_accounts(discovery_db)
+    except Exception:
+        logger.warning("Failed to admit due remote discovery scans", exc_info=True)
+
     # SQLite maintenance owns a separate exact-time schedule.  Subscription
     # scans only ensure that schedule exists; they never VACUUM inline.
     try:
@@ -845,6 +843,8 @@ async def _sync_subscriptions_locked(parent_task_id=None):
         "due": due_count,
         "enqueue_budget": enqueue_budget,
         "due_backlog_deferred": budget_deferred_count,
+        "discovery_created": discovery_admission["created"],
+        "discovery_published": discovery_admission["published"],
         "device_profile": device_profile.name,
         # The synchronous RQ wrapper fills the durable successor timestamp.
         "rescheduled_at": None,

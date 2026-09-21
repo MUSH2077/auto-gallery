@@ -16,7 +16,7 @@ const LEVEL_COLORS: Record<string, string> = {
   CRITICAL: "text-danger font-bold",
 };
 
-export default function SystemLogsPage() {
+function SystemLogsContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const [levelFilter, setLevelFilter] = useState("");
@@ -32,7 +32,6 @@ export default function SystemLogsPage() {
   });
 
   return (
-    <PermissionGuard module="system">
       <PageShell>
       <PageHeader title={t("logs.title")} description={t("logs.desc")}>
         <button
@@ -96,6 +95,13 @@ export default function SystemLogsPage() {
         </div>
       )}
       </PageShell>
+  );
+}
+
+export default function SystemLogsPage() {
+  return (
+    <PermissionGuard module="system">
+      <SystemLogsContent />
     </PermissionGuard>
   );
 }

@@ -18,17 +18,11 @@ async def _record_index_change(target: list, db, index_uid: str) -> None:
     target.append((db, index_uid))
 
 
-def test_work_sorts_have_a_uuid_tie_breaker_in_sql_and_meili():
-    from app.models import Work
-    from app.services.search import _apply_sql_sort, _meili_sort
+def test_work_sorts_have_a_uuid_tie_breaker_in_meili():
+    from app.services.search import _meili_sort
     from app.services.search_language import parse_search_query
 
     query = parse_search_query("sort:updated-desc", "works")
-    sql = str(_apply_sql_sort(select(Work.id), query, Work).compile(
-        dialect=postgresql.dialect()
-    ))
-    assert "works.updated_at DESC NULLS LAST" in sql
-    assert "works.id DESC" in sql
     assert _meili_sort(query, "works") == ["updated_ts:desc", "id:desc"]
 
 
@@ -86,36 +80,6 @@ def test_work_list_media_hydration_is_one_bounded_aggregate_query():
     assert "preview_position <= 10" in source
     assert "array_agg" in source
     assert "MATERIALIZED" in source
-
-
-def test_full_rebuild_streams_work_and_reference_batches_by_keyset():
-    from app.services.search import SearchService
-
-    work_source = inspect.getsource(SearchService._stream_works_to_index)
-    reference_source = inspect.getsource(SearchService._stream_reference_to_index)
-    rebuild_source = inspect.getsource(SearchService._rebuild_selected_indexes)
-    assert "model.id > last_id" in reference_source
-    assert "Work.id > last_id" in work_source
-    assert "documents[start:" not in rebuild_source
-    assert "_stream_reference_to_index" in rebuild_source
-    assert "_run_profiled_search_slice" in work_source
-    assert "_run_profiled_search_slice" in reference_source
-    assert 'workload="maintenance"' in rebuild_source
-
-
-def test_full_reindex_coordinator_does_not_hold_one_global_operation_lock():
-    from app.jobs.admin_operations import run_search_reindex_operation
-    from app.services.resource_aware_worker import ResourceAwareWorker
-    from app.services.search import SearchService
-
-    entrypoint_source = inspect.getsource(run_search_reindex_operation)
-    replay_source = inspect.getsource(
-        SearchService._replay_work_events_to_staging
-    )
-    classifier_source = inspect.getsource(ResourceAwareWorker._internal_slice_workload)
-    assert "run_heavy_io_operation" not in entrypoint_source
-    assert "_run_profiled_search_slice" in replay_source
-    assert "run_search_reindex_operation" in classifier_source
 
 
 def test_projection_audit_checks_every_work_hash_in_bounded_batches():
@@ -418,9 +382,13 @@ async def test_transactional_projection_request_uses_callers_session(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_transactional_projection_request_covers_all_five_indexes(monkeypatch):
+async def test_transactional_projection_request_covers_all_six_indexes(monkeypatch):
     import app.services.search_projection_outbox as outbox
 
+    from unittest.mock import AsyncMock, call
+
+    fanout = AsyncMock(return_value=0)
+    monkeypatch.setattr(outbox, "_fanout_memberships", fanout)
     calls = []
     index_changes = []
 
@@ -436,7 +404,7 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
     )
     monkeypatch.setattr(outbox, "cache_bump_generation", lambda _domain: 1)
     db = SimpleNamespace(info={})
-    identities = [uuid4() for _ in range(5)]
+    identities = [uuid4() for _ in range(7)]
     await outbox.request_search_projection(
         db,
         [identities[0]],
@@ -444,6 +412,8 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         tag_ids=[identities[2]],
         repository_ids=[identities[3]],
         deleted_subscription_ids=[identities[4]],
+        membership_ids=[identities[5]],
+        deleted_membership_ids=[identities[6]],
     )
 
     assert [call[1] for call in calls] == [
@@ -452,11 +422,15 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         outbox.DEFAULT_TAGS_INDEX_UID,
         outbox.DEFAULT_REPOSITORIES_INDEX_UID,
         outbox.DEFAULT_SUBSCRIPTIONS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
     ]
     assert [call[3] for call in calls] == [
         "upsert",
         "upsert",
         "upsert",
+        "upsert",
+        "delete",
         "upsert",
         "delete",
     ]
@@ -466,7 +440,15 @@ async def test_transactional_projection_request_covers_all_five_indexes(monkeypa
         outbox.DEFAULT_TAGS_INDEX_UID,
         outbox.DEFAULT_REPOSITORIES_INDEX_UID,
         outbox.DEFAULT_SUBSCRIPTIONS_INDEX_UID,
+        outbox.DEFAULT_MEMBERSHIPS_INDEX_UID,
     }
+
+    assert calls[-2][2] == (str(identities[5]),)
+    assert calls[-1][2] == (str(identities[6]),)
+    assert fanout.await_args_list == [
+        call(db, subscription_ids=(), creator_ids=(identities[1],), repository_ids=(identities[3],)),
+        call(db, subscription_ids=(identities[4],), creator_ids=(), repository_ids=(), deleting=True),
+    ]
 
 
 def test_exact_timestamp_filter_is_equality_not_less_than():

@@ -202,6 +202,8 @@ export interface TaskRun {
   subject_type?: string | null;
   subject_id?: string | null;
   parent_task_id?: string | null;
+  triggering_user_subscription_id?: string | null;
+  triggering_remote_account_id?: string | null;
   status: string;
   resource_state?: "running" | "waiting" | "yielded" | string | null;
   resource_reason?: string | null;
@@ -228,6 +230,8 @@ export interface TaskRun {
   last_heartbeat_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  available_actions?: components["schemas"]["TaskRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["TaskRead"]["disabled_reasons"];
   events?: {
     id: number;
     event_type: string;
@@ -290,7 +294,7 @@ export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
 export interface AdminOperationCurrent {
   task_id: string;
   job_id?: string | null;
-  status: "enqueued" | "running" | "recovering" | "paused";
+  status: "enqueued" | "running" | "recovering" | "paused" | "failed" | "stale" | "cancelled";
   operation_type: string;
   progress?: AdminOperationStatus["progress"];
 }
@@ -404,35 +408,8 @@ export interface ClearImpactPreview {
   deletes_media_files: boolean;
 }
 
-export interface OperationAttentionItem {
-  id: string;
-  type: string;
-  severity: "critical" | "warning" | string;
-  status: string;
-  reason_code?: string | null;
-  title: string;
-  summary?: string | null;
-  repository_id?: string | null;
-  task_id?: string | null;
-  occurred_at: string;
-  source?: string | null;
-  available_actions: string[];
-  task?: TaskRun | null;
-}
-
-export interface OperationsOverviewResponse {
-  view: OperationsView;
-  total: number;
-  summary: {
-    attention: number;
-    critical: number;
-    warning: number;
-    resolved: number;
-    active: number;
-    resource_limited: number;
-  };
-  items: OperationAttentionItem[];
-}
+export type OperationAttentionItem = components["schemas"]["TaskAttentionItem"] | components["schemas"]["RepositoryAttentionItem"];
+export type OperationsOverviewResponse = components["schemas"]["OperationsOverview"];
 
 export interface ProviderInfo {
   source_name: string;
@@ -444,7 +421,228 @@ export interface ProviderInfo {
     supports_tags: boolean;
     is_reference_only: boolean;
     supports_download_cursor?: boolean;
+    supports_remote_discovery?: boolean;
+    discovery_auth_methods?: RemoteAuthMethod[];
+    supports_collection_selectors?: boolean;
+    remote_discovery_rollout?: RemoteDiscoveryRollout | null;
   };
+}
+
+export interface RemoteDiscoveryRollout {
+  manual_preview: boolean;
+  auto_import: boolean;
+  unavailable_reason?: string | null;
+}
+
+export type RemoteDiscoverySource = "pixiv" | "x" | "bilibili";
+export type RemoteAuthMethod = "refresh_token" | "oauth2" | "cookie" | "sessdata";
+export type DiscoveryConfidence = "high" | "medium" | "low";
+export type DiscoveryCandidateState = "pending" | "dismissed" | "imported" | "conflict";
+export type DiscoveryEvidenceStatus = "pending" | "ready" | "retrying" | "failed" | "not_required";
+
+export interface RemoteCollection {
+  id: string;
+  name: string;
+  selector: Record<string, unknown>;
+}
+
+export interface RemoteAccountRead {
+  id: string;
+  user_id: number;
+  source: RemoteDiscoverySource;
+  remote_user_id?: string | null;
+  remote_username?: string | null;
+  auth_method?: RemoteAuthMethod | null;
+  scopes: string[];
+  collection_selectors: Record<string, unknown>[];
+  is_enabled: boolean;
+  auth_status?: string | null;
+  auth_error_reason?: string | null;
+  last_authenticated_at?: string | null;
+  download_auth_status: "personal" | "anonymous_only" | "unhealthy" | "unavailable";
+  download_auth_error_reason?: string | null;
+  last_download_auth_checked_at?: string | null;
+  download_auth_mask: Record<string, string>;
+  last_scan_started_at?: string | null;
+  last_scan_completed_at?: string | null;
+  next_scan_at?: string | null;
+  scan_interval_hours: number;
+  auto_import_enabled: boolean;
+  auto_import_min_confidence: DiscoveryConfidence;
+  auto_import_limit: number;
+  has_credentials: boolean;
+  credential_mask: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RemoteAccountCreateInput {
+  source: RemoteDiscoverySource;
+  remote_user_id?: string;
+  remote_username?: string;
+  auth_method: RemoteAuthMethod;
+  scopes?: string[];
+  collection_selectors?: Record<string, unknown>[];
+  is_enabled?: boolean;
+  scan_interval_hours?: number;
+  auto_import_enabled?: boolean;
+  auto_import_min_confidence?: DiscoveryConfidence;
+  auto_import_limit?: number;
+  credentials: Record<string, string>;
+}
+
+export type RemoteAccountUpdateInput = Partial<Omit<RemoteAccountCreateInput, "source">>;
+
+export interface DiscoveryCandidate {
+  id: string;
+  remote_account_id: string;
+  user_id: number;
+  source_creator_id: string;
+  remote_url?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  recent_works: DiscoveryRecentWork[];
+  metadata?: Record<string, unknown> | null;
+  confidence: DiscoveryConfidence;
+  confidence_reasons?: Array<string | Record<string, unknown>> | null;
+  state: DiscoveryCandidateState;
+  subscription_id?: string | null;
+  user_subscription_id?: string | null;
+  dismissed_at?: string | null;
+  imported_at?: string | null;
+  last_seen_at?: string | null;
+  is_following: boolean;
+  evidence_status: DiscoveryEvidenceStatus;
+  evidence_checked_at?: string | null;
+  evidence_error_code?: string | null;
+  evidence_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RemoteWorkType = "illust" | "manga" | "ugoira";
+export type RemoteWorkFeedType = "illust" | "manga";
+
+export interface DiscoveryRecentWork {
+  source_work_id: string;
+  title: string;
+  work_url: string;
+  created_at: string;
+  work_type: RemoteWorkType;
+  page_count: number;
+  x_restrict: 0 | 1 | 2;
+  thumbnail_url?: string | null;
+}
+
+export interface RemoteCreatorProfile {
+  source: RemoteDiscoverySource;
+  source_creator_id: string;
+  display_name?: string | null;
+  username?: string | null;
+  profile_url: string;
+  avatar_url?: string | null;
+  header_image_url?: string | null;
+  comment?: string | null;
+  work_counts: Record<string, number>;
+  social_counts: Record<string, number>;
+  public_profile: RemoteCreatorPublicProfile;
+  links: RemoteCreatorLink[];
+  is_followed?: boolean | null;
+  fetched_at: string;
+}
+
+export interface RemoteCreatorPublicProfile {
+  gender?: string | null;
+  region?: string | null;
+  birth_day?: string | null;
+  birth_year?: number | null;
+  job?: string | null;
+}
+
+export interface RemoteCreatorLink {
+  kind: "website" | "x" | "pawoo";
+  url: string;
+}
+
+export interface RemoteWorkPreview {
+  source_work_id: string;
+  source_creator_id: string;
+  title: string;
+  work_url: string;
+  created_at: string;
+  work_type: RemoteWorkType;
+  page_count: number;
+  x_restrict: 0 | 1 | 2;
+  thumbnail_url?: string | null;
+  preview_urls: string[];
+  local_work_id?: string | null;
+  download_job_id?: string | null;
+  import_status: "available" | "queued" | "imported";
+  work_token: string;
+}
+
+export interface RemoteWorkPage {
+  items: RemoteWorkPreview[];
+  next_cursor?: string | null;
+}
+
+export interface RemoteCreatorDetail {
+  candidate: DiscoveryCandidate;
+  profile: RemoteCreatorProfile;
+  works: RemoteWorkPage;
+}
+
+export interface RemoteWorkImportResult {
+  status: "queued" | "already_queued" | "already_imported";
+  local_work_id?: string | null;
+  download_job_id?: string | null;
+  candidate?: DiscoveryCandidate | null;
+}
+
+export interface DiscoveryCandidateListResponse {
+  total: number;
+  items: DiscoveryCandidate[];
+}
+
+export interface DiscoveryCandidateFilters {
+  accountId?: string;
+  state?: DiscoveryCandidateState;
+  confidence?: DiscoveryConfidence;
+  isFollowing?: boolean;
+  localMatch?: boolean;
+  evidenceStatus?: DiscoveryEvidenceStatus;
+  offset?: number;
+  limit?: number;
+}
+
+export interface DiscoveryCandidateBatchInput {
+  ids: string[];
+  action: "import" | "dismiss" | "restore";
+  syncNow?: boolean;
+}
+
+export interface DiscoveryCandidateBatchResponse {
+  items: DiscoveryCandidate[];
+  immediate_sync: boolean;
+  sync_results: unknown[];
+}
+
+export interface DiscoveryCandidateResolveInput {
+  creatorId?: string;
+  creatorName?: string;
+  syncNow?: boolean;
+}
+
+export interface DiscoveryCandidateResolveResponse {
+  candidate: DiscoveryCandidate;
+  immediate_sync: boolean;
+  sync_result?: unknown | null;
+}
+
+export interface XOAuthAuthorizeResponse {
+  authorization_url: string;
+  state: string;
+  expires_in: number;
 }
 
 export interface Creator {
@@ -461,13 +659,59 @@ export interface Creator {
   repository_count?: number;
   last_synced_at?: string;
   curation_state?: CurationState;
+  matched_identity?: MatchedCreatorIdentity | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MatchedCreatorIdentity {
+  creator_id: string;
+  value: string;
+  source: string;
+  kind: "name" | "account" | "source_id" | "url" | "url_handle" | "other_name" | string;
+  is_current: boolean;
+  match_type: "exact" | "prefix" | "fuzzy";
+}
+
+export interface CreatorAlias {
+  id: string;
+  creator_id: string;
+  value: string;
+  normalized_value: string;
+  source: string;
+  kind: string;
+  is_current: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  source_ref?: string | null;
 }
 
 export interface CreatorListResponse {
   items: Creator[];
   total: number;
+}
+
+export interface PixivCreatorReference {
+  source_creator_id: string;
+  display_name: string;
+  username?: string | null;
+  profile_url: string;
+  avatar_url?: string | null;
+  status: "remote" | "fallback";
+  error_code?: string | null;
+}
+
+export interface DanbooruCreatorReference {
+  artist_id: number;
+  name?: string | null;
+  other_names: string[];
+  profile_url: string;
+  status: "remote" | "fallback";
+}
+
+export interface CreatorReferences {
+  pixiv: PixivCreatorReference[];
+  danbooru?: DanbooruCreatorReference | null;
 }
 
 export type DeletionEntityType = "repository" | "subscription" | "creator";
@@ -552,6 +796,7 @@ export interface Subscription {
     selection_reason: string;
   } | null;
   next_sync_at?: string | null;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export type SubscriptionLatestStateKind =
@@ -747,6 +992,8 @@ export interface ImportJob {
   subscription_name?: string | null;
   creator_id?: string | null;
   creator_name?: string | null;
+  available_actions?: components["schemas"]["ImportJobRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["ImportJobRead"]["disabled_reasons"];
 }
 
 export interface RepositoryGraphEdge {
@@ -847,6 +1094,8 @@ export interface WorkbenchSummary {
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
+      available_actions?: components["schemas"]["WorkbenchRecentJob"]["available_actions"];
+      disabled_reasons?: components["schemas"]["WorkbenchRecentJob"]["disabled_reasons"];
     }[];
     import_jobs: {
       id: string;
@@ -865,6 +1114,8 @@ export interface WorkbenchSummary {
       created_at?: string | null;
       updated_at?: string | null;
       error_log_excerpt?: string | null;
+      available_actions?: components["schemas"]["WorkbenchRecentJob"]["available_actions"];
+      disabled_reasons?: components["schemas"]["WorkbenchRecentJob"]["disabled_reasons"];
     }[];
     works: {
       id: string;
@@ -921,48 +1172,46 @@ export interface SchedulerLoopState {
   active?: { queued: number; scheduled: number; started: number };
 }
 
-export interface SchedulerDecisionItem {
-  subscription_id: string;
-  subscription_name?: string | null;
-  subscription_active: boolean;
-  subscription_sync_enabled: boolean;
-  creator_id: string;
-  creator_name: string;
-  source_id: string;
-  source: string;
-  source_display_name?: string | null;
-  source_url?: string | null;
-  source_creator_id?: string | null;
-  source_enabled: boolean;
-  effective_mode: string;
-  timezone: string;
-  scheduled_times?: string | null;
-  schedule_rule?: CalendarScheduleRule | null;
-  sync_interval_hours: number;
-  last_synced_at?: string | null;
-  last_attempted_at?: string | null;
-  due: boolean;
-  decision: string;
-  reason: string;
-  suppression_reason?: string | null;
-  next_due_at?: string | null;
-  window_start?: string | null;
-  window_end?: string | null;
-  auth_healthy: boolean;
-  url_valid: boolean;
-  can_download: boolean;
-  is_overdue?: boolean;
-  is_attention?: boolean;
+export type SchedulerDecisionItem = components["schemas"]["SchedulerDecisionItem"];
+
+export type SchedulerDecisionsResponse = components["schemas"]["SchedulerDecisionPage"];
+export type TagPage = components["schemas"]["TagPage"];
+export type RepeatSyncAccepted = components["schemas"]["RepeatSyncAccepted"];
+export type TaskBulkResult = components["schemas"]["TaskBulkResult"];
+export type TaskBulkStatusResult = components["schemas"]["TaskBulkStatusResult"];
+export type TaskBulkClearResult = components["schemas"]["TaskBulkClearResult"];
+
+export type SchedulerSyncMode = components["schemas"]["SchedulerSyncNowRequest"]["mode"];
+export type SchedulerSyncAcceptance = components["schemas"]["SchedulerSyncAcceptance"];
+export type SchedulerBatchItem = components["schemas"]["SchedulerBatchItemRead"];
+export type SchedulerBatchItemPage = components["schemas"]["SchedulerBatchItemPage"];
+
+export interface SchedulerBatchResult extends Record<string, unknown> {
+  status?: "pending" | "partial_error" | "complete" | "noop" | "cancelled" | string;
+  mode?: SchedulerSyncMode;
+  candidate_count?: number;
+  pending_count?: number;
+  queued_count?: number;
+  waiting_count?: number;
+  downloading_count?: number;
+  importing_count?: number;
+  succeeded_count?: number;
+  skipped_count?: number;
+  failed_count?: number;
+  cancelled_count?: number;
+  enqueued_count?: number;
+  error_count?: number;
+  cleanup_pending?: boolean;
+  cleanup_task_id?: string;
+  skipped_reasons?: Record<string, number>;
+  message?: string;
 }
 
-export interface SchedulerDecisionsResponse {
-  updated_at: string;
-  scheduler_enabled: boolean;
-  suppressed_count?: number;
-  timezone: string;
-  view?: "attention" | "all";
-  total?: number;
-  items: SchedulerDecisionItem[];
+export interface TaskControlResponse {
+  task_id: string;
+  status: string;
+  cleanup_pending?: boolean;
+  cleanup_task_id?: string;
 }
 
 export interface DownloadJob {
@@ -1000,6 +1249,8 @@ export interface DownloadJob {
     canonical_sha256?: string;
   }>;
   retryable?: boolean;
+  available_actions?: components["schemas"]["DownloadJobRead"]["available_actions"];
+  disabled_reasons?: components["schemas"]["DownloadJobRead"]["disabled_reasons"];
 }
 
 export interface JobProgress {
@@ -1034,6 +1285,7 @@ export interface WorkListItem {
 export interface SearchWorkResult extends WorkListItem {
   description?: string;
   tags?: string[];
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface Work {
@@ -1051,6 +1303,15 @@ export interface Work {
   curation_state?: CurationState;
   created_at: string;
   updated_at: string;
+}
+
+export interface RemoteWorkState {
+  source: "pixiv";
+  source_work_id: string;
+  fetched_at: string;
+  total_views: number;
+  total_bookmarks: number;
+  is_bookmarked: boolean;
 }
 
 export type Tag = components["schemas"]["TagRead"];
@@ -1090,6 +1351,7 @@ export interface CreatorSearchHit {
   last_synced_at?: string | null;
   created_at: string;
   updated_at?: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface TagSearchHit {
@@ -1182,6 +1444,7 @@ export interface RepositorySearchHit {
   last_synced_at?: string | null;
   created_at: string;
   updated_at: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface SubscriptionSearchHit {
@@ -1206,6 +1469,7 @@ export interface SubscriptionSearchHit {
   latest_job_created_at?: string | null;
   created_at: string;
   updated_at: string;
+  matched_identity?: MatchedCreatorIdentity | null;
 }
 
 export interface SearchGroups {
@@ -1244,6 +1508,21 @@ export interface SearchResponse {
     index_lag?: number | null;
     elapsed_ms: number;
   };
+}
+
+export interface ReferenceNameAnchorRead {
+  key: string;
+  label: string;
+  kind: "latin" | "digit" | "kana" | "han" | "other";
+  offset: number | null;
+  count: number;
+}
+
+export interface ReferenceNameAnchorsRead {
+  scope: "creators" | "subscriptions";
+  direction: "asc" | "desc";
+  total: number;
+  items: ReferenceNameAnchorRead[];
 }
 
 export interface SearchAssistResponse {

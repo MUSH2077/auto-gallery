@@ -26,6 +26,9 @@ from app.api.tasks import router as tasks_router
 from app.api.operations import router as operations_router
 from app.api.users import router as users_router
 from app.api.upload import router as upload_router
+from app.api.remote_accounts import router as remote_accounts_router
+from app.api.discovery import router as discovery_router
+from app.api.remote_media import router as remote_media_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(ws_router, tags=["websocket"])
@@ -37,6 +40,9 @@ api_router.include_router(reference_router, prefix="/reference", tags=["referenc
 api_router.include_router(creators_router, prefix="/creators", tags=["creators"])
 api_router.include_router(creators_curation_router, prefix="/creators", tags=["creators"])
 api_router.include_router(subscriptions_router, prefix="/subscriptions", tags=["subscriptions"])
+api_router.include_router(remote_accounts_router, prefix="/remote-accounts", tags=["remote-accounts"])
+api_router.include_router(discovery_router, prefix="/discovery", tags=["discovery"])
+api_router.include_router(remote_media_router, prefix="/remote-media", tags=["remote-media"])
 api_router.include_router(download_jobs_router, prefix="/download-jobs", tags=["download-jobs"])
 api_router.include_router(import_jobs_router, prefix="/import-jobs", tags=["import-jobs"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])

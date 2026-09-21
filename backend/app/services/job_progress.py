@@ -81,6 +81,9 @@ def apply_import_progress(
     publish: bool = True,
     **extra: Any,
 ) -> dict[str, Any]:
+    from app.services.stage_metrics import import_metrics_progress
+
+    extra = {**import_metrics_progress(job), **extra}
     progress = make_progress(
         stage,
         message,

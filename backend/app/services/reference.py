@@ -129,6 +129,14 @@ class ReferenceService:
                 notes=link_data.get("notes"),
             ))
             created += 1
+        await self.db.flush()
+        from app.services.creator_aliases import backfill_creator_alias_batch
+
+        await backfill_creator_alias_batch(
+            self.db,
+            (creator_id,),
+            request_projection=True,
+        )
         await self.db.commit()
         return {"status": "ok", "imported": created, "artist_name": artist["name"]}
 
