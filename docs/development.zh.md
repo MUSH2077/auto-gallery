@@ -94,8 +94,10 @@ pip-compile --allow-unsafe --generate-hashes \
 ```
 
 升级依赖后运行 Provider 测试和 Docker Compose smoke 路径。
-Dependabot 会将 minor 与 patch 更新分组到同一个 PR，但每个 major 更新保持独立 PR，
-以便单独审查迁移工作与兼容性风险。
+Dependabot 每月检查一次常规更新，将 npm、pip 和 GitHub Actions 的 minor 与 patch
+更新分组，并将每个生态配置的普通版本更新 PR 限制为 1 个。major 升级通过独立计划
+执行，以便审查迁移工作与兼容性风险。安全告警和安全更新 PR 保持启用，不受常规
+版本更新允许列表限制。
 
 ### 数据库迁移
 

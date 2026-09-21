@@ -95,8 +95,11 @@ pip-compile --allow-unsafe --generate-hashes \
 ```
 
 Run provider tests and the Docker Compose smoke path after dependency updates.
-Dependabot groups minor and patch updates, but keeps each major update in a
-separate pull request so migration and compatibility work remains reviewable.
+Dependabot checks routine updates monthly, groups minor and patch updates for
+npm, pip, and GitHub Actions, and allows one open version-update pull request per
+ecosystem entry. Plan major upgrades explicitly so migration and compatibility
+work remains reviewable. Security alerts and security-update pull requests stay
+enabled and are not limited by the routine update allowlist.
 
 ### Database migrations
 
