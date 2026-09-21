@@ -1951,11 +1951,30 @@ async def test_registered_dedup_worker_uses_postgresql_scope_without_redis_lock(
         def __getattr__(self, _name):
             raise redis_lib.ConnectionError("redis unavailable")
 
+    class AvailableResourceSlice:
+        def __init__(self, cooldown_result):
+            self.cooldown_result = cooldown_result
+
+        async def __aenter__(self):
+            return SimpleNamespace(work_units=1)
+
+        async def __aexit__(self, *_args):
+            self.cooldown_result["seconds"] = 0.0
+
     task_id = None
     try:
         monkeypatch.setenv(
             "HEAVY_IO_LOCK_PATH",
             str(tmp_path / "locks" / "heavy-io.lock"),
+        )
+        # Capacity is orthogonal to this regression. A live controller pause
+        # must not turn a Redis-lock contract into a timing-dependent test.
+        monkeypatch.setattr(
+            asset_dedup,
+            "adaptive_resource_slice",
+            lambda *_args, cooldown_result, **_kwargs: AvailableResourceSlice(
+                cooldown_result
+            ),
         )
         async with async_session() as db:
             await _clear_dispatch_rows(db)
@@ -1989,7 +2008,11 @@ async def test_registered_dedup_worker_uses_postgresql_scope_without_redis_lock(
             str(task_id),
             1,
         )
-        assert result["status"] == "complete"
+        assert result["status"] == "complete", (
+            result.get("resource_state"),
+            result.get("resource_reason"),
+            result,
+        )
         async with async_session() as verify_db:
             task = await verify_db.get(TaskRun, task_id)
             scan = await verify_db.get(AssetDedupScan, scan_id)
