@@ -1,0 +1,40 @@
+{
+  "zh": {
+    "adminPanel": "管理后台",
+    "heroTitle": "把创作者、作品与同步状态收进同一个工作空间。",
+    "heroDesc": "安全访问你的私人媒体库，集中管理远端来源、导入任务与馆藏状态。",
+    "login": "登录",
+    "formDesc": "使用管理员账户进入数据与媒体工作台。",
+    "username": "用户名",
+    "usernamePlaceholder": "管理员账户",
+    "password": "密码",
+    "showPassword": "显示密码",
+    "hidePassword": "隐藏密码",
+    "loggingIn": "登录中…",
+    "loginButton": "登录",
+    "invalidCredentials": "用户名或密码错误",
+    "secureAccess": "v0.1.0 · 安全管理访问",
+    "sourceCode": "查看源代码",
+    "switchLanguage": "Switch to English",
+    "theme": { "light": "浅色", "dark": "深色", "system": "跟随系统" }
+  },
+  "en": {
+    "adminPanel": "Admin console",
+    "heroTitle": "Bring creators, works, and sync health into one workspace.",
+    "heroDesc": "Access your private media library and manage remote sources, imports, and archive health in one place.",
+    "login": "Sign in",
+    "formDesc": "Use an administrator account to enter the media workspace.",
+    "username": "Username",
+    "usernamePlaceholder": "Administrator account",
+    "password": "Password",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "loggingIn": "Signing in…",
+    "loginButton": "Sign in",
+    "invalidCredentials": "Invalid username or password",
+    "secureAccess": "v0.1.0 · secure admin access",
+    "sourceCode": "View source code",
+    "switchLanguage": "切换到中文",
+    "theme": { "light": "Light", "dark": "Dark", "system": "System" }
+  }
+}

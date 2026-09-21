@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Providers from "./providers";
 import { ADMIN_SIDEBAR_BOOTSTRAP_SCRIPT } from "@/lib/adminSidebar";
 import { X_OAUTH_CALLBACK_BOOTSTRAP_SCRIPT } from "@/lib/xOAuthCallbackBootstrap";
 import "./globals.css";
@@ -25,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="bg-subtle dark:bg-canvas text-fg antialiased min-h-screen">
-        <Providers>{children}</Providers>
+        {children}
       </body>
     </html>
   );

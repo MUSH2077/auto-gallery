@@ -13,6 +13,7 @@ import { clearPrivateDiscoveryCache, runPrivateDiscoveryRequest } from "@/lib/re
 import CandidateWorkbench from "./CandidateWorkbench";
 import RemoteAccountPanel from "./RemoteAccountPanel";
 import { safeDiscoveryError } from "./discoveryPresentation";
+import { pollInterval } from "@/lib/polling";
 
 const ACTIVE_SCAN_STATES = new Set(["enqueued", "running", "recovering", "waiting"]);
 
@@ -64,7 +65,8 @@ export default function RemoteDiscoveryPage() {
     queryFn: ({ signal }) => api.listDiscoveryScans(undefined, 0, 50, signal),
     enabled: userId > 0 && !privateAccessError,
     retry: false,
-    refetchInterval: (query) => query.state.data?.items.some((scan) => ACTIVE_SCAN_STATES.has(scan.status)) ? 2000 : false,
+    refetchInterval: (query) => query.state.data?.items.some((scan) => ACTIVE_SCAN_STATES.has(scan.status)) ? pollInterval(true) : false,
+    refetchIntervalInBackground: false,
   });
 
   useLayoutEffect(() => {

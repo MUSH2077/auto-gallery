@@ -5,7 +5,16 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import { HierarchyDeletionDialog, Modal, MotionNumber, PageShell, RepositoryCard, SourceBadge, StatusBadge, SmartSearchInput, WorkMediaThumbnail, type SlideItem } from "@/components";
+import HierarchyDeletionDialog from "@/components/HierarchyDeletionDialog";
+import Modal from "@/components/Modal";
+import MotionNumber from "@/components/MotionNumber";
+import PageShell from "@/components/PageShell";
+import RepositoryCard from "@/components/RepositoryCard";
+import SourceBadge from "@/components/SourceBadge";
+import StatusBadge from "@/components/StatusBadge";
+import { SmartSearchInput } from "@/components/SmartSearchInput";
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import type { SlideItem } from "@/components/SlideshowPlayer";
 import ActivityDotMatrix, { type ActivityDay, type ActivityTimeline } from "@/components/charts/ActivityDotMatrix";
 import BallotTally from "@/components/charts/BallotTally";
 import ChartFrame from "@/components/charts/ChartFrame";
@@ -14,7 +23,7 @@ import TickRows from "@/components/charts/TickRows";
 import { niceUnit } from "@/components/charts/chartMath";
 import type { ChartDatum, ChartSeriesPoint } from "@/components/charts/types";
 import { useSlideshow } from "@/lib/useSlideshow";
-import { POLL_IDLE_MS } from "@/lib/polling";
+import { pollInterval } from "@/lib/polling";
 import { motionConfig } from "@/lib/motion";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { useToast } from "@/components/Toast";
@@ -218,7 +227,7 @@ export default function CreatorDetailPage() {
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
-  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), refetchInterval: POLL_IDLE_MS, staleTime: POLL_IDLE_MS });
+  const stats = useQuery({ queryKey: ["creator-stats", id], queryFn: () => api.getCreatorStats(id), staleTime: 60_000 });
   const availableActivityYears = useMemo(() => {
     if (!stats.data) return [];
     const years = new Set(
@@ -252,8 +261,7 @@ export default function CreatorDetailPage() {
     },
     enabled: activityYear !== null,
     placeholderData: keepPreviousData,
-    refetchInterval: POLL_IDLE_MS,
-    staleTime: POLL_IDLE_MS,
+    staleTime: 60_000,
   });
   const works = useQuery({
     queryKey: ["creator-latest-works", id],
@@ -261,7 +269,7 @@ export default function CreatorDetailPage() {
       const result = await api.search(`creator:${id} sort:posted-desc`, 0, 6, "works");
       return result.groups.works || { total: 0, items: [] };
     },
-    refetchInterval: 15000,
+    staleTime: 60_000,
   });
   const overview = useQuery({
     queryKey: ["creator-subscription-overview", id],
@@ -269,17 +277,14 @@ export default function CreatorDetailPage() {
     refetchInterval: (query) => {
       const data = query.state.data;
       const running = data ? Math.max(data.summary.running_job_count, runningRepoCount(data.repositories)) : 0;
-      return running > 0 ? 4000 : 12000;
+      return pollInterval(running > 0);
     },
+    refetchIntervalInBackground: false,
   });
   const schedulerDecisions = useQuery({
     queryKey: [...queryKeys.schedulerDecisions, id],
     queryFn: api.schedulerDecisions,
-    refetchInterval: (query) => {
-      const hasRunning = (overview.data?.summary.running_job_count || 0) > 0;
-      const hasDue = query.state.data?.items.some((item) => item.creator_id === id && item.due);
-      return hasRunning || hasDue ? 5000 : 15000;
-    },
+    staleTime: 60_000,
   });
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "creator", id],

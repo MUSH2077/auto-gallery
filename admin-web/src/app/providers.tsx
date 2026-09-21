@@ -1,15 +1,16 @@
 "use client";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ThemeProvider, useTheme, type Theme } from "@/lib/theme";
 import { I18nProvider, useI18n, type Lang } from "@/lib/i18n";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useAppearanceSettings, type AppearanceSettings } from "@/lib/appearance";
 import { SlideshowConfigProvider, applySlideshowPreferences } from "@/lib/slideshow/config";
-import { api, queryKeys } from "@/lib/api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { ToastProvider } from "@/components/Toast";
 import { NotificationProvider } from "@/components/NotificationCenter";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+import { useJobWebSocket } from "@/lib/useWebSocket";
 
 function isTheme(v: unknown): v is Theme {
   return v === "light" || v === "dark" || v === "system";
@@ -25,43 +26,46 @@ function isLang(v: unknown): v is Lang {
  * nothing — it only needs to sit below AuthProvider/ThemeProvider/I18nProvider
  * to read their context and setters.
  *
- * `enabled: isAuthenticated` keeps this a no-op on the login page (no token
- * yet, so no /me request at all) and fires automatically the moment
- * AuthProvider's `user` state flips true after login.
+ * AuthProvider supplies the restored user payload, so this does not need a
+ * second `/me` query at layout level.
  */
 function PreferencesHydrator() {
-  const { isAuthenticated } = useAuth();
+  const { user } = useAuth();
   const { setTheme } = useTheme();
   const { setLang } = useI18n();
   const { updateSettings } = useAppearanceSettings();
   const appliedFor = useRef<string | null>(null);
 
-  const me = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe, enabled: isAuthenticated });
-
   useEffect(() => {
-    if (!me.data) return;
+    if (!user) return;
     // Apply once per distinct payload — keyed on user id + the preferences
     // blob itself, so a stable cached object (re-render without refetch)
     // doesn't reapply, but a genuinely new /me payload does.
-    const marker = `${me.data.id}:${JSON.stringify(me.data.preferences)}`;
+    const marker = `${user.id}:${JSON.stringify(user.preferences)}`;
     if (appliedFor.current === marker) return;
     appliedFor.current = marker;
 
-    const prefs = me.data.preferences || {};
+    const prefs = user.preferences || {};
     if (isTheme(prefs.theme)) setTheme(prefs.theme);
     if (isLang(prefs.lang)) setLang(prefs.lang);
     if (prefs.appearance && typeof prefs.appearance === "object") {
       updateSettings(prefs.appearance as Partial<AppearanceSettings>);
     }
     if (prefs.slideshow) applySlideshowPreferences(prefs.slideshow);
-  }, [me.data, setTheme, setLang, updateSettings]);
+  }, [user, setTheme, setLang, updateSettings]);
 
+  return null;
+}
+
+function TaskEventBridge() {
+  const { isAuthenticated } = useAuth();
+  useJobWebSocket({ enabled: isAuthenticated });
   return null;
 }
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
-    defaultOptions: { queries: { staleTime: 30000, gcTime: 300000, refetchOnWindowFocus: false, retry: 1 }, mutations: { retry: 0 } },
+    defaultOptions: { queries: { staleTime: 30000, gcTime: 300000, refetchOnWindowFocus: false, refetchIntervalInBackground: false, retry: 1 }, mutations: { retry: 0 } },
   }));
   return (
     <ErrorBoundary>
@@ -71,6 +75,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
             <AuthProvider>
               <SlideshowConfigProvider>
                 <PreferencesHydrator />
+                <TaskEventBridge />
                 <NotificationProvider>
                   <ToastProvider>{children}</ToastProvider>
                 </NotificationProvider>

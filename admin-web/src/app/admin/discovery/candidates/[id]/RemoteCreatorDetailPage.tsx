@@ -260,6 +260,8 @@ export default function RemoteCreatorDetailPage() {
             <img
               src={profile.header_image_url}
               alt=""
+              loading="eager"
+              decoding="async"
               className="h-full w-full object-cover"
             />
           ) : null}
@@ -272,6 +274,8 @@ export default function RemoteCreatorDetailPage() {
               <img
                 src={avatar}
                 alt={t("discovery.avatar_alt", { name })}
+                loading="eager"
+                decoding="async"
                 className="h-28 w-28 shrink-0 rounded-2xl border-4 border-white/85 bg-subtle object-cover shadow-xl"
               />
             ) : (

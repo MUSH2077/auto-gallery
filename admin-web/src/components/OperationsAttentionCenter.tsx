@@ -12,7 +12,11 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ErrorState, PageHeader, PageShell, SourceBadge, StatusBadge } from "@/components";
+import ErrorState from "@/components/ErrorState";
+import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
+import SourceBadge from "@/components/SourceBadge";
+import StatusBadge from "@/components/StatusBadge";
 import DomainDangerZone from "@/components/DomainDangerZone";
 import { useToast } from "@/components/Toast";
 import {

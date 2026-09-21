@@ -76,6 +76,8 @@ function MediaSide({
           <img
             src={url}
             alt={t("jobs.conflict.preview_alt", { side: label, path: item.relative_path })}
+            loading="lazy"
+            decoding="async"
             className="max-w-none origin-top-left select-none"
             style={{ transform: `scale(${zoom})` }}
             draggable={false}

@@ -1,6 +1,6 @@
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.auth import bearer_scheme, get_admin_key
@@ -17,6 +17,21 @@ router = APIRouter()
 # Resolve roots once at module load for path containment checks
 _RESOLVED_DOWNLOAD_ROOT = Path(settings.download_root).resolve()
 _RESOLVED_LIBRARY_ROOT = Path(settings.library_root).resolve()
+_PRIVATE_MEDIA_CACHE = "private, max-age=86400"
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    if not if_none_match:
+        return False
+    return any(
+        candidate == "*" or candidate.removeprefix("W/") == etag
+        for candidate in (part.strip() for part in if_none_match.split(","))
+    )
+
+
+def _thumbnail_etag(asset_id: str, response: FileResponse) -> str:
+    stat = Path(response.path).stat()
+    return f'"{asset_id}-thumb-{stat.st_mtime_ns:x}-{stat.st_size:x}"'
 
 
 def _safe_path(root: Path, relative: str) -> Path:
@@ -122,16 +137,39 @@ async def _serve(asset_id: str, size: str):
 @router.get(
     "/media/thumb/{asset_id}",
     response_class=FileResponse,
-    responses={200: {"content": {"image/webp": {}}, "description": "WebP thumbnail bytes."}},
+    responses={
+        200: {
+            "content": {"image/webp": {}},
+            "description": "WebP thumbnail bytes.",
+            "headers": {
+                "Cache-Control": {
+                    "description": "Private browser cache policy.",
+                    "schema": {"type": "string"},
+                },
+                "ETag": {
+                    "description": "Thumbnail entity tag for conditional requests.",
+                    "schema": {"type": "string"},
+                },
+            },
+        },
+        304: {"description": "Thumbnail has not changed."},
+    },
 )
-async def thumb(asset_id: str):
+async def thumb(asset_id: str, request: Request):
     """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
 
-    Thumbnails are content-addressed by asset id and never change, so they are
-    safe to cache in the browser. preview/original stay uncached (auth-gated).
+    Thumbnails are content-addressed by asset id and never change. Keep them in
+    the signed-in browser cache, but out of shared intermediary caches.
     """
     resp = await _serve(asset_id, "thumb")
-    resp.headers["Cache-Control"] = "public, max-age=86400"
+    etag = _thumbnail_etag(asset_id, resp)
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(
+            status_code=304,
+            headers={"Cache-Control": _PRIVATE_MEDIA_CACHE, "ETag": etag},
+        )
+    resp.headers["Cache-Control"] = _PRIVATE_MEDIA_CACHE
+    resp.headers["ETag"] = etag
     return resp
 
 

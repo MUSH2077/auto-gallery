@@ -14,6 +14,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { NotificationBell } from "@/components/NotificationCenter";
 import CommandPalette from "@/components/CommandPalette";
 import { api, queryKeys } from "@/lib/api";
+import { pollInterval } from "@/lib/polling";
 
 function UserMenu() {
   const t = useT();
@@ -133,7 +134,7 @@ export default function AppTopBar({
     queryFn: ({ signal }) => api.operationsOverview("attention", signal),
     enabled: showOperations,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: (query) => pollInterval((query.state.data?.summary?.active || 0) > 0),
     refetchIntervalInBackground: false,
   });
   const [commandOpen, setCommandOpen] = useState(false);

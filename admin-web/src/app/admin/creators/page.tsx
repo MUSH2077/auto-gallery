@@ -2,7 +2,28 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
+import PageHeader from "@/components/PageHeader";
+import PageSection from "@/components/PageSection";
+import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
+import HierarchyDeletionDialog from "@/components/HierarchyDeletionDialog";
+import Modal from "@/components/Modal";
+import FilterBar from "@/components/FilterBar";
+import SelectionBar from "@/components/SelectionBar";
+import PageShell from "@/components/PageShell";
+import PermissionGuard from "@/components/PermissionGuard";
+import { EntityRow } from "@/components/EntityList";
+import RowActionMenu from "@/components/RowActionMenu";
+import { SmartSearchInput, useSearchBatchComposer } from "@/components/SmartSearchInput";
+import CompactSelectionCheckbox from "@/components/CompactSelectionCheckbox";
+import ReferenceSortControl from "@/components/ReferenceSortControl";
+import ReferenceNameRail, { ReferenceListLayout } from "@/components/ReferenceNameRail";
+import VirtualReferenceList, {
+  type VirtualReferenceListHandle,
+  type VirtualReferenceListState,
+  type VirtualReferencePage,
+} from "@/components/VirtualReferenceList";
+import MatchedIdentityBadge from "@/components/MatchedIdentityBadge";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useT } from "@/lib/i18n";

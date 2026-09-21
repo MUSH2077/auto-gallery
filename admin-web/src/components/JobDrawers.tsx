@@ -3,7 +3,12 @@ import Link from "next/link";
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DownloadJob, ImportJob, queryKeys } from "@/lib/api";
-import { ConfirmDialog, DownloadConflictDialog, ErrorState, StatusBadge, SourceBadge, SyncOutcomeNotice } from "@/components";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import DownloadConflictDialog from "@/components/DownloadConflictDialog";
+import ErrorState from "@/components/ErrorState";
+import StatusBadge from "@/components/StatusBadge";
+import SourceBadge from "@/components/SourceBadge";
+import { SyncOutcomeNotice } from "@/components/SyncOutcomeBadge";
 import { useT, type TFunction } from "@/lib/i18n";
 import { usePresence, motionTokens } from "@/lib/motion";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -90,7 +95,7 @@ export function TaskDetailDrawer({
         ? POLL_ACTIVE_MS
         : false;
     },
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
   });
   const taskAction = useMutation({
     mutationFn: async (action: "pause" | "resume" | "cancel" | "delete" | "acknowledge" | "repeat_sync") => {

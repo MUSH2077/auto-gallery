@@ -5,7 +5,13 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type RemoteWorkState } from "@/lib/api";
-import { AssetFilmstrip, AssetViewer, WorkMediaThumbnail, PageHeader, PageShell, SourceBadge, ErrorState, EmptyState } from "@/components";
+import { AssetFilmstrip } from "@/components/work-interactions";
+import { AssetViewer, WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
+import SourceBadge from "@/components/SourceBadge";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 import { Breadcrumb } from "@/components/Breadcrumb";
 import { usePermissions } from "@/lib/usePermissions";
 import { FullImageLightbox, ArrowIcon, DisclosurePanel, type AssetData } from "@/components/WorkViewerParts";
@@ -14,6 +20,7 @@ import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { Star } from "lucide-react";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { formatMediaDuration } from "@/lib/media";
+import { pollInterval } from "@/lib/polling";
 
 interface WorkSourceData {
   id: string;
@@ -53,7 +60,8 @@ function WorkViewerShell({ workId }: { workId: string }) {
     queryFn: () => api.getWorkAssets(workId),
     refetchInterval: (query) => query.state.data?.some(
       (asset) => asset.derivative_status === "pending" || asset.derivative_status === "processing",
-    ) ? 15_000 : false,
+    ) ? pollInterval(true) : false,
+    refetchIntervalInBackground: false,
   });
   const [activeIndex, setActiveIndex] = useState(0);
   const [fullAsset, setFullAsset] = useState<AssetData | null>(null);

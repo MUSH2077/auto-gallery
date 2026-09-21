@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useMemo, useRef, Suspense } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +9,16 @@ import { api, queryKeys, WorkListItem, type SearchQualifierToken, type SearchRes
 import type { MediaDerivativeProgress, WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
-import { PageHeader, EmptyState, ErrorState, SourceBadge, PageShell, SelectionBar, SmartSearchInput, WorkMediaThumbnail, WorkPreviewOverlay, PermissionGuard, useSearchComposer, type SlideItem } from "@/components";
+import PageHeader from "@/components/PageHeader";
+import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
+import SourceBadge from "@/components/SourceBadge";
+import PageShell from "@/components/PageShell";
+import SelectionBar from "@/components/SelectionBar";
+import { SmartSearchInput, useSearchComposer } from "@/components/SmartSearchInput";
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import PermissionGuard from "@/components/PermissionGuard";
+import type { SlideItem } from "@/components/SlideshowPlayer";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -16,6 +26,12 @@ import { Star } from "lucide-react";
 import { searchUrl } from "@/lib/search-query";
 import { resolveMediaKind } from "@/lib/media";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import { pollInterval } from "@/lib/polling";
+
+const WorkPreviewOverlay = dynamic(
+  () => import("@/components/work-interactions").then((module) => module.WorkPreviewOverlay),
+  { ssr: false },
+);
 
 type PreviewState = {
   work: WorkListItem;
@@ -69,6 +85,7 @@ function WorkCard({
   onPreviewPage,
   canCurate,
   canPurge,
+  eager = false,
 }: {
   w: WorkListItem;
   onToggleFavorite: (id: string) => void;
@@ -88,6 +105,7 @@ function WorkCard({
   onPreviewPage: (workId: string, pageIndex: number) => void;
   canCurate: boolean;
   canPurge: boolean;
+  eager?: boolean;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
@@ -136,7 +154,11 @@ function WorkCard({
     <article
       ref={cardRef}
       className={`card-interactive media-motion-card relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={entrance?.style}
+      style={{
+        ...entrance?.style,
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 260px",
+      }}
       onMouseEnter={() => {
         onCancelClosePreview();
         clearHoverTimer();
@@ -153,7 +175,7 @@ function WorkCard({
         className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
       <div className="media-motion-visual pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
-        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} />
+        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} eager={eager} />
         {selectable && (
           <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
             <span className="sr-only">{t("works.select_work")}</span>
@@ -444,8 +466,9 @@ function WorksContent() {
     queryFn: ({ signal }) => api.getMediaDerivativeProgress(signal),
     staleTime: 10_000,
     refetchInterval: (query) => (
-      (query.state.data?.remaining ?? 0) > 0 ? 15_000 : false
+      (query.state.data?.remaining ?? 0) > 0 ? pollInterval(true) : false
     ),
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
@@ -507,7 +530,8 @@ function WorksContent() {
     staleTime: 60000,
     refetchInterval: (query) => query.state.data?.some(
       (asset) => asset.derivative_status === "pending" || asset.derivative_status === "processing",
-    ) ? 15_000 : false,
+    ) ? pollInterval(true) : false,
+    refetchIntervalInBackground: false,
   });
   const previewAssetIds = useMemo(
     () => previewAssets.data?.length
@@ -864,6 +888,7 @@ function WorksContent() {
               }}
               canCurate={canCurate}
               canPurge={isAdmin}
+              eager={i < 8}
             />
           ))}
         </div>
@@ -878,7 +903,7 @@ function WorksContent() {
             <div
               key={w.id}
               className={`${entrance.className} flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`}
-              style={entrance.style}
+              style={{ ...entrance.style, contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
               onClick={() => router.push(`/admin/works/${w.id}`)}
             >
               {canCurate && curationVisibility === "visible" && (
@@ -892,7 +917,7 @@ function WorksContent() {
                 />
               )}
               <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={w.thumbnail_asset_id ? t("media.derivative_pending") : t("works.na")} />
+                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={w.thumbnail_asset_id ? t("media.derivative_pending") : t("works.na")} eager={index < 8} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">

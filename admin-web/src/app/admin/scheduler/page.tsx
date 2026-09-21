@@ -30,8 +30,8 @@ import {
 } from "@/lib/api";
 import { useT, type TFunction } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
-import { useJobWebSocket } from "@/lib/useWebSocket";
-import { POLL_ACTIVE_MS } from "@/lib/polling";
+import { useJobEvents } from "@/lib/useWebSocket";
+import { pollInterval } from "@/lib/polling";
 import { secureRandomUuid } from "@/lib/random";
 import {
   scheduleModeLabel,
@@ -440,13 +440,15 @@ function SchedulerContent() {
     queryFn: api.queueStats,
     refetchInterval: (query) => {
       const active = query.state.data?.scheduler_loop?.active;
-      return active && (active.started > 0 || active.queued > 0) ? 10_000 : 30_000;
+      return pollInterval(!!active && (active.started > 0 || active.queued > 0));
     },
+    refetchIntervalInBackground: false,
   });
   const attention = useQuery({
     queryKey: [...queryKeys.schedulerDecisions, "attention", attentionPage, PLAN_PAGE_SIZE],
     queryFn: () => api.schedulerDecisionsView("attention", (attentionPage - 1) * PLAN_PAGE_SIZE, PLAN_PAGE_SIZE),
-    refetchInterval: 30_000,
+    refetchInterval: () => pollInterval(false),
+    refetchIntervalInBackground: false,
   });
   const plans = useQuery({
     queryKey: [...queryKeys.schedulerDecisions, "all", page, PLAN_PAGE_SIZE, search, stateFilter],
@@ -460,8 +462,8 @@ function SchedulerContent() {
     queryFn: () => api.getTask(batchIntent?.taskId || ""),
     enabled: !!batchIntent?.taskId,
     retry: false,
-    refetchInterval: (query) => schedulerBatchSettled(query.state.data) ? false : POLL_ACTIVE_MS,
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) => schedulerBatchSettled(query.state.data) ? false : pollInterval(true),
+    refetchIntervalInBackground: false,
   });
 
   const batchItems = useInfiniteQuery({
@@ -474,8 +476,7 @@ function SchedulerContent() {
     },
     enabled: !!batchIntent?.taskId && !batchTask.error,
     retry: false,
-    refetchInterval: () => schedulerBatchSettled(batchTask.data) ? false : POLL_ACTIVE_MS,
-    refetchIntervalInBackground: true,
+    refetchInterval: false,
   });
   const batchItemList = useMemo(
     () => batchItems.data?.pages.flatMap((page) => page.items) || [],
@@ -503,7 +504,7 @@ function SchedulerContent() {
     persistBatchIntent({ ...batchIntent, trackedMode: authoritativeBatchMode });
   }, [authoritativeBatchMode, batchIntent, persistBatchIntent]);
 
-  useJobWebSocket({
+  useJobEvents({
     enabled: !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data),
     onStatusChange: (message) => {
       const taskId = batchIntent?.taskId;

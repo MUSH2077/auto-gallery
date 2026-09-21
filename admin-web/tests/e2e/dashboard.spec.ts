@@ -77,6 +77,8 @@ const WORKBENCH = {
         creator_name: "Atlas Ink",
         subscription_name: "Atlas archive",
         status: "failed",
+        available_actions: ["retry", "repeat_sync"],
+        disabled_reasons: {},
         pipeline_stage: "download",
         created_at: "2026-07-28T08:20:00Z",
         updated_at: "2026-07-28T08:24:00Z",
@@ -120,6 +122,8 @@ const WORKBENCH = {
         source: "danbooru",
         creator_name: "Harbor Archive",
         status: "failed",
+        available_actions: ["retry"],
+        disabled_reasons: {},
         progress_stage: "indexing",
         created_at: "2026-07-28T08:18:00Z",
         updated_at: "2026-07-28T08:21:00Z",
@@ -179,6 +183,9 @@ async function installDashboardRoutes(
     calls?: string[];
   } = {},
 ) {
+  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+    webSocket.send(JSON.stringify({ type: "connected" }));
+  });
   await context.addCookies([{
     name: "ag_token",
     value: "dashboard-test-token",

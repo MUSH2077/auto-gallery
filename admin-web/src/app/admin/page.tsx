@@ -2,7 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ConfirmDialog, ErrorState, PageShell, useToast } from "@/components";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import ErrorState from "@/components/ErrorState";
+import PageShell from "@/components/PageShell";
+import { useToast } from "@/components/Toast";
 import {
   ActivityPanel,
   AttentionBanner,
@@ -45,12 +48,7 @@ export default function Dashboard() {
   const workbench = useQuery({
     queryKey: queryKeys.workbench,
     queryFn: api.workbench,
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const active = (data?.queue.active_download_count || 0)
-        + (data?.queue.active_import_count || 0);
-      return active > 0 ? 5000 : 15000;
-    },
+    refetchInterval: false,
   });
 
   const refresh = useMutation({

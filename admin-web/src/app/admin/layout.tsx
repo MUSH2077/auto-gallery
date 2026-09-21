@@ -15,6 +15,7 @@ import {
   SIDEBAR_MID_KEY,
   SIDEBAR_WIDE_KEY,
 } from "@/lib/adminSidebar";
+import Providers from "@/app/providers";
 
 export const dynamic = 'force-dynamic';
 
@@ -253,14 +254,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   const t = useT();
-  const pathname = usePathname();
-  const isLoginPage = pathname === "/admin/login";
-
-  if (isLoginPage) {
-    return <ErrorBoundary>{children}</ErrorBoundary>;
-  }
 
   return (
     <ErrorBoundary>
@@ -270,4 +265,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </AuthGuard>
     </ErrorBoundary>
   );
+}
+
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  return <Providers><AdminLayoutContent>{children}</AdminLayoutContent></Providers>;
 }

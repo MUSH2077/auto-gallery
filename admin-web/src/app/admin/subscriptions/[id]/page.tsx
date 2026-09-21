@@ -11,6 +11,7 @@ import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/l
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { pollInterval } from "@/lib/polling";
 
 function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void }) {
   const [source, setSource] = useState("pixiv"); const [sourceUrl, setSourceUrl] = useState(""); const [sourceCreatorId, setSourceCreatorId] = useState("");
@@ -83,15 +84,18 @@ export default function SubscriptionDetailPage() {
   const summaries = useQuery({
     queryKey: queryKeys.subscriptions.summaries([id]),
     queryFn: () => api.subscriptionSummaries([id]),
-    refetchInterval: 15000,
+    refetchInterval: (query) => pollInterval(
+      (query.state.data?.items || []).some((item) => item.active_count > 0),
+    ),
+    refetchIntervalInBackground: false,
   });
-  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), refetchInterval: 12000 });
+  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), staleTime: 60_000 });
   const decisions = useInfiniteQuery({
     queryKey: [...queryKeys.schedulerDecisions, "subscription", id],
     queryFn: ({ pageParam }) => api.schedulerDecisionsForSubscriptions([id], pageParam, 100),
     initialPageParam: 0,
     getNextPageParam: (last) => last.next_offset ?? undefined,
-    refetchInterval: 15000,
+    staleTime: 60_000,
   });
   const providerInfos = useQuery({ queryKey: queryKeys.sources, queryFn: api.sources });
   const creator = useQuery({

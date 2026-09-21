@@ -1,12 +1,25 @@
 "use client";
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { PageHeader, PageShell, EmptyState, ErrorState, Modal, Pagination, PermissionGuard, SmartSearchInput, TagBubbleChart } from "@/components";
+import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
+import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
+import Modal from "@/components/Modal";
+import Pagination from "@/components/Pagination";
+import PermissionGuard from "@/components/PermissionGuard";
+import { SmartSearchInput } from "@/components/SmartSearchInput";
 import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
+
+const TagBubbleChart = dynamic(() => import("@/components/TagBubbleChart"), {
+  ssr: false,
+  loading: () => <div className="h-72 animate-pulse rounded-md bg-subtle" aria-hidden="true" />,
+});
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
 const PAGE_SIZE = 100;

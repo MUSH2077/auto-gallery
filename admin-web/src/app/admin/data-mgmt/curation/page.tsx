@@ -13,6 +13,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { useAdminOperation } from "@/lib/useAdminOperation";
 import { usePermissions } from "@/lib/usePermissions";
+import { pollInterval } from "@/lib/polling";
 
 type BackfillResult = {
   status: string;
@@ -173,11 +174,12 @@ function CurationContent() {
   const purgePreview = useQuery({
     queryKey: [...queryKeys.curation.all, "purge-preview"],
     queryFn: () => api.previewPurge(),
-    refetchInterval: 30000,
+    refetchInterval: () => pollInterval(false),
+    refetchIntervalInBackground: false,
     enabled: isAdmin,
   });
   const suggestions = useQuery({ queryKey: queryKeys.curation.suggestions, queryFn: api.curationRuleSuggestions });
-  const backfillStatus = useQuery({ queryKey: queryKeys.curation.backfillStatus, queryFn: api.getCurationBackfillStatus, refetchInterval: 30000 });
+  const backfillStatus = useQuery({ queryKey: queryKeys.curation.backfillStatus, queryFn: api.getCurationBackfillStatus, refetchInterval: () => pollInterval(false), refetchIntervalInBackground: false });
   const commitItems = commits.data?.items ?? [];
   const suggestionItems = suggestions.data ?? [];
   const commitEntrance = useStaggeredEntrance(commitItems.map((commit) => commit.id));

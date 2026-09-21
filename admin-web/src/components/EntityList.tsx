@@ -60,7 +60,11 @@ export function EntityRow({
       aria-posinset={positionInSet}
       aria-setsize={setSize}
       className={entrance?.className}
-      style={entrance?.style}
+      style={{
+        ...entrance?.style,
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 72px",
+      }}
     >
       <div
         role="link"

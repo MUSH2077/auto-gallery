@@ -14,6 +14,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { authHealthPresentation, hasActionableAuthFailure } from "@/lib/auth-health";
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
+import { pollInterval } from "@/lib/polling";
 
 type TabKey = "overview" | "content" | "history" | "settings";
 
@@ -374,8 +375,8 @@ export default function RepositoryDetailPage() {
   const [deleteFiles, setDeleteFiles] = useState(false);
   const tagLimit = 50;
 
-  const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: 12000 });
-  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: () => pollInterval(false), refetchIntervalInBackground: false });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, staleTime: 60_000 });
   const repositoryTags = useQuery({
     queryKey: queryKeys.repositories.tags(id, tagPage),
     queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
