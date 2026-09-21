@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.services.artifact_ledger import ArtifactLedger, managed_artifact_row
 from app.services.heavy_io import LocalHeavyIOLock
+from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.work_import import WorkImportService
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ async def request_import_projection(
     )
     existing = {row.work_id: row for row in existing_rows}
     now = _now()
+    needs_wake = False
     for record, work_id in zip(records, work_ids, strict=True):
         row = existing.get(work_id)
         if row is None:
@@ -79,6 +81,7 @@ async def request_import_projection(
                     metadata_available_at=now,
                 )
             )
+            needs_wake = True
             continue
 
         # Existing works can legitimately receive upstream metadata changes or
@@ -106,6 +109,11 @@ async def request_import_projection(
             row.metadata_lease_token = None
             row.metadata_completed_at = None
             row.metadata_last_error = None
+        needs_wake = needs_wake or row.state in {"pending", "failed"} or (
+            row.metadata_state in {"pending", "failed"}
+        )
+    if needs_wake:
+        mark_outbox_wake_pending(db, "import_projection")
     return len(work_ids)
 
 

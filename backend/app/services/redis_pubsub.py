@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.redis_client import get_redis
+from app.services.workbench_cache import bump_workbench_generation
 
 
 _CLAIM_PUBLISHER_FENCE_SCRIPT = """
@@ -157,6 +158,7 @@ class TaskEventPublisher:
         r = get_redis()
         r.publish(TaskChannel.task_events(task_type), payload)
         r.publish(TaskChannel.all_events(), payload)
+        bump_workbench_generation(r)
 
     # ── progress ───────────────────────────────────
 

@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.services.image_utils import can_compute_phash, can_generate_thumbnail
 from app.services.media_assets import browser_video_mime_type, render_video_derivatives
+from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.thumbnail import inspect_and_generate_thumbnail
 from app.services.work_import import WorkImportService
 
@@ -169,6 +170,7 @@ async def request_media_derivatives(
                 },
             )
         )
+    mark_outbox_wake_pending(db, "media")
     return len(by_asset)
 
 
@@ -576,6 +578,7 @@ async def _complete(request: dict[str, Any], values: dict[str, Any]) -> bool:
                 )
                 .on_conflict_do_nothing(index_elements=["idempotency_key"])
             )
+            mark_outbox_wake_pending(db, "dedup")
         await db.commit()
         return True
 

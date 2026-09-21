@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, exists, func, or_, select, text
+from sqlalchemy import and_, delete, exists, func, literal_column, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -43,6 +43,7 @@ from app.services.asset_dedup_scope import (
     scope_error_message,
 )
 from app.services.media_signing import signed_media_url
+from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.settings import extractor_key_for_source
 
 
@@ -55,6 +56,7 @@ AUTO_MERGE_SCORE = 95.0
 REVIEW_MIN_SCORE = 70.0
 QUARANTINE_DAYS = 30
 MAX_CANDIDATES_PER_ASSET = 250
+PHASH_BANDS = ((1, 3), (4, 3), (7, 3), (10, 3), (13, 4))
 
 IMAGE_MIME_TYPES = {
     "image/jpeg",
@@ -71,6 +73,30 @@ class StaleDedupCase(ValueError):
 
 class DedupIdempotencyConflict(ValueError):
     pass
+
+
+def phash_candidate_conditions(asset: Asset) -> tuple:
+    """Return band predicates matching the deployed expression indexes."""
+
+    if not asset.phash:
+        return ()
+    phash_version_matches = (
+        Asset.phash_version.is_(None)
+        if asset.phash_version is None
+        else Asset.phash_version == asset.phash_version
+    )
+    return tuple(
+        and_(
+            phash_version_matches,
+            func.substr(
+                Asset.phash,
+                literal_column(str(start)),
+                literal_column(str(length)),
+            )
+            == asset.phash[start - 1 : start - 1 + length],
+        )
+        for start, length in PHASH_BANDS
+    )
 
 
 @dataclass(frozen=True)
@@ -610,20 +636,7 @@ class AssetReconciliation:
         conditions = []
         if asset.sha256:
             conditions.append(Asset.sha256 == asset.sha256)
-        if asset.phash:
-            phash_version_matches = (
-                Asset.phash_version.is_(None)
-                if asset.phash_version is None
-                else Asset.phash_version == asset.phash_version
-            )
-            for start, length in ((1, 3), (4, 3), (7, 3), (10, 3), (13, 4)):
-                conditions.append(
-                    and_(
-                        phash_version_matches,
-                        func.substr(Asset.phash, start, length)
-                        == asset.phash[start - 1 : start - 1 + length],
-                    )
-                )
+        conditions.extend(phash_candidate_conditions(asset))
         if not conditions:
             return []
 
@@ -1217,6 +1230,8 @@ class AssetReconciliation:
                 actions += 1
                 bytes_reclaimable += int(asset.file_size or 0)
         await self.db.flush()
+        if actions:
+            mark_outbox_wake_pending(self.db, "dedup")
         return group.id, representative.id, actions, bytes_reclaimable
 
     async def _asset_payload(self, asset_id: UUID) -> dict[str, Any]:

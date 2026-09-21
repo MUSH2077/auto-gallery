@@ -24,6 +24,7 @@ from app.database import async_session
 from app.models.search_projection_outbox import SearchProjectionOutbox
 from app.models.repository_sync_receipt import SearchIndexState
 from app.services.cache import cache_bump_generation
+from app.services.outbox_coordinator import mark_outbox_wake_pending
 
 
 OUTBOX_SQL_BATCH_SIZE = 500
@@ -324,6 +325,8 @@ async def request_search_projection(
         mark_works_generation_pending(db)
     for projection_uid in changed_indexes:
         await _mark_index_changed(db, projection_uid)
+    if requested:
+        mark_outbox_wake_pending(db, "search")
     return requested
 
 
@@ -354,6 +357,8 @@ async def enqueue_projection_events(
             await _mark_index_changed(db, index_uid)
         if requested and index_uid == DEFAULT_WORKS_INDEX_UID:
             db.info[_WORKS_GENERATION_PENDING] = True
+        if requested:
+            mark_outbox_wake_pending(db, "search")
         await db.commit()
     return requested
 

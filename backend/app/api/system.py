@@ -35,6 +35,7 @@ from app.services.settings import get_scheduler_config
 from app.services.subscription_calendar import effective_calendar_rule
 from app.services.sync_outcome import download_job_outcome
 from app.services.auth_health import auth_attention_counts
+from app.services.workbench_cache import read_workbench_generation
 
 try:
     from zoneinfo import ZoneInfo
@@ -199,9 +200,60 @@ async def _quick_service_health(db: AsyncSession) -> dict:
     return services
 
 
-async def _count_statuses(db: AsyncSession, model, statuses: set[str]) -> int:
-    result = await db.execute(select(func.count(model.id)).where(model.status.in_(statuses)))
-    return int(result.scalar() or 0)
+async def _job_status_counts(db: AsyncSession) -> dict[str, int]:
+    """Aggregate all workbench job counters with one round trip and two scans."""
+
+    downloads = (
+        select(
+            func.count(DownloadJob.id)
+            .filter(DownloadJob.status.in_(DOWNLOAD_RUNNING_STATUSES))
+            .label("active_download_count"),
+            func.count(DownloadJob.id)
+            .filter(DownloadJob.status.in_(FAILED_STATUSES))
+            .label("failed_download_count"),
+            func.count(DownloadJob.id)
+            .filter(DownloadJob.status == "stale")
+            .label("stale_download_count"),
+        )
+        .select_from(DownloadJob)
+        .subquery()
+    )
+    imports = (
+        select(
+            func.count(ImportJob.id)
+            .filter(ImportJob.status.in_(IMPORT_RUNNING_STATUSES))
+            .label("active_import_count"),
+            func.count(ImportJob.id)
+            .filter(ImportJob.status.in_(FAILED_STATUSES))
+            .label("failed_import_count"),
+            func.count(ImportJob.id)
+            .filter(ImportJob.status == "stale")
+            .label("stale_import_count"),
+        )
+        .select_from(ImportJob)
+        .subquery()
+    )
+    row = (
+        await db.execute(
+            select(
+                downloads.c.active_download_count,
+                downloads.c.failed_download_count,
+                downloads.c.stale_download_count,
+                imports.c.active_import_count,
+                imports.c.failed_import_count,
+                imports.c.stale_import_count,
+            )
+        )
+    ).one()
+    keys = (
+        "active_download_count",
+        "failed_download_count",
+        "stale_download_count",
+        "active_import_count",
+        "failed_import_count",
+        "stale_import_count",
+    )
+    return {key: int(value or 0) for key, value in zip(keys, row, strict=True)}
 
 
 def _provider_state(source: str, source_url: str | None) -> dict:
@@ -329,6 +381,7 @@ async def _count_active_rebuilds() -> int:
 _workbench_cache: dict | None = None
 _workbench_cache_ts: float = 0.0
 _workbench_cache_actor = None
+_workbench_cache_generation: int | None = None
 _WORKBENCH_CACHE_TTL = 10.0
 
 
@@ -340,11 +393,17 @@ async def workbench_summary(
 ):
     """Read-only dashboard aggregation for the live admin workbench."""
     global _workbench_cache, _workbench_cache_ts, _workbench_cache_actor
+    global _workbench_cache_generation
     actor = (user.id, user.is_admin, tuple(sorted(user.permissions or [])))
     _now_mono = time.monotonic()
+    generation = await asyncio.to_thread(read_workbench_generation)
     if (
         not refresh
         and _workbench_cache_actor == actor
+        and (
+            generation is None
+            or generation == _workbench_cache_generation
+        )
         and _workbench_cache is not None
         and (_now_mono - _workbench_cache_ts) < _WORKBENCH_CACHE_TTL
     ):
@@ -368,19 +427,13 @@ async def workbench_summary(
         storage_risk = "critical" if free_pct < 5 else "warning" if free_pct < 15 else "ok"
     queue_payload = await _queue_stats_payload()
     scheduler_config = await get_scheduler_config(db)
-    active_download_count = await _count_statuses(db, DownloadJob, DOWNLOAD_RUNNING_STATUSES)
-    failed_download_count = await _count_statuses(db, DownloadJob, FAILED_STATUSES)
-    stale_download_rows = await db.execute(
-        select(func.count(DownloadJob.id)).where(DownloadJob.status == "stale")
-    )
-    stale_download_count = int(stale_download_rows.scalar() or 0)
-
-    active_import_count = await _count_statuses(db, ImportJob, IMPORT_RUNNING_STATUSES)
-    failed_import_count = await _count_statuses(db, ImportJob, FAILED_STATUSES)
-    stale_import_rows = await db.execute(
-        select(func.count(ImportJob.id)).where(ImportJob.status == "stale")
-    )
-    stale_import_count = int(stale_import_rows.scalar() or 0)
+    job_counts = await _job_status_counts(db)
+    active_download_count = job_counts["active_download_count"]
+    failed_download_count = job_counts["failed_download_count"]
+    stale_download_count = job_counts["stale_download_count"]
+    active_import_count = job_counts["active_import_count"]
+    failed_import_count = job_counts["failed_import_count"]
+    stale_import_count = job_counts["stale_import_count"]
 
     auth_counts = await auth_attention_counts(db)
 
@@ -564,6 +617,7 @@ async def workbench_summary(
         },
     }
     _workbench_cache_actor = actor
+    _workbench_cache_generation = generation
     _workbench_cache = payload
     _workbench_cache_ts = time.monotonic()
     return payload

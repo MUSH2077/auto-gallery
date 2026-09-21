@@ -29,6 +29,8 @@ SUPERVISOR_STATUS_INTERVAL_SECONDS = 5
 SUPERVISOR_STABLE_HEARTBEAT_SECONDS = 30
 WORKER_SUPERVISOR_HASH_KEY = "worker:supervisors:v1"
 SCHEDULER_WATCHDOG_INTERVAL_SECONDS = 60
+OUTBOX_FALLBACK_INTERVAL_SECONDS = 60
+OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS = 30
 
 
 def resolve_concurrency(db_value, argv_value, default=3, lo=1, hi=5):
@@ -265,6 +267,44 @@ def _sweep_personal_auth_startup(queues: list[str]) -> int:
     return sweep_abandoned_personal_auth_configs()
 
 
+def run_outbox_control_plane_tick(
+    *,
+    fallback: bool,
+    refresh_health: bool,
+) -> dict:
+    """Run the unique scheduler-owned durable outbox maintenance tick."""
+
+    import asyncio
+
+    from app.database import async_session, engine
+    from app.services.outbox_coordinator import (
+        cleanup_completed_outboxes,
+        outbox_readiness,
+        publish_outbox_health,
+        wake_pending_outboxes,
+    )
+
+    async def _run() -> dict:
+        outcome: dict = {}
+        try:
+            async with async_session() as db:
+                if refresh_health:
+                    outcome["health"] = await publish_outbox_health(db)
+                if fallback:
+                    readiness = await outbox_readiness(db)
+                    outcome["readiness"] = readiness
+                    if any(readiness.values()):
+                        outcome["wake"] = wake_pending_outboxes(readiness)
+                    outcome["cleanup"] = await cleanup_completed_outboxes(db)
+        finally:
+            # asyncio.run creates a fresh loop for every supervisor tick.  Do
+            # not retain asyncpg connections bound to the now-closed loop.
+            await engine.dispose()
+        return outcome
+
+    return asyncio.run(_run())
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <queue_name> [concurrency]", file=sys.stderr)
@@ -328,6 +368,8 @@ def main():
     last_exit: dict | None = None
     last_status_at = 0.0
     last_scheduler_watchdog_at = 0.0
+    last_outbox_fallback_at = 0.0
+    last_outbox_health_at = 0.0
 
     worker_specs = build_worker_specs(
         queues,
@@ -428,6 +470,38 @@ def main():
                     flush=True,
                 )
             last_scheduler_watchdog_at = now
+        if "scheduled" in supervised_queues:
+            fallback_due = (
+                now - last_outbox_fallback_at >= OUTBOX_FALLBACK_INTERVAL_SECONDS
+            )
+            health_due = (
+                now - last_outbox_health_at
+                >= OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS
+            )
+            if fallback_due or health_due:
+                try:
+                    result = run_outbox_control_plane_tick(
+                        fallback=fallback_due,
+                        refresh_health=health_due,
+                    )
+                    wake = result.get("wake") or {}
+                    cleanup = result.get("cleanup") or {}
+                    if wake.get("enqueued") or cleanup.get("deleted"):
+                        print(
+                            "[worker_entrypoint] outbox control-plane "
+                            f"wake={wake} cleanup={cleanup}",
+                            flush=True,
+                        )
+                except Exception as exc:  # noqa: BLE001 - retry next tick
+                    print(
+                        f"[worker_entrypoint] outbox control-plane failed: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                if fallback_due:
+                    last_outbox_fallback_at = now
+                if health_due:
+                    last_outbox_health_at = now
         for managed in list(processes):
             process = managed.process
             return_code = process.poll()

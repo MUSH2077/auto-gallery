@@ -316,30 +316,6 @@ async def lifespan(app: FastAPI):
     admin_dispatch_recovery_task = asyncio.create_task(admin_dispatch_recovery_loop())
     logger.info("Admin TaskRun dispatch recovery started (every 30s, grace 15s, batch 25)")
 
-    async def outbox_coordinator_loop():
-        # HTTP workers only publish bounded wake-ups. libvips/ffmpeg/Gitllery
-        # and deep dedup always execute in an RQ workhorse with a resource
-        # profile; an idle system performs one compact SQL snapshot and zero
-        # Redis writes per cycle.
-        while True:
-            await asyncio.sleep(15)
-            try:
-                from app.services.outbox_coordinator import (
-                    outbox_counts,
-                    wake_pending_outboxes,
-                )
-
-                async with async_session() as db:
-                    counts = await outbox_counts(db, ready_only=True)
-                if any(counts.values()):
-                    result = wake_pending_outboxes(counts)
-                    logger.info("Pipeline outbox coordinator", counts=counts, **result)
-            except Exception:
-                logger.warning("Pipeline outbox coordinator failed", exc_info=True)
-
-    outbox_coordinator_task = asyncio.create_task(outbox_coordinator_loop())
-    logger.info("Pipeline outbox coordinator started (15s snapshots)")
-
     # ── Memory monitor — logs RSS so an OOM leaves a visible climb in the
     #    logs + the last thing that was happening. WARNs past a threshold. ──
     async def memory_monitor_loop():
@@ -412,7 +388,6 @@ async def lifespan(app: FastAPI):
     import_recovery_task.cancel()
     download_dispatch_recovery_task.cancel()
     admin_dispatch_recovery_task.cancel()
-    outbox_coordinator_task.cancel()
     memory_task.cancel()
     resource_pressure_task.cancel()
     health_aggregation_task.cancel()
@@ -438,10 +413,6 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await admin_dispatch_recovery_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await outbox_coordinator_task
     except asyncio.CancelledError:
         pass
     try:
@@ -1019,10 +990,9 @@ async def _build_health_snapshot() -> dict:
             "auth_unhealthy_sources": auth_counts["auth_actionable_count"],
             **auth_counts,
         }
-        from app.services.outbox_coordinator import outbox_health
+        from app.services.outbox_coordinator import read_published_outbox_health
 
-        async with async_session() as session:
-            business["outboxes"] = await outbox_health(session)
+        business["outboxes"] = read_published_outbox_health()
     except Exception:
         logger.debug("Business DB health skipped", exc_info=True)
 

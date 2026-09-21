@@ -19,7 +19,10 @@ from app.services.import_projection import (
     _release_metadata_locks,
     process_import_projection_outbox,
 )
-from app.services.outbox_coordinator import outbox_counts, outbox_health
+from app.services.outbox_coordinator import (
+    _load_outbox_health,
+    outbox_readiness_statement,
+)
 from app.services.work_import import WorkImportService
 
 
@@ -112,8 +115,13 @@ def test_metadata_retry_does_not_reclaim_completed_curation():
 
 
 def test_import_outbox_wake_and_health_include_metadata_substate():
-    count_source = inspect.getsource(outbox_counts)
-    health_source = inspect.getsource(outbox_health)
+    count_source = inspect.getsource(outbox_readiness_statement) + inspect.getsource(
+        __import__(
+            "app.services.outbox_coordinator",
+            fromlist=["_import_ready"],
+        )._import_ready
+    )
+    health_source = inspect.getsource(_load_outbox_health)
 
     assert "metadata_available_at" in count_source
     assert "metadata_lease_expires_at" in count_source
