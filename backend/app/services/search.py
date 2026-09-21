@@ -5738,6 +5738,34 @@ class SearchService:
         except Exception:
             logger.warning("Failed to clear works search index", exc_info=True)
 
+    @staticmethod
+    async def _committed_repository_maps() -> tuple[
+        dict[tuple[str, str], list[str]],
+        dict[str, list[str]],
+    ]:
+        """Load repository lookup data without extending the audit snapshot."""
+
+        async with async_session() as db:
+            return await SearchService(db)._repository_lookup()
+
+    @staticmethod
+    async def _committed_work_documents(
+        work_ids: Iterable[UUID],
+        repository_maps: tuple[
+            dict[tuple[str, str], list[str]],
+            dict[str, list[str]],
+        ],
+    ) -> list[dict]:
+        """Build one bounded audit batch from newly committed database state."""
+
+        async with async_session() as db:
+            service = SearchService(
+                db,
+                parallel_hydration=_parallel_work_hydration_supported(),
+            )
+            service._repository_maps = repository_maps
+            return await service._build_work_documents(work_ids)
+
     async def audit_projection(self) -> dict[str, Any]:
         """Stream identity sets and every work hash without giant IN lists.
 
