@@ -362,18 +362,22 @@ class RepoResolver:
     async def all_repositories(self) -> list[RepoDescriptor]:
         rows = await self.db.execute(
             select(WorkSource.source, WorkSource.source_creator_id)
-            .where(WorkSource.source_creator_id.isnot(None)).distinct())
+            .where(
+                WorkSource.source_creator_id.isnot(None),
+                WorkSource.source_creator_id != "",
+            )
+            .distinct()
+            .order_by(WorkSource.source, WorkSource.source_creator_id)
+        )
+        keys = list(rows.all())
+        # Hydrate all descriptors with a fixed query count.  The former loop
+        # performed several queries per repository and made the status route
+        # scale linearly with network round trips (804 repositories took
+        # seconds even before filesystem probes began).
+        hydrated = await self._hydrate_repository_keys(keys)
         out: list[RepoDescriptor] = []
         seen: set[str] = set()
-        for source, scid in rows.all():
-            ws_row = await self.db.execute(
-                select(WorkSource).where(
-                    WorkSource.source == source,
-                    WorkSource.source_creator_id == scid).limit(1))
-            ws = ws_row.scalar_one_or_none()
-            if not ws:
-                continue
-            desc = await self._descriptor_for_work_source(ws)
+        for desc in hydrated:
             if desc and desc.key() not in seen:
                 seen.add(desc.key())
                 out.append(desc)

@@ -21,12 +21,17 @@ from app.schemas.admin_operations import (
     AdminOperationSnapshotResponse,
 )
 from app.schemas.gitllery import (
+    GitlleryBuildCreateRequest,
+    GitlleryBuildOperationResponse,
+    GitlleryBuildRead,
+    GitlleryBuildVerifyRequest,
     GitlleryCommandRequest,
     GitlleryCommandResponse,
     GitlleryLogResponse,
     GitlleryReconcileResponse,
     GitlleryStatusResponse,
     GitlleryVerifyRequest,
+    GitlleryVerifyOperationResponse,
 )
 from app.services.curation import CurationService
 from app.services.gitllery import GitlleryService
@@ -241,39 +246,99 @@ async def gitllery_reconcile(
     }
 
 
-@router.post("/gitllery/backfill")
-@router.post("/gitllery/build")
+async def _enqueue_gitllery_build(
+    db: AsyncSession,
+    request: GitlleryBuildCreateRequest,
+) -> dict:
+    from app.services.gitllery.builds import GitlleryBuildService
+    from app.services.operations import enqueue_admin_operation
+
+    build = await GitlleryBuildService(db).create(
+        scope=request.scope,
+        generation=request.generation,
+    )
+    try:
+        operation = await enqueue_admin_operation(
+            lock_key="library:gitllery-build:active",
+            operation_type="admin-gitllery-build",
+            title=f"Build Gitllery {request.scope} generation",
+            entity="gitllery-build",
+            func="app.jobs.admin_operations.run_gitllery_build_operation",
+            options={"build_id": str(build.id)},
+            job_timeout=7 * 24 * 60 * 60,
+            queue_name="maintenance",
+        )
+    except Exception as exc:
+        build.state = "failed"
+        build.last_error = f"Unable to queue Gitllery build: {exc}"[:4000]
+        await db.commit()
+        raise
+    return {
+        "build": GitlleryBuildRead.model_validate(build).model_dump(),
+        **operation,
+    }
+
+
+@router.post(
+    "/gitllery/builds",
+    status_code=202,
+    response_model=GitlleryBuildOperationResponse,
+)
+async def create_gitllery_build(
+    request: GitlleryBuildCreateRequest,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue a resumable side-by-side build; active data is never replaced."""
+
+    return await _enqueue_gitllery_build(db, request)
+
+
+@router.get("/gitllery/builds/{build_id}", response_model=GitlleryBuildRead)
+async def get_gitllery_build(
+    build_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.gitllery.builds import GitlleryBuildService
+
+    return await GitlleryBuildService(db).get(build_id)
+
+
+@router.post("/gitllery/build", status_code=202)
+async def gitllery_build_compatibility(
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Compatibility entry: start the required canary generation."""
+
+    result = await _enqueue_gitllery_build(
+        db,
+        GitlleryBuildCreateRequest(scope="canary"),
+    )
+    return {
+        **result,
+        "projection_mode": settings.gitllery_projection_mode,
+        "captured": 0,
+        "ready": 0,
+    }
+
+
+@router.post("/gitllery/backfill", status_code=202)
 async def gitllery_backfill(
     _admin=RequireAdminUser,
     db: AsyncSession = Depends(get_db),
 ):
-    """Capture missing historical intents, then wake bounded projection."""
+    """Compatibility entry: start a full build after a passing canary."""
 
-    _require_gitllery_projection_active()
-    from sqlalchemy import text
-    from app.services.outbox_coordinator import outbox_counts, wake_pending_outboxes
-
-    result = await db.execute(
-        text(
-            """
-            INSERT INTO gitllery_projection_outbox (
-              id, created_at, updated_at, commit_id, state, attempts, available_at
-            )
-            SELECT id, now(), now(), id, 'pending', 0, now()
-            FROM curation_commits
-            ON CONFLICT (commit_id) DO NOTHING
-            """
-        )
+    result = await _enqueue_gitllery_build(
+        db,
+        GitlleryBuildCreateRequest(scope="full"),
     )
-    await db.commit()
-    counts = await outbox_counts(db)
-    wake = wake_pending_outboxes({"gitllery": max(1, counts.get("gitllery", 0))})
     return {
-        "status": "enqueued",
-        "captured": int(result.rowcount or 0),
-        "ready": counts.get("gitllery", 0),
+        **result,
         "projection_mode": settings.gitllery_projection_mode,
-        **wake,
+        "captured": 0,
+        "ready": 0,
     }
 
 
@@ -308,22 +373,87 @@ async def gitllery_rebuild(
     return await gitllery_backfill(_admin, db)
 
 
-@router.post("/gitllery/verify", status_code=202)
+async def _enqueue_gitllery_verification(
+    db: AsyncSession,
+    request: GitlleryVerifyRequest,
+) -> dict:
+    from app.services.gitllery.builds import GitlleryBuildService
+    from app.services.operations import enqueue_admin_operation
+
+    verification = await GitlleryBuildService(db).create_verification(
+        repository_id=request.repository_id,
+        build_id=request.build_id,
+        deep=request.deep,
+        evidence=request.evidence,
+    )
+
+    target = (
+        f"build:{request.build_id}"
+        if request.build_id
+        else request.repository_id or "library"
+    )
+    try:
+        operation = await enqueue_admin_operation(
+            lock_key=f"gitllery:verify:{target}",
+            operation_type="admin-gitllery-verify",
+            title=(
+                "Verify Gitllery repository"
+                if request.repository_id
+                else "Verify Gitllery library"
+            ),
+            entity="gitllery-verify",
+            func="app.jobs.admin_operations.run_gitllery_verify_operation",
+            options={
+                **request.model_dump(mode="json"),
+                "verification_id": str(verification.id),
+            },
+            job_timeout=7 * 24 * 60 * 60,
+            queue_name="maintenance",
+        )
+    except Exception as exc:
+        verification.state = "failed"
+        verification.last_error = f"Unable to queue Gitllery verification: {exc}"[
+            :4000
+        ]
+        await db.commit()
+        raise
+    return {
+        "verification": GitlleryBuildRead.model_validate(verification).model_dump(),
+        **operation,
+    }
+
+
+@router.post(
+    "/gitllery/verify",
+    status_code=202,
+    response_model=GitlleryVerifyOperationResponse,
+)
 async def gitllery_verify(
     request: GitlleryVerifyRequest,
     _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """Queue bounded verification; never scan repository history in HTTP."""
 
-    from app.services.operations import enqueue_admin_operation
+    return await _enqueue_gitllery_verification(db, request)
 
-    return await enqueue_admin_operation(
-        lock_key=f"gitllery:verify:{request.repository_id}",
-        operation_type="admin-gitllery-verify",
-        title="Verify Gitllery repository",
-        entity="gitllery-verify",
-        func="app.jobs.admin_operations.run_gitllery_verify_operation",
-        options=request.model_dump(),
-        job_timeout=7 * 24 * 60 * 60,
-        queue_name="maintenance",
+
+@router.post(
+    "/gitllery/builds/{build_id}/verify",
+    status_code=202,
+    response_model=GitlleryVerifyOperationResponse,
+)
+async def verify_gitllery_build(
+    build_id: UUID,
+    request: GitlleryBuildVerifyRequest,
+    _admin=RequireAdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    return await _enqueue_gitllery_verification(
+        db,
+        GitlleryVerifyRequest(
+            build_id=build_id,
+            deep=request.deep,
+            evidence=request.evidence,
+        ),
     )

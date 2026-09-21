@@ -1878,6 +1878,7 @@ export interface GitlleryRepoStatus {
   projection_mode?: "shadow" | "active" | null;
   head_segment?: string | null;
   last_complete_commit_id?: string | null;
+  last_verified_at?: string | null;
 }
 
 export interface GitlleryStatus {
@@ -1890,6 +1891,12 @@ export interface GitlleryStatus {
   format_id: "gitllery-segment";
   format_revision: 1;
   projection_mode: "shadow" | "active";
+  unplanned_intents?: number;
+  legacy_repositories?: number;
+  segment_repositories?: number;
+  projection_state?: string;
+  projection_error?: string | null;
+  last_verified_at?: string | null;
 }
 
 export interface GitlleryCapability {

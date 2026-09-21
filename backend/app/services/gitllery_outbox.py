@@ -336,6 +336,10 @@ def _repository_path(target: dict) -> Path:
 def _write_target(target: dict) -> dict:
     repo = SegmentRepository(_repository_path(target))
     repo.root.relative_to(Path(settings.library_root).resolve())
+    if settings.gitllery_projection_mode.strip().lower() == "active":
+        from app.services.gitllery.builds import assert_active_repository_ready
+
+        assert_active_repository_ready(repo)
     with repo.projection_lock():
         repo.initialise(
             repository_id=target["repository_key"],

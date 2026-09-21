@@ -64,6 +64,8 @@ _ADMIN_INTERNAL_RESOURCE_PROFILES = {
     "admin-search-reindex": "search_index",
     "admin-curation-backfill": "import_db",
     "admin-gitllery-sync": "git_projection",
+    "admin-gitllery-build": "git_projection",
+    "admin-gitllery-verify": "git_projection",
     "hierarchy-delete": "maintenance",
     "asset-dedup-scan": "image_derive",
 }
@@ -228,6 +230,13 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "admin-gitllery-verify",
             "app.jobs.admin_operations.run_gitllery_verify_operation",
             scopes=("gitllery:verify:",),
+            timeout=7 * 24 * 60 * 60,
+            permission="curation",
+        ),
+        _spec(
+            "admin-gitllery-build",
+            "app.jobs.admin_operations.run_gitllery_build_operation",
+            scopes=("library:gitllery-build:active",),
             timeout=7 * 24 * 60 * 60,
             permission="curation",
         ),

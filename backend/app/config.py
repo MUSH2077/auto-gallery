@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     # while active writes the atomically promoted .gitllery directory.
     gitllery_projection_mode: str = "shadow"  # shadow | active
     gitllery_build_generation: str = "segment-r1"
+    # Active projection requires a second, matching deployment assertion.
+    # This prevents an accidental one-variable mode flip from writing into an
+    # unverified generation before promotion and the soak gate are complete.
+    gitllery_active_verified_generation: str = ""
 
     # DB connection pool, per Python process. Defaults are worker-sized (a worker
     # handles one job at a time). The backend serves concurrent HTTP and overrides
@@ -188,6 +192,15 @@ class Settings(BaseSettings):
         }:
             errors.append(
                 "GITLLERY_PROJECTION_MODE must be shadow or active."
+            )
+        elif (
+            self.gitllery_projection_mode.strip().lower() == "active"
+            and self.gitllery_active_verified_generation.strip()
+            != self.gitllery_build_generation.strip()
+        ):
+            errors.append(
+                "GITLLERY_ACTIVE_VERIFIED_GENERATION must match "
+                "GITLLERY_BUILD_GENERATION before active projection is allowed."
             )
         if self.resource_governance_mode.strip().lower() not in {
             "shadow",

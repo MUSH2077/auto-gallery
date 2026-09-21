@@ -1,4 +1,5 @@
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -19,6 +20,7 @@ class GitlleryRepoStatus(BaseModel):
     projection_mode: str | None = None
     head_segment: str | None = None
     last_complete_commit_id: str | None = None
+    last_verified_at: datetime | None = None
 
 
 class GitlleryStatusResponse(BaseModel):
@@ -34,6 +36,56 @@ class GitlleryStatusResponse(BaseModel):
     format_id: str = "gitllery-segment"
     format_revision: int = 1
     projection_mode: str = "shadow"
+    unplanned_intents: int = 0
+    legacy_repositories: int = 0
+    segment_repositories: int = 0
+    projection_state: str = "shadow_unbuilt"
+    projection_error: str | None = None
+    last_verified_at: datetime | None = None
+
+
+class GitlleryBuildCreateRequest(BaseModel):
+    scope: Literal["canary", "full"] = "canary"
+    generation: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class GitlleryBuildRead(BaseModel):
+    id: UUID
+    kind: Literal["build", "verify", "restore"]
+    state: Literal["pending", "running", "staged", "complete", "failed", "cancelled"]
+    generation: str
+    repository_key: str | None = None
+    high_water_commit_id: UUID | None = None
+    cursor_created_at: datetime | None = None
+    cursor_commit_id: UUID | None = None
+    summary_hash: str | None = None
+    stats: dict[str, Any] | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GitlleryBuildOperationResponse(BaseModel):
+    build: GitlleryBuildRead
+    task_id: str
+    job_id: str
+    status: Literal["enqueued"]
+    operation_type: str
+
+
+class GitlleryBuildVerifyRequest(BaseModel):
+    deep: bool = True
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class GitlleryVerifyOperationResponse(BaseModel):
+    verification: GitlleryBuildRead
+    task_id: str
+    job_id: str
+    status: Literal["enqueued"]
+    operation_type: str
 
 
 class GitlleryCapability(BaseModel):
@@ -172,5 +224,13 @@ class GitlleryCommandResponse(BaseModel):
 
 
 class GitlleryVerifyRequest(BaseModel):
-    repository_id: str
+    repository_id: str | None = None
+    build_id: UUID | None = None
     deep: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.repository_id and self.build_id:
+            raise ValueError("repository_id and build_id are mutually exclusive")
+        return self

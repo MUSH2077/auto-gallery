@@ -15,7 +15,7 @@ from time import monotonic
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import exists, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -24,6 +24,7 @@ from app.models import (
     CurationCommit,
     GitlleryProjectionOutbox,
     GitlleryProjectionTarget,
+    GitlleryBuild,
     GitlleryRepositoryState,
 )
 from app.services.gitllery.objects import hash_payload
@@ -145,6 +146,10 @@ class GitlleryService:
         changes: list[CurationChange],
     ) -> bool:
         repo = self._segment_repo_for(desc)
+        if settings.gitllery_projection_mode == "active":
+            from app.services.gitllery.builds import assert_active_repository_ready
+
+            assert_active_repository_ready(repo)
         with repo.projection_lock():
             repo.initialise(
                 repository_id=desc.repository_id,
@@ -928,6 +933,31 @@ class GitlleryService:
         *,
         deep: bool,
     ) -> dict:
+        if deep and repository_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "gitllery_async_verify_required",
+                    "message": (
+                        "Library-wide Gitllery verification is asynchronous; "
+                        "use POST /gitllery/verify."
+                    ),
+                },
+            )
+
+        from app.services.cache import TTL, cache_get, cache_key, cache_set
+
+        key = cache_key(
+            "gitllery:status",
+            repository_id=repository_id,
+            deep=deep,
+            format="segment-v1-db",
+        )
+        if not deep:
+            cached = cache_get(key)
+            if cached is not None:
+                return cached
+
         descriptors = {
             descriptor.key(): descriptor
             for descriptor in await RepoResolver(self.db).all_repositories()
@@ -960,22 +990,95 @@ class GitlleryService:
             key: int(count)
             for key, count in (await self.db.execute(pending_stmt)).all()
         }
+
+        has_targets = exists(
+            select(GitlleryProjectionTarget.id).where(
+                GitlleryProjectionTarget.intent_id == GitlleryProjectionOutbox.id
+            )
+        )
+        unplanned_intents = int(
+            (
+                await self.db.execute(
+                    select(func.count(GitlleryProjectionOutbox.id)).where(
+                        GitlleryProjectionOutbox.state != "complete",
+                        ~has_targets,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        current_states = {
+            key: state
+            for key, state in states.items()
+            if state.format_id == "gitllery-segment"
+            and int(state.format_revision or 0) == 1
+        }
+        segment_repositories = len(current_states)
+        legacy_repositories = max(0, len(descriptors) - segment_repositories)
+        last_verified_at = max(
+            (
+                state.last_verified_at
+                for state in current_states.values()
+                if state.last_verified_at is not None
+            ),
+            default=None,
+        )
+        latest_operation = (
+            await self.db.execute(
+                select(GitlleryBuild)
+                .order_by(GitlleryBuild.created_at.desc(), GitlleryBuild.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        latest_build = (
+            await self.db.execute(
+                select(GitlleryBuild)
+                .where(GitlleryBuild.kind == "build")
+                .order_by(GitlleryBuild.created_at.desc(), GitlleryBuild.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if latest_operation is not None and latest_operation.state == "failed":
+            projection_state = "blocked"
+        elif latest_operation is not None and latest_operation.state in {"pending", "running"}:
+            projection_state = (
+                "verifying" if latest_operation.kind == "verify" else "building"
+            )
+        elif settings.gitllery_projection_mode == "active":
+            projection_state = "active"
+        elif segment_repositories == 0:
+            projection_state = "shadow_unbuilt"
+        elif legacy_repositories or unplanned_intents or sum(pending.values()):
+            projection_state = "shadow_building"
+        elif latest_build is not None and latest_build.state in {"staged", "complete"}:
+            gates = (latest_build.stats or {}).get("gates") or {}
+            projection_state = "shadow_ready" if gates.get("passed") else "awaiting_gates"
+        else:
+            projection_state = "shadow_ready"
+
         repositories = []
         missing = behind_total = 0
         for key, descriptor in descriptors.items():
             state = states.get(key)
-            repo = self._segment_repo_for(descriptor)
-            exists_on_disk = repo.exists()
-            if not exists_on_disk:
-                missing += 1
+            recorded_exists = state is not None
             behind = pending.get(key, 0)
             behind_total += behind
-            integrity = True
-            drift: list[str] = []
-            if deep and exists_on_disk:
-                verification = await asyncio.to_thread(repo.verify, deep=True)
-                integrity = verification.ok
-                drift = list(verification.errors)
+            integrity = not bool(state and state.last_error)
+            drift: list[str] = [state.last_error] if state and state.last_error else []
+            if deep:
+                repo = self._segment_repo_for(descriptor)
+                exists_on_disk = await asyncio.to_thread(repo.exists)
+                if not exists_on_disk:
+                    integrity = False
+                    drift = ["segment repository is missing from disk"]
+                else:
+                    verification = await asyncio.to_thread(repo.verify, deep=True)
+                    integrity = verification.ok
+                    drift = list(verification.errors)
+            else:
+                exists_on_disk = recorded_exists
+            if not exists_on_disk:
+                missing += 1
             repositories.append(
                 {
                     "repository_id": key,
@@ -996,9 +1099,10 @@ class GitlleryService:
                         if state and state.last_complete_commit_id
                         else None
                     ),
+                    "last_verified_at": state.last_verified_at if state else None,
                 }
             )
-        return {
+        result = {
             "repositories": repositories,
             "missing_repos": missing,
             "behind_total": behind_total,
@@ -1008,7 +1112,21 @@ class GitlleryService:
             "format_id": "gitllery-segment",
             "format_revision": 1,
             "projection_mode": settings.gitllery_projection_mode,
+            "unplanned_intents": unplanned_intents,
+            "legacy_repositories": legacy_repositories,
+            "segment_repositories": segment_repositories,
+            "projection_state": projection_state,
+            "projection_error": (
+                latest_operation.last_error
+                if latest_operation is not None
+                and latest_operation.state == "failed"
+                else None
+            ),
+            "last_verified_at": last_verified_at,
         }
+        if not deep:
+            cache_set(key, result, TTL["gitllery:status"])
+        return result
 
     async def reconcile(
         self, repository_id: str | None = None, *, continuation: dict | None = None,
