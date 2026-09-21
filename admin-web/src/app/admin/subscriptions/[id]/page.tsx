@@ -242,6 +242,8 @@ export default function SubscriptionDetailPage() {
       source_url: ss.source_url,
       is_enabled: ss.is_enabled,
       auth_healthy: ss.auth_healthy,
+      auth_state: ss.auth_state || "unknown",
+      credential_state: ss.credential_state || "unknown",
       last_successful_auth: ss.last_successful_auth,
       last_synced_at: ss.last_synced_at,
       can_download: !!provider?.capabilities.can_download,

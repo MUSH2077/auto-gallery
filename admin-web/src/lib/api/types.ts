@@ -5,6 +5,7 @@ import type { components } from "./types.generated";
 export interface HealthResponse {
   status: string;
   version: string;
+  build_revision: string;
   services: Record<string, string>;
   disk?: string;
   resource_pressure?: ResourcePressureSnapshot;
@@ -859,6 +860,8 @@ export interface SubscriptionSource {
   last_synced_at?: string;
   last_attempted_at?: string;
   auth_status?: string | null;
+  auth_state?: "healthy" | "unhealthy" | "unknown";
+  credential_state?: "ready" | "missing" | "not_required" | "unknown";
   auth_error_reason?: string | null;
   last_auth_checked_at?: string | null;
   created_at: string;
@@ -1071,6 +1074,9 @@ export interface WorkbenchSummary {
   health: Record<string, string>;
   attention: {
     auth_unhealthy_count: number;
+    auth_actionable_count: number;
+    auth_disabled_or_unchecked_count: number;
+    credential_issue_count: number;
     failed_download_count: number;
     failed_import_count: number;
     stale_job_count: number;
@@ -1441,6 +1447,8 @@ export interface RepositorySearchHit {
   is_enabled: boolean;
   auth_healthy: boolean;
   auth_status?: string | null;
+  auth_state?: "healthy" | "unhealthy" | "unknown";
+  credential_state?: "ready" | "missing" | "not_required" | "unknown";
   last_synced_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -1821,6 +1829,9 @@ export interface AuthStatusItem {
   source_creator_id?: string;
   auth_healthy: boolean | null;
   auth_status?: string | null;
+  auth_state: "healthy" | "unhealthy" | "unknown";
+  credential_state: "ready" | "missing" | "not_required" | "unknown";
+  auth_actionable: boolean;
   auth_error_reason?: string | null;
   last_auth_checked_at?: string | null;
   last_successful_auth: string | null;
@@ -1845,6 +1856,9 @@ export interface AuthStatusResponse {
     healthy: number;
     unhealthy: number;
     unknown: number;
+    auth_actionable_count: number;
+    auth_disabled_or_unchecked_count: number;
+    credential_issue_count: number;
   };
 }
 

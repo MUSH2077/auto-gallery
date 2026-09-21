@@ -7603,12 +7603,24 @@ export interface components {
             auth_error_reason?: string | null;
             /** Auth Healthy */
             auth_healthy: boolean;
+            /**
+             * Auth State
+             * @default unknown
+             * @enum {string}
+             */
+            auth_state: "healthy" | "unhealthy" | "unknown";
             /** Auth Status */
             auth_status?: string | null;
             /** Can Download */
             can_download: boolean;
             /** Created At */
             created_at?: string | null;
+            /**
+             * Credential State
+             * @default unknown
+             * @enum {string}
+             */
+            credential_state: "ready" | "missing" | "not_required" | "unknown";
             /**
              * Id
              * Format: uuid
@@ -8006,6 +8018,11 @@ export interface components {
         SchedulerDecisionItem: {
             /** Auth Healthy */
             auth_healthy: boolean;
+            /**
+             * Auth State
+             * @enum {string}
+             */
+            auth_state: "healthy" | "unhealthy" | "unknown";
             /** Can Download */
             can_download: boolean;
             /**
@@ -8015,6 +8032,11 @@ export interface components {
             creator_id: string;
             /** Creator Name */
             creator_name: string | null;
+            /**
+             * Credential State
+             * @enum {string}
+             */
+            credential_state: "ready" | "missing" | "not_required" | "unknown";
             /** Decision */
             decision: string;
             /** Due */
@@ -8631,6 +8653,12 @@ export interface components {
             auth_error_reason?: string | null;
             /** Auth Healthy */
             auth_healthy: boolean;
+            /**
+             * Auth State
+             * @default unknown
+             * @enum {string}
+             */
+            auth_state: "healthy" | "unhealthy" | "unknown";
             /** Auth Status */
             auth_status?: string | null;
             /**
@@ -8638,6 +8666,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Credential State
+             * @default unknown
+             * @enum {string}
+             */
+            credential_state: "ready" | "missing" | "not_required" | "unknown";
             /**
              * Id
              * Format: uuid
@@ -9554,6 +9588,56 @@ export interface components {
              */
             updated_at: string;
         };
+        /** WorkbenchAttention */
+        WorkbenchAttention: {
+            /**
+             * Auth Actionable Count
+             * @default 0
+             */
+            auth_actionable_count: number;
+            /**
+             * Auth Disabled Or Unchecked Count
+             * @default 0
+             */
+            auth_disabled_or_unchecked_count: number;
+            /**
+             * Auth Unhealthy Count
+             * @default 0
+             */
+            auth_unhealthy_count: number;
+            /**
+             * Credential Issue Count
+             * @default 0
+             */
+            credential_issue_count: number;
+            /**
+             * Failed Download Count
+             * @default 0
+             */
+            failed_download_count: number;
+            /**
+             * Failed Import Count
+             * @default 0
+             */
+            failed_import_count: number;
+            /**
+             * Low Disk Warning
+             * @default false
+             */
+            low_disk_warning: boolean;
+            /**
+             * Scheduler Disabled Warning
+             * @default false
+             */
+            scheduler_disabled_warning: boolean;
+            /**
+             * Stale Job Count
+             * @default 0
+             */
+            stale_job_count: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** WorkbenchRecent */
         WorkbenchRecent: {
             /** Download Jobs */
@@ -9583,6 +9667,7 @@ export interface components {
         };
         /** WorkbenchSummary */
         WorkbenchSummary: {
+            attention?: components["schemas"]["WorkbenchAttention"];
             recent: components["schemas"]["WorkbenchRecent"];
         } & {
             [key: string]: unknown;

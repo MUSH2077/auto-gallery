@@ -277,6 +277,8 @@ INDEX_SETTINGS = {
             "source_creator_keys",
             "is_enabled",
             "auth_healthy",
+            "auth_state",
+            "credential_state",
             "has_last_sync",
             "has_source_creator_id",
             "created_ts",
@@ -531,8 +533,8 @@ IS_FIELD = {
     "repositories": {
         "enabled": ("is_enabled", True),
         "disabled": ("is_enabled", False),
-        "auth-ok": ("auth_healthy", True),
-        "auth-error": ("auth_healthy", False),
+        "auth-ok": ("auth_state", "healthy"),
+        "auth-error": ("auth_state", "unhealthy"),
     },
     "subscriptions": {
         "active": ("is_active", True),
@@ -3068,6 +3070,7 @@ class SearchService:
         from app.jobs.subscription_sync import schedule_decision_snapshot
         from app.services.settings import get_scheduler_config
         from app.services.subscription_calendar import effective_calendar_rule
+        from app.services.auth_health import classify_source_health
         from zoneinfo import ZoneInfo
 
         config = await get_scheduler_config(self.db)
@@ -3142,6 +3145,7 @@ class SearchService:
             due = bool(decision.get("due"))
             reason = str(decision.get("reason"))
             suppression_reason = None
+            auth_health = classify_source_health(source_policy, subscription_policy)
             auth_healthy = source_policy.auth_healthy is not False
             if not subscription_policy.is_active:
                 due, reason = False, "subscription_inactive"
@@ -3149,7 +3153,7 @@ class SearchService:
                 due, reason = False, "subscription_sync_disabled"
             elif not source_policy.is_enabled:
                 due, reason = False, "source_disabled"
-            elif not auth_healthy:
+            elif auth_health.actionable:
                 due, reason = False, "auth_unhealthy"
             elif not can_download:
                 due, reason = False, "provider_not_downloadable"
@@ -3191,6 +3195,8 @@ class SearchService:
                 "window_start": decision.get("window_start"),
                 "window_end": decision.get("window_end"),
                 "auth_healthy": auth_healthy,
+                "auth_state": auth_health.auth_state,
+                "credential_state": auth_health.credential_state,
                 "url_valid": url_valid,
                 "can_download": can_download,
             })
@@ -3848,6 +3854,16 @@ class SearchService:
         alias_by_creator = await self._creator_alias_projections(
             creator.id for _repo, _subscription, creator in rows
         )
+        from app.services.auth_health import classify_source_health
+
+        def _health_fields(repo: SubscriptionSource, subscription: Subscription) -> dict:
+            health = classify_source_health(repo, subscription)
+            return {
+                "auth_healthy": repo.auth_healthy is not False,
+                "auth_state": health.auth_state,
+                "credential_state": health.credential_state,
+            }
+
         return [{
             "id": str(repo.id),
             "name": f"{repo.source}/{repo.source_creator_id}" if repo.source_creator_id else (repo.source_url or str(repo.id)),
@@ -3865,7 +3881,7 @@ class SearchService:
             "subscription_id": str(subscription.id),
             "subscription_name": subscription.name,
             "is_enabled": bool(repo.is_enabled),
-            "auth_healthy": repo.auth_healthy is not False,
+            **_health_fields(repo, subscription),
             "auth_status": repo.auth_status,
             "has_last_sync": repo.last_synced_at is not None,
             "has_source_creator_id": bool(repo.source_creator_id),
@@ -4654,11 +4670,16 @@ class SearchService:
                             "inactive": Creator.is_active.is_(False),
                         }.get(value)
                     elif target == "repositories":
+                        from app.services.auth_health import (
+                            auth_healthy_condition,
+                            auth_unhealthy_condition,
+                        )
+
                         expression = {
                             "enabled": SubscriptionSource.is_enabled.is_(True),
                             "disabled": SubscriptionSource.is_enabled.is_(False),
-                            "auth-ok": SubscriptionSource.auth_healthy.is_not(False),
-                            "auth-error": SubscriptionSource.auth_healthy.is_(False),
+                            "auth-ok": auth_healthy_condition(SubscriptionSource),
+                            "auth-error": auth_unhealthy_condition(SubscriptionSource),
                         }.get(value)
                     else:
                         expression = {

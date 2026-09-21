@@ -25,6 +25,7 @@ from app.services.scheduler_loop import (
     mark_scheduler_scan_started,
 )
 from app.services.settings import get_scheduler_config
+from app.services.auth_health import classify_source_health
 from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.subscription_calendar import (
     calendar_decision,
@@ -747,7 +748,7 @@ async def _sync_subscriptions_locked(parent_task_id=None):
                     logger.debug("Auto-sync skipped source: not due", extra={**log_context, **decision})
                     continue
 
-                if ss.auth_healthy is False:
+                if classify_source_health(ss, sub).actionable:
                     skipped_count += 1
                     logger.debug("Auto-sync skipped source: auth unhealthy", extra={**log_context, "decision": "auth_unhealthy"})
                     continue

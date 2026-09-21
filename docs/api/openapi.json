@@ -7603,6 +7603,16 @@
             "title": "Auth Healthy",
             "type": "boolean"
           },
+          "auth_state": {
+            "default": "unknown",
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "unknown"
+            ],
+            "title": "Auth State",
+            "type": "string"
+          },
           "auth_status": {
             "anyOf": [
               {
@@ -7628,6 +7638,17 @@
               }
             ],
             "title": "Created At"
+          },
+          "credential_state": {
+            "default": "unknown",
+            "enum": [
+              "ready",
+              "missing",
+              "not_required",
+              "unknown"
+            ],
+            "title": "Credential State",
+            "type": "string"
           },
           "id": {
             "format": "uuid",
@@ -8997,6 +9018,15 @@
             "title": "Auth Healthy",
             "type": "boolean"
           },
+          "auth_state": {
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "unknown"
+            ],
+            "title": "Auth State",
+            "type": "string"
+          },
           "can_download": {
             "title": "Can Download",
             "type": "boolean"
@@ -9016,6 +9046,16 @@
               }
             ],
             "title": "Creator Name"
+          },
+          "credential_state": {
+            "enum": [
+              "ready",
+              "missing",
+              "not_required",
+              "unknown"
+            ],
+            "title": "Credential State",
+            "type": "string"
           },
           "decision": {
             "title": "Decision",
@@ -9239,6 +9279,8 @@
           "window_start",
           "window_end",
           "auth_healthy",
+          "auth_state",
+          "credential_state",
           "url_valid",
           "can_download",
           "is_overdue",
@@ -10792,6 +10834,16 @@
             "title": "Auth Healthy",
             "type": "boolean"
           },
+          "auth_state": {
+            "default": "unknown",
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "unknown"
+            ],
+            "title": "Auth State",
+            "type": "string"
+          },
           "auth_status": {
             "anyOf": [
               {
@@ -10806,6 +10858,17 @@
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "credential_state": {
+            "default": "unknown",
+            "enum": [
+              "ready",
+              "missing",
+              "not_required",
+              "unknown"
+            ],
+            "title": "Credential State",
             "type": "string"
           },
           "id": {
@@ -13619,6 +13682,58 @@
         "title": "WorkRead",
         "type": "object"
       },
+      "WorkbenchAttention": {
+        "additionalProperties": true,
+        "properties": {
+          "auth_actionable_count": {
+            "default": 0,
+            "title": "Auth Actionable Count",
+            "type": "integer"
+          },
+          "auth_disabled_or_unchecked_count": {
+            "default": 0,
+            "title": "Auth Disabled Or Unchecked Count",
+            "type": "integer"
+          },
+          "auth_unhealthy_count": {
+            "default": 0,
+            "title": "Auth Unhealthy Count",
+            "type": "integer"
+          },
+          "credential_issue_count": {
+            "default": 0,
+            "title": "Credential Issue Count",
+            "type": "integer"
+          },
+          "failed_download_count": {
+            "default": 0,
+            "title": "Failed Download Count",
+            "type": "integer"
+          },
+          "failed_import_count": {
+            "default": 0,
+            "title": "Failed Import Count",
+            "type": "integer"
+          },
+          "low_disk_warning": {
+            "default": false,
+            "title": "Low Disk Warning",
+            "type": "boolean"
+          },
+          "scheduler_disabled_warning": {
+            "default": false,
+            "title": "Scheduler Disabled Warning",
+            "type": "boolean"
+          },
+          "stale_job_count": {
+            "default": 0,
+            "title": "Stale Job Count",
+            "type": "integer"
+          }
+        },
+        "title": "WorkbenchAttention",
+        "type": "object"
+      },
       "WorkbenchRecent": {
         "additionalProperties": true,
         "properties": {
@@ -13701,6 +13816,9 @@
       "WorkbenchSummary": {
         "additionalProperties": true,
         "properties": {
+          "attention": {
+            "$ref": "#/components/schemas/WorkbenchAttention"
+          },
           "recent": {
             "$ref": "#/components/schemas/WorkbenchRecent"
           }

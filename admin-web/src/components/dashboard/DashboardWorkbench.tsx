@@ -509,7 +509,8 @@ export function AttentionBanner({
   onRetryFailedDownloads: () => void;
 }) {
   const t = useT();
-  const issueCount = data.attention.auth_unhealthy_count
+  const authActionableCount = data.attention.auth_actionable_count ?? data.attention.auth_unhealthy_count;
+  const issueCount = authActionableCount
     + data.attention.failed_download_count
     + data.attention.failed_import_count
     + data.attention.stale_job_count
@@ -523,14 +524,14 @@ export function AttentionBanner({
       ? t("dashboard.attention_failed_imports", { count: data.attention.failed_import_count })
       : data.attention.stale_job_count
         ? t("dashboard.attention_stale", { count: data.attention.stale_job_count })
-        : data.attention.auth_unhealthy_count
-          ? t("dashboard.attention_auth", { count: data.attention.auth_unhealthy_count })
+        : authActionableCount
+          ? t("dashboard.attention_auth", { count: authActionableCount })
           : data.attention.low_disk_warning
             ? t("dashboard.attention_storage")
             : t("dashboard.attention_scheduler");
   const href = data.attention.failed_import_count && !data.attention.failed_download_count
     ? "/admin/jobs?tab=imports&q=kind%3Aimport%20status%3Afailed"
-    : data.attention.auth_unhealthy_count && !data.attention.failed_download_count
+    : authActionableCount && !data.attention.failed_download_count
       ? adminRoutes.schedulerAuth
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"

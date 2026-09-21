@@ -37,7 +37,10 @@ RUN npm run check:i18n && \
 
 FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner
 WORKDIR /app
-ENV NODE_ENV=production
+ARG BUILD_REVISION=development
+LABEL org.opencontainers.image.revision="${BUILD_REVISION}"
+ENV NODE_ENV=production \
+    BUILD_REVISION=${BUILD_REVISION}
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

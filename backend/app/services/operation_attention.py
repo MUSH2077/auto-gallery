@@ -24,6 +24,11 @@ from app.models.storage_artifact import StorageArtifact
 from app.models.task_run import TaskRun
 from app.services.job_manifest import get_manifest
 from app.services.sync_outcome import download_job_outcome
+from app.services.auth_health import (
+    actionable_binding_exists,
+    classify_source_health,
+    credential_issue_binding_exists,
+)
 from app.services.tasks import (
     TaskService,
     normalize_task_status,
@@ -1115,19 +1120,33 @@ async def operations_overview(
             Subscription, Subscription.id == SubscriptionSource.subscription_id
         )
         if user_id is None:
-            source_stmt = source_stmt.where(
-                SubscriptionSource.is_enabled.is_(True),
+            binding_auth_actionable = actionable_binding_exists()
+            binding_credential_issue = credential_issue_binding_exists()
+            source_stmt = source_stmt.add_columns(
+                binding_auth_actionable.label("binding_auth_actionable"),
+                binding_credential_issue.label("binding_credential_issue"),
+            ).where(
                 Subscription.is_active.is_(True),
                 Subscription.sync_enabled.is_(True),
+                or_(
+                    SubscriptionSource.is_enabled.is_(True),
+                    binding_auth_actionable,
+                    binding_credential_issue,
+                ),
             )
         else:
             from app.models.remote_discovery import (
+                RemoteAccount,
                 UserSubscription,
                 UserSubscriptionSource,
             )
 
             source_stmt = (
-                source_stmt.add_columns(UserSubscriptionSource, UserSubscription)
+                source_stmt.add_columns(
+                    UserSubscriptionSource,
+                    UserSubscription,
+                    RemoteAccount,
+                )
                 .join(
                     UserSubscriptionSource,
                     UserSubscriptionSource.subscription_source_id
@@ -1137,6 +1156,10 @@ async def operations_overview(
                     UserSubscription,
                     UserSubscription.id
                     == UserSubscriptionSource.user_subscription_id,
+                )
+                .outerjoin(
+                    RemoteAccount,
+                    RemoteAccount.id == UserSubscriptionSource.remote_account_id,
                 )
                 .where(
                     UserSubscription.user_id == user_id,
@@ -1157,15 +1180,27 @@ async def operations_overview(
             repository, subscription = row[:2]
             source_policy = row[2] if user_id is not None else repository
             member = row[3] if user_id is not None else subscription
+            remote_account = row[4] if user_id is not None else None
+            binding_auth_actionable = bool(row[2]) if user_id is None else False
+            binding_credential_issue = bool(row[3]) if user_id is None else False
             reason_code = None
             severity = "warning"
             summary = None
             occurred_at = source_policy.updated_at or repository.created_at or _now()
-            if source_policy.auth_healthy is False:
+            auth_health = classify_source_health(
+                source_policy,
+                member,
+                remote_account=remote_account,
+            )
+            if binding_auth_actionable or auth_health.actionable:
                 reason_code = "auth_unhealthy"
                 severity = "critical"
                 summary = source_policy.auth_error_reason or "Repository authentication is unhealthy"
                 occurred_at = source_policy.last_auth_checked_at or occurred_at
+            elif binding_credential_issue or auth_health.credential_issue:
+                reason_code = "credential_missing"
+                severity = "critical"
+                summary = "Repository credential is missing or unavailable"
             else:
                 try:
                     provider = registry.get(repository.source)

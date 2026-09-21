@@ -12,6 +12,7 @@ class ServiceStatus(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+    build_revision: str
     services: ServiceStatus
 
     model_config = {"from_attributes": True}

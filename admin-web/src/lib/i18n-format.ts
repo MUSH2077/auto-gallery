@@ -11,6 +11,7 @@ const STATUS_KEYS = new Set([
 ]);
 const SCHEDULER_REASON_KEYS = new Set([
   "already_attempted_in_window", "already_synced_in_window", "auth_unhealthy",
+  "credential_missing",
   "fixed_time_window_due", "interval_due", "interval_not_due", "manual_mode",
   "fixed_time_backlog_due", "interval_backlog_due",
   "calendar_due", "calendar_not_reached", "calendar_missed_skipped",

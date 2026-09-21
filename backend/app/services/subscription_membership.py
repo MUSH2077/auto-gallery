@@ -29,6 +29,14 @@ from app.schemas.subscription import SubscriptionRead
 from app.schemas.subscription_source import SubscriptionSourceRead
 from app.providers import registry as provider_registry
 from app.services.settings import get_scheduler_config
+from app.services.auth_health import (
+    auth_state_for,
+    auth_unhealthy_condition,
+    credential_state_for,
+    remote_account_auth_state_for,
+    remote_account_unhealthy_condition,
+    source_health_payload,
+)
 
 
 _MEMBERSHIP_FIELDS = {
@@ -50,17 +58,15 @@ def membership_source_is_usable(
 ) -> bool:
     """Return whether one private binding can authenticate a shared download."""
 
-    if not binding.is_enabled or not binding.auth_healthy:
+    if not binding.is_enabled or auth_state_for(binding) == "unhealthy":
         return False
     if binding.remote_account_id is None:
         return True
     return bool(
-        account is not None
-        and account.id == binding.remote_account_id
+        credential_state_for(binding, account) == "ready"
+        and account is not None
         and account.source == source
-        and account.is_enabled
-        and account.auth_status == "healthy"
-        and account.credential_ciphertext
+        and remote_account_auth_state_for(account) != "unhealthy"
     )
 
 
@@ -75,20 +81,20 @@ def reset_binding_auth_for_destination(
         # path. Hard account deletion does not call this helper and therefore
         # keeps its protective NULL + deleted tombstone state.
         binding.auth_healthy = True
-        binding.auth_status = "healthy"
+        binding.auth_status = None
         binding.auth_error_reason = None
         binding.last_auth_checked_at = None
         return
 
-    healthy = bool(
-        account.is_enabled
-        and account.auth_status == "healthy"
-        and account.credential_ciphertext
+    state = remote_account_auth_state_for(account)
+    binding.auth_healthy = state != "unhealthy"
+    binding.auth_status = account.auth_status if state != "unknown" else None
+    binding.auth_error_reason = (
+        account.auth_error_reason if state == "unhealthy" else None
     )
-    binding.auth_healthy = healthy
-    binding.auth_status = account.auth_status or "untested"
-    binding.auth_error_reason = None if healthy else account.auth_error_reason
-    binding.last_auth_checked_at = account.last_authenticated_at
+    binding.last_auth_checked_at = (
+        account.last_authenticated_at if state != "unknown" else None
+    )
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,7 @@ async def select_eligible_membership_source(
     conditions = [
         UserSubscriptionSource.subscription_source_id == source.id,
         UserSubscriptionSource.is_enabled.is_(True),
-        UserSubscriptionSource.auth_healthy.is_(True),
+        ~auth_unhealthy_condition(UserSubscriptionSource),
         UserSubscription.is_active.is_(True),
         (
             UserSubscriptionSource.remote_account_id.is_(None)
@@ -128,8 +134,8 @@ async def select_eligible_membership_source(
                 RemoteAccount.id.is_not(None),
                 RemoteAccount.source == source.source,
                 RemoteAccount.is_enabled.is_(True),
-                RemoteAccount.auth_status == "healthy",
                 RemoteAccount.credential_ciphertext.is_not(None),
+                ~remote_account_unhealthy_condition(RemoteAccount),
             )
         ),
     ]
@@ -253,6 +259,9 @@ async def recompute_subscription_membership_cache(
             for binding, account in binding_rows
             if membership_source_is_usable(binding, account, source=source.source)
         ]
+        # Canonical enablement is an aggregate scheduling cache. The private
+        # binding retains the user's explicit toggle, while this flag answers
+        # whether at least one binding can currently perform work.
         source.is_enabled = bool(bindings)
         due = [binding.next_sync_at for binding in bindings]
         source.next_sync_at = (
@@ -260,7 +269,6 @@ async def recompute_subscription_membership_cache(
             if not due or any(value is None for value in due)
             else min(value for value in due if value is not None)
         )
-        source.auth_healthy = bool(bindings)
     await db.flush()
     from app.services.search_projection_outbox import request_search_projection
     await request_search_projection(db, subscription_ids=[subscription_id])
@@ -759,13 +767,17 @@ class SubscriptionMembershipService:
         member = await self.require_membership(subscription_id)
         rows = (
             await self.db.execute(
-                select(SubscriptionSource, UserSubscriptionSource)
+                select(SubscriptionSource, UserSubscriptionSource, RemoteAccount)
                 .join(
                     UserSubscriptionSource,
                     and_(
                         UserSubscriptionSource.subscription_source_id == SubscriptionSource.id,
                         UserSubscriptionSource.user_subscription_id == member.id,
                     ),
+                )
+                .outerjoin(
+                    RemoteAccount,
+                    RemoteAccount.id == UserSubscriptionSource.remote_account_id,
                 )
                 .where(SubscriptionSource.subscription_id == subscription_id)
                 .order_by(SubscriptionSource.created_at, SubscriptionSource.id)
@@ -788,13 +800,18 @@ class SubscriptionMembershipService:
                     "last_attempted_at": binding.last_attempted_at,
                     "next_sync_at": binding.next_sync_at,
                     "auth_status": binding.auth_status,
+                    **source_health_payload(
+                        binding,
+                        member,
+                        remote_account=account,
+                    ),
                     "auth_error_reason": binding.auth_error_reason,
                     "last_auth_checked_at": binding.last_auth_checked_at,
                     "created_at": source.created_at,
                     "updated_at": binding.updated_at,
                 }
             )
-            for source, binding in rows
+            for source, binding, account in rows
         ]
 
     async def update_source(self, subscription_id: UUID, source_id: UUID, data: dict[str, Any]) -> SubscriptionSourceRead:

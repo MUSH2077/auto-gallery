@@ -34,6 +34,7 @@ from app.providers import registry
 from app.services.settings import get_scheduler_config
 from app.services.subscription_calendar import effective_calendar_rule
 from app.services.sync_outcome import download_job_outcome
+from app.services.auth_health import auth_attention_counts
 
 try:
     from zoneinfo import ZoneInfo
@@ -381,10 +382,7 @@ async def workbench_summary(
     )
     stale_import_count = int(stale_import_rows.scalar() or 0)
 
-    auth_unhealthy_rows = await db.execute(
-        select(func.count(SubscriptionSource.id)).where(SubscriptionSource.auth_healthy == False)
-    )
-    auth_unhealthy_count = int(auth_unhealthy_rows.scalar() or 0)
+    auth_counts = await auth_attention_counts(db)
 
     latest_download_rows = list((await db.execute(
         select(DownloadJob, Subscription, Creator)
@@ -496,7 +494,9 @@ async def workbench_summary(
         },
         "health": await _quick_service_health(db),
         "attention": {
-            "auth_unhealthy_count": auth_unhealthy_count,
+            # Compatibility alias: this now means a real, actionable failure.
+            "auth_unhealthy_count": auth_counts["auth_actionable_count"],
+            **auth_counts,
             "failed_download_count": failed_download_count,
             "failed_import_count": failed_import_count,
             "stale_job_count": stale_download_count + stale_import_count,

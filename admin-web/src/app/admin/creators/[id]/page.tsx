@@ -24,6 +24,7 @@ import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
+import { hasActionableAuthFailure } from "@/lib/auth-health";
 import CreatorReferences from "./CreatorReferences";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
@@ -432,7 +433,7 @@ export default function CreatorDetailPage() {
     const enabled = legalRepos.filter((r) => r.is_enabled).length;
     const running = runningRepoCount(repos);
     const failed = repos.filter((r) => r.latest_job && ["failed", "stale"].includes(r.latest_job.status)).length;
-    const authIssues = repos.filter((r) => !r.auth_healthy).length;
+    const authIssues = repos.filter(hasActionableAuthFailure).length;
     const lastSuccess = legalRepos
       .map((r) => r.last_synced_at)
       .filter(Boolean)

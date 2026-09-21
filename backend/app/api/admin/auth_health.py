@@ -37,14 +37,42 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
     from app.models import SubscriptionSource, Subscription, Creator
     from sqlalchemy import select as s
 
+    from app.services.auth_health import (
+        actionable_binding_exists,
+        auth_attention_counts,
+        classify_source_health,
+        credential_issue_binding_exists,
+        healthy_binding_exists,
+    )
+
     result = await db.execute(
-        s(SubscriptionSource, Subscription, Creator)
+        s(
+            SubscriptionSource,
+            Subscription,
+            Creator,
+            actionable_binding_exists().label("binding_auth_actionable"),
+            healthy_binding_exists().label("binding_auth_healthy"),
+            credential_issue_binding_exists().label("binding_credential_issue"),
+        )
         .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
         .join(Creator, Creator.id == Subscription.creator_id)
         .order_by(SubscriptionSource.auth_healthy.asc())
     )
     sources = []
-    for ss, sub, creator in result:
+    for ss, sub, creator, binding_failed, binding_healthy, binding_credential_issue in result:
+        classification = classify_source_health(ss, sub)
+        auth_state = (
+            "unhealthy"
+            if binding_failed
+            else "healthy"
+            if binding_healthy and classification.auth_state == "unknown"
+            else classification.auth_state
+        )
+        credential_state = (
+            "missing"
+            if binding_credential_issue
+            else classification.credential_state
+        )
         sources.append({
             "id": str(ss.id),
             "source": ss.source,
@@ -52,6 +80,9 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
             "source_creator_id": ss.source_creator_id,
             "auth_healthy": ss.auth_healthy,
             "auth_status": ss.auth_status,
+            "auth_state": auth_state,
+            "credential_state": credential_state,
+            "auth_actionable": bool(binding_failed or classification.actionable),
             "auth_error_reason": ss.auth_error_reason,
             "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
             "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,
@@ -68,12 +99,18 @@ async def get_auth_status(db: AsyncSession = Depends(get_db)):
                 "display_name": creator.display_name,
             },
         })
-    healthy = sum(1 for s in sources if s["auth_healthy"] is True)
-    unhealthy = sum(1 for s in sources if s["auth_healthy"] is False)
-    unknown = sum(1 for s in sources if s["auth_healthy"] is None)
+    counts = await auth_attention_counts(db)
+    healthy = sum(1 for source in sources if source["auth_state"] == "healthy")
+    unknown = sum(1 for source in sources if source["auth_state"] == "unknown")
     return {
         "sources": sources,
-        "summary": {"total": len(sources), "healthy": healthy, "unhealthy": unhealthy, "unknown": unknown},
+        "summary": {
+            "total": len(sources),
+            "healthy": healthy,
+            "unhealthy": counts["auth_actionable_count"],
+            "unknown": unknown,
+            **counts,
+        },
     }
 
 

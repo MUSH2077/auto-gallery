@@ -869,6 +869,7 @@ def _starting_health_snapshot() -> dict:
     return {
         "status": "degraded",
         "version": "0.1.0",
+        "build_revision": settings.build_revision,
         "services": {
             "postgres": "unknown",
             "redis": "unknown",
@@ -939,6 +940,7 @@ async def ready():
         status_code=200 if required_up else 503,
         content={
             "status": "ok" if all_up else "degraded" if required_up else "unavailable",
+            "build_revision": settings.build_revision,
             "services": services,
         },
     )
@@ -1000,7 +1002,8 @@ async def _build_health_snapshot() -> dict:
 
     try:
         from sqlalchemy import func, select
-        from app.models import DownloadJob, ImportJob, SubscriptionSource
+        from app.models import DownloadJob, ImportJob
+        from app.services.auth_health import auth_attention_counts
 
         async with async_session() as session:
             download_counts = await session.execute(
@@ -1009,13 +1012,12 @@ async def _build_health_snapshot() -> dict:
             import_counts = await session.execute(
                 select(ImportJob.status, func.count(ImportJob.id)).group_by(ImportJob.status)
             )
-            auth_unhealthy = await session.execute(
-                select(func.count(SubscriptionSource.id)).where(SubscriptionSource.auth_healthy == False)
-            )
+            auth_counts = await auth_attention_counts(session)
         business["jobs"] = {
             "downloads": {status: count for status, count in download_counts.all()},
             "imports": {status: count for status, count in import_counts.all()},
-            "auth_unhealthy_sources": auth_unhealthy.scalar() or 0,
+            "auth_unhealthy_sources": auth_counts["auth_actionable_count"],
+            **auth_counts,
         }
         from app.services.outbox_coordinator import outbox_health
 
@@ -1043,6 +1045,7 @@ async def _build_health_snapshot() -> dict:
     return {
         "status": "ok" if all_up and disk == "ok" and protection_normal else "degraded",
         "version": "0.1.0",
+        "build_revision": settings.build_revision,
         "services": services,
         "disk": disk,
         "business": business,

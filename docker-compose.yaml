@@ -4,10 +4,14 @@ x-default-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-build-metadata: &build-metadata
+  BUILD_REVISION: ${BUILD_REVISION:-development}
+
 services:
   postgres:
     image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     environment:
+      <<: *build-metadata
       POSTGRES_DB: ${POSTGRES_DB:-autogallery}
       POSTGRES_USER: ${POSTGRES_USER:-autogallery}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -66,6 +70,7 @@ services:
     # loudly instead. 192mb keeps headroom under the 256M container limit.
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 192mb --maxmemory-policy noeviction
     environment:
+      <<: *build-metadata
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - ${HOST_REDIS:-./data/docker/redis}:/data
@@ -94,6 +99,7 @@ services:
   meilisearch:
     image: getmeili/meilisearch:v1.12@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
     environment:
+      <<: *build-metadata
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_ENV: ${MEILI_ENV:-production}
       MEILI_HTTP_ADDR: ${MEILI_HTTP_ADDR:-meilisearch:7700}
@@ -121,6 +127,7 @@ services:
     pull_policy: never
     command: alembic upgrade head
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -154,11 +161,13 @@ services:
       dockerfile: Dockerfile
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        BUILD_REVISION: ${BUILD_REVISION:-development}
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/$${site}.txt; done && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -237,6 +246,7 @@ services:
     # scheduler service only owns the separate `scheduled` queue.
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py downloads,downloads:pixiv,downloads:danbooru,downloads:iwara,downloads:weibo,downloads:bilibili,downloads:pinterest,downloads:lofter,downloads:x 1 --with-scheduler
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -309,6 +319,7 @@ services:
     # Promote delayed import retries from the imports scheduled registry.
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports 1 --with-scheduler
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -373,6 +384,7 @@ services:
     pull_policy: never
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations 1 --with-scheduler
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -434,6 +446,7 @@ services:
     pull_policy: never
     command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py discovery 1 --with-scheduler
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -495,6 +508,7 @@ services:
     pull_policy: never
     command: sh -c "python seed_sync.py && exec nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py scheduled 1 --with-scheduler"
     environment:
+      <<: *build-metadata
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MEILI_URL: http://meilisearch:7700
@@ -560,12 +574,14 @@ services:
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         ADMIN_BUILD_NODE_HEAP_MB: ${ADMIN_BUILD_NODE_HEAP_MB:-640}
+        BUILD_REVISION: ${BUILD_REVISION:-development}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
         NEXT_PUBLIC_SOURCE_CODE_URL: ${NEXT_PUBLIC_SOURCE_CODE_URL:-https://github.com/MUSH2077/auto-gallery}
     image: ${ADMIN_IMAGE:-auto-gallery-admin-web:latest}
     ports:
       - "${ADMIN_WEB_PORT:-13000}:3000"
     environment:
+      <<: *build-metadata
       HOSTNAME: "0.0.0.0"
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
       # Keep the Node.js heap below its internal process budget for native allocations.

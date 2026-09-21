@@ -1031,6 +1031,34 @@ async def test_unhealthy_repository_auth_appears_without_creating_task_run():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_unchecked_legacy_auth_flag_is_not_an_operation_attention_item():
+    from app.database import async_session, engine
+    from app.services.operation_attention import operations_overview
+
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            repository, _download = await _repository_fixture(db)
+            repository.auth_healthy = False
+            repository.auth_status = None
+            repository.auth_error_reason = None
+            repository.last_auth_checked_at = None
+            await db.commit()
+
+            overview = await operations_overview(db, view="attention")
+
+            assert all(
+                item.get("reason_code") != "auth_unhealthy"
+                for item in overview["items"]
+            )
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_acknowledged_anomaly_remains_in_resolved_window():
     from app.database import async_session, engine
     from app.services.operation_attention import operations_overview

@@ -20,6 +20,7 @@ def _is_allowed_bootstrap_admin_password(value: str | None) -> bool:
 
 
 class Settings(BaseSettings):
+    build_revision: str = "development"
     database_url: str = "postgresql+asyncpg://autogallery:changeme@postgres:5432/autogallery"
     redis_url: str = "redis://:changeme@redis:6379/0"
     meili_url: str = "http://meilisearch:7700"

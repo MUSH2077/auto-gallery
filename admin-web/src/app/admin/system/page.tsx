@@ -393,6 +393,8 @@ export default function SystemPage() {
                 <p className="mt-4 text-xs text-muted">
                   {t("system_health.version")} {health.data.version}
                   {" · "}
+                  {t("system_health.build_revision")} {health.data.build_revision}
+                  {" · "}
                   {t("system_health.last_update")}{" "}
                   {health.dataUpdatedAt
                     ? fmt.time(new Date(health.dataUpdatedAt).toISOString())

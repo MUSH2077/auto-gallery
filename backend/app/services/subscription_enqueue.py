@@ -19,6 +19,7 @@ from app.services.locks import redis_lock
 from app.services.redis_client import get_redis
 from app.services.settings import get_download_defaults, get_scheduler_config
 from app.services.search_projection_outbox import request_search_projection
+from app.services.auth_health import classify_source_health
 from app.services.subscription_membership import (
     recompute_subscription_membership_cache,
     select_eligible_membership_source,
@@ -472,7 +473,12 @@ async def enqueue_subscription_source_sync(
         return skip_result(ss.id, "subscription_inactive")
     if not force and not ss.is_enabled and not explicit_private_manual and not batch_manual:
         return skip_result(ss.id, "source_disabled")
-    if not force and ss.auth_healthy is False and not explicit_private_manual and not batch_manual:
+    if (
+        not force
+        and classify_source_health(ss, sub).actionable
+        and not explicit_private_manual
+        and not batch_manual
+    ):
         return skip_result(ss.id, "auth_unhealthy", auth_status=ss.auth_status, auth_error_reason=ss.auth_error_reason)
     if not force:
         try:
@@ -565,7 +571,7 @@ async def enqueue_subscription_source_sync(
                 return skip_result(ss.id, "subscription_inactive")
             if not ss.is_enabled and not batch_manual:
                 return skip_result(ss.id, "source_disabled")
-            if ss.auth_healthy is False and not batch_manual:
+            if classify_source_health(ss, sub).actionable and not batch_manual:
                 return skip_result(ss.id, "auth_unhealthy")
             if batch_mode != "manual_all_enabled" and not sub.sync_enabled:
                 return skip_result(ss.id, "subscription_sync_disabled")

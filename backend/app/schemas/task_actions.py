@@ -82,6 +82,22 @@ class WorkbenchRecent(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class WorkbenchAttention(BaseModel):
+    # ``auth_unhealthy_count`` remains as a compatibility alias for clients
+    # that have not yet adopted the more precise actionable name.
+    auth_unhealthy_count: int = 0
+    auth_actionable_count: int = 0
+    auth_disabled_or_unchecked_count: int = 0
+    credential_issue_count: int = 0
+    failed_download_count: int = 0
+    failed_import_count: int = 0
+    stale_job_count: int = 0
+    low_disk_warning: bool = False
+    scheduler_disabled_warning: bool = False
+    model_config = {"extra": "allow"}
+
+
 class WorkbenchSummary(BaseModel):
     recent: WorkbenchRecent
+    attention: WorkbenchAttention = Field(default_factory=WorkbenchAttention)
     model_config = {"extra": "allow"}

@@ -18,7 +18,7 @@ from app.models.curation import WorkCurationState
 from app.models.work_source import WorkSource
 from app.models.work_source_tag import WorkSourceTag
 from app.models.tag import Tag
-from app.models.remote_discovery import UserSubscription, UserSubscriptionSource
+from app.models.remote_discovery import RemoteAccount, UserSubscription, UserSubscriptionSource
 from app.providers import registry
 from app.schemas.curation import RepositoryGraphResponse
 from app.schemas.repository import RepositoryDetailResponse
@@ -33,6 +33,7 @@ from app.services.subscription_enqueue import enqueue_subscription_source_sync
 from app.services.repository_identity import resolve_repository_source_creator_ids
 from app.services.sync_outcome import download_job_outcome
 from app.services.subscription_membership import SubscriptionMembershipService
+from app.services.auth_health import source_health_payload
 
 router = APIRouter(dependencies=[RequirePermission("library")])
 mutation_router = APIRouter()
@@ -215,7 +216,9 @@ def _repository_payload(
     provider: dict,
     latest_job_payload: dict | None,
     *,
+    subscription_policy: Subscription | UserSubscription,
     binding: UserSubscriptionSource | None = None,
+    remote_account: RemoteAccount | None = None,
 ) -> dict:
     policy = binding or ss
     return {
@@ -228,6 +231,11 @@ def _repository_payload(
         "is_enabled": policy.is_enabled,
         "auth_healthy": policy.auth_healthy,
         "auth_status": policy.auth_status,
+        **source_health_payload(
+            policy,
+            subscription_policy,
+            remote_account=remote_account,
+        ),
         "auth_error_reason": policy.auth_error_reason,
         "last_auth_checked_at": (
             policy.last_auth_checked_at.isoformat() if policy.last_auth_checked_at else None
@@ -266,13 +274,17 @@ async def _get_member_source_context(
     db: AsyncSession,
     source_id: UUID,
     user_id: int,
-) -> tuple[UserSubscription, UserSubscriptionSource]:
+) -> tuple[UserSubscription, UserSubscriptionSource, RemoteAccount | None]:
     row = (
         await db.execute(
-            select(UserSubscription, UserSubscriptionSource)
+            select(UserSubscription, UserSubscriptionSource, RemoteAccount)
             .join(
                 UserSubscriptionSource,
                 UserSubscriptionSource.user_subscription_id == UserSubscription.id,
+            )
+            .outerjoin(
+                RemoteAccount,
+                RemoteAccount.id == UserSubscriptionSource.remote_account_id,
             )
             .where(
                 UserSubscription.user_id == user_id,
@@ -319,7 +331,7 @@ async def delete_repository(
                 detail="Administrator access required to delete files",
             )
         raise HTTPException(status_code=400, detail="Member removal cannot delete shared files")
-    member, _binding = await _get_member_source_context(db, source_id, user.id)
+    member, _binding, _account = await _get_member_source_context(db, source_id, user.id)
     await SubscriptionMembershipService(db, user.id).remove_source(
         member.subscription_id, source_id
     )
@@ -343,8 +355,11 @@ async def get_repository(
     user_id = getattr(user, "id", None)
     member = None
     binding = None
+    remote_account = None
     if isinstance(user_id, int):
-        member, binding = await _get_member_source_context(db, source_id, user_id)
+        member, binding, remote_account = await _get_member_source_context(
+            db, source_id, user_id
+        )
     provider = _provider_payload(ss)
 
     job_filters = [
@@ -444,7 +459,12 @@ async def get_repository(
 
     return {
         "repository": _repository_payload(
-            ss, provider, latest_job_payload, binding=binding
+            ss,
+            provider,
+            latest_job_payload,
+            subscription_policy=member or sub,
+            binding=binding,
+            remote_account=remote_account,
         ),
         "creator": {
             "id": str(creator.id),
@@ -547,7 +567,9 @@ async def sync_repository(
     member = None
     binding = None
     if isinstance(user_id, int):
-        member, binding = await _get_member_source_context(db, source_id, user_id)
+        member, binding, _account = await _get_member_source_context(
+            db, source_id, user_id
+        )
     ownership = {}
     if member is not None:
         ownership = {

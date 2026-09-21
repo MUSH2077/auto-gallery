@@ -353,6 +353,7 @@ class CreatorService:
         from app.models.subscription_source import SubscriptionSource as SS
         from app.models.download_job import DownloadJob as DJ
         from app.providers import registry
+        from app.services.auth_health import source_health_payload
 
         sub_rows = await self.db.execute(
             select(Sub)
@@ -361,6 +362,7 @@ class CreatorService:
         )
         subscriptions = list(sub_rows.scalars().all())
         subscription_ids = [s.id for s in subscriptions]
+        subscriptions_by_id = {subscription.id: subscription for subscription in subscriptions}
 
         if not subscription_ids:
             return {
@@ -434,6 +436,7 @@ class CreatorService:
                 "is_enabled": ss.is_enabled,
                 "auth_healthy": ss.auth_healthy,
                 "auth_status": ss.auth_status,
+                **source_health_payload(ss, subscriptions_by_id[ss.subscription_id]),
                 "auth_error_reason": ss.auth_error_reason,
                 "last_auth_checked_at": ss.last_auth_checked_at.isoformat() if ss.last_auth_checked_at else None,
                 "last_successful_auth": ss.last_successful_auth.isoformat() if ss.last_successful_auth else None,

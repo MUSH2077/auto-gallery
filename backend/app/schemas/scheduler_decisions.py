@@ -32,6 +32,8 @@ class SchedulerDecisionItem(BaseModel):
     window_start: datetime | None
     window_end: datetime | None
     auth_healthy: bool
+    auth_state: Literal["healthy", "unhealthy", "unknown"]
+    credential_state: Literal["ready", "missing", "not_required", "unknown"]
     url_valid: bool
     can_download: bool
     is_overdue: bool

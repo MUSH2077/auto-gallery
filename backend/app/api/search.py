@@ -21,6 +21,7 @@ from app.services.search import (
     SearchService,
 )
 from app.services.search_language import SCOPE_TARGETS, SearchQueryError
+from app.services.auth_health import classify_source_health
 
 _require_search = RequireAnyPermission("library", "curation", "subscriptions", "tasks", "upload")
 
@@ -169,12 +170,21 @@ async def search(
             if binding is None:
                 continue
             membership = memberships_by_subscription.get(binding.subscription_id)
+            health = (
+                classify_source_health(binding, membership)
+                if membership is not None
+                else None
+            )
             item.update(
                 {
                     "subscription_name": membership.name if membership else None,
                     "is_enabled": binding.is_enabled,
                     "auth_healthy": binding.auth_healthy,
                     "auth_status": binding.auth_status,
+                    "auth_state": health.auth_state if health else "unknown",
+                    "credential_state": (
+                        health.credential_state if health else "unknown"
+                    ),
                     "last_synced_at": (
                         binding.last_synced_at.isoformat()
                         if binding.last_synced_at
