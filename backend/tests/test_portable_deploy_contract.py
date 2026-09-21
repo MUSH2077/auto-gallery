@@ -188,13 +188,31 @@ def test_source_digest_and_snapshot_skip_tracked_deletions():
     assert "tar --null --files-from=-" in deploy
 
 
-def test_source_digest_is_stable_across_available_collations(tmp_path):
+def test_source_digest_is_stable_across_available_collations(tmp_path, monkeypatch):
     repo = tmp_path / "source"
+    fake_bin = tmp_path / "bin"
     repo.mkdir()
-    subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
+    fake_bin.mkdir()
     for name in ("A", "a", "_a", "á"):
         (repo / name).write_text(f"contents for {name}\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "A", "a", "_a", "á"], cwd=repo, check=True)
+
+    # Production candidates intentionally omit Git. Keep this contract runnable
+    # in the exact acceptance image while preserving the byte-for-byte
+    # `git ls-files -z` interface consumed by the deployment script.
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+
+if sys.argv[1:] != ["ls-files", "-co", "--exclude-standard", "-z"]:
+    raise SystemExit(2)
+os.write(1, b"A\\0a\\0_a\\0\\xc3\\xa1\\0")
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
 
     installed_locales = subprocess.run(
         ["locale", "-a"], capture_output=True, text=True, timeout=5, check=True
