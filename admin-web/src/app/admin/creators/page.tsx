@@ -595,6 +595,7 @@ function CreatorsContent() {
               selected={selected.has(c.id)}
               positionInSet={index + 1}
               setSize={total}
+              deferOffscreen={false}
               onOpen={() => {
                 persistListSession();
                 router.push(`/admin/creators/${c.id}`);

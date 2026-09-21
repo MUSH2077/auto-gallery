@@ -239,7 +239,7 @@ test("logout and account change stop saved Danbooru polling despite cached prior
     });
     await opened.page.getByLabel("Username", { exact: true }).fill("next-denied");
     await opened.page.getByLabel("Password", { exact: true }).fill("fixture-password");
-    await opened.page.getByRole("button", { name: "Sign In", exact: true }).click();
+    await opened.page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect.poll(() => opened.page.evaluate(() => localStorage.getItem("ag_token"))).toBe("denied-token");
     const requestsAfterAccountChange = statusRequests;
     await opened.page.waitForTimeout(2_500);

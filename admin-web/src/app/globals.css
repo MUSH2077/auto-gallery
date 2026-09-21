@@ -178,7 +178,7 @@
   /* Tactile press (P3 motion primitive). Unlayered so it cleanly extends the
      @layer components transition-property to include transform — no cancel. */
   .btn-primary, .btn-ghost, .btn-danger, .btn-icon, .clickable {
-    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-property: color, background-color, border-color, box-shadow, transform;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
   }

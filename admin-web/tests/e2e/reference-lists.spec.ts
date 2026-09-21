@@ -471,6 +471,10 @@ for (const query of ["new search", ""]) {
     } finally {
       release();
     }
+    // The search field writes to the URL after its 300 ms debounce. An empty
+    // query can reuse the initial list cache, so an API observation alone does
+    // not prove that the replacement navigation has committed.
+    await page.waitForTimeout(650);
     await expect(input).toHaveValue(query);
     await expect.poll(() => new URL(page.url()).searchParams.get("q") ?? "").toBe(query);
     // Returning to the empty query can reuse the fresh virtual-list cache.
@@ -641,7 +645,7 @@ test("only the visible subscription batch keeps polling summaries", async ({ con
     (batch) => batch.includes("subscription-0300"),
   ).length;
 
-  await page.clock.fastForward(16_000);
+  await page.clock.fastForward(61_000);
   await expect.poll(() => observations.summaryBatches.filter(
     (batch) => batch.includes("subscription-0300"),
   ).length).toBeGreaterThan(visibleBatchPolls);

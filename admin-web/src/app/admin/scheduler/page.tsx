@@ -476,7 +476,8 @@ function SchedulerContent() {
     },
     enabled: !!batchIntent?.taskId && !batchTask.error,
     retry: false,
-    refetchInterval: false,
+    refetchInterval: () => schedulerBatchSettled(batchTask.data) ? false : pollInterval(true),
+    refetchIntervalInBackground: false,
   });
   const batchItemList = useMemo(
     () => batchItems.data?.pages.flatMap((page) => page.items) || [],

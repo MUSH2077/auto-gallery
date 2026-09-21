@@ -94,6 +94,7 @@ test("two-link setup failure survives unrelated success and reload without re-ve
   await expect(partial).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
   await page.getByRole("button", { name: "Confirm" }).click();
+  await expect.poll(() => sourceCount).toBe(2);
   await expect(partial).toBeVisible();
   await page.reload();
   await expect(partial).toBeVisible();
