@@ -12,7 +12,10 @@ from app.database import async_session
 from app.models.remote_discovery import RemoteAccount
 from app.remote_discovery.pixiv import PIXIV_RANKING_MODES, PixivRemoteDiscoveryAdapter
 from app.remote_discovery.registry import registry
-from app.services.pixiv_ranking_scheduler import pixiv_ranking_plan
+from app.services.pixiv_ranking_scheduler import (
+    pixiv_ranking_plan,
+    schedule_pixiv_heat_expiry,
+)
 from app.services.pixiv_ranking_sync import (
     PixivRankingDateNotReady,
     store_pixiv_ranking_results,
@@ -30,6 +33,16 @@ def _request_pixiv_heat_refresh() -> None:
     except Exception:
         logger.warning(
             "Unable to queue Pixiv heat expiry recomputation",
+            exc_info=True,
+        )
+
+
+def _schedule_pixiv_heat_expiry(fetched_at) -> None:
+    try:
+        schedule_pixiv_heat_expiry(fetched_at)
+    except Exception:
+        logger.warning(
+            "Unable to schedule Pixiv heat expiry recomputation",
             exc_info=True,
         )
 
@@ -85,6 +98,7 @@ async def sync_pixiv_rankings_async(ranking_date_iso: str | None = None) -> dict
 
         outcome = await store_pixiv_ranking_results(db, results)
         await db.commit()
+        _schedule_pixiv_heat_expiry(max(result.fetched_at for result in results))
         return {
             "status": "completed",
             "ranking_date": ranking_date.isoformat(),

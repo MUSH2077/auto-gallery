@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 import os
 import subprocess
 import sys
+from time import perf_counter
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -20,6 +21,7 @@ from app.services.work_heat import (
     aggregate_work_heat,
     extract_source_metrics,
     fallback_heat_rows,
+    official_rank_expired,
     recompute_source_heat,
     score_source_candidates,
     stable_shuffle_key,
@@ -97,6 +99,13 @@ def test_fresh_official_rank_precedes_fallback_but_stale_rank_does_not():
     assert scores[popular_fallback.work_source_id] > scores[stale.work_source_id]
 
 
+def test_official_rank_expiry_has_an_explicit_48_hour_boundary():
+    fetched_at = NOW - timedelta(hours=48)
+
+    assert official_rank_expired(fetched_at, NOW - timedelta(minutes=1)) is False
+    assert official_rank_expired(fetched_at, NOW + timedelta(minutes=1)) is True
+
+
 def test_fallback_compares_primary_counts_inside_age_cohort():
     new_work = candidate(1, age_days=1, primary=8, views=100)
     old_work = candidate(2, age_days=365, primary=500, views=10000)
@@ -148,6 +157,25 @@ def test_bayesian_rate_breaks_equal_primary_count_ties_without_promoting_one_of_
 
     assert scores[efficient.work_source_id] > scores[inefficient.work_source_id]
     assert scores[efficient.work_source_id] > scores[tiny_sample.work_source_id]
+
+
+def test_source_scoring_handles_70000_candidates_without_quadratic_regression():
+    candidates = [
+        candidate(
+            number,
+            age_days=number % 120,
+            primary=number % 1000,
+            views=1000 + number % 1000,
+        )
+        for number in range(1, 70_001)
+    ]
+
+    started = perf_counter()
+    scores = score_source_candidates(candidates, now=NOW)
+    elapsed = perf_counter() - started
+
+    assert len(scores) == 70_000
+    assert elapsed < 5.0
 
 
 def test_missing_metrics_remain_null_and_multi_source_uses_best_score():

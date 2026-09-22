@@ -1,5 +1,6 @@
 """Regression coverage for upstream revisions of an existing work."""
 
+from datetime import UTC, datetime
 import json
 from uuid import uuid4
 
@@ -45,6 +46,8 @@ def _pixiv_raw(page: int) -> dict:
         "date": "2026-08-13T12:00:00+00:00",
         "page_count": 2,
         "num": page,
+        "total_bookmarks": 42,
+        "total_view": 700,
         "user": {"id": 12539859, "name": "Artist"},
         "tags": ["update", "two-pages"],
     }
@@ -131,7 +134,15 @@ async def test_existing_work_metadata_and_new_page_are_idempotently_imported(
                 source_work_id="148166622",
                 source_creator_id="12539859",
                 title="Old title",
-                raw_metadata={"id": 148166622, "page_count": 1},
+                raw_metadata={
+                    "id": 148166622,
+                    "page_count": 1,
+                    "total_bookmarks": 42,
+                    "total_view": 700,
+                },
+                engagement_count=42,
+                view_count=700,
+                metrics_observed_at=datetime(2026, 8, 1, tzinfo=UTC),
             )
             db.add(work_source)
             await db.flush()
@@ -176,6 +187,13 @@ async def test_existing_work_metadata_and_new_page_are_idempotently_imported(
             download_job,
             prepared,
         )
+        async with async_session() as db:
+            first_observed_at = await db.scalar(
+                select(WorkSource.metrics_observed_at).where(
+                    WorkSource.source == "pixiv",
+                    WorkSource.source_work_id == "148166622",
+                )
+            )
         second = await _update_existing_work_groups(
             provider,
             download_job,
@@ -215,6 +233,10 @@ async def test_existing_work_metadata_and_new_page_are_idempotently_imported(
             )
 
         assert stored_source.raw_metadata["page_count"] == 2
+        assert first_observed_at > datetime(2026, 8, 1, tzinfo=UTC)
+        assert stored_source.metrics_observed_at == first_observed_at
+        assert stored_source.engagement_count == 42
+        assert stored_source.view_count == 700
         assert [row.source_asset_id for row in assets] == [
             "148166622_p0",
             "148166622_p1",

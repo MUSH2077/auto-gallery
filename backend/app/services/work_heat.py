@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Iterable, Mapping
@@ -129,6 +130,14 @@ def age_bucket(posted_at: datetime | None, observed_at: datetime) -> int:
     return 3
 
 
+def official_rank_expired(fetched_at: datetime, now: datetime) -> bool:
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now - fetched_at > OFFICIAL_RANK_MAX_AGE
+
+
 def _fresh_official(candidate: HeatCandidate, now: datetime) -> bool:
     fetched_at = candidate.official_fetched_at
     if (
@@ -141,35 +150,39 @@ def _fresh_official(candidate: HeatCandidate, now: datetime) -> bool:
         return False
     if fetched_at.tzinfo is None:
         fetched_at = fetched_at.replace(tzinfo=UTC)
-    return timedelta() <= now - fetched_at <= OFFICIAL_RANK_MAX_AGE
+    return timedelta() <= now - fetched_at and not official_rank_expired(fetched_at, now)
 
 
-def _expanded_cohort(
-    candidate: HeatCandidate,
+def _cohort_counts_by_age_bucket(
     fallback: list[HeatCandidate],
     *,
     observed_at: datetime,
     minimum: int,
-) -> list[HeatCandidate]:
-    target = age_bucket(candidate.posted_at, observed_at)
-    included = {target}
-    result = [item for item in fallback if age_bucket(item.posted_at, observed_at) in included]
-    distance = 1
-    while len(result) < minimum and len(included) < 4:
-        for bucket in (target - distance, target + distance):
-            if 0 <= bucket <= 3:
-                included.add(bucket)
-        result = [item for item in fallback if age_bucket(item.posted_at, observed_at) in included]
-        distance += 1
+) -> dict[int, list[int]]:
+    counts_by_bucket: list[list[int]] = [[], [], [], []]
+    for item in fallback:
+        assert item.primary_count is not None
+        counts_by_bucket[age_bucket(item.posted_at, observed_at)].append(
+            item.primary_count
+        )
+
+    result: dict[int, list[int]] = {}
+    for target in range(4):
+        included = {target}
+        cohort_size = len(counts_by_bucket[target])
+        distance = 1
+        while cohort_size < minimum and len(included) < 4:
+            for bucket in (target - distance, target + distance):
+                if 0 <= bucket <= 3 and bucket not in included:
+                    included.add(bucket)
+                    cohort_size += len(counts_by_bucket[bucket])
+            distance += 1
+        result[target] = sorted(
+            count
+            for bucket in included
+            for count in counts_by_bucket[bucket]
+        )
     return result
-
-
-def _primary_percentile(candidate: HeatCandidate, cohort: list[HeatCandidate]) -> float:
-    assert candidate.primary_count is not None
-    counts = [item.primary_count for item in cohort if item.primary_count is not None]
-    if not counts:
-        return 0.0
-    return sum(value <= candidate.primary_count for value in counts) / len(counts)
 
 
 def _source_baseline(candidates: list[HeatCandidate]) -> float:
@@ -202,6 +215,11 @@ def score_source_candidates(
     minimum = max(1, min_cohort_size)
     fallback = [item for item in items if item.primary_count is not None]
     baseline = _source_baseline(fallback)
+    cohort_counts = _cohort_counts_by_age_bucket(
+        fallback,
+        observed_at=now,
+        minimum=minimum,
+    )
 
     sortable: list[tuple[tuple[object, ...], HeatCandidate]] = []
     result: dict[UUID, float | None] = {
@@ -212,13 +230,8 @@ def score_source_candidates(
             official_position = item.official_rank / item.official_total  # type: ignore[operator]
             key = (0, official_position, item.work_source_id.int)
         elif item.primary_count is not None:
-            cohort = _expanded_cohort(
-                item,
-                fallback,
-                observed_at=now,
-                minimum=minimum,
-            )
-            percentile = _primary_percentile(item, cohort)
+            counts = cohort_counts[age_bucket(item.posted_at, now)]
+            percentile = bisect_right(counts, item.primary_count) / len(counts)
             rate = _smoothed_rate(item, baseline)
             posted = item.posted_at.timestamp() if item.posted_at is not None else 0.0
             key = (1, -percentile, -rate, -posted, item.work_source_id.int)

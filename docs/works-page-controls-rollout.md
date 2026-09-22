@@ -50,7 +50,10 @@ remain in place if the application is rolled back.
 6. Start or retain the ordinary scheduler. Pixiv ranking refreshes use healthy
    accounts and the existing rate limits. Missing credentials, missing R18
    permission, stale snapshots, or provider failures only activate the local
-   heat fallback; they do not block the works page.
+   heat fallback; they do not block the works page. Every successful snapshot
+   also schedules a guarded expiry check just after 48 hours. The check becomes
+   a no-op when a newer snapshot exists and queues one coalesced heat rebuild
+   when the latest snapshot is stale.
 
 ## Rollback
 
@@ -85,7 +88,9 @@ remain in place if the application is rolled back.
 5. 启用新前端，检查桌面弹窗、移动端底部面板、三种布局、三档卡片、搜索清除、重新随机、
    NSFW 模糊、隐藏多选，以及回收站单项操作。
 6. 启动或保留正常调度器。Pixiv 榜单同步复用健康账号和既有限流；无账号、无 R18 权限、
-   榜单过期或同步失败时只会回退到本地热度，不会阻断作品页。
+   榜单过期或同步失败时只会回退到本地热度，不会阻断作品页。每次成功快照还会在 48 小时
+   后安排一次带保护条件的过期检查；若已有更新快照则直接跳过，仅在最新快照确已过期时
+   排入一次可合并的热度重算。
 
 ### 回滚
 

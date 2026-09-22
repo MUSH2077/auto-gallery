@@ -11,12 +11,14 @@ from rq.exceptions import NoSuchJobError
 from rq.job import Job
 
 from app.remote_discovery.pixiv import PIXIV_RANKING_MODES
-from app.services.queue_admission import checked_enqueue
+from app.services.queue_admission import checked_enqueue, checked_enqueue_in
 from app.services.redis_client import get_redis
+from app.services.work_heat import OFFICIAL_RANK_MAX_AGE
 
 
 PIXIV_RANKING_TIMEZONE = ZoneInfo("Asia/Tokyo")
 PIXIV_RANKING_READY_TIME = time(hour=12, minute=15)
+PIXIV_HEAT_EXPIRY_GRACE = timedelta(seconds=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +49,62 @@ def pixiv_ranking_plan(now: datetime | None = None) -> PixivRankingPlan:
 
 def pixiv_ranking_job_id(ranking_date: date) -> str:
     return f"pixiv-ranking-{ranking_date.isoformat()}"
+
+
+def pixiv_heat_expiry_job_id(expires_at: datetime) -> str:
+    if expires_at.tzinfo is None:
+        raise ValueError("Pixiv heat expiry requires a timezone-aware datetime")
+    return f"pixiv-heat-expiry-{int(expires_at.timestamp())}"
+
+
+def schedule_pixiv_heat_expiry(
+    fetched_at: datetime,
+    *,
+    now: datetime | None = None,
+    redis_client=None,
+) -> dict:
+    """Schedule a guarded expiry check for one successful ranking snapshot."""
+
+    if fetched_at.tzinfo is None:
+        raise ValueError("Pixiv ranking fetched_at must be timezone-aware")
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        raise ValueError("Pixiv heat expiry schedule requires a timezone-aware datetime")
+    expires_at = fetched_at + OFFICIAL_RANK_MAX_AGE + PIXIV_HEAT_EXPIRY_GRACE
+    job_id = pixiv_heat_expiry_job_id(expires_at)
+    redis_client = redis_client or get_redis()
+    try:
+        existing = Job.fetch(job_id, connection=redis_client)
+    except NoSuchJobError:
+        existing = None
+    if existing is not None:
+        status = existing.get_status(refresh=True)
+        return {
+            "created": False,
+            "job_id": job_id,
+            "expires_at": expires_at.isoformat(),
+            "status": str(getattr(status, "value", status)),
+        }
+
+    from app.jobs.work_heat import expire_pixiv_heat
+
+    queue = Queue(name="scheduled", connection=redis_client)
+    checked_enqueue_in(
+        queue,
+        max(timedelta(), expires_at - current),
+        expire_pixiv_heat,
+        job_id=job_id,
+        job_timeout=5 * 60,
+        result_ttl=48 * 60 * 60,
+        failure_ttl=48 * 60 * 60,
+        retry=Retry(max=3, interval=[60, 300, 900]),
+    )
+    return {
+        "created": True,
+        "job_id": job_id,
+        "expires_at": expires_at.isoformat(),
+        "status": "scheduled",
+    }
 
 
 def ensure_pixiv_ranking_sync(
@@ -97,6 +155,8 @@ __all__ = [
     "PIXIV_RANKING_MODES",
     "PixivRankingPlan",
     "ensure_pixiv_ranking_sync",
+    "pixiv_heat_expiry_job_id",
     "pixiv_ranking_job_id",
     "pixiv_ranking_plan",
+    "schedule_pixiv_heat_expiry",
 ]

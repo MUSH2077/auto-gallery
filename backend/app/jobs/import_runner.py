@@ -1035,6 +1035,15 @@ async def _update_existing_work_groups(
                         work_source.description = ws_data.get("description")
                         work_source.posted_at = prepared_work["posted_at"]
                         work_source.raw_metadata = ws_data.get("raw_metadata")
+                        if "raw_metadata" in changed_fields:
+                            observed_metrics = extract_source_metrics(
+                                provider.source_name,
+                                work_source.raw_metadata,
+                                datetime.now(timezone.utc),
+                            )
+                            work_source.engagement_count = observed_metrics.primary_count
+                            work_source.view_count = observed_metrics.view_count
+                            work_source.metrics_observed_at = observed_metrics.observed_at
 
                         new_asset_ids: list[UUID] = []
                         derivative_requests: list[dict[str, Any]] = []

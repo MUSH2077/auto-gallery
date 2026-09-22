@@ -1,5 +1,5 @@
 from collections import deque
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -149,6 +149,7 @@ async def test_pixiv_ranking_rejects_untrusted_next_page_and_invalid_modes():
 def test_pixiv_ranking_schedule_uses_jst_publication_cutoff_and_legal_job_id():
     from app.services.pixiv_ranking_scheduler import (
         PIXIV_RANKING_MODES,
+        pixiv_heat_expiry_job_id,
         pixiv_ranking_job_id,
         pixiv_ranking_plan,
     )
@@ -163,6 +164,96 @@ def test_pixiv_ranking_schedule_uses_jst_publication_cutoff_and_legal_job_id():
     assert after_cutoff.ready_at == datetime(2026, 9, 22, 3, 15, tzinfo=UTC)
     assert pixiv_ranking_job_id(after_cutoff.ranking_date) == "pixiv-ranking-2026-09-21"
     assert ":" not in pixiv_ranking_job_id(after_cutoff.ranking_date)
+    expiry_job_id = pixiv_heat_expiry_job_id(datetime(2026, 9, 24, 3, 15, 1, tzinfo=UTC))
+    assert expiry_job_id == "pixiv-heat-expiry-1790219701"
+    assert ":" not in expiry_job_id
+
+
+def test_pixiv_heat_expiry_schedules_one_guarded_job_at_the_48_hour_boundary(monkeypatch):
+    from rq.exceptions import NoSuchJobError
+
+    from app.services import pixiv_ranking_scheduler
+
+    fetched_at = datetime(2026, 9, 22, 3, 15, tzinfo=UTC)
+    now = fetched_at + timedelta(hours=1)
+    redis = object()
+    queue = object()
+    calls = []
+
+    def fetch(_job_id, *, connection):
+        assert connection is redis
+        raise NoSuchJobError
+
+    def enqueue_in(actual_queue, delay, function, **kwargs):
+        calls.append((actual_queue, delay, function, kwargs))
+
+    monkeypatch.setattr(pixiv_ranking_scheduler.Job, "fetch", fetch)
+    monkeypatch.setattr(pixiv_ranking_scheduler, "Queue", lambda **_kwargs: queue)
+    monkeypatch.setattr(pixiv_ranking_scheduler, "checked_enqueue_in", enqueue_in)
+
+    outcome = pixiv_ranking_scheduler.schedule_pixiv_heat_expiry(
+        fetched_at,
+        now=now,
+        redis_client=redis,
+    )
+
+    assert outcome["created"] is True
+    assert outcome["expires_at"] == "2026-09-24T03:15:01+00:00"
+    assert calls[0][0] is queue
+    assert calls[0][1] == timedelta(hours=47, seconds=1)
+    assert calls[0][3]["job_id"] == outcome["job_id"]
+
+    existing = SimpleNamespace(get_status=lambda refresh: "scheduled")
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler.Job,
+        "fetch",
+        lambda _job_id, *, connection: existing,
+    )
+    repeated = pixiv_ranking_scheduler.schedule_pixiv_heat_expiry(
+        fetched_at,
+        now=now,
+        redis_client=redis,
+    )
+    assert repeated["created"] is False
+    assert len(calls) == 1
+
+
+def test_pixiv_heat_expiry_job_ignores_newer_snapshots_and_queues_stale_ones(monkeypatch):
+    from app.jobs import work_heat
+
+    current = datetime(2026, 9, 24, 3, 15, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current if tz is not None else current.replace(tzinfo=None)
+
+    latest_fetched_at = current - timedelta(hours=47, minutes=59)
+
+    def run_latest(awaitable):
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        return latest_fetched_at
+
+    queued = []
+    monkeypatch.setattr(work_heat, "datetime", FixedDateTime)
+    monkeypatch.setattr(work_heat.asyncio, "run", run_latest)
+    monkeypatch.setattr(
+        work_heat,
+        "request_work_heat_recompute",
+        lambda sources: queued.append(sources)
+        or {"created": 1, "coalesced": 0, "errors": 0},
+    )
+
+    fresh = work_heat.expire_pixiv_heat()
+    assert fresh["status"] == "skipped"
+    assert fresh["reason"] == "newer_ranking_is_fresh"
+    assert queued == []
+
+    latest_fetched_at = current - timedelta(hours=48, minutes=1)
+    stale = work_heat.expire_pixiv_heat()
+    assert stale["status"] == "queued"
+    assert queued == [{"pixiv"}]
 
 
 @pytest.mark.asyncio
@@ -261,6 +352,76 @@ def test_ranking_job_retries_not_ready_date_after_30_then_120_minutes(monkeypatc
     assert retry.max == 2
     assert retry.intervals == [1800, 7200]
     assert recomputes == [{"pixiv"}]
+
+
+@pytest.mark.asyncio
+async def test_successful_ranking_sync_schedules_heat_expiry_after_commit(monkeypatch):
+    from app.jobs import pixiv_ranking_sync
+    from app.remote_discovery.pixiv import PIXIV_RANKING_MODES
+
+    fetched_at = datetime(2026, 9, 22, 3, 16, tzinfo=UTC)
+    db = SimpleNamespace(
+        commit_count=0,
+        commit=None,
+    )
+
+    async def commit():
+        db.commit_count += 1
+
+    db.commit = commit
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def healthy(_db):
+        return SimpleNamespace(user_id="user")
+
+    class Adapter:
+        async def fetch_rankings(self, _credentials, *, mode, ranking_date):
+            return SimpleNamespace(
+                mode=mode,
+                ranking_date=ranking_date,
+                fetched_at=fetched_at,
+                items=(SimpleNamespace(source_work_id=f"{mode}-1", rank=1),),
+            )
+
+    async def store(_db, results):
+        assert tuple(result.mode for result in results) == PIXIV_RANKING_MODES
+        return {"snapshots": 4, "changed_works": 1}
+
+    scheduled = []
+    monkeypatch.setattr(pixiv_ranking_sync, "async_session", lambda: SessionContext())
+    monkeypatch.setattr(pixiv_ranking_sync, "_healthy_pixiv_account", healthy)
+    monkeypatch.setattr(
+        pixiv_ranking_sync,
+        "RemoteAccountService",
+        lambda _db, _user_id: SimpleNamespace(
+            credentials_for_adapter=lambda _account: {"refresh_token": "fixture"}
+        ),
+    )
+    monkeypatch.setattr(pixiv_ranking_sync, "PixivRemoteDiscoveryAdapter", Adapter)
+    monkeypatch.setattr(pixiv_ranking_sync.registry, "get", lambda _source: Adapter())
+    monkeypatch.setattr(pixiv_ranking_sync, "store_pixiv_ranking_results", store)
+    monkeypatch.setattr(
+        pixiv_ranking_sync,
+        "_schedule_pixiv_heat_expiry",
+        lambda observed_at: scheduled.append(observed_at),
+    )
+
+    outcome = await pixiv_ranking_sync.sync_pixiv_rankings_async("2026-09-21")
+
+    assert db.commit_count == 2
+    assert scheduled == [fetched_at]
+    assert outcome == {
+        "status": "completed",
+        "ranking_date": "2026-09-21",
+        "snapshots": 4,
+        "changed_works": 1,
+    }
 
 
 def test_ranking_job_requests_expiry_recompute_when_no_account_is_available(monkeypatch):
