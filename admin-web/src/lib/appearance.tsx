@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { pushPreferences } from "@/lib/preferencesSync";
 
 export type WorkPreviewDelayMs = 150 | 250 | 400;
@@ -102,12 +102,17 @@ function writeAppearanceSettings(settings: AppearanceSettings) {
 
 export function useAppearanceSettings() {
   const [settings, setSettingsState] = useState<AppearanceSettings>(() => readAppearanceSettings());
+  const settingsRef = useRef(settings);
 
   useEffect(() => {
-    const applyCurrent = () => setSettingsState(readAppearanceSettings());
+    const apply = (next: AppearanceSettings) => {
+      settingsRef.current = next;
+      setSettingsState(next);
+    };
+    const applyCurrent = () => apply(readAppearanceSettings());
     const onCustom = (event: Event) => {
       const detail = (event as CustomEvent<AppearanceSettings>).detail;
-      setSettingsState(sanitizeAppearanceSettings(detail));
+      apply(sanitizeAppearanceSettings(detail));
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === APPEARANCE_STORAGE_KEY || event.key === LEGACY_WORK_PREVIEW_KEY) applyCurrent();
@@ -122,14 +127,14 @@ export function useAppearanceSettings() {
   }, []);
 
   const updateSettings = useCallback((patch: Partial<AppearanceSettings>) => {
-    setSettingsState((current) => {
-      const next = sanitizeAppearanceSettings({ ...current, ...patch });
-      try { writeAppearanceSettings(next); } catch {}
-      return next;
-    });
+    const next = sanitizeAppearanceSettings({ ...settingsRef.current, ...patch });
+    settingsRef.current = next;
+    setSettingsState(next);
+    try { writeAppearanceSettings(next); } catch {}
   }, []);
 
   const resetSettings = useCallback(() => {
+    settingsRef.current = DEFAULT_APPEARANCE_SETTINGS;
     setSettingsState(DEFAULT_APPEARANCE_SETTINGS);
     try { writeAppearanceSettings(DEFAULT_APPEARANCE_SETTINGS); } catch {}
   }, []);

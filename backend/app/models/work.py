@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Boolean, Computed, DateTime, Float, Index, String, Text, Uuid
+from sqlalchemy import BigInteger, Boolean, Computed, DateTime, Float, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -10,7 +10,11 @@ from app.models.base import Base, TimestampMixin
 class Work(TimestampMixin, Base):
     __tablename__ = "works"
     __table_args__ = (
-        Index("ix_works_heat_score_id", "heat_score", "id"),
+        Index(
+            "ix_works_heat_score_id",
+            text("heat_score DESC NULLS LAST"),
+            text("id DESC"),
+        ),
         Index("ix_works_shuffle_key_id", "shuffle_key", "id"),
     )
 

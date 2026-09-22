@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -67,6 +67,10 @@ async def sort_session():
         )
         await connection.exec_driver_sql(
             "CREATE INDEX ix_works_shuffle_key_id ON works (shuffle_key, id)"
+        )
+        await connection.exec_driver_sql(
+            "CREATE INDEX ix_works_heat_score_id "
+            "ON works (heat_score DESC NULLS LAST, id DESC)"
         )
         session = AsyncSession(bind=connection, expire_on_commit=False)
         try:
@@ -325,6 +329,62 @@ async def test_heat_sort_is_descending_null_last_and_cursor_stable(sort_db):
         [6, 5],
     ]
     assert [row["id"].int for row in await page(cursor(pages[2][0], "before"))] == [4, 3]
+
+
+@pytest.mark.asyncio
+async def test_heat_and_random_first_pages_use_indexes_at_70000_work_scale(sort_session, monkeypatch):
+    await sort_session.execute(text("""
+        INSERT INTO works (id, is_nsfw, is_ai_generated, is_favorite, heat_score)
+        SELECT lpad(to_hex(n), 32, '0')::uuid, false, false, false,
+               CASE WHEN n % 10 = 0 THEN NULL ELSE (n % 100)::float END
+        FROM generate_series(1, 70000) AS n
+    """))
+    await sort_session.execute(text("ANALYZE works"))
+
+    async def plan_for(statement):
+        compiled = sql(statement)
+        assert "random(" not in compiled.lower()
+        result = await sort_session.execute(text(
+            "EXPLAIN (ANALYZE, FORMAT JSON) " + compiled
+        ))
+        plan = result.scalar_one()[0]["Plan"]
+        nodes = [plan]
+        for node in nodes:
+            nodes.extend(node.get("Plans", []))
+        assert all(node["Node Type"] != "Sort" for node in nodes), plan
+        return nodes
+
+    heat = _apply_sql_sort(
+        select(Work.id, Work.heat_score),
+        parse_search_query("sort:heat-desc", "works"),
+        Work,
+    ).limit(30)
+    heat_nodes = await plan_for(heat)
+    assert any(node.get("Index Name") == "ix_works_heat_score_id" for node in heat_nodes)
+
+    captured = []
+    execute = sort_session.execute
+
+    async def capture(statement, *args, **kwargs):
+        captured.append(statement)
+        return await execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(sort_session, "execute", capture)
+    rows = await _fetch_random_work_page(
+        sort_session,
+        select(Work),
+        parse_search_query("sort:random", "works"),
+        offset=0,
+        limit=30,
+        force_sfw=False,
+        cursor=None,
+        seed=1_234_567_890,
+    )
+    assert len(rows) == 30
+    random_statement = captured[-1]
+    monkeypatch.setattr(sort_session, "execute", execute)
+    random_nodes = await plan_for(random_statement)
+    assert any(node.get("Index Name") == "ix_works_shuffle_key_id" for node in random_nodes)
 
 
 @pytest.mark.asyncio

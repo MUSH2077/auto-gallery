@@ -236,6 +236,16 @@ async def test_recompute_source_heat_materializes_changed_works_and_requests_pro
     assert second_work.heat_score == second_source.source_heat_score
     assert projected == [first_work.id, second_work.id]
 
+    repeat_db = FakeSession([[first_source, second_source], [], [first_work, second_work]])
+    repeated = await recompute_source_heat(
+        repeat_db,  # type: ignore[arg-type]
+        {"pixiv"},
+        now=NOW,
+        request_projection=request_projection,
+    )
+    assert repeated == set()
+    assert projected == [first_work.id, second_work.id]
+
 
 def test_bulk_import_rows_include_stable_shuffle_and_source_metric_snapshot(
     tmp_path,
@@ -425,6 +435,16 @@ def test_heat_schema_migration_backfills_shuffle_key_and_round_trips(
             assert await connection.fetchval(
                 "SELECT to_regclass('public.source_ranking_snapshots')"
             ) == "source_ranking_snapshots"
+            heat_index = await connection.fetchval(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'ix_works_heat_score_id'
+                """
+            )
+            assert heat_index is not None
+            assert "heat_score DESC NULLS LAST, id DESC" in heat_index
         finally:
             await connection.close()
 

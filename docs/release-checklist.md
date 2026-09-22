@@ -60,6 +60,9 @@ docker compose --env-file .env.ci down -v
 - [ ] Upgrade and rollback were tested when the release contains migrations.
 - [ ] Stability/performance releases completed the disposable 70k-intent /
       100k-asset benchmark and recorded a production-data read-only sample.
+- [ ] Works-control releases completed the 70k-work heat/random first-page and
+      cursor benchmark, recorded the existing-sort baseline comparison, and
+      followed `works-page-controls-rollout.md`.
 - [ ] Gitllery remains `shadow` unless the separate 24-hour incremental gate in
       `stability-performance-rollout.md` has complete reviewed evidence.
 - [ ] The seven-day soak is recorded as pending or complete; it is never

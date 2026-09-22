@@ -255,6 +255,12 @@ test("mobile works panel is a focus-trapped bottom sheet", async ({ context, pag
 });
 
 test("display defaults persist without re-requesting works", async ({ context, page }) => {
+  const renderPhaseWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("Cannot update a component")) {
+      renderPhaseWarnings.push(message.text());
+    }
+  });
   const fixture = await setup(context);
   await page.goto("/admin/works");
   await expect(page.getByText("Harbor light")).toBeVisible();
@@ -292,6 +298,7 @@ test("display defaults persist without re-requesting works", async ({ context, p
   await page.reload();
   await page.getByRole("button", { name: "Display", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Display settings" }).getByRole("button", { name: "Masonry", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(renderPhaseWarnings).toEqual([]);
 });
 
 test("server appearance preferences hydrate older clients with safe defaults", async ({ context, page }) => {

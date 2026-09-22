@@ -31,7 +31,11 @@ def upgrade() -> None:
     )
     op.add_column("works", sa.Column("heat_score", sa.Float(), nullable=True))
     op.add_column("works", sa.Column("heat_observed_at", sa.DateTime(timezone=True), nullable=True))
-    op.create_index("ix_works_heat_score_id", "works", ["heat_score", "id"])
+    op.create_index(
+        "ix_works_heat_score_id",
+        "works",
+        [sa.text("heat_score DESC NULLS LAST"), sa.text("id DESC")],
+    )
     op.create_index("ix_works_shuffle_key_id", "works", ["shuffle_key", "id"])
 
     op.add_column("work_sources", sa.Column("engagement_count", sa.BigInteger(), nullable=True))

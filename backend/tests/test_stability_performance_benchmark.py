@@ -82,6 +82,10 @@ def test_acceptance_performance_phase_runs_stability_hot_path_benchmark():
     ).read_text()
 
     assert "benchmark_stability_hot_paths.py" in script
+    assert "work-search-current.json" in script
+    assert "work-search-baseline.json" in script
+    assert "--require-baseline" in script
+    assert "--sql-budget 6" in script
     assert "--assets 100000" in script
     assert "--intents 70000" in script
 
