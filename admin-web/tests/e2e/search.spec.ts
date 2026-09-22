@@ -539,7 +539,10 @@ test("entity tabs and visible work filters write only the canonical q parameter"
   await expect(page).toHaveURL(/q=aurora/);
 
   await page.goto("/admin/works");
-  await page.getByRole("combobox", { name: "Filter source" }).selectOption("pixiv");
+  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  const filter = page.getByRole("dialog", { name: "Filter works" });
+  await filter.getByRole("checkbox", { name: "Pixiv" }).check();
+  await filter.getByRole("button", { name: "Apply" }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("source:pixiv");
   const params = new URL(page.url()).searchParams;
   for (const legacy of ["source", "creator", "nsfw", "fav", "ai", "sort", "order"]) {
@@ -559,9 +562,7 @@ test("every internal search surface uses the shared smart-search contract", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   for (const route of routes) {
     await page.goto(route);
-    if (route === "/admin/works") {
-      await page.getByRole("button", { name: /Filters/ }).click();
-    } else if (route === "/admin/scheduler") {
+    if (route === "/admin/scheduler") {
       await page.locator("details").filter({ hasText: "Healthy schedules" }).locator("summary").click();
     }
     await expect(page.locator("[data-smart-search]").first(), route).toBeVisible();

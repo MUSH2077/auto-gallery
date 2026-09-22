@@ -6,6 +6,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+def test_search_response_contract_exposes_random_seed():
+    from app.main import app
+
+    schema = app.openapi()
+    response = schema["components"]["schemas"]["SearchResponseRead"]
+    assert "seed" in response["properties"]
+
+
 @pytest.mark.asyncio
 async def test_search_accepts_100_and_rejects_101(monkeypatch):
     from app.api import search as search_api

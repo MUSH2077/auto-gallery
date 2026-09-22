@@ -9936,6 +9936,19 @@
             "title": "Query",
             "type": "string"
           },
+          "seed": {
+            "anyOf": [
+              {
+                "maximum": 4294967295.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
           "total": {
             "default": 0,
             "title": "Total",
@@ -13836,6 +13849,30 @@
               }
             ],
             "title": "Thumbnail Asset Id"
+          },
+          "thumbnail_height": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Height"
+          },
+          "thumbnail_width": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Width"
           },
           "title": {
             "anyOf": [
@@ -29356,6 +29393,26 @@
               ],
               "description": "Optional seek cursor for adjacent structured work pages",
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Stable random-order seed for work searches",
+            "in": "query",
+            "name": "seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Stable random-order seed for work searches",
+              "title": "Seed"
             }
           }
         ],

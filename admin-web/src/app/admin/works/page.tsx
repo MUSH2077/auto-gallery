@@ -1,18 +1,16 @@
 "use client";
 import { useState, useEffect, useMemo, useRef, Suspense } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n";
 import { api, queryKeys, WorkListItem, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
 import type { MediaDerivativeProgress, WorkAsset } from "@/lib/api/endpoints/works";
 import { useAppearanceSettings } from "@/lib/appearance";
-import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
+import { useStaggeredEntrance } from "@/lib/motion";
 import PageHeader from "@/components/PageHeader";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
-import SourceBadge from "@/components/SourceBadge";
 import PageShell from "@/components/PageShell";
 import SelectionBar from "@/components/SelectionBar";
 import {
@@ -21,16 +19,14 @@ import {
   useSearchBatchComposer,
   useSearchComposer,
 } from "@/components/SmartSearchInput";
-import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
 import PermissionGuard from "@/components/PermissionGuard";
 import type { SlideItem } from "@/components/SlideshowPlayer";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { Star } from "lucide-react";
-import { searchUrl } from "@/lib/search-query";
 import { resolveMediaKind } from "@/lib/media";
 import DomainDangerZone from "@/components/DomainDangerZone";
+import { useToast } from "@/components/Toast";
 import { pollInterval } from "@/lib/polling";
 import { WorksControlSurface, WorksDisplayPanel } from "./WorksControlSurface";
 import {
@@ -73,175 +69,6 @@ function stripLegacyWorkQuery(params: URLSearchParams): boolean {
     }
   }
   return changed;
-}
-
-function WorkCard({
-  w,
-  onToggleFavorite,
-  trashMode,
-  onRestore,
-  onPurge,
-  selectable,
-  selected,
-  onToggleSelect,
-  entrance,
-  previewEnabled,
-  previewDelayMs,
-  wheelThreshold,
-  onOpenPreview,
-  onScheduleClosePreview,
-  onCancelClosePreview,
-  onPreviewPage,
-  canCurate,
-  canPurge,
-  eager = false,
-}: {
-  w: WorkListItem;
-  onToggleFavorite: (id: string) => void;
-  trashMode?: boolean;
-  onRestore?: (id: string) => void;
-  onPurge?: (id: string) => void;
-  selectable?: boolean;
-  selected?: boolean;
-  onToggleSelect?: (id: string) => void;
-  entrance?: StaggeredEntranceProps;
-  previewEnabled: boolean;
-  previewDelayMs: number;
-  wheelThreshold: number;
-  onOpenPreview: (preview: PreviewState) => void;
-  onScheduleClosePreview: () => void;
-  onCancelClosePreview: () => void;
-  onPreviewPage: (workId: string, pageIndex: number) => void;
-  canCurate: boolean;
-  canPurge: boolean;
-  eager?: boolean;
-}) {
-  const t = useT();
-  const fmt = useI18nFormat();
-  const cardRef = useRef<HTMLElement | null>(null);
-  const hoverTimer = useRef<number | null>(null);
-  const wheelDelta = useRef(0);
-  const [pageIdx, setPageIdx] = useState(0);
-  const assetIds = w.preview_asset_ids?.length ? w.preview_asset_ids : (w.thumbnail_asset_id ? [w.thumbnail_asset_id] : []);
-  const hasMultiple = assetIds.length > 1;
-  const currentId = assetIds[pageIdx] || assetIds[0];
-
-  const updatePage = (next: number) => {
-    if (!assetIds.length) return;
-    const normalized = (next + assetIds.length) % assetIds.length;
-    setPageIdx(normalized);
-    onPreviewPage(w.id, normalized);
-  };
-
-  const openPreview = () => {
-    if (!previewEnabled || !cardRef.current || !assetIds.length || window.matchMedia("(pointer: coarse)").matches) return;
-    onOpenPreview({ work: w, anchor: cardRef.current.getBoundingClientRect(), assetIds, pageIndex: pageIdx });
-  };
-
-  const clearHoverTimer = () => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-  };
-
-  useEffect(() => {
-    const card = cardRef.current;
-    if (!card || !hasMultiple) return;
-    const onWheel = (event: WheelEvent) => {
-      wheelDelta.current += event.deltaY;
-      if (Math.abs(wheelDelta.current) < wheelThreshold) return;
-      event.preventDefault();
-      const normalized = (pageIdx + (wheelDelta.current > 0 ? 1 : -1) + assetIds.length) % assetIds.length;
-      setPageIdx(normalized);
-      onPreviewPage(w.id, normalized);
-      wheelDelta.current = 0;
-    };
-    card.addEventListener("wheel", onWheel, { passive: false });
-    return () => card.removeEventListener("wheel", onWheel);
-  }, [assetIds.length, hasMultiple, onPreviewPage, pageIdx, wheelThreshold, w.id]);
-
-  return (
-    <article
-      ref={cardRef}
-      className={`card-interactive media-motion-card relative ${entrance?.className || ""} overflow-hidden group ${selected ? "ring-2 ring-accent" : ""}`}
-      style={{
-        ...entrance?.style,
-        contentVisibility: "auto",
-        containIntrinsicSize: "auto 260px",
-      }}
-      onMouseEnter={() => {
-        onCancelClosePreview();
-        clearHoverTimer();
-        hoverTimer.current = window.setTimeout(openPreview, previewDelayMs);
-      }}
-      onMouseLeave={() => {
-        clearHoverTimer();
-        onScheduleClosePreview();
-      }}
-    >
-      <Link
-        href={`/admin/works/${w.id}`}
-        aria-label={t("common.open_item", { name: w.title || t("works.untitled") })}
-        className="absolute inset-0 z-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      />
-      <div className="media-motion-visual pointer-events-none relative z-10 flex h-32 items-center justify-center overflow-hidden bg-subtle text-xs text-muted">
-        <WorkMediaThumbnail assetId={currentId} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={currentId ? t("media.derivative_pending") : t("works.na")} eager={eager} />
-        {selectable && (
-          <label className="pointer-events-auto absolute left-1 top-1 z-20 flex h-7 w-7 items-center justify-center rounded bg-black/60 text-white shadow-sm">
-            <span className="sr-only">{t("works.select_work")}</span>
-            <input
-              type="checkbox"
-              checked={!!selected}
-              onChange={(e) => { e.stopPropagation(); onToggleSelect?.(w.id); }}
-              onClick={(e) => e.stopPropagation()}
-              className="h-4 w-4 rounded border-white"
-            />
-          </label>
-        )}
-        {canCurate && (
-          <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(w.id); }}
-            className={`pointer-events-auto absolute right-0 top-0 z-10 flex h-11 w-11 items-center justify-center text-base ${w.is_favorite ? "text-warning" : "text-white/60 hover:text-warning"} drop-shadow`}
-            title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-            aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-            <Star className="h-5 w-5" fill={w.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
-          </button>
-        )}
-        {w.asset_count > 1 && (
-          <span className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded font-medium">{w.asset_count}p</span>
-        )}
-        {w.is_ai_generated && (
-          <span className="absolute top-1 left-1 rounded bg-warning px-1.5 py-0.5 text-xs text-on-primary">{t("works.ai_badge")}</span>
-        )}
-        {w.has_ugoira && (
-          <span className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium text-on-primary">{t("works.gif_badge")}</span>
-        )}
-        {trashMode && !selectable && (
-          <span className="absolute left-1 top-1 rounded bg-danger/90 px-1.5 py-0.5 text-xs font-medium text-white">{t("works.trash_badge")}</span>
-        )}
-      </div>
-      <div className="pointer-events-none relative z-10 p-3">
-        <div className="text-sm font-medium truncate text-fg">{w.title || t("works.untitled")}</div>
-        <div className="flex items-center gap-1.5 mt-1">
-          {w.source && <SourceBadge source={w.source} href={`/admin/works?q=${encodeURIComponent(`source:${w.source}`)}`} />}
-          {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-[10px] text-accent">{t("works.gif_badge")}</span>}
-          {w.creator_name && w.creator_id && (
-  <Link href={`/admin/creators/${w.creator_id}`}
-    className="pointer-events-auto relative z-10 truncate text-xs text-accent hover:underline">
-    {w.creator_name}
-  </Link>
-)}
-        </div>
-        <div className="text-xs text-muted mt-0.5">
-          {w.posted_at ? fmt.date(w.posted_at) : t("works.no_date")}
-        </div>
-        {trashMode && canCurate && (
-          <div className="mt-3 flex gap-2">
-            <button onClick={(e) => { e.stopPropagation(); onRestore?.(w.id); }} className="pointer-events-auto rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-            {canPurge && <button onClick={(e) => { e.stopPropagation(); onPurge?.(w.id); }} className="pointer-events-auto rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>}
-          </div>
-        )}
-      </div>
-    </article>
-  );
 }
 
 function DerivativeProgressCard({
@@ -326,42 +153,33 @@ function DerivativeProgressCard({
 
 function WorksContent() {
   const t = useT();
-  const fmt = useI18nFormat();
   const router = useRouter();
   const qc = useQueryClient();
   const sp = useSearchParams();
   const pathname = usePathname();
   const { isAdmin, has } = usePermissions();
   const canCurate = has("curation");
+  const toast = useToast();
   const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const closePreviewTimer = useRef<number | null>(null);
   const previewEnabled = appearance.workPreviewEnabled;
   const wheelThreshold = appearance.workPreviewWheelSensitivity === "relaxed" ? 120 : 70;
-  const SORT_OPTIONS: { key: "created_at" | "posted_at" | "title"; label: string }[] = [
-    { key: "created_at", label: t("works.sort_imported") },
-    { key: "posted_at", label: t("works.sort_posted") },
-    { key: "title", label: t("works.sort_title") },
-  ];
-  const NSFW_FILTERS = [
-    { key: "all", label: t("works.filter_all") },
-    { key: "sfw", label: t("works.filter_sfw") },
-    { key: "nsfw", label: t("works.filter_nsfw") },
-  ];
-  const SOURCE_FILTERS = [
-    { key: "", label: t("works.filter_all_sources") },
-    ...["pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo"].map((key) => ({ key, label: key === "x" ? "X" : key[0].toUpperCase() + key.slice(1) })),
-  ];
-
-  // q is the only search state. Page and view remain navigation/presentation
-  // state and are deliberately outside the search language.
+  // q is canonical search state; page, random seed, and the temporary legacy
+  // view override remain separate navigation state.
   const search = sp.get("q") ?? "";
   const requestedPage = Number(sp.get("p") ?? "0");
   const page = Number.isSafeInteger(requestedPage) && requestedPage >= 0
     ? requestedPage
     : 0;
+  const requestedSeed = Number(sp.get("seed"));
+  const seed = sp.has("seed")
+    && Number.isSafeInteger(requestedSeed)
+    && requestedSeed >= 0
+    && requestedSeed <= 0xffffffff
+    ? requestedSeed
+    : null;
   const legacyView = sp.get("view");
   const viewMode = legacyView === "grid" || legacyView === "list" || legacyView === "masonry"
     ? legacyView
@@ -415,8 +233,10 @@ function WorksContent() {
     setInputVal(next);
   }
 
-  function clearFilters() {
-    setSearchQuery("");
+  function clearSearch() {
+    composer.discardPendingResult();
+    setInputVal("");
+    updateParams({ q: null, p: null, seed: null }, false);
   }
 
   const scheduleClosePreview = () => {
@@ -429,12 +249,7 @@ function WorksContent() {
     closePreviewTimer.current = null;
   };
 
-  const setPreviewPreference = (enabled: boolean) => {
-    updateSettings({ workPreviewEnabled: enabled });
-    if (!enabled) setPreview(null);
-  };
-
-  const worksQueryKey = [...queryKeys.works.all, "compound-search", page, search] as const;
+  const worksQueryKey = [...queryKeys.works.all, "compound-search", page, search, seed] as const;
   const worksQuery = useQuery({
     queryKey: worksQueryKey,
     queryFn: ({ signal }) => {
@@ -444,6 +259,7 @@ function WorksContent() {
             "compound-search",
             page - 1,
             search,
+            seed,
           ])
         : undefined;
       return api.search(
@@ -453,6 +269,7 @@ function WorksContent() {
         "works",
         signal,
         previous?.next_cursor,
+        seed,
       );
     },
     placeholderData: (previous) => previous,
@@ -481,7 +298,7 @@ function WorksContent() {
     const nextPage = page + 1;
     if (nextPage * limit >= total) return;
     void qc.prefetchQuery({
-      queryKey: [...queryKeys.works.all, "compound-search", nextPage, search],
+      queryKey: [...queryKeys.works.all, "compound-search", nextPage, search, seed],
       queryFn: ({ signal }) => api.search(
         search,
         nextPage * limit,
@@ -489,10 +306,11 @@ function WorksContent() {
         "works",
         signal,
         worksQuery.data?.next_cursor,
+        seed,
       ),
       staleTime: 60_000,
     });
-  }, [limit, page, qc, search, worksQuery.data, worksQuery.isPlaceholderData]);
+  }, [limit, page, qc, search, seed, worksQuery.data, worksQuery.isPlaceholderData]);
 
   const qualifierTokens = (worksQuery.data?.parsed.tokens || []).filter(
     (token): token is SearchQualifierToken => token.kind === "qualifier",
@@ -506,12 +324,6 @@ function WorksContent() {
   const aiFilter = isValues.includes("ai") ? "ai" : isValues.includes("human") ? "human" : "all";
   const curationVisibility = isValues.includes("trashed") ? "trashed" : "visible";
   const sortValue = qualifierValues("sort")[0] || "created-desc";
-  const sortBy: "created_at" | "posted_at" | "title" = sortValue.startsWith("posted")
-    ? "posted_at"
-    : sortValue.startsWith("title")
-      ? "title"
-      : "created_at";
-  const sortOrder: "asc" | "desc" = sortValue.endsWith("-asc") ? "asc" : "desc";
   const activeFilterCount = qualifierTokens.filter((token) => !["type", "sort"].includes(token.key)).length;
   const composer = useSearchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
   const batchComposer = useSearchBatchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
@@ -535,6 +347,18 @@ function WorksContent() {
   const currentSort: WorksSortValue = knownSorts.includes(sortValue as WorksSortValue)
     ? sortValue as WorksSortValue
     : "created-desc";
+  useEffect(() => {
+    if (
+      currentSort !== "random"
+      || seed !== null
+      || inputVal !== search
+      || worksQuery.isPlaceholderData
+      || worksQuery.data?.canonical_query !== search
+      || worksQuery.data.seed === undefined
+      || worksQuery.data.seed === null
+    ) return;
+    updateParams({ seed: String(worksQuery.data.seed) }, false);
+  }, [currentSort, inputVal, search, seed, worksQuery.data?.canonical_query, worksQuery.data?.seed, worksQuery.isPlaceholderData]);
   const sortSummary = currentSort === "heat-desc"
     ? t("works.sort_heat")
     : currentSort === "random"
@@ -624,6 +448,12 @@ function WorksContent() {
   useEffect(() => {
     setSelectedWorkIds(new Set());
   }, [page, filters]);
+
+  useEffect(() => {
+    if (appearance.workCardShowCheckbox || selectedWorkIds.size === 0) return;
+    setSelectedWorkIds(new Set());
+    toast.info(t("works.selection_hidden_cleared"));
+  }, [appearance.workCardShowCheckbox, selectedWorkIds.size, t, toast]);
 
   const toggleFavorite = useMutation({
     mutationFn: (id: string) => api.toggleWorkFavorite(id),
@@ -720,6 +550,7 @@ function WorksContent() {
             value={inputVal}
             onChange={setInputVal}
             onEditStart={composer.discardPendingResult}
+            onClear={clearSearch}
             scope="works"
             ariaLabel={t("works.search_title")}
             placeholder={t("works.search_title")}
@@ -744,179 +575,14 @@ function WorksContent() {
           />
         )}
         renderDisplay={() => (
-          <WorksDisplayPanel appearance={appearance} updateAppearance={updateDisplayAppearance} />
+          <WorksDisplayPanel
+            appearance={{ ...appearance, worksViewMode: viewMode }}
+            updateAppearance={updateDisplayAppearance}
+          />
         )}
       />
 
-      {/* Search & Filters */}
-      <div data-page-primary-content className="mb-3 flex flex-wrap items-center gap-2 md:hidden" style={{ display: "none" }} aria-hidden="true">
-        <button
-          onClick={() => setFiltersOpen((value) => !value)}
-          className="btn-ghost"
-          aria-expanded={filtersOpen}
-          aria-controls="works-filter-panel"
-        >
-          {t("works.filters")} {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-accent px-1.5 py-0.5 text-xs text-white">{activeFilterCount}</span>}
-        </button>
-        {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="btn-ghost">
-            {t("works.clear_filters")}
-          </button>
-        )}
-      </div>
-
-      <div data-page-primary-content id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} toolbar mb-4 flex-col md:flex md:flex-row md:flex-wrap md:items-center`} style={{ display: "none" }} aria-hidden="true">
-        <div className="segmented-control">
-          <button onClick={() => composer.mutate({
-            key: "is",
-            value: null,
-            operation: "replace-group",
-            replace_values: ["visible", "trashed"],
-          })}
-            aria-label={t("works.gallery")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "visible" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
-            {t("works.gallery")}
-          </button>
-          <button onClick={() => composer.mutate({
-            key: "is",
-            value: "trashed",
-            operation: "replace-group",
-            replace_values: ["visible", "trashed"],
-          })}
-            aria-label={t("works.trash")}
-            className={`px-2.5 py-1 text-xs rounded transition-colors ${curationVisibility === "trashed" ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
-            {t("works.trash")}
-          </button>
-        </div>
-
-        <SmartSearchInput
-          value={inputVal}
-          onChange={setInputVal}
-          onEditStart={composer.discardPendingResult}
-          scope="works"
-          ariaLabel={t("works.search_title")}
-          placeholder={t("works.search_title")}
-          showTokens={false}
-          className="w-full md:w-72"
-        />
-
-        {/* Source filter — dropdown */}
-        <select value={sourceFilter} onChange={(e) => composer.mutate({
-          key: "source",
-          value: e.target.value || null,
-          operation: "set",
-        })}
-          aria-label={t("works.filter_source")}
-          className="select px-2 py-1.5 text-xs">
-          {SOURCE_FILTERS.map((f) => (
-            <option key={f.key} value={f.key}>{f.label}</option>
-          ))}
-        </select>
-
-        {/* NSFW filter */}
-        <div className="segmented-control">
-          {NSFW_FILTERS.map((f) => (
-            <button key={f.key} onClick={() => composer.mutate({
-              key: "is",
-              value: f.key === "all" ? null : f.key,
-              operation: "replace-group",
-              replace_values: ["sfw", "nsfw"],
-            })}
-              aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${nsfwFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Favorites filter */}
-        <button onClick={() => composer.mutate({
-          key: "is",
-          value: "favorite",
-          operation: "toggle",
-        })}
-          aria-label={t("works.filter_favorites")}
-          className={`px-2.5 py-1 text-xs rounded transition-colors ${isFavoriteFilter ? "bg-warning-subtle text-warning font-medium" : "text-muted hover:text-fg"}`}>
-          <Star className="mr-1 inline h-3.5 w-3.5" fill={isFavoriteFilter ? "currentColor" : "none"} aria-hidden="true" />
-          {t("works.filter_favorites")}
-        </button>
-
-        {/* AI filter */}
-        <div className="segmented-control">
-          {[
-            { key: "all", label: t("works.ai_filter_all") },
-            { key: "human", label: t("works.ai_filter_human") },
-            { key: "ai", label: t("works.ai_filter_ai") },
-          ].map((f) => (
-            <button key={f.key} onClick={() => composer.mutate({
-              key: "is",
-              value: f.key === "all" ? null : f.key,
-              operation: "replace-group",
-              replace_values: ["human", "ai"],
-            })}
-              aria-label={f.label}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${aiFilter === f.key ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Sort — click same field toggles direction */}
-        <div className="segmented-control">
-          {SORT_OPTIONS.map((s) => {
-            const active = sortBy === s.key;
-            const dir = active ? sortOrder : "desc";
-            const nextDir = dir === "desc" ? "asc" : "desc";
-            return (
-              <button key={s.key}
-                onClick={() => composer.mutate({
-                  key: "sort",
-                  value: s.key === "created_at" && nextDir === "desc"
-                    ? null
-                    : `${s.key === "created_at" ? "created" : s.key === "posted_at" ? "posted" : "title"}-${nextDir}`,
-                  operation: "set",
-                })}
-                aria-label={t("works.sort_by", { sort: s.label })}
-                className={`px-2.5 py-1 text-xs rounded transition-colors ${active ? "bg-surface shadow-sm font-medium" : "text-muted hover:text-fg"}`}>
-                {s.label} {active ? (dir === "desc" ? "↓" : "↑") : ""}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex-1" />
-
-        {activeFilterCount > 0 && (
-          <button onClick={clearFilters} className="hidden rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle md:inline-flex">
-            {t("works.clear_filters")}
-          </button>
-        )}
-
-        {/* View toggle */}
-        <div className="segmented-control">
-          <button onClick={() => updateParams({ view: null }, false)}
-            aria-label={t("works.view_grid")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "grid" ? "bg-surface shadow-sm" : "text-muted"}`}>
-            {t("works.view_grid")}
-          </button>
-          <button onClick={() => updateParams({ view: "list" }, false)}
-            aria-label={t("works.view_list")}
-            className={`px-2.5 py-1 rounded text-xs ${viewMode === "list" ? "bg-surface shadow-sm" : "text-muted"}`}>
-            {t("works.view_list")}
-          </button>
-        </div>
-
-        {viewMode === "grid" && (
-          <button
-            onClick={() => setPreviewPreference(!previewEnabled)}
-            className={`rounded-md border border-border px-2.5 py-1.5 text-xs transition-colors ${previewEnabled ? "bg-accent-subtle text-accent" : "bg-surface text-muted hover:bg-subtle"}`}
-          >
-            {previewEnabled ? t("works.preview_on") : t("works.preview_off")}
-          </button>
-        )}
-      </div>
-
-      {canCurate && works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
+      {canCurate && appearance.workCardShowCheckbox && works.data && works.data.items?.length > 0 && curationVisibility === "visible" && (
         selectedCount > 0 ? (
           <SelectionBar
             count={selectedCount}

@@ -141,6 +141,7 @@ export interface SmartSearchInputProps {
   showHelp?: boolean;
   onFocus?: () => void;
   onEditStart?: () => void;
+  onClear?: () => void;
   onSubmit?: (canonicalQuery: string) => void;
   keyboardNavigation?: boolean;
 }
@@ -159,6 +160,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   showHelp = false,
   onFocus,
   onEditStart,
+  onClear,
   onSubmit,
   keyboardNavigation = true,
 }, forwardedRef) {
@@ -292,7 +294,8 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
-              onChange("");
+              if (onClear) onClear();
+              else onChange("");
               requestAnimationFrame(() => inputRef.current?.focus());
             }}
             className="btn-icon min-h-9 min-w-9 text-muted"

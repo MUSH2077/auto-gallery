@@ -8438,6 +8438,8 @@ export interface components {
              * @default
              */
             query: string;
+            /** Seed */
+            seed?: number | null;
             /**
              * Total
              * @default 0
@@ -9724,6 +9726,10 @@ export interface components {
             source?: string | null;
             /** Thumbnail Asset Id */
             thumbnail_asset_id?: string | null;
+            /** Thumbnail Height */
+            thumbnail_height?: number | null;
+            /** Thumbnail Width */
+            thumbnail_width?: number | null;
             /** Title */
             title?: string | null;
         };
@@ -19256,6 +19262,8 @@ export interface operations {
                 limit?: number;
                 /** @description Optional seek cursor for adjacent structured work pages */
                 cursor?: string | null;
+                /** @description Stable random-order seed for work searches */
+                seed?: number | null;
             };
             header?: never;
             path?: never;

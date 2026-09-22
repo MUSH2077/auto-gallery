@@ -76,6 +76,7 @@ class SearchGroupRead(BaseModel):
 class SearchResponseRead(BaseModel):
     query: str = ""
     canonical_query: str = ""
+    seed: int | None = Field(default=None, ge=0, le=4_294_967_295)
     groups: dict[str, SearchGroupRead] = Field(default_factory=dict)
     total: int = 0
 

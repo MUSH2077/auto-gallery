@@ -1500,6 +1500,7 @@ export interface SearchGroups {
 export interface SearchResponse {
   query: string;
   canonical_query: string;
+  seed?: number | null;
   parsed: SearchParsedQuery;
   groups: SearchGroups;
   total: number;

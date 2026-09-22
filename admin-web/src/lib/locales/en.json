@@ -1094,6 +1094,7 @@
   "works.deselect_page": "Deselect page",
   "works.selected_count": "{count} works selected",
   "works.clear_selection": "Clear selection",
+  "works.selection_hidden_cleared": "Selection cleared because selection checkboxes are hidden.",
   "works.move_to_trash": "Move to Trash",
   "works.moving_to_trash": "Moving...",
   "works.batch_trash_confirm": "Move {count} works to trash?",

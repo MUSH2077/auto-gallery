@@ -1094,6 +1094,7 @@
   "works.deselect_page": "取消选择本页",
   "works.selected_count": "已选 {count} 个作品",
   "works.clear_selection": "清空选择",
+  "works.selection_hidden_cleared": "已隐藏选择框，当前选择已清空。",
   "works.move_to_trash": "移入回收站",
   "works.moving_to_trash": "移动中...",
   "works.batch_trash_confirm": "将 {count} 个作品移入回收站？",

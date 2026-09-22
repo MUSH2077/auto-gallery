@@ -155,7 +155,8 @@ test("works debounce preserves a rapid view navigation through settlement", asyn
   await page.goto("/admin/works?q=is%3Afavorite&view=list");
   const search = page.getByRole("combobox", { name: "Search title..." });
   await search.fill("is:favorite sky");
-  await page.getByRole("button", { name: /Grid/ }).click();
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("dialog", { name: "Display settings" }).getByRole("button", { name: "Grid", exact: true }).click();
   await page.waitForTimeout(700);
   await expect(page).toHaveURL(/q=is%3Afavorite(?:\+|%20)sky/);
   expect(new URL(page.url()).searchParams.has("view")).toBe(false);

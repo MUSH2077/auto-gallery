@@ -146,7 +146,10 @@ function ResponsiveWorksPanel({
         className={desktop
           ? "popover fixed z-[71] max-h-[min(72vh,680px)] w-[min(420px,calc(100vw-24px))] overflow-y-auto rounded-xl border border-border bg-surface shadow-overlay dark:shadow-overlay-dark"
           : "overlay-panel fixed inset-x-0 bottom-0 z-[71] max-h-[min(82vh,720px)] overflow-y-auto rounded-t-2xl border border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"}
-        style={desktop ? position : undefined}
+        style={desktop ? {
+          ...position,
+          maxHeight: `calc(100vh - ${position.top + 12}px)`,
+        } : undefined}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface/95 px-4 py-3 backdrop-blur">
           <h2 id={titleId} className="text-sm font-semibold text-fg">{title}</h2>
