@@ -30,7 +30,10 @@ async def sort_db():
     try:
         # Shadow works only on this connection, using the real schema's column
         # nullability. The two indexes match the existing browse migration.
-        await connection.execute("CREATE TEMP TABLE works (LIKE public.works INCLUDING DEFAULTS) ON COMMIT DROP")
+        await connection.execute(
+            "CREATE TEMP TABLE works "
+            "(LIKE public.works INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP"
+        )
         await connection.execute("CREATE INDEX ix_works_created_id ON works (created_at, id)")
         await connection.execute("CREATE INDEX ix_works_updated_id ON works (updated_at, id)")
         yield connection

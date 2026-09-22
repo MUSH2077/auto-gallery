@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 import hashlib
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -33,6 +34,23 @@ from app.remote_discovery.contract import (
 from app.services.remote_credentials import DownloadAuthenticationOverride
 
 
+PIXIV_RANKING_MODES = ("day", "day_ai", "day_r18", "day_r18_ai")
+
+
+@dataclass(frozen=True, slots=True)
+class PixivRankingEntry:
+    source_work_id: str
+    rank: int
+
+
+@dataclass(frozen=True, slots=True)
+class PixivRankingResult:
+    mode: str
+    ranking_date: date
+    items: tuple[PixivRankingEntry, ...]
+    fetched_at: datetime
+
+
 class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
     source = "pixiv"
     auth_methods = ("refresh_token",)
@@ -41,6 +59,7 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
     USER_DETAIL_URL = "https://app-api.pixiv.net/v1/user/detail"
     USER_ILLUSTS_URL = "https://app-api.pixiv.net/v1/user/illusts"
     ILLUST_DETAIL_URL = "https://app-api.pixiv.net/v1/illust/detail"
+    RANKING_URL = "https://app-api.pixiv.net/v1/illust/ranking"
     APP_HEADERS = {
         "App-OS": "ios",
         "App-OS-Version": "16.7.2",
@@ -116,6 +135,93 @@ class PixivRemoteDiscoveryAdapter(RemoteDiscoveryAdapter):
             display_name=str(user.get("name") or user.get("account") or source_creator_id),
             username=str(user.get("account") or "") or None,
             metadata={"account": user.get("account")},
+        )
+
+    async def fetch_rankings(
+        self,
+        credentials: Mapping[str, Any],
+        *,
+        mode: str,
+        ranking_date: date,
+        limit: int = 500,
+    ) -> PixivRankingResult:
+        """Fetch one dated Pixiv ranking without trusting provider pagination URLs."""
+
+        if mode not in PIXIV_RANKING_MODES:
+            raise ValueError("unknown Pixiv ranking mode")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("Pixiv ranking limit must be between 1 and 500")
+
+        access_token, _user = await self._authentication(credentials)
+        headers = {**self.APP_HEADERS, "Authorization": f"Bearer {access_token}"}
+        items: list[PixivRankingEntry] = []
+        seen_work_ids: set[str] = set()
+        seen_offsets: set[int] = set()
+        offset = 0
+
+        while len(items) < limit:
+            if offset in seen_offsets:
+                raise MalformedRemoteResponse("Pixiv ranking next_url repeats an offset")
+            seen_offsets.add(offset)
+            response = await self.transport.request(
+                "GET",
+                self.RANKING_URL,
+                headers=headers,
+                params={
+                    "filter": "for_ios",
+                    "mode": mode,
+                    "date": ranking_date.isoformat(),
+                    "offset": offset,
+                },
+            )
+            payload = checked_payload(response, provider="Pixiv")
+            raw_illusts = payload.get("illusts")
+            if not isinstance(raw_illusts, list):
+                raise MalformedRemoteResponse("Pixiv ranking response has invalid illusts")
+            for raw_illust in raw_illusts:
+                if not isinstance(raw_illust, Mapping):
+                    raise MalformedRemoteResponse("Pixiv ranking contains an invalid illustration")
+                work_id = raw_illust.get("id")
+                if isinstance(work_id, bool) or not isinstance(work_id, (int, str)):
+                    raise MalformedRemoteResponse("Pixiv ranking illustration is missing id")
+                source_work_id = str(work_id).strip()
+                if not source_work_id or source_work_id in seen_work_ids:
+                    raise MalformedRemoteResponse("Pixiv ranking contains a duplicate or empty id")
+                seen_work_ids.add(source_work_id)
+                items.append(PixivRankingEntry(source_work_id, len(items) + 1))
+                if len(items) >= limit:
+                    break
+
+            next_url = payload.get("next_url")
+            if not next_url or len(items) >= limit:
+                break
+            if not isinstance(next_url, str):
+                raise MalformedRemoteResponse("Pixiv ranking next_url is malformed")
+            parsed = urlsplit(next_url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "app-api.pixiv.net"
+                or parsed.path != "/v1/illust/ranking"
+                or parsed.username
+                or parsed.password
+            ):
+                raise MalformedRemoteResponse("Pixiv ranking next_url is untrusted")
+            query = parse_qs(parsed.query)
+            try:
+                next_offset = int(query["offset"][0])
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise MalformedRemoteResponse(
+                    "Pixiv ranking next_url is missing a valid offset"
+                ) from exc
+            if next_offset <= offset:
+                raise MalformedRemoteResponse("Pixiv ranking next_url does not advance")
+            offset = next_offset
+
+        return PixivRankingResult(
+            mode=mode,
+            ranking_date=ranking_date,
+            items=tuple(items),
+            fetched_at=datetime.now(UTC),
         )
 
     async def fetch_page(

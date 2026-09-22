@@ -13,5 +13,6 @@ Public API (import from sub-modules)::
 __all__ = [
     "run_download_job",
     "run_import_job",
+    "sync_pixiv_rankings",
     "sync_subscriptions",
 ]

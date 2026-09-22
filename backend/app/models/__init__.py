@@ -5,6 +5,7 @@ from app.models.creator_link import CreatorLink
 from app.models.creator_alias import CreatorAlias
 from app.models.work import Work
 from app.models.work_source import WorkSource
+from app.models.source_ranking_snapshot import SourceRankingSnapshot
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
 from app.models.tag import Tag
@@ -56,6 +57,7 @@ __all__ = [
     "CreatorAlias",
     "Work",
     "WorkSource",
+    "SourceRankingSnapshot",
     "Asset",
     "AssetSource",
     "Tag",

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID
@@ -23,6 +23,11 @@ class WorkSource(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     raw_metadata: Mapped[dict | None] = mapped_column(JSONB)
+    engagement_count: Mapped[int | None] = mapped_column(BigInteger)
+    view_count: Mapped[int | None] = mapped_column(BigInteger)
+    metrics_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_heat_score: Mapped[float | None] = mapped_column(Float)
+    heat_basis: Mapped[str | None] = mapped_column(String(32))
 
     work = relationship("Work", back_populates="work_sources")
     work_source_tags = relationship("WorkSourceTag", back_populates="work_source")

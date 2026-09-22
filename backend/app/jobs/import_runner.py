@@ -74,6 +74,8 @@ from app.services.stage_metrics import (
     import_execution_metrics, measure_async_stage, measure_import_phase,
     record_import_deferred, timed_import_phase,
 )
+from app.services.work_heat import extract_source_metrics
+from app.services.work_heat_queue import request_work_heat_recompute
 
 logger = logging.getLogger(__name__)
 
@@ -893,6 +895,7 @@ async def _update_existing_work_groups(
     download_root = Path(settings.download_root).resolve()
 
     for prepared_batch in _prepared_work_batches(prepared):
+        updated_before_batch = result["updated"]
         batch_ids = [source_work_id for source_work_id, _ in prepared_batch]
         prepared_by_id = dict(prepared_batch)
         media_by_id: dict[str, tuple[list[Path], dict[Path, os.stat_result]]] = {}
@@ -1235,6 +1238,8 @@ async def _update_existing_work_groups(
                         preserve_active_leases=True,
                     )
             await _commit_import(db)
+        if result["updated"] > updated_before_batch:
+            request_work_heat_recompute({provider.source_name})
 
     return result
 
@@ -1282,9 +1287,16 @@ def _build_import_work(
     asset_files = media_work["asset_files"]
     file_stats = media_work["file_stats"]
     primary_values = media_work["primary_values"]
+    observed_at = datetime.now(timezone.utc)
+    metrics = extract_source_metrics(
+        provider.source_name,
+        ws_data.get("raw_metadata"),
+        observed_at,
+    )
+    work_id = uuid4()
 
     work = Work(
-        id=uuid4(),
+        id=work_id,
         title=ws_data.get("title"),
         description=ws_data.get("description"),
         posted_at=posted_at,
@@ -1303,6 +1315,9 @@ def _build_import_work(
         description=ws_data.get("description"),
         posted_at=posted_at,
         raw_metadata=ws_data.get("raw_metadata"),
+        engagement_count=metrics.primary_count,
+        view_count=metrics.view_count,
+        metrics_observed_at=metrics.observed_at,
     )
 
     asset_rows: list[dict[str, Any]] = []
@@ -1405,6 +1420,8 @@ def _build_import_work(
                     "is_ai_generated": work.is_ai_generated,
                     "thumbnail_asset_id": work.thumbnail_asset_id,
                     "is_favorite": False,
+                    "heat_score": None,
+                    "heat_observed_at": None,
                 }
             ],
             "work_sources": [
@@ -1419,6 +1436,11 @@ def _build_import_work(
                     "description": work_source.description,
                     "posted_at": work_source.posted_at,
                     "raw_metadata": work_source.raw_metadata,
+                    "engagement_count": work_source.engagement_count,
+                    "view_count": work_source.view_count,
+                    "metrics_observed_at": work_source.metrics_observed_at,
+                    "source_heat_score": None,
+                    "heat_basis": None,
                 }
             ],
             "assets": asset_rows,
@@ -2546,6 +2568,9 @@ async def run_import_job(import_job_id: str):
                                     # One durable transaction owns all
                                     # successful domain and outbox rows.
                                     await _commit_import(batch_db)
+                                    request_work_heat_recompute(
+                                        {provider.source_name}
+                                    )
                                     record_import_deferred(
                                         media_derivatives=sum(len(work["derivative_requests"]) for work in staged_works),
                                         import_projection=len(staged_works),
