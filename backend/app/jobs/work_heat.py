@@ -53,14 +53,12 @@ def expire_pixiv_heat():
             "latest_fetched_at": latest_fetched_at.isoformat(),
         }
     queued = request_work_heat_recompute({"pixiv"})
+    if queued["errors"]:
+        # This job carries an RQ Retry policy.  Raising keeps a transient Redis
+        # failure from turning the only exact 48-hour expiry check into success.
+        raise RuntimeError("Pixiv heat expiry recomputation could not be queued")
     return {
-        "status": (
-            "queued"
-            if queued["created"]
-            else "error"
-            if queued["errors"]
-            else "coalesced"
-        ),
+        "status": "queued" if queued["created"] else "coalesced",
         "latest_fetched_at": latest_fetched_at.isoformat(),
         **queued,
     }

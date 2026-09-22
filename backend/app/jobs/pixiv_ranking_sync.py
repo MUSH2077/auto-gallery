@@ -38,13 +38,10 @@ def _request_pixiv_heat_refresh() -> None:
 
 
 def _schedule_pixiv_heat_expiry(fetched_at) -> None:
-    try:
-        schedule_pixiv_heat_expiry(fetched_at)
-    except Exception:
-        logger.warning(
-            "Unable to schedule Pixiv heat expiry recomputation",
-            exc_info=True,
-        )
+    # Let the ranking job's Retry policy handle transient Redis failures.  The
+    # snapshots are already committed and the deterministic expiry id makes the
+    # retry idempotent.
+    schedule_pixiv_heat_expiry(fetched_at)
 
 
 async def _healthy_pixiv_account(db) -> RemoteAccount | None:

@@ -218,6 +218,112 @@ def test_pixiv_heat_expiry_schedules_one_guarded_job_at_the_48_hour_boundary(mon
     assert len(calls) == 1
 
 
+def test_pixiv_heat_expiry_replaces_a_terminal_job_instead_of_losing_the_check(
+    monkeypatch,
+):
+    from app.services import pixiv_ranking_scheduler
+
+    fetched_at = datetime(2026, 9, 22, 3, 15, tzinfo=UTC)
+    redis = object()
+    queue = object()
+    calls = []
+
+    class FailedJob:
+        deleted = False
+
+        def get_status(self, refresh=True):
+            assert refresh is True
+            return "failed"
+
+        def delete(self):
+            self.deleted = True
+
+    existing = FailedJob()
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler.Job,
+        "fetch",
+        lambda _job_id, *, connection: existing,
+    )
+    monkeypatch.setattr(pixiv_ranking_scheduler, "Queue", lambda **_kwargs: queue)
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler,
+        "checked_enqueue_in",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    outcome = pixiv_ranking_scheduler.schedule_pixiv_heat_expiry(
+        fetched_at,
+        now=fetched_at,
+        redis_client=redis,
+    )
+
+    assert existing.deleted is True
+    assert outcome["created"] is True
+    assert len(calls) == 1
+
+
+def test_pixiv_heat_expiry_does_not_repeat_an_already_completed_check(monkeypatch):
+    from app.services import pixiv_ranking_scheduler
+
+    fetched_at = datetime(2026, 9, 22, 3, 15, tzinfo=UTC)
+    redis = object()
+
+    class FinishedJob:
+        def get_status(self, refresh=True):
+            assert refresh is True
+            return "finished"
+
+        def delete(self):
+            raise AssertionError("a completed expiry check must remain satisfied")
+
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler.Job,
+        "fetch",
+        lambda _job_id, *, connection: FinishedJob(),
+    )
+
+    outcome = pixiv_ranking_scheduler.schedule_pixiv_heat_expiry(
+        fetched_at,
+        now=fetched_at + timedelta(days=3),
+        redis_client=redis,
+    )
+
+    assert outcome["created"] is False
+    assert outcome["status"] == "finished"
+
+
+def test_latest_pixiv_heat_expiry_reconciliation_uses_the_database_snapshot(
+    monkeypatch,
+):
+    from app.services import pixiv_ranking_scheduler
+
+    fetched_at = datetime(2026, 9, 22, 3, 15, tzinfo=UTC)
+    redis = object()
+    scheduled = []
+
+    def run_latest(awaitable):
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        return fetched_at
+
+    monkeypatch.setattr(pixiv_ranking_scheduler.asyncio, "run", run_latest)
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler,
+        "schedule_pixiv_heat_expiry",
+        lambda observed_at, *, redis_client: scheduled.append(
+            (observed_at, redis_client)
+        )
+        or {"created": True, "status": "scheduled"},
+    )
+
+    outcome = pixiv_ranking_scheduler.ensure_latest_pixiv_heat_expiry(
+        redis_client=redis
+    )
+
+    assert scheduled == [(fetched_at, redis)]
+    assert outcome == {"created": True, "status": "scheduled"}
+
+
 def test_pixiv_heat_expiry_job_ignores_newer_snapshots_and_queues_stale_ones(monkeypatch):
     from app.jobs import work_heat
 
@@ -254,6 +360,33 @@ def test_pixiv_heat_expiry_job_ignores_newer_snapshots_and_queues_stale_ones(mon
     stale = work_heat.expire_pixiv_heat()
     assert stale["status"] == "queued"
     assert queued == [{"pixiv"}]
+
+
+def test_pixiv_heat_expiry_job_raises_when_recompute_cannot_be_queued(monkeypatch):
+    from app.jobs import work_heat
+
+    current = datetime(2026, 9, 24, 3, 15, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current if tz is not None else current.replace(tzinfo=None)
+
+    def run_latest(awaitable):
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        return current - timedelta(hours=49)
+
+    monkeypatch.setattr(work_heat, "datetime", FixedDateTime)
+    monkeypatch.setattr(work_heat.asyncio, "run", run_latest)
+    monkeypatch.setattr(
+        work_heat,
+        "request_work_heat_recompute",
+        lambda _sources: {"created": 0, "coalesced": 0, "errors": 1},
+    )
+
+    with pytest.raises(RuntimeError, match="could not be queued"):
+        work_heat.expire_pixiv_heat()
 
 
 @pytest.mark.asyncio
@@ -424,6 +557,20 @@ async def test_successful_ranking_sync_schedules_heat_expiry_after_commit(monkey
     }
 
 
+def test_successful_ranking_sync_propagates_heat_expiry_schedule_failure(monkeypatch):
+    from app.jobs import pixiv_ranking_sync
+
+    def fail(_fetched_at):
+        raise RuntimeError("expiry queue unavailable")
+
+    monkeypatch.setattr(pixiv_ranking_sync, "schedule_pixiv_heat_expiry", fail)
+
+    with pytest.raises(RuntimeError, match="expiry queue unavailable"):
+        pixiv_ranking_sync._schedule_pixiv_heat_expiry(
+            datetime(2026, 9, 22, 3, 16, tzinfo=UTC)
+        )
+
+
 def test_ranking_job_requests_expiry_recompute_when_no_account_is_available(monkeypatch):
     from app.jobs import pixiv_ranking_sync
 
@@ -484,6 +631,20 @@ def test_scheduler_watchdog_keeps_subscription_loop_when_ranking_ensure_fails(mo
         raise RuntimeError("ranking queue unavailable")
 
     monkeypatch.setattr(scheduler_loop, "ensure_pixiv_ranking_sync", fail_ranking)
+    expiry_reconciliations = []
+    monkeypatch.setattr(
+        scheduler_loop,
+        "ensure_latest_pixiv_heat_expiry",
+        lambda *, redis_client: expiry_reconciliations.append(redis_client)
+        or {"created": True, "status": "scheduled"},
+    )
+    heat_queue_reconciliations = []
+    monkeypatch.setattr(
+        scheduler_loop,
+        "reconcile_deferred_work_heat_jobs",
+        lambda *, redis_client: heat_queue_reconciliations.append(redis_client)
+        or {"checked": 1, "recovered": 1, "waiting": 0, "errors": 0},
+    )
 
     outcome = scheduler_loop.scheduler_watchdog()
 
@@ -492,3 +653,15 @@ def test_scheduler_watchdog_keeps_subscription_loop_when_ranking_ensure_fails(mo
         "status": "error",
         "error": "ranking queue unavailable",
     }
+    assert outcome["pixiv_heat_expiry"] == {
+        "created": True,
+        "status": "scheduled",
+    }
+    assert expiry_reconciliations == [redis]
+    assert outcome["work_heat_queue"] == {
+        "checked": 1,
+        "recovered": 1,
+        "waiting": 0,
+        "errors": 0,
+    }
+    assert heat_queue_reconciliations == [redis]

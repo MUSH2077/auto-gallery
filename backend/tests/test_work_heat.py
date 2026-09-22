@@ -528,15 +528,19 @@ def test_heat_recompute_request_coalesces_queued_work_and_follows_running_work(
     from app.services import work_heat_queue
 
     class ExistingJob:
-        def __init__(self, status):
+        def __init__(self, status, *, deletable=False):
             self.status = status
+            self.deletable = deletable
+            self.deleted = False
 
         def get_status(self, refresh=True):
             assert refresh is True
             return self.status
 
         def delete(self):
-            raise AssertionError("active jobs must not be deleted")
+            if not self.deletable:
+                raise AssertionError("active jobs must not be deleted")
+            self.deleted = True
 
     queued_calls = []
     statuses = {"work-heat-pixiv": ExistingJob("queued")}
@@ -570,15 +574,321 @@ def test_heat_recompute_request_coalesces_queued_work_and_follows_running_work(
     assert running == {"created": 1, "coalesced": 0, "errors": 0}
     assert queued_calls[0][2] == "pixiv"
     assert queued_calls[0][3]["job_id"] == "work-heat-pixiv-followup"
+    assert queued_calls[0][3]["depends_on"].dependencies == ["work-heat-pixiv"]
+    assert queued_calls[0][3]["depends_on"].allow_failure is True
 
     queued_calls.clear()
-    statuses.pop("work-heat-pixiv")
+    completed_primary = ExistingJob("finished", deletable=True)
+    statuses["work-heat-pixiv"] = completed_primary
     statuses["work-heat-pixiv-followup"] = ExistingJob("started")
     followup_running = work_heat_queue.request_work_heat_recompute(
         {"pixiv"}, redis_client=redis
     )
-    assert followup_running == {"created": 0, "coalesced": 1, "errors": 0}
+    assert followup_running == {"created": 1, "coalesced": 0, "errors": 0}
+    assert completed_primary.deleted is True
+    assert queued_calls[0][3]["job_id"] == "work-heat-pixiv"
+    assert queued_calls[0][3]["depends_on"].dependencies == [
+        "work-heat-pixiv-followup"
+    ]
+    assert queued_calls[0][3]["depends_on"].allow_failure is True
+
+    queued_calls.clear()
+    statuses["work-heat-pixiv"] = ExistingJob("deferred")
+    successor_pending = work_heat_queue.request_work_heat_recompute(
+        {"pixiv"}, redis_client=redis
+    )
+    assert successor_pending == {"created": 0, "coalesced": 1, "errors": 0}
     assert queued_calls == []
+
+
+def test_heat_recompute_enqueue_lock_prevents_duplicate_job_ids(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+
+    from rq import Queue
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job
+
+    from app.services import work_heat_queue
+    from app.services.redis_client import get_redis
+
+    redis = get_redis()
+    try:
+        redis.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis unavailable: {exc}")
+
+    source = f"race-{uuid4().hex[:12]}"
+    primary_id = f"work-heat-{source}"
+    followup_id = f"{primary_id}-followup"
+    queue = Queue("maintenance", connection=redis)
+    original_enqueue = work_heat_queue.checked_enqueue
+    first_entered = Event()
+    release_first = Event()
+    second_entered = Event()
+    call_lock = Lock()
+    enqueue_calls = 0
+
+    monkeypatch.setattr(work_heat_queue, "_ENQUEUE_LOCK_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(
+        work_heat_queue,
+        "_ENQUEUE_LOCK_RENEW_INTERVAL_SECONDS",
+        0.05,
+    )
+
+    def delayed_enqueue(*args, **kwargs):
+        nonlocal enqueue_calls
+        with call_lock:
+            enqueue_calls += 1
+            call_number = enqueue_calls
+        if call_number == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_entered.set()
+        return original_enqueue(*args, **kwargs)
+
+    monkeypatch.setattr(work_heat_queue, "checked_enqueue", delayed_enqueue)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(
+                work_heat_queue.request_work_heat_recompute,
+                {source},
+                redis_client=redis,
+            )
+            assert first_entered.wait(timeout=5)
+            second = executor.submit(
+                work_heat_queue.request_work_heat_recompute,
+                {source},
+                redis_client=redis,
+            )
+            # Keep the first producer inside enqueue for more than twice the
+            # base lock TTL. Renewal must still prevent the second producer
+            # from observing the uncommitted slot and writing the same job id.
+            raced_past_lock = second_entered.wait(timeout=0.5)
+            release_first.set()
+            outcomes = (first.result(timeout=10), second.result(timeout=10))
+
+        assert raced_past_lock is False
+        assert enqueue_calls == 1
+        assert sorted(outcome["created"] for outcome in outcomes) == [0, 1]
+        assert queue.get_job_ids().count(primary_id) == 1
+    finally:
+        release_first.set()
+        queue.connection.lrem(queue.key, 0, primary_id)
+        queue.connection.lrem(queue.key, 0, followup_id)
+        for job_id in (primary_id, followup_id):
+            try:
+                Job.fetch(job_id, connection=redis).delete()
+            except NoSuchJobError:
+                pass
+        redis.delete(f"lock:work-heat:enqueue:{source}")
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "stopped", "canceled"])
+def test_heat_recompute_dependency_handshake_recovers_terminal_parent_race(
+    monkeypatch,
+    terminal_status,
+):
+    from rq import Queue
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job, JobStatus
+
+    from app.services import work_heat_queue
+    from app.services.redis_client import get_redis
+
+    redis = get_redis()
+    try:
+        redis.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis unavailable: {exc}")
+
+    source = f"terminal-{uuid4().hex[:12]}"
+    primary_id = f"work-heat-{source}"
+    followup_id = f"{primary_id}-followup"
+    queue = Queue("maintenance", connection=redis)
+    original_enqueue = work_heat_queue.checked_enqueue
+    observed_before_handshake = []
+
+    try:
+        assert work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )["created"] == 1
+        primary = Job.fetch(primary_id, connection=redis)
+        queue.connection.lrem(queue.key, 0, primary_id)
+        primary.set_status(JobStatus.STARTED)
+
+        def finish_parent_before_dependency_registration(*args, **kwargs):
+            if kwargs.get("job_id") == followup_id and "depends_on" in kwargs:
+                primary.set_status(JobStatus(terminal_status))
+            job = original_enqueue(*args, **kwargs)
+            if kwargs.get("job_id") == followup_id and "depends_on" in kwargs:
+                observed_before_handshake.append(job.get_status(refresh=True))
+            return job
+
+        monkeypatch.setattr(
+            work_heat_queue,
+            "checked_enqueue",
+            finish_parent_before_dependency_registration,
+        )
+        outcome = work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )
+        followup = Job.fetch(followup_id, connection=redis)
+
+        assert outcome == {"created": 1, "coalesced": 0, "errors": 0}
+        assert observed_before_handshake == [JobStatus.DEFERRED]
+        assert followup.get_status(refresh=True) == JobStatus.QUEUED
+        assert queue.get_job_ids().count(followup_id) == 1
+        assert not redis.sismember(Job.dependents_key_for(primary_id), followup_id)
+    finally:
+        queue.connection.lrem(queue.key, 0, primary_id)
+        queue.connection.lrem(queue.key, 0, followup_id)
+        for job_id in (primary_id, followup_id):
+            try:
+                Job.fetch(job_id, connection=redis).delete()
+            except NoSuchJobError:
+                pass
+        redis.delete(f"lock:work-heat:enqueue:{source}")
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "stopped", "canceled"])
+def test_heat_recompute_watchdog_recovers_parent_terminal_after_handshake(
+    monkeypatch,
+    terminal_status,
+):
+    from rq import Queue
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job, JobStatus
+
+    from app.services import work_heat_queue
+    from app.services.redis_client import get_redis
+
+    redis = get_redis()
+    try:
+        redis.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis unavailable: {exc}")
+
+    source = f"late-terminal-{uuid4().hex[:12]}"
+    primary_id = f"work-heat-{source}"
+    followup_id = f"{primary_id}-followup"
+    queue = Queue("maintenance", connection=redis)
+
+    try:
+        assert work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )["created"] == 1
+        primary = Job.fetch(primary_id, connection=redis)
+        queue.connection.lrem(queue.key, 0, primary_id)
+        primary.set_status(JobStatus.STARTED)
+
+        assert work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )["created"] == 1
+        followup = Job.fetch(followup_id, connection=redis)
+        assert followup.get_status(refresh=True) == JobStatus.DEFERRED
+
+        # The dependency was healthy during the post-enqueue handshake and
+        # only became terminal afterwards. RQ does not release STOPPED or
+        # CANCELED dependents, and this also models a missed FAILED promotion.
+        primary.set_status(JobStatus(terminal_status))
+        if terminal_status != "failed":
+            queue.enqueue_dependents(primary)
+            assert followup.get_status(refresh=True) == JobStatus.DEFERRED
+
+        # This successor already passed admission when it entered Deferred.
+        # Recovery must promote it in place even if admitting brand-new work is
+        # currently forbidden, rather than deleting it before a fresh enqueue.
+        monkeypatch.setattr(
+            work_heat_queue,
+            "checked_enqueue",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("deferred recovery must not re-enter admission")
+            ),
+        )
+        outcome = work_heat_queue.reconcile_deferred_work_heat_jobs(
+            redis_client=redis
+        )
+        followup = Job.fetch(followup_id, connection=redis)
+
+        assert outcome["recovered"] >= 1
+        assert followup.get_status(refresh=True) == JobStatus.QUEUED
+        assert queue.get_job_ids().count(followup_id) == 1
+    finally:
+        queue.connection.lrem(queue.key, 0, primary_id)
+        queue.connection.lrem(queue.key, 0, followup_id)
+        for job_id in (primary_id, followup_id):
+            try:
+                Job.fetch(job_id, connection=redis).delete()
+            except NoSuchJobError:
+                pass
+        redis.delete(f"lock:work-heat:enqueue:{source}")
+
+
+def test_deferred_atomic_promotion_preserves_child_when_lock_is_lost_before_commit():
+    from rq import Queue
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job, JobStatus
+
+    from app.services import work_heat_queue
+    from app.services.redis_client import get_redis
+
+    redis = get_redis()
+    try:
+        redis.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis unavailable: {exc}")
+
+    source = f"lock-loss-{uuid4().hex[:12]}"
+    primary_id = f"work-heat-{source}"
+    followup_id = f"{primary_id}-followup"
+    queue = Queue("maintenance", connection=redis)
+
+    class LoseBeforeCommit:
+        checks = 0
+
+        def ensure_owned(self):
+            self.checks += 1
+            if self.checks == 4:
+                raise RuntimeError("simulated lock loss before EXEC")
+
+    try:
+        assert work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )["created"] == 1
+        primary = Job.fetch(primary_id, connection=redis)
+        queue.connection.lrem(queue.key, 0, primary_id)
+        primary.set_status(JobStatus.STARTED)
+        assert work_heat_queue.request_work_heat_recompute(
+            {source}, redis_client=redis
+        )["created"] == 1
+        followup = Job.fetch(followup_id, connection=redis)
+        primary.set_status(JobStatus.STOPPED)
+
+        with pytest.raises(RuntimeError, match="simulated lock loss"):
+            work_heat_queue._promote_deferred_job_atomically(
+                queue,
+                followup,
+                parent_id=primary_id,
+                redis_client=redis,
+                lock_guard=LoseBeforeCommit(),
+            )
+
+        followup = Job.fetch(followup_id, connection=redis)
+        assert followup.get_status(refresh=True) == JobStatus.DEFERRED
+        assert redis.sismember(Job.dependents_key_for(primary_id), followup_id)
+        assert queue.get_job_ids().count(followup_id) == 0
+    finally:
+        queue.connection.lrem(queue.key, 0, primary_id)
+        queue.connection.lrem(queue.key, 0, followup_id)
+        for job_id in (primary_id, followup_id):
+            try:
+                Job.fetch(job_id, connection=redis).delete()
+            except NoSuchJobError:
+                pass
+        redis.delete(f"lock:work-heat:enqueue:{source}")
 
 
 def test_import_paths_request_heat_recompute_only_after_durable_commit():
