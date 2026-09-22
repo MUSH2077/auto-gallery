@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Iterable, Mapping
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models.source_ranking_snapshot import SourceRankingSnapshot
@@ -287,18 +287,38 @@ async def recompute_source_heat(
     if not source_rows:
         return set()
 
+    ranking_cutoff = observed_at - OFFICIAL_RANK_MAX_AGE
+    latest_ranking_date = {
+        source: ranking_date
+        for source, ranking_date in (
+            await db.execute(
+                select(
+                    SourceRankingSnapshot.source,
+                    func.max(SourceRankingSnapshot.ranking_date),
+                )
+                .where(
+                    SourceRankingSnapshot.source.in_(normalized_sources),
+                    SourceRankingSnapshot.fetched_at >= ranking_cutoff,
+                )
+                .group_by(SourceRankingSnapshot.source)
+            )
+        ).all()
+        if ranking_date is not None
+    }
     source_work_ids = {row.source_work_id for row in source_rows}
     ranking_rows = (
         await db.execute(
             select(SourceRankingSnapshot).where(
                 SourceRankingSnapshot.source.in_(normalized_sources),
                 SourceRankingSnapshot.source_work_id.in_(source_work_ids),
-                SourceRankingSnapshot.fetched_at >= observed_at - OFFICIAL_RANK_MAX_AGE,
+                SourceRankingSnapshot.fetched_at >= ranking_cutoff,
             )
         )
     ).scalars().all()
     best_rank: dict[tuple[str, str], SourceRankingSnapshot] = {}
     for ranking in ranking_rows:
+        if ranking.ranking_date != latest_ranking_date.get(ranking.source):
+            continue
         key = (ranking.source, ranking.source_work_id)
         current = best_rank.get(key)
         if current is None or ranking.rank / ranking.rank_total < current.rank / current.rank_total:
@@ -307,8 +327,17 @@ async def recompute_source_heat(
     candidates_by_source: dict[str, list[HeatCandidate]] = {}
     row_by_id: dict[UUID, WorkSource] = {}
     for row in source_rows:
-        metric_time = row.updated_at or observed_at
+        metric_time = row.metrics_observed_at or row.updated_at or observed_at
         metrics = extract_source_metrics(row.source, row.raw_metadata, metric_time)
+        if (
+            metrics.primary_count != row.engagement_count
+            or metrics.view_count != row.view_count
+        ):
+            metrics = extract_source_metrics(
+                row.source,
+                row.raw_metadata,
+                row.updated_at or observed_at,
+            )
         row.engagement_count = metrics.primary_count
         row.view_count = metrics.view_count
         row.metrics_observed_at = metrics.observed_at

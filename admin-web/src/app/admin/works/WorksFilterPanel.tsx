@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { useT } from "@/lib/i18n";
 
@@ -18,7 +18,7 @@ export interface WorksFilterValue {
   media: WorksMediaFilter[];
 }
 
-const SOURCE_OPTIONS = ["pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo"];
+const SOURCE_OPTIONS = ["pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 
 function ChoiceGroup<T extends string>({
   label,
@@ -31,21 +31,26 @@ function ChoiceGroup<T extends string>({
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
 }) {
+  const groupName = useId();
   return (
     <fieldset>
       <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{label}</legend>
       <div className="segmented-control flex w-full">
         {options.map((option) => (
-          <button
+          <label
             key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={value === option.value}
-            onClick={() => onChange(option.value)}
-            className={`segment min-h-9 flex-1 ${value === option.value ? "segment-active" : ""}`}
+            className={`segment relative flex min-h-9 flex-1 cursor-pointer items-center justify-center focus-within:ring-2 focus-within:ring-accent/30 ${value === option.value ? "segment-active" : ""}`}
           >
-            {option.label}
-          </button>
+            <input
+              type="radio"
+              name={groupName}
+              value={option.value}
+              checked={value === option.value}
+              onChange={() => onChange(option.value)}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            />
+            <span className="pointer-events-none relative">{option.label}</span>
+          </label>
         ))}
       </div>
     </fieldset>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import date
 
 from sqlalchemy import func, select
@@ -17,6 +18,20 @@ from app.services.pixiv_ranking_sync import (
     store_pixiv_ranking_results,
 )
 from app.services.remote_accounts import RemoteAccountService
+from app.services.work_heat_queue import request_work_heat_recompute
+
+
+logger = logging.getLogger(__name__)
+
+
+def _request_pixiv_heat_refresh() -> None:
+    try:
+        request_work_heat_recompute({"pixiv"})
+    except Exception:
+        logger.warning(
+            "Unable to queue Pixiv heat expiry recomputation",
+            exc_info=True,
+        )
 
 
 async def _healthy_pixiv_account(db) -> RemoteAccount | None:
@@ -79,11 +94,19 @@ async def sync_pixiv_rankings_async(ranking_date_iso: str | None = None) -> dict
 
 def sync_pixiv_rankings(ranking_date_iso: str | None = None):
     try:
-        return asyncio.run(sync_pixiv_rankings_async(ranking_date_iso))
+        outcome = asyncio.run(sync_pixiv_rankings_async(ranking_date_iso))
     except PixivRankingDateNotReady:
         from rq import Retry
 
+        _request_pixiv_heat_refresh()
         return Retry(max=2, interval=[30 * 60, 120 * 60])
+    except Exception:
+        _request_pixiv_heat_refresh()
+        raise
+
+    if outcome.get("status") != "completed":
+        _request_pixiv_heat_refresh()
+    return outcome
 
 
 __all__ = ["sync_pixiv_rankings", "sync_pixiv_rankings_async"]

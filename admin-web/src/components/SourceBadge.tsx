@@ -8,7 +8,7 @@ export default function SourceBadge({ source, href }: { source: string; href?: s
     </span>
   );
   if (href) {
-    return <Link href={href} onClick={(e) => e.stopPropagation()} className="inline-flex">{badge}</Link>;
+    return <Link href={href} onClick={(e) => e.stopPropagation()} className="pointer-events-auto inline-flex">{badge}</Link>;
   }
   return badge;
 }

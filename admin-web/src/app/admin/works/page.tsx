@@ -323,7 +323,7 @@ function WorksContent() {
   const isFavoriteFilter = isValues.includes("favorite");
   const aiFilter = isValues.includes("ai") ? "ai" : isValues.includes("human") ? "human" : "all";
   const curationVisibility = isValues.includes("trashed") ? "trashed" : "visible";
-  const sortValue = qualifierValues("sort")[0] || "created-desc";
+  const explicitSortValue = qualifierValues("sort")[0] || null;
   const activeFilterCount = qualifierTokens.filter((token) => !["type", "sort"].includes(token.key)).length;
   const composer = useSearchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
   const batchComposer = useSearchBatchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
@@ -344,9 +344,10 @@ function WorksContent() {
     "relevance", "heat-desc", "random", "created-desc", "created-asc", "posted-desc",
     "posted-asc", "updated-desc", "updated-asc", "title-desc", "title-asc",
   ];
-  const currentSort: WorksSortValue = knownSorts.includes(sortValue as WorksSortValue)
-    ? sortValue as WorksSortValue
-    : "created-desc";
+  const defaultSort: WorksSortValue = parsedHasText ? "relevance" : "created-desc";
+  const currentSort: WorksSortValue = explicitSortValue && knownSorts.includes(explicitSortValue as WorksSortValue)
+    ? explicitSortValue as WorksSortValue
+    : defaultSort;
   useEffect(() => {
     if (
       currentSort !== "random"
@@ -359,6 +360,16 @@ function WorksContent() {
     ) return;
     updateParams({ seed: String(worksQuery.data.seed) }, false);
   }, [currentSort, inputVal, search, seed, worksQuery.data?.canonical_query, worksQuery.data?.seed, worksQuery.isPlaceholderData]);
+  useEffect(() => {
+    if (
+      seed === null
+      || currentSort === "random"
+      || inputVal !== search
+      || worksQuery.isPlaceholderData
+      || worksQuery.data?.canonical_query !== search
+    ) return;
+    updateParams({ seed: null }, false);
+  }, [currentSort, inputVal, search, seed, worksQuery.data?.canonical_query, worksQuery.isPlaceholderData]);
   const sortSummary = currentSort === "heat-desc"
     ? t("works.sort_heat")
     : currentSort === "random"
@@ -392,7 +403,7 @@ function WorksContent() {
     updateParams({ seed: next === "random" ? String(crypto.getRandomValues(new Uint32Array(1))[0]) : null });
     composer.mutate({
       key: "sort",
-      value: next === "created-desc" ? null : next,
+      value: next === "created-desc" && !parsedHasText ? null : next,
       operation: "set",
     });
   };

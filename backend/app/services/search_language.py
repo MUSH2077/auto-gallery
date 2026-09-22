@@ -722,7 +722,11 @@ def compose_search_query(
     if operation == "set":
         existing = [
             token for token in existing
-            if not (isinstance(token, SearchQualifier) and token.key == normalized_key)
+            if not (
+                isinstance(token, SearchQualifier)
+                and token.key == normalized_key
+                and token.negated == negated
+            )
         ]
         if probe:
             existing.append(probe)
@@ -770,6 +774,7 @@ def compose_search_query(
                 isinstance(token, SearchQualifier)
                 and token.key == normalized_key
                 and token.value in normalized_values
+                and token.negated == negated
             )
         ]
         if probe:

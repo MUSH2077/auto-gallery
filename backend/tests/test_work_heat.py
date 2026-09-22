@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import os
 import subprocess
 import sys
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.models.work import Work
 from app.models.work_source import WorkSource
+from app.models.source_ranking_snapshot import SourceRankingSnapshot
 
 from app.services.work_heat import (
     HeatCandidate,
@@ -203,8 +204,12 @@ async def test_recompute_source_heat_materializes_changed_works_and_requests_pro
         source="pixiv",
         source_work_id="p1",
         raw_metadata={"bookmarks": 20, "views": 200},
+        engagement_count=20,
+        view_count=200,
+        metrics_observed_at=NOW - timedelta(days=2),
         work=first_work,
     )
+    first_source.updated_at = NOW - timedelta(hours=1)
     second_source = WorkSource(
         id=UUID(int=202),
         work_id=second_work.id,
@@ -215,7 +220,7 @@ async def test_recompute_source_heat_materializes_changed_works_and_requests_pro
     )
     first_work.work_sources = [first_source]
     second_work.work_sources = [second_source]
-    db = FakeSession([[first_source, second_source], [], [first_work, second_work]])
+    db = FakeSession([[first_source, second_source], [], [], [first_work, second_work]])
     projected: list[UUID] = []
 
     async def request_projection(_db, work_ids):
@@ -231,12 +236,13 @@ async def test_recompute_source_heat_materializes_changed_works_and_requests_pro
     assert result == {first_work.id, second_work.id}
     assert first_source.engagement_count == 20
     assert first_source.view_count == 200
+    assert first_source.metrics_observed_at == NOW - timedelta(days=2)
     assert first_source.source_heat_score > second_source.source_heat_score
     assert first_work.heat_score == first_source.source_heat_score
     assert second_work.heat_score == second_source.source_heat_score
     assert projected == [first_work.id, second_work.id]
 
-    repeat_db = FakeSession([[first_source, second_source], [], [first_work, second_work]])
+    repeat_db = FakeSession([[first_source, second_source], [], [], [first_work, second_work]])
     repeated = await recompute_source_heat(
         repeat_db,  # type: ignore[arg-type]
         {"pixiv"},
@@ -245,6 +251,187 @@ async def test_recompute_source_heat_materializes_changed_works_and_requests_pro
     )
     assert repeated == set()
     assert projected == [first_work.id, second_work.id]
+
+
+@pytest.mark.asyncio
+async def test_recompute_uses_only_the_latest_complete_daily_ranking_batch():
+    first_work = Work(id=UUID(int=111), title="first", posted_at=NOW - timedelta(days=1))
+    second_work = Work(id=UUID(int=112), title="second", posted_at=NOW - timedelta(days=1))
+    first_source = WorkSource(
+        id=UUID(int=211),
+        work_id=first_work.id,
+        source="pixiv",
+        source_work_id="p1",
+        raw_metadata={"bookmarks": 1, "views": 100},
+        work=first_work,
+    )
+    second_source = WorkSource(
+        id=UUID(int=212),
+        work_id=second_work.id,
+        source="pixiv",
+        source_work_id="p2",
+        raw_metadata={"bookmarks": 1, "views": 100},
+        work=second_work,
+    )
+    first_work.work_sources = [first_source]
+    second_work.work_sources = [second_source]
+    rankings = [
+        SourceRankingSnapshot(
+            source="pixiv",
+            mode="day",
+            ranking_date=date(2026, 9, 20),
+            source_work_id="p1",
+            rank=1,
+            rank_total=100,
+            fetched_at=NOW - timedelta(hours=2),
+        ),
+        SourceRankingSnapshot(
+            source="pixiv",
+            mode="day",
+            ranking_date=date(2026, 9, 21),
+            source_work_id="p1",
+            rank=100,
+            rank_total=100,
+            fetched_at=NOW - timedelta(hours=1),
+        ),
+        SourceRankingSnapshot(
+            source="pixiv",
+            mode="day",
+            ranking_date=date(2026, 9, 21),
+            source_work_id="p2",
+            rank=1,
+            rank_total=100,
+            fetched_at=NOW - timedelta(hours=1),
+        ),
+    ]
+    db = FakeSession([
+        [first_source, second_source],
+        [("pixiv", date(2026, 9, 21))],
+        rankings,
+        [first_work, second_work],
+    ])
+
+    await recompute_source_heat(
+        db,  # type: ignore[arg-type]
+        {"pixiv"},
+        now=NOW,
+        request_projection=lambda *_args: asyncio.sleep(0),
+    )
+
+    assert second_source.source_heat_score > first_source.source_heat_score
+    assert first_source.heat_basis == "official_rank"
+    assert second_source.heat_basis == "official_rank"
+
+
+@pytest.mark.asyncio
+async def test_recompute_drops_an_old_rank_when_no_local_work_is_in_latest_batch():
+    work = Work(id=UUID(int=121), title="dropped", posted_at=NOW - timedelta(days=1))
+    source = WorkSource(
+        id=UUID(int=221),
+        work_id=work.id,
+        source="pixiv",
+        source_work_id="dropped-from-today",
+        raw_metadata={"bookmarks": 4, "views": 100},
+        work=work,
+    )
+    work.work_sources = [source]
+    old_ranking = SourceRankingSnapshot(
+        source="pixiv",
+        mode="day",
+        ranking_date=date(2026, 9, 20),
+        source_work_id=source.source_work_id,
+        rank=1,
+        rank_total=100,
+        fetched_at=NOW - timedelta(hours=2),
+    )
+    db = FakeSession([
+        [source],
+        [("pixiv", date(2026, 9, 21))],
+        [old_ranking],
+        [work],
+    ])
+
+    await recompute_source_heat(
+        db,  # type: ignore[arg-type]
+        {"pixiv"},
+        now=NOW,
+        request_projection=lambda *_args: asyncio.sleep(0),
+    )
+
+    assert source.heat_basis == "local_fallback"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_latest_ranking_date_is_resolved_before_filtering_to_local_works():
+    from sqlalchemy import delete, select
+
+    from app.database import async_session
+
+    source_name = f"heat-boundary-{uuid4().hex[:12]}"
+    local_source_work_id = f"local-{uuid4().hex}"
+    external_source_work_id = f"external-{uuid4().hex}"
+    work_id = uuid4()
+    source_id = uuid4()
+
+    async def ignore_projection(_db, _work_ids):
+        return None
+
+    try:
+        async with async_session() as db:
+            work = Work(id=work_id, title="ranking boundary", posted_at=NOW - timedelta(days=1))
+            source = WorkSource(
+                id=source_id,
+                work_id=work_id,
+                source=source_name,
+                source_work_id=local_source_work_id,
+                raw_metadata={},
+            )
+            db.add_all([
+                work,
+                source,
+                SourceRankingSnapshot(
+                    source=source_name,
+                    mode="day",
+                    ranking_date=date(2026, 9, 20),
+                    source_work_id=local_source_work_id,
+                    rank=1,
+                    rank_total=100,
+                    fetched_at=NOW - timedelta(hours=2),
+                ),
+                SourceRankingSnapshot(
+                    source=source_name,
+                    mode="day",
+                    ranking_date=date(2026, 9, 21),
+                    source_work_id=external_source_work_id,
+                    rank=1,
+                    rank_total=100,
+                    fetched_at=NOW - timedelta(hours=1),
+                ),
+            ])
+            await db.commit()
+
+        async with async_session() as db:
+            await recompute_source_heat(
+                db,
+                {source_name},
+                now=NOW,
+                request_projection=ignore_projection,
+            )
+            await db.commit()
+            stored = (
+                await db.execute(select(WorkSource).where(WorkSource.id == source_id))
+            ).scalar_one()
+            assert stored.heat_basis is None
+            assert stored.source_heat_score is None
+    finally:
+        async with async_session() as db:
+            await db.execute(
+                delete(SourceRankingSnapshot).where(SourceRankingSnapshot.source == source_name)
+            )
+            await db.execute(delete(WorkSource).where(WorkSource.id == source_id))
+            await db.execute(delete(Work).where(Work.id == work_id))
+            await db.commit()
 
 
 def test_bulk_import_rows_include_stable_shuffle_and_source_metric_snapshot(
@@ -355,6 +542,15 @@ def test_heat_recompute_request_coalesces_queued_work_and_follows_running_work(
     assert running == {"created": 1, "coalesced": 0, "errors": 0}
     assert queued_calls[0][2] == "pixiv"
     assert queued_calls[0][3]["job_id"] == "work-heat-pixiv-followup"
+
+    queued_calls.clear()
+    statuses.pop("work-heat-pixiv")
+    statuses["work-heat-pixiv-followup"] = ExistingJob("started")
+    followup_running = work_heat_queue.request_work_heat_recompute(
+        {"pixiv"}, redis_client=redis
+    )
+    assert followup_running == {"created": 0, "coalesced": 1, "errors": 0}
+    assert queued_calls == []
 
 
 def test_import_paths_request_heat_recompute_only_after_durable_commit():

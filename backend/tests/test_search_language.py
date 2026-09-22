@@ -163,6 +163,31 @@ def test_compose_replace_group_preserves_unrelated_tokens():
     assert query.canonical == "portrait is:favorite source:x is:sfw"
 
 
+def test_compose_visual_positive_filters_preserve_negated_advanced_tokens():
+    query = compose_search_query(
+        "cat -source:x source:pixiv -has:video has:image -is:favorite is:nsfw",
+        "works",
+        key="source",
+        value="weibo",
+        operation="set",
+    )
+    assert query.canonical == (
+        "cat -source:x -has:video has:image -is:favorite is:nsfw source:weibo"
+    )
+
+    query = compose_search_query(
+        query.canonical,
+        "works",
+        key="has",
+        value="animation",
+        operation="replace-group",
+        replace_values=("image", "animation", "video", "multiple-assets"),
+    )
+    assert query.canonical == (
+        "cat -source:x -has:video -is:favorite is:nsfw source:weibo has:animation"
+    )
+
+
 def test_catalog_is_scope_aware():
     works = {item["key"]: item for item in qualifier_catalog("works")}
     assert "type" not in works

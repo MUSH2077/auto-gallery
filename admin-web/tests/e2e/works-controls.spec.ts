@@ -357,11 +357,17 @@ test("shared work cards apply visibility, size, and NSFW blur preferences", asyn
 
 test("filter draft cancels cleanly and replaces only controlled qualifier groups", async ({ context, page }) => {
   await setup(context);
-  const original = 'cat tag:sky creator:"Ada Lovelace" after:2025-01-01 source:x is:nsfw is:ai sort:title-asc';
+  const original = 'cat tag:sky creator:"Ada Lovelace" after:2025-01-01 -source:weibo -has:animation -is:favorite source:x is:nsfw is:ai sort:title-asc';
   await page.goto("/admin/works?q=" + encodeURIComponent(original));
 
   await page.getByRole("button", { name: "Filter", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "Filter works" });
+  await expect(dialog.getByRole("checkbox", { name: "Bilibili" })).toBeVisible();
+  await dialog.getByRole("radio", { name: "Gallery" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(dialog.getByRole("radio", { name: "Trash" })).toBeChecked();
+  await page.keyboard.press("ArrowLeft");
+  await expect(dialog.getByRole("radio", { name: "Gallery" })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: "X", exact: true })).toBeChecked();
   await dialog.getByRole("checkbox", { name: "Pixiv" }).check();
   await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -384,6 +390,9 @@ test("filter draft cancels cleanly and replaces only controlled qualifier groups
   expect(query).toContain("tag:sky");
   expect(query).toContain('creator:"Ada Lovelace"');
   expect(query).toContain("after:2025-01-01");
+  expect(query).toContain("-source:weibo");
+  expect(query).toContain("-has:animation");
+  expect(query).toContain("-is:favorite");
   expect(query).toContain("source:x");
   expect(query).toContain("source:pixiv");
   expect(query).toContain("is:sfw");
@@ -407,7 +416,16 @@ test("sort options manage stable random seeds and relevance availability", async
   await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("cat tag:sky");
   await page.getByRole("button", { name: "Sort", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Sort works" });
-  await expect(dialog.getByRole("radio", { name: "Relevance" })).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: "Relevance" })).toBeChecked();
+  await dialog.getByRole("radio", { name: "Relevance" }).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(dialog.getByRole("radio", { name: "Popularity" })).toBeChecked();
+  await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:heat-desc");
+  await dialog.getByRole("radio", { name: "Relevance" }).click();
+  await dialog.getByRole("radio", { name: "Imported · Newest first" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:created-desc");
+  await dialog.getByRole("radio", { name: "Relevance" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:relevance");
   await dialog.getByRole("radio", { name: "Popularity" }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:heat-desc");
   expect(new URL(page.url()).searchParams.has("seed")).toBe(false);
@@ -422,6 +440,11 @@ test("sort options manage stable random seeds and relevance availability", async
   const secondSeed = new URL(page.url()).searchParams.get("seed");
   await expect.poll(() => fixture.searchUrls.at(-1)?.searchParams.get("seed")).toBe(secondSeed);
 
+  await page.getByRole("combobox", { name: "Search title..." }).fill("cat tag:sky");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("cat tag:sky");
+  await expect.poll(() => new URL(page.url()).searchParams.has("seed")).toBe(false);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Sort", exact: true }).click();
   await dialog.getByRole("radio", { name: "Published · Oldest first" }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:posted-asc");
   expect(new URL(page.url()).searchParams.has("seed")).toBe(false);

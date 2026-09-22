@@ -57,25 +57,31 @@ def request_work_heat_recompute(
     for source in normalized:
         try:
             primary_id = f"work-heat-{source}"
+            followup_id = f"{primary_id}-followup"
             primary = _fetch(primary_id, redis_client)
+            followup = _fetch(followup_id, redis_client)
             primary_status = _status(primary) if primary is not None else None
+            followup_status = _status(followup) if followup is not None else None
             if primary_status in _PENDING_STATUSES:
                 outcome["coalesced"] += 1
                 continue
 
             job_id = primary_id
             if primary_status in _RUNNING_STATUSES:
-                job_id = f"{primary_id}-followup"
-                followup = _fetch(job_id, redis_client)
-                if followup is not None and _status(followup) in (
-                    _PENDING_STATUSES | _RUNNING_STATUSES
-                ):
+                job_id = followup_id
+                if followup_status in (_PENDING_STATUSES | _RUNNING_STATUSES):
                     outcome["coalesced"] += 1
                     continue
                 if followup is not None:
                     followup.delete()
-            elif primary is not None:
-                primary.delete()
+            else:
+                if followup_status in (_PENDING_STATUSES | _RUNNING_STATUSES):
+                    outcome["coalesced"] += 1
+                    continue
+                if followup is not None:
+                    followup.delete()
+                if primary is not None:
+                    primary.delete()
 
             checked_enqueue(
                 queue,

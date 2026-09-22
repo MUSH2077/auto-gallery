@@ -248,11 +248,64 @@ def test_ranking_job_retries_not_ready_date_after_30_then_120_minutes(monkeypatc
         raise PixivRankingDateNotReady("ranking date has not advanced")
 
     monkeypatch.setattr(pixiv_ranking_sync.asyncio, "run", raise_not_ready)
+    recomputes = []
+    monkeypatch.setattr(
+        pixiv_ranking_sync,
+        "request_work_heat_recompute",
+        lambda sources: recomputes.append(sources),
+        raising=False,
+    )
     retry = pixiv_ranking_sync.sync_pixiv_rankings("2026-09-21")
 
     assert isinstance(retry, Retry)
     assert retry.max == 2
     assert retry.intervals == [1800, 7200]
+    assert recomputes == [{"pixiv"}]
+
+
+def test_ranking_job_requests_expiry_recompute_when_no_account_is_available(monkeypatch):
+    from app.jobs import pixiv_ranking_sync
+
+    def return_skipped(awaitable):
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        return {"status": "skipped", "reason": "no_healthy_account"}
+
+    recomputes = []
+    monkeypatch.setattr(pixiv_ranking_sync.asyncio, "run", return_skipped)
+    monkeypatch.setattr(
+        pixiv_ranking_sync,
+        "request_work_heat_recompute",
+        lambda sources: recomputes.append(sources),
+        raising=False,
+    )
+
+    outcome = pixiv_ranking_sync.sync_pixiv_rankings("2026-09-21")
+
+    assert outcome == {"status": "skipped", "reason": "no_healthy_account"}
+    assert recomputes == [{"pixiv"}]
+
+
+def test_ranking_job_degradation_is_not_masked_by_heat_queue_failure(monkeypatch):
+    from app.jobs import pixiv_ranking_sync
+
+    def return_skipped(awaitable):
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        return {"status": "skipped", "reason": "no_healthy_account"}
+
+    monkeypatch.setattr(pixiv_ranking_sync.asyncio, "run", return_skipped)
+    monkeypatch.setattr(
+        pixiv_ranking_sync,
+        "request_work_heat_recompute",
+        lambda _sources: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+        raising=False,
+    )
+
+    assert pixiv_ranking_sync.sync_pixiv_rankings("2026-09-21") == {
+        "status": "skipped",
+        "reason": "no_healthy_account",
+    }
 
 
 def test_scheduler_watchdog_keeps_subscription_loop_when_ranking_ensure_fails(monkeypatch):

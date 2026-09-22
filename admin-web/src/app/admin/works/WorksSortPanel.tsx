@@ -1,6 +1,7 @@
 "use client";
 
 import { RefreshCw } from "lucide-react";
+import { useId } from "react";
 
 import { useT } from "@/lib/i18n";
 
@@ -21,24 +22,30 @@ function SortChoice({
   value,
   current,
   label,
+  name,
   onChange,
 }: {
   value: WorksSortValue;
   current: WorksSortValue;
   label: string;
+  name: string;
   onChange: (value: WorksSortValue) => void;
 }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={current === value}
-      onClick={() => onChange(value)}
-      className={`flex min-h-11 w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${current === value ? "border-accent bg-accent-subtle text-accent" : "border-border text-fg hover:bg-subtle"}`}
+    <label
+      className={`relative flex min-h-11 w-full cursor-pointer items-center justify-between rounded-lg border px-3 py-2 text-left text-sm focus-within:ring-2 focus-within:ring-accent/30 ${current === value ? "border-accent bg-accent-subtle text-accent" : "border-border text-fg hover:bg-subtle"}`}
     >
-      <span>{label}</span>
-      {current === value ? <span aria-hidden>✓</span> : null}
-    </button>
+      <input
+        type="radio"
+        name={name}
+        value={value}
+        checked={current === value}
+        onChange={() => onChange(value)}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+      />
+      <span className="pointer-events-none relative">{label}</span>
+      {current === value ? <span className="pointer-events-none relative" aria-hidden>✓</span> : null}
+    </label>
   );
 }
 
@@ -54,6 +61,7 @@ export function WorksSortPanel({
   onReshuffle: () => void;
 }) {
   const t = useT();
+  const groupName = useId();
   const choices: { value: WorksSortValue; label: string }[] = [
     ...(hasText ? [{ value: "relevance" as const, label: t("works.sort_relevance") }] : []),
     { value: "heat-desc", label: t("works.sort_heat") },
@@ -72,7 +80,7 @@ export function WorksSortPanel({
       <legend className="sr-only">{t("works.sort_panel_title")}</legend>
       <div className="grid gap-2">
         {choices.map((choice) => (
-          <SortChoice key={choice.value} {...choice} current={value} onChange={onChange} />
+          <SortChoice key={choice.value} {...choice} name={groupName} current={value} onChange={onChange} />
         ))}
       </div>
       {value === "random" ? (
