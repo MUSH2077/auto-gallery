@@ -70,7 +70,7 @@ function suggestionDescription(t: Translator, suggestion: SearchSuggestion) {
   return t("search.suggestion_value");
 }
 
-type ComposeRequest = {
+export type SearchComposeRequest = {
   key: string;
   value?: string | null;
   operation?: "set" | "add" | "toggle" | "remove" | "replace-group";
@@ -84,7 +84,7 @@ type SearchComposerOptions = {
   onChange: (value: string) => void;
 };
 
-function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
+function useSearchComposition<T extends SearchComposeRequest | SearchComposeRequest[]>({
   value,
   scope,
   onChange,
@@ -120,11 +120,11 @@ function useSearchComposition<T extends ComposeRequest | ComposeRequest[]>({
 }
 
 export function useSearchComposer(options: SearchComposerOptions) {
-  return useSearchComposition<ComposeRequest>(options);
+  return useSearchComposition<SearchComposeRequest>(options);
 }
 
 export function useSearchBatchComposer(options: SearchComposerOptions) {
-  return useSearchComposition<ComposeRequest[]>(options);
+  return useSearchComposition<SearchComposeRequest[]>(options);
 }
 
 export interface SmartSearchInputProps {

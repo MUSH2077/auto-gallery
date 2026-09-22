@@ -15,7 +15,12 @@ import ErrorState from "@/components/ErrorState";
 import SourceBadge from "@/components/SourceBadge";
 import PageShell from "@/components/PageShell";
 import SelectionBar from "@/components/SelectionBar";
-import { SmartSearchInput, useSearchComposer } from "@/components/SmartSearchInput";
+import {
+  SmartSearchInput,
+  type SearchComposeRequest,
+  useSearchBatchComposer,
+  useSearchComposer,
+} from "@/components/SmartSearchInput";
 import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
 import PermissionGuard from "@/components/PermissionGuard";
 import type { SlideItem } from "@/components/SlideshowPlayer";
@@ -27,18 +32,22 @@ import { searchUrl } from "@/lib/search-query";
 import { resolveMediaKind } from "@/lib/media";
 import DomainDangerZone from "@/components/DomainDangerZone";
 import { pollInterval } from "@/lib/polling";
+import { WorksControlSurface, WorksDisplayPanel } from "./WorksControlSurface";
+import {
+  WorksFilterPanel,
+  type WorksFilterValue,
+  type WorksMediaFilter,
+} from "./WorksFilterPanel";
+import { WorksSortPanel, type WorksSortValue } from "./WorksSortPanel";
+import { WorkCard as SharedWorkCard, type WorkCardPreview } from "./WorkCard";
+import { WorksLayout, WorksLayoutSkeleton } from "./WorksLayout";
 
 const WorkPreviewOverlay = dynamic(
   () => import("@/components/work-interactions").then((module) => module.WorkPreviewOverlay),
   { ssr: false },
 );
 
-type PreviewState = {
-  work: WorkListItem;
-  anchor: DOMRect;
-  assetIds: string[];
-  pageIndex: number;
-};
+type PreviewState = WorkCardPreview;
 
 const LEGACY_WORK_QUERY_KEYS = [
   "source",
@@ -235,9 +244,6 @@ function WorkCard({
   );
 }
 
-type SortKey = "created_at" | "posted_at" | "title";
-type ViewMode = "grid" | "list";
-
 function DerivativeProgressCard({
   progress,
   refreshing,
@@ -334,29 +340,21 @@ function WorksContent() {
   const closePreviewTimer = useRef<number | null>(null);
   const previewEnabled = appearance.workPreviewEnabled;
   const wheelThreshold = appearance.workPreviewWheelSensitivity === "relaxed" ? 120 : 70;
-
-  const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  const SORT_OPTIONS: { key: "created_at" | "posted_at" | "title"; label: string }[] = [
     { key: "created_at", label: t("works.sort_imported") },
     { key: "posted_at", label: t("works.sort_posted") },
     { key: "title", label: t("works.sort_title") },
   ];
-
   const NSFW_FILTERS = [
     { key: "all", label: t("works.filter_all") },
     { key: "sfw", label: t("works.filter_sfw") },
     { key: "nsfw", label: t("works.filter_nsfw") },
   ];
-
   const SOURCE_FILTERS = [
     { key: "", label: t("works.filter_all_sources") },
-    { key: "pixiv", label: "Pixiv" },
-    { key: "x", label: "X" },
-    { key: "iwara", label: "Iwara" },
-    { key: "danbooru", label: "Danbooru" },
-    { key: "pinterest", label: "Pinterest" },
-    { key: "lofter", label: "Lofter" },
-    { key: "weibo", label: t("works.source_weibo") },
+    ...["pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo"].map((key) => ({ key, label: key === "x" ? "X" : key[0].toUpperCase() + key.slice(1) })),
   ];
+
   // q is the only search state. Page and view remain navigation/presentation
   // state and are deliberately outside the search language.
   const search = sp.get("q") ?? "";
@@ -364,7 +362,10 @@ function WorksContent() {
   const page = Number.isSafeInteger(requestedPage) && requestedPage >= 0
     ? requestedPage
     : 0;
-  const viewMode = (sp.get("view") as ViewMode) ?? "grid";
+  const legacyView = sp.get("view");
+  const viewMode = legacyView === "grid" || legacyView === "list" || legacyView === "masonry"
+    ? legacyView
+    : appearance.worksViewMode;
   const limit = 30;
   const navigationParamsRef = useRef(sp.toString());
   useEffect(() => { navigationParamsRef.current = sp.toString(); }, [sp]);
@@ -505,14 +506,77 @@ function WorksContent() {
   const aiFilter = isValues.includes("ai") ? "ai" : isValues.includes("human") ? "human" : "all";
   const curationVisibility = isValues.includes("trashed") ? "trashed" : "visible";
   const sortValue = qualifierValues("sort")[0] || "created-desc";
-  const sortBy: SortKey = sortValue.startsWith("posted")
+  const sortBy: "created_at" | "posted_at" | "title" = sortValue.startsWith("posted")
     ? "posted_at"
     : sortValue.startsWith("title")
       ? "title"
       : "created_at";
   const sortOrder: "asc" | "desc" = sortValue.endsWith("-asc") ? "asc" : "desc";
-  const activeFilterCount = qualifierTokens.filter((token) => token.key !== "type").length + (worksQuery.data?.parsed.tokens.some((token) => token.kind === "text") ? 1 : 0);
+  const activeFilterCount = qualifierTokens.filter((token) => !["type", "sort"].includes(token.key)).length;
   const composer = useSearchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
+  const batchComposer = useSearchBatchComposer({ value: inputVal, scope: "works", onChange: setSearchQuery });
+  const sourceFilters = qualifierValues("source");
+  const mediaFilters = qualifierValues("has").filter((value): value is WorksMediaFilter => (
+    value === "image" || value === "animation" || value === "video" || value === "multiple-assets"
+  ));
+  const filterValue = useMemo<WorksFilterValue>(() => ({
+    visibility: curationVisibility,
+    sources: sourceFilters,
+    safety: nsfwFilter,
+    ai: aiFilter,
+    favorite: isFavoriteFilter,
+    media: mediaFilters,
+  }), [aiFilter, curationVisibility, isFavoriteFilter, mediaFilters.join("\u0000"), nsfwFilter, sourceFilters.join("\u0000")]);
+  const parsedHasText = !!worksQuery.data?.parsed.tokens.some((token) => token.kind === "text");
+  const knownSorts: WorksSortValue[] = [
+    "relevance", "heat-desc", "random", "created-desc", "created-asc", "posted-desc",
+    "posted-asc", "updated-desc", "updated-asc", "title-desc", "title-asc",
+  ];
+  const currentSort: WorksSortValue = knownSorts.includes(sortValue as WorksSortValue)
+    ? sortValue as WorksSortValue
+    : "created-desc";
+  const sortSummary = currentSort === "heat-desc"
+    ? t("works.sort_heat")
+    : currentSort === "random"
+      ? t("works.sort_random")
+      : currentSort === "relevance"
+        ? t("works.sort_relevance")
+        : currentSort.startsWith("posted")
+          ? t("works.sort_posted")
+          : currentSort.startsWith("updated")
+            ? t("works.sort_updated")
+            : currentSort.startsWith("title")
+              ? t("works.sort_title")
+              : t("works.sort_imported");
+  const displaySummary = `${t(`works.view_${viewMode}_plain`)} · ${t(`works.card_size_${appearance.workCardSize}`)}`;
+
+  const applyFilterDraft = (next: WorksFilterValue, close: () => void) => {
+    const operations: SearchComposeRequest[] = [
+      { key: "is", value: next.visibility === "trashed" ? "trashed" : null, operation: "replace-group", replace_values: ["visible", "trashed"] },
+      { key: "source", value: next.sources[0] || null, operation: "set" },
+      ...next.sources.slice(1).map((value): SearchComposeRequest => ({ key: "source", value, operation: "add" })),
+      { key: "is", value: next.safety === "all" ? null : next.safety, operation: "replace-group", replace_values: ["sfw", "nsfw"] },
+      { key: "is", value: next.ai === "all" ? null : next.ai, operation: "replace-group", replace_values: ["human", "ai"] },
+      { key: "is", value: next.favorite ? "favorite" : null, operation: "replace-group", replace_values: ["favorite"] },
+      { key: "has", value: next.media[0] || null, operation: "replace-group", replace_values: ["image", "animation", "video", "multiple-assets"] },
+      ...next.media.slice(1).map((value): SearchComposeRequest => ({ key: "has", value, operation: "add" })),
+    ];
+    batchComposer.mutate(operations, { onSuccess: close });
+  };
+
+  const selectSort = (next: WorksSortValue) => {
+    updateParams({ seed: next === "random" ? String(crypto.getRandomValues(new Uint32Array(1))[0]) : null });
+    composer.mutate({
+      key: "sort",
+      value: next === "created-desc" ? null : next,
+      operation: "set",
+    });
+  };
+
+  const updateDisplayAppearance = (patch: Parameters<typeof updateSettings>[0]) => {
+    if (patch.worksViewMode) updateParams({ view: null }, false);
+    updateSettings(patch);
+  };
   const filters = search;
 
   const slideshow = useSlideshow();
@@ -647,8 +711,45 @@ function WorksContent() {
         </div>
       )}
 
+      <WorksControlSurface
+        filterCount={activeFilterCount}
+        sortSummary={sortSummary}
+        displaySummary={displaySummary}
+        search={(
+          <SmartSearchInput
+            value={inputVal}
+            onChange={setInputVal}
+            onEditStart={composer.discardPendingResult}
+            scope="works"
+            ariaLabel={t("works.search_title")}
+            placeholder={t("works.search_title")}
+            showTokens={false}
+            className="w-full"
+          />
+        )}
+        renderFilter={(close) => (
+          <WorksFilterPanel
+            value={filterValue}
+            applying={batchComposer.isPending}
+            onApply={(next) => applyFilterDraft(next, close)}
+            onCancel={close}
+          />
+        )}
+        renderSort={() => (
+          <WorksSortPanel
+            value={currentSort}
+            hasText={parsedHasText}
+            onChange={selectSort}
+            onReshuffle={() => updateParams({ seed: String(crypto.getRandomValues(new Uint32Array(1))[0]) })}
+          />
+        )}
+        renderDisplay={() => (
+          <WorksDisplayPanel appearance={appearance} updateAppearance={updateDisplayAppearance} />
+        )}
+      />
+
       {/* Search & Filters */}
-      <div data-page-primary-content className="mb-3 flex flex-wrap items-center gap-2 md:hidden">
+      <div data-page-primary-content className="mb-3 flex flex-wrap items-center gap-2 md:hidden" style={{ display: "none" }} aria-hidden="true">
         <button
           onClick={() => setFiltersOpen((value) => !value)}
           className="btn-ghost"
@@ -664,7 +765,7 @@ function WorksContent() {
         )}
       </div>
 
-      <div data-page-primary-content id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} toolbar mb-4 flex-col md:flex md:flex-row md:flex-wrap md:items-center`}>
+      <div data-page-primary-content id="works-filter-panel" className={`${filtersOpen ? "flex" : "hidden"} toolbar mb-4 flex-col md:flex md:flex-row md:flex-wrap md:items-center`} style={{ display: "none" }} aria-hidden="true">
         <div className="segmented-control">
           <button onClick={() => composer.mutate({
             key: "is",
@@ -839,20 +940,7 @@ function WorksContent() {
         )
       )}
 
-      {/* Loading */}
-      {works.isLoading && viewMode === "grid" && (
-        <div className="overflow-x-auto grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="rounded-md bg-surface p-3 shadow-sm animate-pulse">
-              <div className="h-32 bg-subtle rounded mb-2" />
-              <div className="h-3 bg-subtle rounded w-3/4" />
-            </div>
-          ))}
-        </div>
-      )}
-      {works.isLoading && viewMode === "list" && (
-        <div className="space-y-1">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-12 bg-subtle rounded animate-pulse" />)}</div>
-      )}
+      {works.isLoading ? <WorksLayoutSkeleton mode={viewMode} size={appearance.workCardSize} /> : null}
 
       {/* Error */}
       {works.error && <ErrorState message={(works.error as Error).message} onRetry={() => works.refetch()} />}
@@ -862,14 +950,22 @@ function WorksContent() {
         <EmptyState title={t("works.no_works")} description={search || sourceFilter || creatorFilter ? t("works.no_works_filter") : t("works.no_works_desc")} />
       )}
 
-      {/* Grid View */}
-      {works.data && works.data.items?.length > 0 && viewMode === "grid" && (
-        <div className="overflow-x-auto grid gap-4 mb-6 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {works.data.items.map((w: WorkListItem, i: number) => (
-            <WorkCard
-              key={w.id}
-              entrance={workEntrance(w.id, i)}
-              w={w}
+      {works.data && works.data.items?.length > 0 ? (
+        <WorksLayout mode={viewMode} size={appearance.workCardSize}>
+          {works.data.items.map((work: WorkListItem, index: number) => (
+            <SharedWorkCard
+              key={work.id}
+              entrance={workEntrance(work.id, index)}
+              work={work}
+              presentation={{
+                layout: viewMode,
+                size: appearance.workCardSize,
+                showCheckbox: appearance.workCardShowCheckbox,
+                showAi: appearance.workCardShowAi,
+                showNsfw: appearance.workCardShowNsfw,
+                showFavorite: appearance.workCardShowFavorite,
+                blurNsfw: appearance.blurNsfw,
+              }}
               previewEnabled={previewEnabled}
               previewDelayMs={appearance.workPreviewDelayMs}
               wheelThreshold={wheelThreshold}
@@ -879,7 +975,7 @@ function WorksContent() {
               onPreviewPage={(workId, pageIndex) => setPreview((current) => current?.work.id === workId ? { ...current, pageIndex } : current)}
               trashMode={curationVisibility === "trashed"}
               selectable={canCurate && curationVisibility === "visible"}
-              selected={selectedWorkIds.has(w.id)}
+              selected={selectedWorkIds.has(work.id)}
               onToggleSelect={toggleSelectWork}
               onToggleFavorite={(id) => toggleFavorite.mutate(id)}
               onRestore={(id) => restoreWork.mutate(id)}
@@ -888,71 +984,11 @@ function WorksContent() {
               }}
               canCurate={canCurate}
               canPurge={isAdmin}
-              eager={i < 8}
+              eager={index < 8}
             />
           ))}
-        </div>
-      )}
-
-      {/* List View */}
-      {works.data && works.data.items?.length > 0 && viewMode === "list" && (
-        <div className="space-y-1 mb-6">
-          {works.data.items.map((w: WorkListItem, index: number) => {
-            const entrance = workEntrance(w.id, index);
-            return (
-            <div
-              key={w.id}
-              className={`${entrance.className} flex cursor-pointer items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm transition-shadow hover:shadow-md ${selectedWorkIds.has(w.id) ? "ring-2 ring-accent" : ""}`}
-              style={{ ...entrance.style, contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
-              onClick={() => router.push(`/admin/works/${w.id}`)}
-            >
-              {canCurate && curationVisibility === "visible" && (
-                <input
-                  type="checkbox"
-                  checked={selectedWorkIds.has(w.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => { e.stopPropagation(); toggleSelectWork(w.id); }}
-                  aria-label={t("works.select_work")}
-                  className="h-4 w-4 shrink-0 rounded border-border"
-                />
-              )}
-              <div className="w-12 h-12 bg-subtle rounded overflow-hidden shrink-0">
-                <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" fallback={w.thumbnail_asset_id ? t("media.derivative_pending") : t("works.na")} eager={index < 8} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-fg truncate">{w.title || t("works.untitled")}</span>
-                  {w.is_nsfw && <span className="rounded bg-danger-subtle px-1 text-xs text-danger">{t("works.nsfw_badge")}</span>}
-                  {w.asset_count > 1 && <span className="text-xs text-muted">{w.asset_count}p</span>}
-                  {w.has_ugoira && <span className="rounded bg-accent-subtle px-1 text-xs text-accent">{t("works.gif_badge")}</span>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted mt-0.5">
-                  {w.source && <SourceBadge source={w.source} href={searchUrl("/admin/works", `source:${w.source}`)} />}
-                  {w.creator_name && w.creator_id && (
-  <Link href={`/admin/creators/${w.creator_id}`} onClick={(e) => e.stopPropagation()} className="text-accent hover:underline">{w.creator_name}</Link>
-)}
-                  <span>{w.posted_at ? fmt.date(w.posted_at) : "—"}</span>
-                </div>
-              </div>
-              {canCurate && (
-                <button onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate(w.id); }}
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-md ${w.is_favorite ? "text-warning" : "text-muted hover:bg-subtle hover:text-warning"}`}
-                  title={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}
-                  aria-label={w.is_favorite ? t("works.unfavorite") : t("works.favorite")}>
-                  <Star className="h-5 w-5" fill={w.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
-                </button>
-              )}
-              {canCurate && curationVisibility === "trashed" && (
-                <div className="flex shrink-0 gap-2">
-                  <button onClick={(e) => { e.stopPropagation(); restoreWork.mutate(w.id); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-subtle dark:border-border dark:hover:bg-subtle">{t("works.restore")}</button>
-                  {isAdmin && <button onClick={(e) => { e.stopPropagation(); if (window.confirm(t("works.purge_confirm"))) purgeWork.mutate(w.id); }} className="rounded bg-danger px-2 py-1 text-xs text-white hover:bg-danger">{t("works.purge")}</button>}
-                </div>
-              )}
-            </div>
-            );
-          })}
-        </div>
-      )}
+        </WorksLayout>
+      ) : null}
 
       {preview && previewEnabled && (
         <WorkPreviewOverlay
@@ -967,6 +1003,7 @@ function WorksContent() {
           previewSize={appearance.workPreviewSize}
           pageIndex={preview.pageIndex}
           assetCount={preview.work.asset_count}
+          blurred={preview.work.is_nsfw && appearance.blurNsfw}
           onMouseEnter={cancelClosePreview}
           onMouseLeave={scheduleClosePreview}
           onWheelPage={(delta) => {

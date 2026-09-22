@@ -1276,6 +1276,8 @@ export interface WorkListItem {
   is_nsfw: boolean;
   is_ai_generated: boolean;
   thumbnail_asset_id?: string;
+  thumbnail_width?: number | null;
+  thumbnail_height?: number | null;
   asset_count: number;
   created_at: string;
   source?: string;

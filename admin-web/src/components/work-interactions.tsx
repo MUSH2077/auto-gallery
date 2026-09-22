@@ -131,6 +131,7 @@ export function WorkPreviewOverlay({
   previewSize,
   pageIndex,
   assetCount,
+  blurred = false,
   onMouseEnter,
   onMouseLeave,
   onWheelPage,
@@ -147,6 +148,7 @@ export function WorkPreviewOverlay({
   previewSize: WorkPreviewSize;
   pageIndex: number;
   assetCount: number;
+  blurred?: boolean;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onWheelPage: (delta: number) => void;
@@ -195,7 +197,11 @@ export function WorkPreviewOverlay({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="relative flex items-center justify-center bg-canvas" style={{ height: "var(--preview-image-height)" }}>
+      <div
+        data-nsfw-blurred={blurred ? "true" : undefined}
+        className="relative flex items-center justify-center overflow-hidden bg-canvas"
+        style={{ height: "var(--preview-image-height)" }}
+      >
         {isLoading ? (
           <div className="h-full w-full animate-pulse bg-subtle" />
         ) : isError ? (
@@ -204,7 +210,7 @@ export function WorkPreviewOverlay({
           <AssetImage
             src={currentSrc}
             alt={title || currentAsset?.file_name || ""}
-            className="h-full w-full object-contain no-outline"
+            className={`h-full w-full object-contain no-outline transition-[filter,transform] duration-200 ${blurred ? "scale-[1.03] blur-xl" : ""}`}
             fallback={derivativeFailed ? t("media.derivative_failed") : derivativePending ? t("media.derivative_pending") : t("works.original_unavailable")}
             onLoad={(event) => {
               const image = event.currentTarget;
