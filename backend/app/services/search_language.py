@@ -179,6 +179,8 @@ QUALIFIER_HELP: dict[str, tuple[str, str, str]] = {
 
 SORT_TARGETS: dict[str, frozenset[SearchTarget]] = {
     "relevance": frozenset(SCOPE_TARGETS["global"] + ("tasks", "scheduler")),
+    "heat-desc": frozenset({"works"}),
+    "random": frozenset({"works"}),
     "posted-desc": frozenset({"works"}),
     "posted-asc": frozenset({"works"}),
     "created-desc": frozenset({"works", "creators", "tags", "repositories", "subscriptions", "tasks"}),
@@ -594,6 +596,19 @@ def _validate_query(tokens: tuple[SearchToken, ...], scope: SearchScope) -> tupl
         raise SearchQueryError(SearchDiagnostic(
             code="duplicate_sort",
             message="A search query can use only one sort: qualifier.",
+            start=token.start,
+            end=token.end,
+            token=_canonical_token(token),
+        ))
+    if (
+        sort_tokens
+        and sort_tokens[0].value == "relevance"
+        and not any(isinstance(token, SearchTerm) for token in tokens)
+    ):
+        token = sort_tokens[0]
+        raise SearchQueryError(SearchDiagnostic(
+            code="relevance_requires_text",
+            message="Relevance sorting requires a text search term.",
             start=token.start,
             end=token.end,
             token=_canonical_token(token),

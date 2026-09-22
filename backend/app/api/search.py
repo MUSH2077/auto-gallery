@@ -88,6 +88,12 @@ async def search(
         None,
         description="Optional seek cursor for adjacent structured work pages",
     ),
+    seed: int | None = Query(
+        None,
+        ge=0,
+        le=4_294_967_295,
+        description="Stable random-order seed for work searches",
+    ),
     user: User = _require_search,
     db: AsyncSession = Depends(get_db),
 ):
@@ -121,6 +127,7 @@ async def search(
             permissions=_permissions(user),
             force_sfw=not user.nsfw_visible,
             cursor=cursor,
+            seed=seed,
             allowed_repository_ids=set(bindings_by_repository),
             user_id=user_id,
         )

@@ -68,6 +68,21 @@ def test_date_comparison_is_accepted():
     assert query.values("posted") == (">=2026-07-01",)
 
 
+@pytest.mark.parametrize("sort", ["heat-desc", "random"])
+def test_works_accepts_heat_and_random_sort(sort):
+    query = parse_search_query(f"sort:{sort}", "works")
+    assert query.values("sort") == (sort,)
+
+
+def test_relevance_sort_requires_a_text_term():
+    with pytest.raises(SearchQueryError) as error:
+        parse_search_query("source:pixiv sort:relevance", "works")
+    assert error.value.diagnostic.code == "relevance_requires_text"
+
+    query = parse_search_query("landscape source:pixiv sort:relevance", "works")
+    assert query.values("sort") == ("relevance",)
+
+
 def test_source_identity_qualifiers_are_generic_exact_and_source_paired():
     query = parse_search_query(
         "uid:PIXIV/1980643 pid:twitter/1234567890123456789",

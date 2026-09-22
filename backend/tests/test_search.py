@@ -233,6 +233,35 @@ class TestSearchService:
         assert "offset" in params
         assert "limit" in params
 
+    def test_work_list_contract_includes_optional_thumbnail_dimensions(self):
+        from app.schemas.work import WorkList
+        from app.services.search import WORK_LIST_RETRIEVE_FIELDS
+
+        fields = WorkList.model_fields
+        assert fields["thumbnail_width"].annotation == int | None
+        assert fields["thumbnail_height"].annotation == int | None
+        assert fields["thumbnail_width"].default is None
+        assert fields["thumbnail_height"].default is None
+        assert {"thumbnail_width", "thumbnail_height"} <= set(WORK_LIST_RETRIEVE_FIELDS)
+
+    def test_thumbnail_projection_uses_selected_asset_and_sanitizes_dimensions(self):
+        from app.services.search import _thumbnail_projection
+
+        explicit = SimpleNamespace(thumbnail_asset_id="explicit")
+        assert _thumbnail_projection(
+            explicit,
+            ["preview"],
+            {"explicit": (1200, 800), "preview": (640, 480)},
+        ) == ("explicit", 1200, 800)
+
+        fallback = SimpleNamespace(thumbnail_asset_id=None)
+        assert _thumbnail_projection(
+            fallback,
+            ["preview"],
+            {"preview": (0, None)},
+        ) == ("preview", None, None)
+        assert _thumbnail_projection(fallback, [], {}) == (None, None, None)
+
     def test_reindex_method_exists(self):
         from app.services.search import SearchService
         assert hasattr(SearchService, "reindex")
@@ -248,6 +277,44 @@ class TestSearchService:
                 parse_search_query("", scope),
                 scope,
             ) == ["name_sort:asc", "id:asc"]
+
+    def test_work_heat_and_random_fields_are_search_index_sortable(self):
+        from app.services.search import (
+            INDEX_SETTINGS,
+            WORKS_INDEX,
+            _meili_shuffle_key,
+            _meili_sort,
+        )
+        from app.services.search_language import parse_search_query
+
+        settings = INDEX_SETTINGS[WORKS_INDEX]
+        random_fields = {
+            "shuffle_high",
+            "shuffle_low",
+            "shuffle_id_0",
+            "shuffle_id_1",
+            "shuffle_id_2",
+            "shuffle_id_3",
+        }
+        assert {"heat_available", *random_fields} <= set(settings["filterableAttributes"])
+        assert {"heat_available", "heat_score", *random_fields} <= set(settings["sortableAttributes"])
+        assert _meili_sort(
+            parse_search_query("landscape sort:heat-desc", "works"),
+            "works",
+        ) == ["heat_available:desc", "heat_score:desc", "id:desc"]
+        assert _meili_sort(
+            parse_search_query("landscape sort:random", "works"),
+            "works",
+        ) == [f"{field}:asc" for field in (
+            "shuffle_high",
+            "shuffle_low",
+            "shuffle_id_0",
+            "shuffle_id_1",
+            "shuffle_id_2",
+            "shuffle_id_3",
+        )]
+        assert _meili_shuffle_key(0) == "0000000000000000000"
+        assert _meili_shuffle_key(2**63 - 1) == "9223372036854775807"
 
     def test_parallel_work_hydration_reserves_a_control_connection(self, monkeypatch):
         from app.services import search
@@ -268,6 +335,28 @@ class TestSearchService:
         filters = _compile_meili_filter(query, "works", {}, force_sfw=False)
         assert '(tags = "a\\"b" OR tags = "landscape")' in filters
         assert '(sources != "x" AND sources != "pixiv")' in filters
+
+    def test_meili_random_ring_filter_uses_exact_padded_keys_and_cursor_boundary(self):
+        from app.services.search import RandomWorkCursor, _meili_random_phase_filter
+
+        boundary = RandomWorkCursor(
+            seek="after",
+            key=123,
+            identity=__import__("uuid").UUID(int=7),
+            phase=0,
+        )
+        expression = _meili_random_phase_filter(
+            'visibility = "visible"',
+            start=100,
+            phase=0,
+            boundary=boundary,
+            reverse=False,
+        )
+        assert "shuffle_high = 0" in expression
+        assert "shuffle_low >= 100" in expression
+        assert "shuffle_low > 123" in expression
+        assert "shuffle_id_3 > 7" in expression
+        assert 'visibility = "visible"' in expression
 
     def test_source_identity_meili_filters_keep_source_and_id_paired(self):
         from app.services.search import _compile_meili_filter
@@ -346,6 +435,135 @@ class TestSearchService:
             assert SearchService._works_db_compatible(
                 parse_search_query(value, "works")
             )
+
+    @pytest.mark.asyncio
+    async def test_random_search_generates_or_preserves_uint32_seed(self, monkeypatch):
+        from app.services.search import SearchService
+
+        service = SearchService(SimpleNamespace())
+        seen: list[int] = []
+
+        async def no_aliases(*_args, **_kwargs):
+            return ()
+
+        async def no_resolutions(_query):
+            return {}
+
+        async def random_page(_query, _resolved, _offset, _limit, **kwargs):
+            seen.append(kwargs["seed"])
+            return {"total": 0, "items": [], "next_cursor": None, "previous_cursor": None}, {}
+
+        monkeypatch.setattr(service, "_exact_creator_aliases_for_value", no_aliases)
+        monkeypatch.setattr(service, "_exact_creator_aliases", no_aliases)
+        monkeypatch.setattr(service, "_resolve_qualifiers", no_resolutions)
+        monkeypatch.setattr(service, "_hedged_structured_works_search", random_page)
+
+        generated = await service.search("sort:random", scope="works")
+        supplied = await service.search("sort:random", scope="works", seed=17)
+
+        assert 0 <= generated["seed"] <= 2**32 - 1
+        assert supplied["seed"] == 17
+        assert seen == [generated["seed"], 17]
+
+    @pytest.mark.asyncio
+    async def test_full_text_random_search_passes_seed_to_meilisearch(self, monkeypatch):
+        from app.services.search import SearchService
+
+        service = SearchService(SimpleNamespace())
+        seen = {}
+
+        async def no_aliases(*_args, **_kwargs):
+            return ()
+
+        async def no_resolutions(_query):
+            return {}
+
+        async def indexed(_query, _targets, _resolved, _offset, _limit, _force_sfw, **kwargs):
+            seen.update(kwargs)
+            return {"works": {"total": 0, "items": [], "next_cursor": None, "previous_cursor": None}}
+
+        monkeypatch.setattr(service, "_exact_creator_aliases_for_value", no_aliases)
+        monkeypatch.setattr(service, "_exact_creator_aliases", no_aliases)
+        monkeypatch.setattr(service, "_resolve_qualifiers", no_resolutions)
+        monkeypatch.setattr(service, "_search_meili", indexed)
+
+        result = await service.search(
+            "landscape sort:random",
+            scope="works",
+            seed=23,
+        )
+
+        assert result["seed"] == 23
+        assert seen["seed"] == 23
+        assert seen["cursor"] is None
+
+    @pytest.mark.asyncio
+    async def test_meili_random_page_wraps_ring_and_emits_bound_cursor(self, monkeypatch):
+        from app.services import search
+        from app.services.search import (
+            SearchService,
+            _decode_random_work_cursor,
+            _meili_shuffle_key,
+            _shuffle_ring_start,
+        )
+        from app.services.search_language import parse_search_query
+
+        query = parse_search_query("landscape sort:random", "works")
+        seed = 23
+        start = _shuffle_ring_start(seed)
+        phase_zero_key = min(start + 1, 2**63 - 1)
+        phase_one_keys = [1, 2]
+        ids = [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000003",
+        ]
+
+        class Index:
+            def search(self, _text, **kwargs):
+                filter_expression = kwargs.get("filter", "")
+                if "shuffle_high" not in filter_expression:
+                    return SimpleNamespace(hits=[], estimated_total_hits=3)
+                if ">=" in filter_expression:
+                    return SimpleNamespace(
+                        hits=[{"id": ids[0], "shuffle_key": _meili_shuffle_key(phase_zero_key)}],
+                        estimated_total_hits=1,
+                    )
+                return SimpleNamespace(
+                    hits=[
+                        {"id": ids[index + 1], "shuffle_key": _meili_shuffle_key(key)}
+                        for index, key in enumerate(phase_one_keys)
+                    ],
+                    estimated_total_hits=2,
+                )
+
+        class Client:
+            def index(self, _uid):
+                return Index()
+
+        monkeypatch.setattr(search, "_client", lambda **_kwargs: Client())
+        service = SearchService(SimpleNamespace())
+        result = await service._search_meili(
+            query,
+            ["works"],
+            {},
+            0,
+            3,
+            False,
+            seed=seed,
+            cursor=None,
+        )
+
+        group = result["works"]
+        assert [item["id"] for item in group["items"]] == ids
+        decoded = _decode_random_work_cursor(
+            group["next_cursor"],
+            query,
+            force_sfw=False,
+            seed=seed,
+        )
+        assert decoded.phase == 1
+        assert decoded.key == phase_one_keys[-1]
 
 
 

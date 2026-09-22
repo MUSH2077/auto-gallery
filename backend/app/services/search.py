@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import math
+import secrets
 import struct
 import tempfile
 import time as monotonic_time
@@ -35,6 +36,7 @@ from meilisearch_python_sdk.models.settings import MeilisearchSettings
 from sqlalchemy import String, and_, case, cast, exists, func, literal_column, not_, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import settings
 from app.database import async_session
@@ -148,6 +150,14 @@ TAGS_INDEX = f"{_INDEX_PREFIX}tags"
 REPOSITORIES_INDEX = f"{_INDEX_PREFIX}repositories"
 SUBSCRIPTIONS_INDEX = f"{_INDEX_PREFIX}subscriptions"
 MEMBERSHIPS_INDEX = f"{_INDEX_PREFIX}subscription_memberships_v1"
+MEILI_SHUFFLE_FIELDS = (
+    "shuffle_high",
+    "shuffle_low",
+    "shuffle_id_0",
+    "shuffle_id_1",
+    "shuffle_id_2",
+    "shuffle_id_3",
+)
 
 INDEX_LABELS = {
     WORKS_INDEX: "works",
@@ -200,10 +210,23 @@ INDEX_SETTINGS = {
             "posted_ts",
             "created_ts",
             "updated_ts",
+            "heat_available",
+            "shuffle_key",
+            *MEILI_SHUFFLE_FIELDS,
         ],
         # ``id`` is the deterministic final key for every non-relevance sort.
         # Without it, equal timestamps/titles can move between offset pages.
-        "sortableAttributes": ["posted_ts", "created_ts", "updated_ts", "title", "id"],
+        "sortableAttributes": [
+            "posted_ts",
+            "created_ts",
+            "updated_ts",
+            "title",
+            "heat_available",
+            "heat_score",
+            "shuffle_key",
+            *MEILI_SHUFFLE_FIELDS,
+            "id",
+        ],
         "pagination": {"maxTotalHits": 100_000},
         "nonSeparatorTokens": ["_", "@"],
         "typoTolerance": {
@@ -347,7 +370,7 @@ INDEX_SETTINGS[MEMBERSHIPS_INDEX] = {
     "sortableAttributes": [*INDEX_SETTINGS[SUBSCRIPTIONS_INDEX]["sortableAttributes"], "subscription_id"],
 }
 
-WORK_PROJECTION_VERSION = 4
+WORK_PROJECTION_VERSION = 5
 WORK_HYDRATION_QUERY_COUNT = 4
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
@@ -389,10 +412,15 @@ WORK_LIST_RETRIEVE_FIELDS = [
     "posted_ts",
     "created_ts",
     "updated_ts",
+    "heat_available",
+    "heat_score",
+    "shuffle_key",
     "is_nsfw",
     "is_ai_generated",
     "is_favorite",
     "thumbnail_asset_id",
+    "thumbnail_width",
+    "thumbnail_height",
     "preview_asset_ids",
     "asset_count",
     "source",
@@ -456,6 +484,7 @@ DEFAULT_SORT = {
 }
 
 SORT_FIELD = {
+    "heat-desc": ("heat_score", "desc"),
     "posted-desc": ("posted_ts", "desc"),
     "posted-asc": ("posted_ts", "asc"),
     "created-desc": ("created_ts", "desc"),
@@ -1114,6 +1143,24 @@ def _timestamp(value: datetime | None) -> int | None:
     return int(value.timestamp())
 
 
+def _thumbnail_projection(
+    work: Any,
+    preview_asset_ids: list[str],
+    dimensions: dict[str, tuple[int | None, int | None]],
+) -> tuple[str | None, int | None, int | None]:
+    selected = (
+        str(work.thumbnail_asset_id)
+        if getattr(work, "thumbnail_asset_id", None)
+        else (preview_asset_ids[0] if preview_asset_ids else None)
+    )
+    width, height = dimensions.get(selected, (None, None)) if selected else (None, None)
+    return (
+        selected,
+        int(width) if width is not None and int(width) > 0 else None,
+        int(height) if height is not None and int(height) > 0 else None,
+    )
+
+
 def _with_projection_hash(document: dict[str, Any], *, version: int = 1) -> dict[str, Any]:
     """Attach a deterministic projection fingerprint for sampled audits."""
 
@@ -1214,6 +1261,7 @@ def _sql_sort_spec(query: SearchQuery, model) -> tuple[Any, str, bool]:
         "created": "created_at",
         "updated": "updated_at",
         "posted": "posted_at",
+        "heat": "heat_score",
         "title": "title",
         "name": "name",
         "last-sync": "last_synced_at",
@@ -1287,11 +1335,281 @@ def _decode_work_cursor(
         value = payload.get("value")
         if value is not None and attribute in {"created_at", "updated_at", "posted_at"}:
             value = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        elif value is not None and attribute == "heat_score":
+            value = float(value)
         elif value is not None:
             value = str(value)
         return str(payload["seek"]), value, identity
     except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("Invalid or stale works cursor") from exc
+
+
+SHUFFLE_RING_SIZE = 1 << 63
+
+
+@dataclass(frozen=True)
+class RandomWorkCursor:
+    seek: str
+    key: int
+    identity: UUID
+    phase: int
+
+
+def _shuffle_ring_start(seed: int) -> int:
+    """Map a public uint32 seed to a uniformly distributed hash-ring point."""
+
+    if not 0 <= seed <= 0xFFFFFFFF:
+        raise ValueError("Random seed must be an unsigned 32-bit integer")
+    digest = hashlib.blake2b(
+        seed.to_bytes(4, "big", signed=False),
+        digest_size=8,
+        person=b"ag-random",
+    ).digest()
+    return int.from_bytes(digest, "big") & (SHUFFLE_RING_SIZE - 1)
+
+
+def _meili_shuffle_key(value: int) -> str:
+    """Keep 63-bit hash order exact across Meilisearch's JSON number boundary."""
+
+    if not 0 <= int(value) < SHUFFLE_RING_SIZE:
+        raise ValueError("Shuffle key is outside the stable hash ring")
+    return f"{int(value):019d}"
+
+
+def _meili_shuffle_parts(value: int, identity: UUID) -> dict[str, int]:
+    key = int(value)
+    if not 0 <= key < SHUFFLE_RING_SIZE:
+        raise ValueError("Shuffle key is outside the stable hash ring")
+    identity_value = identity.int
+    return {
+        "shuffle_high": key >> 31,
+        "shuffle_low": key & ((1 << 31) - 1),
+        "shuffle_id_0": (identity_value >> 96) & 0xFFFFFFFF,
+        "shuffle_id_1": (identity_value >> 64) & 0xFFFFFFFF,
+        "shuffle_id_2": (identity_value >> 32) & 0xFFFFFFFF,
+        "shuffle_id_3": identity_value & 0xFFFFFFFF,
+    }
+
+
+def _meili_tuple_comparison(
+    fields: tuple[str, ...],
+    values: tuple[int, ...],
+    operator: str,
+    *,
+    inclusive_last: bool = False,
+) -> str:
+    clauses = []
+    for index, (field, value) in enumerate(zip(fields, values, strict=True)):
+        prefix = " AND ".join(
+            f"{fields[position]} = {values[position]}"
+            for position in range(index)
+        )
+        comparison = (
+            f"{field} {operator}= {value}"
+            if inclusive_last and index == len(fields) - 1
+            else f"{field} {operator} {value}"
+        )
+        clauses.append(f"({prefix} AND {comparison})" if prefix else comparison)
+    return "(" + " OR ".join(clauses) + ")"
+
+
+def _meili_random_phase_filter(
+    base_filter: str | None,
+    *,
+    start: int,
+    phase: int,
+    boundary: RandomWorkCursor | None = None,
+    reverse: bool = False,
+) -> str:
+    if phase not in {0, 1}:
+        raise ValueError("Invalid random ring phase")
+    start_parts = _meili_shuffle_parts(start, UUID(int=0))
+    key_fields = MEILI_SHUFFLE_FIELDS[:2]
+    key_values = tuple(start_parts[field] for field in key_fields)
+    parts = [_meili_tuple_comparison(
+        key_fields,
+        key_values,
+        ">" if phase == 0 else "<",
+        inclusive_last=phase == 0,
+    )]
+    if boundary is not None:
+        boundary_parts = _meili_shuffle_parts(boundary.key, boundary.identity)
+        operator = "<" if reverse else ">"
+        parts.append(_meili_tuple_comparison(
+            MEILI_SHUFFLE_FIELDS,
+            tuple(boundary_parts[field] for field in MEILI_SHUFFLE_FIELDS),
+            operator,
+        ))
+    if base_filter:
+        parts.insert(0, base_filter)
+    return " AND ".join(f"({part})" for part in parts)
+
+
+def _encode_random_work_cursor(
+    query: SearchQuery,
+    work: Work,
+    *,
+    seek: str,
+    force_sfw: bool,
+    seed: int,
+    phase: int,
+) -> str:
+    if seek not in {"after", "before"} or phase not in {0, 1}:
+        raise ValueError("Invalid random cursor boundary")
+    payload = {
+        "v": 2,
+        "q": hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16],
+        "sfw": bool(force_sfw),
+        "sort": "random",
+        "seed": seed,
+        "phase": phase,
+        "seek": seek,
+        "key": int(work.shuffle_key),
+        "id": str(work.id),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def _decode_random_work_cursor(
+    cursor: str,
+    query: SearchQuery,
+    *,
+    force_sfw: bool,
+    seed: int,
+) -> RandomWorkCursor:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        expected_query = hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16]
+        if (
+            payload.get("v") != 2
+            or payload.get("q") != expected_query
+            or bool(payload.get("sfw")) != bool(force_sfw)
+            or payload.get("sort") != "random"
+            or payload.get("seed") != seed
+            or payload.get("phase") not in {0, 1}
+            or payload.get("seek") not in {"after", "before"}
+        ):
+            raise ValueError
+        key = int(payload["key"])
+        if not 0 <= key < SHUFFLE_RING_SIZE:
+            raise ValueError
+        return RandomWorkCursor(
+            seek=str(payload["seek"]),
+            key=key,
+            identity=UUID(str(payload["id"])),
+            phase=int(payload["phase"]),
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid or stale works cursor") from exc
+
+
+async def _fetch_random_work_page(
+    db: AsyncSession,
+    page_base,
+    query: SearchQuery,
+    *,
+    offset: int,
+    limit: int,
+    force_sfw: bool,
+    cursor: str | None,
+    seed: int,
+) -> list[Any]:
+    """Read one stable UUID-hash ring page without a full-table random sort."""
+
+    start = _shuffle_ring_start(seed)
+
+    def phase_condition(phase: int):
+        return Work.shuffle_key >= start if phase == 0 else Work.shuffle_key < start
+
+    async def fetch_phase(
+        phase: int,
+        count: int,
+        *,
+        reverse: bool = False,
+        phase_offset: int = 0,
+        boundary: RandomWorkCursor | None = None,
+    ) -> list[Any]:
+        if count <= 0:
+            return []
+        statement = page_base.where(phase_condition(phase)).order_by(None)
+        if boundary is not None:
+            if reverse:
+                statement = statement.where(or_(
+                    Work.shuffle_key < boundary.key,
+                    and_(
+                        Work.shuffle_key == boundary.key,
+                        Work.id < boundary.identity,
+                    ),
+                ))
+            else:
+                statement = statement.where(or_(
+                    Work.shuffle_key > boundary.key,
+                    and_(
+                        Work.shuffle_key == boundary.key,
+                        Work.id > boundary.identity,
+                    ),
+                ))
+        direction = Work.shuffle_key.desc() if reverse else Work.shuffle_key.asc()
+        identity = Work.id.desc() if reverse else Work.id.asc()
+        result = await db.execute(
+            statement.order_by(direction, identity).offset(phase_offset).limit(count)
+        )
+        return list(result.all())
+
+    if cursor:
+        boundary = _decode_random_work_cursor(
+            cursor,
+            query,
+            force_sfw=force_sfw,
+            seed=seed,
+        )
+        expected_phase = 0 if boundary.key >= start else 1
+        if boundary.phase != expected_phase:
+            raise ValueError("Invalid or stale works cursor")
+        reverse = boundary.seek == "before"
+        rows = await fetch_phase(
+            boundary.phase,
+            limit,
+            reverse=reverse,
+            boundary=boundary,
+        )
+        if len(rows) < limit:
+            adjacent_phase = (
+                0 if reverse and boundary.phase == 1
+                else 1 if not reverse and boundary.phase == 0
+                else None
+            )
+            if adjacent_phase is not None:
+                rows.extend(await fetch_phase(
+                    adjacent_phase,
+                    limit - len(rows),
+                    reverse=reverse,
+                ))
+        if reverse:
+            rows.reverse()
+        return rows
+
+    phase = 0
+    phase_offset = offset
+    if offset:
+        phase_zero = page_base.where(phase_condition(0)).with_only_columns(
+            Work.id,
+        ).order_by(None).subquery()
+        phase_zero_count = int((await db.execute(
+            select(func.count()).select_from(phase_zero)
+        )).scalar() or 0)
+        if offset >= phase_zero_count:
+            phase = 1
+            phase_offset = offset - phase_zero_count
+
+    rows = await fetch_phase(phase, limit, phase_offset=phase_offset)
+    if phase == 0 and len(rows) < limit:
+        rows.extend(await fetch_phase(1, limit - len(rows)))
+    return rows
 
 
 def _work_seek_expression(
@@ -1588,6 +1906,10 @@ def _compile_meili_filter(
 def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
     selected = query.values("sort")
     if selected and selected[0] != "relevance":
+        if selected[0] == "heat-desc":
+            return ["heat_available:desc", "heat_score:desc", "id:desc"]
+        if selected[0] == "random":
+            return [f"{field}:asc" for field in MEILI_SHUFFLE_FIELDS]
         field, direction = SORT_FIELD[selected[0]]
         order = [f"{field}:{direction}"]
         if target in {"works", "creators", "repositories", "subscriptions"} and field != "id":
@@ -2112,6 +2434,7 @@ class SearchService:
         *,
         force_sfw: bool,
         cursor: str | None,
+        seed: int | None = None,
     ) -> tuple[dict, dict[str, Any]]:
         """Race an equivalent first page only after the durable gate passes."""
 
@@ -2123,8 +2446,17 @@ class SearchService:
                 limit,
                 force_sfw=force_sfw,
                 cursor=cursor,
+                seed=seed,
             )
         )
+        if query.values("sort") == ("random",):
+            return await db_task, {
+                "winner": "postgresql",
+                "hedged": False,
+                "consistency": "authoritative_random_ring",
+                "index_status": "not_eligible",
+                "index_lag": None,
+            }
         # Cursor and later offset pages must stay on the authoritative keyset
         # path.  Do not even consult the index gate for those requests.
         if cursor or offset > 0:
@@ -2289,6 +2621,7 @@ class SearchService:
         force_sfw: bool = False,
         kind: str | None = None,
         cursor: str | None = None,
+        seed: int | None = None,
         allowed_subscription_ids: set[UUID] | None = None,
         allowed_repository_ids: set[UUID] | None = None,
         user_id: int | None = None,
@@ -2315,6 +2648,14 @@ class SearchService:
             if raw_exact_aliases and not url_input
             else parse_search_query(query, scope)
         )
+        if seed is not None and not 0 <= seed <= 0xFFFFFFFF:
+            raise ValueError("Random seed must be an unsigned 32-bit integer")
+        random_sort = parsed.values("sort") == ("random",)
+        if random_sort and cursor and seed is None:
+            raise ValueError("Random cursor pagination requires its seed")
+        random_seed = (
+            seed if seed is not None else secrets.randbits(32)
+        ) if random_sort else None
         parsed_at = monotonic_time.perf_counter()
         permission_set = permissions if permissions is not None else {"library", "subscriptions", "tasks", "curation"}
         targets = self._allowed_targets(parsed, permission_set)
@@ -2377,6 +2718,7 @@ class SearchService:
                         fetch_limit,
                         force_sfw=force_sfw,
                         cursor=cursor,
+                        seed=random_seed,
                     )
                 else:
                     group = await self._search_identity_reference_db(
@@ -2438,6 +2780,7 @@ class SearchService:
                         target_limit,
                         force_sfw=force_sfw,
                         cursor=cursor,
+                        seed=random_seed,
                     )
                 elif target in {"creators", "repositories", "subscriptions"}:
                     groups[target] = await self._search_identity_reference_db(
@@ -2458,6 +2801,7 @@ class SearchService:
                 limit,
                 force_sfw=force_sfw,
                 cursor=cursor,
+                seed=random_seed,
             )
         elif not text and not has_filters and len(targets) == 1:
             target = targets[0]
@@ -2493,7 +2837,9 @@ class SearchService:
             t for t in targets if t in MEILI_TARGET_INDEX and t not in groups
             and (not exact_alias_search or (t == "subscriptions" and user_id is not None))
         ]
-        if cursor and meili_targets:
+        if cursor and meili_targets and not (
+            random_sort and meili_targets == ["works"]
+        ):
             raise ValueError("Cursor pagination is only available for structured work lists")
         if meili_targets:
             groups.update(
@@ -2507,6 +2853,8 @@ class SearchService:
                     allowed_subscription_ids=allowed_subscription_ids,
                     allowed_repository_ids=allowed_repository_ids,
                     user_id=user_id,
+                    seed=random_seed,
+                    cursor=cursor,
                 )
             )
             execution.update({
@@ -2557,6 +2905,8 @@ class SearchService:
             "repositories": groups.get("repositories", {}).get("items", []),
             "subscriptions": groups.get("subscriptions", {}).get("items", []),
         }
+        if random_seed is not None:
+            response["seed"] = random_seed
         completed_at = monotonic_time.perf_counter()
         execution["elapsed_ms"] = round(
             (completed_at - request_started_at) * 1000,
@@ -2577,6 +2927,210 @@ class SearchService:
         )
         return response
 
+    async def _search_meili_random_works(
+        self,
+        query: SearchQuery,
+        resolved: dict[tuple[str, str], Any],
+        offset: int,
+        limit: int,
+        force_sfw: bool,
+        *,
+        seed: int,
+        cursor: str | None,
+    ) -> dict:
+        """Page the same stable hash ring in Meilisearch for text queries."""
+
+        text = _free_text(query)
+        base_filter = _compile_meili_filter(
+            query,
+            "works",
+            resolved,
+            force_sfw=force_sfw,
+        )
+        start = _shuffle_ring_start(seed)
+        boundary = (
+            _decode_random_work_cursor(
+                cursor,
+                query,
+                force_sfw=force_sfw,
+                seed=seed,
+            )
+            if cursor
+            else None
+        )
+        if boundary is not None:
+            expected_phase = 0 if boundary.key >= start else 1
+            if boundary.phase != expected_phase:
+                raise ValueError("Invalid or stale works cursor")
+
+        timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
+        deadline = monotonic_time.perf_counter() + timeout_seconds
+        semaphore = _meili_search_semaphore()
+        acquired = False
+        attempted = False
+        try:
+            remaining = deadline - monotonic_time.perf_counter()
+            if remaining <= 0:
+                raise TimeoutError
+            await asyncio.wait_for(semaphore.acquire(), timeout=remaining)
+            acquired = True
+            _meili_breaker_before_request()
+            attempted = True
+
+            def run(socket_timeout: float) -> tuple[list[dict], int]:
+                index = _client(timeout_seconds=socket_timeout).index(WORKS_INDEX)
+                common: dict[str, Any] = {
+                    "matching_strategy": _matching_strategy("works"),
+                    "attributes_to_retrieve": WORK_LIST_RETRIEVE_FIELDS,
+                }
+                count_kwargs = {
+                    **common,
+                    "offset": 0,
+                    "limit": 1,
+                    "attributes_to_retrieve": ["id"],
+                }
+                if base_filter:
+                    count_kwargs["filter"] = base_filter
+                _count_hits, total = _search_hits(index.search(text, **count_kwargs))
+
+                def fetch(
+                    phase: int,
+                    count: int,
+                    *,
+                    reverse: bool = False,
+                    phase_offset: int = 0,
+                    cursor_boundary: RandomWorkCursor | None = None,
+                ) -> tuple[list[dict], int]:
+                    if count <= 0:
+                        return [], 0
+                    result = index.search(
+                        text,
+                        **common,
+                        offset=phase_offset,
+                        limit=count,
+                        filter=_meili_random_phase_filter(
+                            base_filter,
+                            start=start,
+                            phase=phase,
+                            boundary=cursor_boundary,
+                            reverse=reverse,
+                        ),
+                        sort=[
+                            f"{field}:{'desc' if reverse else 'asc'}"
+                            for field in MEILI_SHUFFLE_FIELDS
+                        ],
+                    )
+                    return _search_hits(result)
+
+                if boundary is not None:
+                    reverse = boundary.seek == "before"
+                    hits, _phase_total = fetch(
+                        boundary.phase,
+                        limit,
+                        reverse=reverse,
+                        cursor_boundary=boundary,
+                    )
+                    if len(hits) < limit:
+                        adjacent_phase = (
+                            0 if reverse and boundary.phase == 1
+                            else 1 if not reverse and boundary.phase == 0
+                            else None
+                        )
+                        if adjacent_phase is not None:
+                            adjacent, _ = fetch(
+                                adjacent_phase,
+                                limit - len(hits),
+                                reverse=reverse,
+                            )
+                            hits.extend(adjacent)
+                    if reverse:
+                        hits.reverse()
+                    return hits, total
+
+                phase_zero_hits, phase_zero_total = fetch(
+                    0,
+                    limit,
+                    phase_offset=offset,
+                )
+                if offset >= phase_zero_total:
+                    hits, _ = fetch(
+                        1,
+                        limit,
+                        phase_offset=offset - phase_zero_total,
+                    )
+                    return hits, total
+                hits = phase_zero_hits
+                if len(hits) < limit:
+                    adjacent, _ = fetch(1, limit - len(hits))
+                    hits.extend(adjacent)
+                return hits, total
+
+            remaining = deadline - monotonic_time.perf_counter()
+            if remaining <= 0:
+                raise TimeoutError
+            hits, total = await asyncio.wait_for(
+                asyncio.to_thread(run, remaining),
+                timeout=remaining + 0.1,
+            )
+            _meili_breaker_success()
+
+            for hit in hits:
+                _decorate_alias_hit(hit, text)
+                hit.setdefault("description", "")
+                hit.setdefault("tags", [])
+                hit.setdefault("repository_ids", [])
+                hit.setdefault("source_work_ids", [])
+
+            def cursor_work(hit: dict) -> Work:
+                return Work(
+                    id=UUID(str(hit["id"])),
+                    shuffle_key=int(str(hit["shuffle_key"])),
+                )
+
+            next_cursor = None
+            previous_cursor = None
+            if hits:
+                last = cursor_work(hits[-1])
+                next_cursor = _encode_random_work_cursor(
+                    query,
+                    last,
+                    seek="after",
+                    force_sfw=force_sfw,
+                    seed=seed,
+                    phase=0 if last.shuffle_key >= start else 1,
+                )
+                if cursor or offset > 0:
+                    first = cursor_work(hits[0])
+                    previous_cursor = _encode_random_work_cursor(
+                        query,
+                        first,
+                        seek="before",
+                        force_sfw=force_sfw,
+                        seed=seed,
+                        phase=0 if first.shuffle_key >= start else 1,
+                    )
+            return {
+                "total": total,
+                "items": hits,
+                "next_cursor": next_cursor,
+                "previous_cursor": previous_cursor,
+            }
+        except SearchBackendUnavailable:
+            raise
+        except TimeoutError as exc:
+            if attempted:
+                _meili_breaker_failure()
+            logger.warning("Meilisearch random search timed out after %.1fs", timeout_seconds)
+            raise SearchBackendUnavailable("Search index timed out") from exc
+        except Exception as exc:
+            if attempted:
+                _meili_breaker_failure()
+            logger.warning("Meilisearch random search failed", exc_info=True)
+            raise SearchBackendUnavailable("Search index is unavailable") from exc
+        finally:
+            if acquired:
+                semaphore.release()
+
     async def _search_meili(
         self,
         query: SearchQuery,
@@ -2589,7 +3143,23 @@ class SearchService:
         allowed_subscription_ids: set[UUID] | None = None,
         allowed_repository_ids: set[UUID] | None = None,
         user_id: int | None = None,
+        seed: int | None = None,
+        cursor: str | None = None,
     ) -> dict[str, dict]:
+        if query.values("sort") == ("random",):
+            if targets != ["works"] or seed is None:
+                raise ValueError("Random indexed search requires one works target and a seed")
+            return {
+                "works": await self._search_meili_random_works(
+                    query,
+                    resolved,
+                    offset,
+                    limit,
+                    force_sfw,
+                    seed=seed,
+                    cursor=cursor,
+                )
+            }
         text = _free_text(query)
         timeout_seconds = max(0.1, float(settings.meili_search_timeout_seconds))
         deadline = monotonic_time.perf_counter() + timeout_seconds
@@ -3548,7 +4118,14 @@ class SearchService:
         # Join through WorkSource so media hydration can start at the same time
         # as source hydration instead of waiting for a Python ID map first.
         asset_statement = (
-            select(WorkSource.work_id, Asset.id, Asset.mime_type, Asset.file_name)
+            select(
+                WorkSource.work_id,
+                Asset.id,
+                Asset.mime_type,
+                Asset.file_name,
+                Asset.width,
+                Asset.height,
+            )
             .select_from(WorkSource)
             .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
             .join(Asset, Asset.id == AssetSource.asset_id)
@@ -3615,7 +4192,8 @@ class SearchService:
         asset_id_sets: dict[str, set[str]] = defaultdict(set)
         asset_mimes: dict[str, set[str]] = defaultdict(set)
         asset_names: dict[str, set[str]] = defaultdict(set)
-        for work_id, asset_id, mime, file_name in asset_rows:
+        asset_dimensions: dict[str, dict[str, tuple[int | None, int | None]]] = defaultdict(dict)
+        for work_id, asset_id, mime, file_name, width, height in asset_rows:
             work_key = str(work_id)
             rendered_asset_id = str(asset_id)
             if rendered_asset_id not in asset_id_sets[work_key]:
@@ -3624,6 +4202,7 @@ class SearchService:
             if mime:
                 asset_mimes[work_key].add(mime.lower())
             asset_names[work_key].add((file_name or "").lower())
+            asset_dimensions[work_key][rendered_asset_id] = (width, height)
 
         documents = []
         for work, visibility in work_rows:
@@ -3640,6 +4219,11 @@ class SearchService:
             )
             has_image = any(mime.startswith("image/") for mime in mimes)
             previews = asset_ids[key][:10]
+            thumbnail_asset_id, thumbnail_width, thumbnail_height = _thumbnail_projection(
+                work,
+                previews,
+                asset_dimensions[key],
+            )
             ordered_creator_names = sorted(creator_names[key])
             ordered_creator_ids = sorted(creator_ids[key])
             ordered_sources = sorted(sources[key])
@@ -3666,9 +4250,15 @@ class SearchService:
                 "is_nsfw": bool(work.is_nsfw),
                 "is_ai_generated": bool(work.is_ai_generated),
                 "is_favorite": bool(work.is_favorite),
+                "heat_available": work.heat_score is not None,
+                "heat_score": float(work.heat_score) if work.heat_score is not None else None,
+                "shuffle_key": _meili_shuffle_key(work.shuffle_key),
+                **_meili_shuffle_parts(work.shuffle_key, work.id),
                 "visibility": visibility or "visible",
                 "curation_visibility": visibility or "visible",
-                "thumbnail_asset_id": str(work.thumbnail_asset_id) if work.thumbnail_asset_id else (previews[0] if previews else None),
+                "thumbnail_asset_id": thumbnail_asset_id,
+                "thumbnail_width": thumbnail_width,
+                "thumbnail_height": thumbnail_height,
                 "preview_asset_ids": previews,
                 "asset_count": len(asset_ids[key]),
                 "has_tags": bool(tags[key]),
@@ -5337,6 +5927,7 @@ class SearchService:
         *,
         force_sfw: bool = False,
         cursor: str | None = None,
+        seed: int | None = None,
     ) -> dict:
         """Real-time PostgreSQL work list with bounded page hydration."""
 
@@ -5352,30 +5943,45 @@ class SearchService:
             force_sfw=force_sfw,
         )
 
-        page_base = base
-        reverse_page = False
-        if cursor:
-            seek, boundary, boundary_id = _decode_work_cursor(
-                cursor,
+        random_sort = query.values("sort") == ("random",)
+        if random_sort:
+            if seed is None:
+                raise ValueError("Random sorting requires a seed")
+            page_rows = await _fetch_random_work_page(
+                self.db,
+                base.add_columns(has_tags_expression.label("has_tags")),
                 query,
+                offset=offset,
+                limit=limit,
                 force_sfw=force_sfw,
+                cursor=cursor,
+                seed=seed,
             )
-            page_base = page_base.where(_work_seek_expression(
-                query,
-                seek=seek,
-                value=boundary,
-                identity=boundary_id,
-            ))
-            reverse_page = seek == "before"
+        else:
+            page_base = base
+            reverse_page = False
+            if cursor:
+                seek, boundary, boundary_id = _decode_work_cursor(
+                    cursor,
+                    query,
+                    force_sfw=force_sfw,
+                )
+                page_base = page_base.where(_work_seek_expression(
+                    query,
+                    seek=seek,
+                    value=boundary,
+                    identity=boundary_id,
+                ))
+                reverse_page = seek == "before"
 
-        page_rows = (await self.db.execute(
-            _apply_sql_sort(page_base, query, Work, reverse=reverse_page)
-            .add_columns(has_tags_expression.label("has_tags"))
-            .offset(0 if cursor else offset)
-            .limit(limit)
-        )).all()
-        if reverse_page:
-            page_rows.reverse()
+            page_rows = (await self.db.execute(
+                _apply_sql_sort(page_base, query, Work, reverse=reverse_page)
+                .add_columns(has_tags_expression.label("has_tags"))
+                .offset(0 if cursor else offset)
+                .limit(limit)
+            )).all()
+            if reverse_page:
+                page_rows.reverse()
         if not page_rows:
             return {
                 "total": total,
@@ -5476,6 +6082,8 @@ class SearchService:
                 Asset.id.label("asset_id"),
                 Asset.mime_type.label("mime_type"),
                 Asset.file_name.label("file_name"),
+                Asset.width.label("width"),
+                Asset.height.label("height"),
                 func.min(AssetSource.ordinal).label("ordinal"),
                 func.bool_or(
                     func.lower(func.coalesce(AssetSource.role, "")) == "video"
@@ -5494,6 +6102,8 @@ class SearchService:
                 Asset.id,
                 Asset.mime_type,
                 Asset.file_name,
+                Asset.width,
+                Asset.height,
             )
             .cte("work_page_distinct_assets")
             .prefix_with("MATERIALIZED", dialect="postgresql")
@@ -5525,6 +6135,8 @@ class SearchService:
         ranked_assets = select(
             distinct_assets.c.work_id,
             distinct_assets.c.asset_id,
+            distinct_assets.c.width,
+            distinct_assets.c.height,
             func.row_number().over(
                 partition_by=distinct_assets.c.work_id,
                 order_by=(
@@ -5541,11 +6153,18 @@ class SearchService:
                     ranked_assets.c.asset_id,
                     ranked_assets.c.preview_position,
                 )).label("preview_asset_ids"),
+                func.max(ranked_assets.c.width).filter(
+                    ranked_assets.c.preview_position == 1
+                ).label("preview_width"),
+                func.max(ranked_assets.c.height).filter(
+                    ranked_assets.c.preview_position == 1
+                ).label("preview_height"),
             )
             .where(ranked_assets.c.preview_position <= 10)
             .group_by(ranked_assets.c.work_id)
             .cte("work_page_media_previews")
         )
+        thumbnail_asset = aliased(Asset)
         media_rows = (await self.db.execute(
             select(
                 media_summary.c.work_id,
@@ -5554,6 +6173,16 @@ class SearchService:
                 media_summary.c.has_video,
                 media_summary.c.has_animation,
                 media_previews.c.preview_asset_ids,
+                media_previews.c.preview_width,
+                media_previews.c.preview_height,
+                thumbnail_asset.width.label("thumbnail_width"),
+                thumbnail_asset.height.label("thumbnail_height"),
+            )
+            .select_from(media_summary)
+            .join(Work, Work.id == media_summary.c.work_id)
+            .outerjoin(
+                thumbnail_asset,
+                thumbnail_asset.id == Work.thumbnail_asset_id,
             )
             .outerjoin(
                 media_previews,
@@ -5567,6 +6196,10 @@ class SearchService:
                 "has_video": bool(has_video),
                 "has_animation": bool(has_animation),
                 "preview_asset_ids": [str(asset_id) for asset_id in (preview_ids or [])],
+                "preview_width": preview_width,
+                "preview_height": preview_height,
+                "thumbnail_width": thumbnail_width,
+                "thumbnail_height": thumbnail_height,
             }
             for (
                 work_id,
@@ -5575,6 +6208,10 @@ class SearchService:
                 has_video,
                 has_animation,
                 preview_ids,
+                preview_width,
+                preview_height,
+                thumbnail_width,
+                thumbnail_height,
             ) in media_rows
         }
 
@@ -5583,6 +6220,22 @@ class SearchService:
         for work in work_rows:
             summary = asset_summary.get(work.id, {})
             previews = list(summary.get("preview_asset_ids", []))
+            selected_thumbnail_id = (
+                str(work.thumbnail_asset_id)
+                if work.thumbnail_asset_id
+                else (previews[0] if previews else None)
+            )
+            selected_dimensions = {
+                selected_thumbnail_id: (
+                    summary.get("thumbnail_width") if work.thumbnail_asset_id else summary.get("preview_width"),
+                    summary.get("thumbnail_height") if work.thumbnail_asset_id else summary.get("preview_height"),
+                )
+            } if selected_thumbnail_id else {}
+            thumbnail_asset_id, thumbnail_width, thumbnail_height = _thumbnail_projection(
+                work,
+                previews,
+                selected_dimensions,
+            )
             work_sources = sources[work.id]
             work_creator_names = creator_names[work.id]
             work_creator_ids = creator_ids[work.id]
@@ -5601,11 +6254,9 @@ class SearchService:
                 "is_nsfw": bool(work.is_nsfw),
                 "is_ai_generated": bool(work.is_ai_generated),
                 "is_favorite": bool(work.is_favorite),
-                "thumbnail_asset_id": (
-                    str(work.thumbnail_asset_id)
-                    if work.thumbnail_asset_id
-                    else (previews[0] if previews else None)
-                ),
+                "thumbnail_asset_id": thumbnail_asset_id,
+                "thumbnail_width": thumbnail_width,
+                "thumbnail_height": thumbnail_height,
                 "preview_asset_ids": previews,
                 "asset_count": asset_count,
                 "source": work_sources[0] if work_sources else "unknown",
@@ -5627,21 +6278,43 @@ class SearchService:
                 "repository_ids": repository_ids[work.id],
                 "source_work_ids": source_work_ids[work.id],
             })
-        return {
-            "total": total,
-            "items": items,
-            "next_cursor": _encode_work_cursor(
+        if random_sort:
+            assert seed is not None
+            ring_start = _shuffle_ring_start(seed)
+            next_cursor = _encode_random_work_cursor(
                 query,
                 work_rows[-1],
                 seek="after",
                 force_sfw=force_sfw,
-            ) if work_rows else None,
-            "previous_cursor": _encode_work_cursor(
+                seed=seed,
+                phase=0 if work_rows[-1].shuffle_key >= ring_start else 1,
+            )
+            previous_cursor = _encode_random_work_cursor(
                 query,
                 work_rows[0],
                 seek="before",
                 force_sfw=force_sfw,
-            ) if work_rows and (cursor or offset > 0) else None,
+                seed=seed,
+                phase=0 if work_rows[0].shuffle_key >= ring_start else 1,
+            ) if work_rows and (cursor or offset > 0) else None
+        else:
+            next_cursor = _encode_work_cursor(
+                query,
+                work_rows[-1],
+                seek="after",
+                force_sfw=force_sfw,
+            ) if work_rows else None
+            previous_cursor = _encode_work_cursor(
+                query,
+                work_rows[0],
+                seek="before",
+                force_sfw=force_sfw,
+            ) if work_rows and (cursor or offset > 0) else None
+        return {
+            "total": total,
+            "items": items,
+            "next_cursor": next_cursor,
+            "previous_cursor": previous_cursor,
         }
 
     async def _rebuild_selected_indexes(

@@ -69,6 +69,8 @@ def test_contract_describes_search_enums_and_pagination_limit():
     parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
 
     assert parameters["limit"]["schema"]["maximum"] == 100
+    assert parameters["seed"]["schema"]["anyOf"][0]["minimum"] == 0
+    assert parameters["seed"]["schema"]["anyOf"][0]["maximum"] == 4_294_967_295
     assert set(parameters["scope"]["schema"]["enum"]) >= {"global", "tasks", "scheduler"}
     validation_schema = operation["responses"]["422"]["content"]["application/json"]["schema"]["$ref"]
     assert validation_schema.endswith(("/HTTPValidationError", "/ValidationError"))
