@@ -29,10 +29,11 @@ pages work without internet access. The contract endpoints are also protected:
 - `/api/openapi.json`
 - `/api/asyncapi.yaml`
 
-An active administrator session cookie may open the documentation. To execute
-business operations from Swagger, select **Authorize** and enter the explicit
-JWT Bearer token returned by `POST /api/v1/auth/login`. Business APIs do not
-accept cookie authentication.
+An active administrator browser session can open the documentation and call
+business APIs. Browser writes require a session-bound CSRF header and exact
+allowed Origin. Swagger's **Authorize** action supports script clients: obtain
+an explicit JWT from `POST /api/v1/auth/login` and enter it as Bearer. The
+browser login endpoint does not return an access token to JavaScript.
 
 The legacy `/docs`, `/redoc`, and `/openapi.json` paths permanently redirect to
 their protected `/api/*` equivalents.
@@ -46,4 +47,7 @@ CORS remains an explicit allowlist. Add each trusted client origin to
 CORS_ORIGINS=http://gallery-client.example.test:3000
 ```
 
-Do not use `*` for a credentialed LAN installation.
+Do not use `*` for a credentialed LAN installation. Browser session origins
+use the dedicated `BROWSER_SESSION_ORIGINS` allowlist and must match the
+exact scheme, host, and port of each admin web entry. HTTP LAN access
+remains possible but sends its session cookie without HTTPS protection.

@@ -34,6 +34,8 @@
   "nav.upload": "Upload",
   "auth.login": "Sign In",
   "auth.logout": "Sign Out",
+  "auth.session_unavailable": "Sign-in service is temporarily unavailable. Please try again later.",
+  "auth.retry": "Retry",
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.show_password": "Show password",

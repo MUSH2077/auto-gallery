@@ -48,7 +48,7 @@ def test_openapi_covers_every_http_route_with_stable_metadata():
         assert operation["description"], (method, path)
         assert operation["tags"], (method, path)
         assert any(str(code).startswith("2") for code in operation["responses"]), (method, path)
-        assert operation["x-authentication"] in {"public", "bearer"}, (method, path)
+        assert operation["x-authentication"] in {"public", "bearer-or-session", "browser-session"}, (method, path)
         assert isinstance(operation["x-admin-only"], bool), (method, path)
         assert isinstance(operation["x-background-task"], bool), (method, path)
         assert isinstance(operation["x-dangerous"], bool), (method, path)
@@ -229,6 +229,12 @@ async def test_online_contracts_require_admin_and_use_local_assets(monkeypatch):
         lambda token: {"sub": "docs-admin", "pwd_chg_required": False} if token == "docs-token" else None,
     )
     monkeypatch.setattr(auth, "_load_active_user", fake_user)
+    async def fake_session(_token):
+        return SimpleNamespace(user_id=7, password_fingerprint=auth.password_fingerprint("hash"))
+    async def fake_user_by_id(_id):
+        return SimpleNamespace(is_admin=True, is_active=True, password_hash="hash", username="docs-admin", must_change_password=False)
+    monkeypatch.setattr(auth, "load_browser_session", fake_session)
+    monkeypatch.setattr(auth, "_load_active_user_by_id", fake_user_by_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=False) as client:
@@ -238,7 +244,7 @@ async def test_online_contracts_require_admin_and_use_local_assets(monkeypatch):
         ordinary = await client.get("/api/openapi.json", headers={"Authorization": "Bearer invalid"})
         assert ordinary.status_code == 401
 
-        cookie_schema = await client.get("/api/openapi.json", headers={"Cookie": "ag_token=docs-token"})
+        cookie_schema = await client.get("/api/openapi.json", headers={"Cookie": "ag_session=docs-token"})
         assert cookie_schema.status_code == 200
         assert cookie_schema.json()["info"]["title"] == "auto-gallery LAN API"
 
@@ -248,12 +254,12 @@ async def test_online_contracts_require_admin_and_use_local_assets(monkeypatch):
         )
         assert bearer_asyncapi.status_code == 200
 
-        swagger = await client.get("/api/docs", headers={"Cookie": "ag_token=docs-token"})
+        swagger = await client.get("/api/docs", headers={"Cookie": "ag_session=docs-token"})
         assert swagger.status_code == 200
         assert "/api-docs/swagger-ui-bundle.js" in swagger.text
         assert "jsdelivr" not in swagger.text
 
-        redoc = await client.get("/api/redoc", headers={"Cookie": "ag_token=docs-token"})
+        redoc = await client.get("/api/redoc", headers={"Cookie": "ag_session=docs-token"})
         assert redoc.status_code == 200
         assert "/api-docs/redoc.standalone.js" in redoc.text
         assert "fonts.googleapis.com" not in redoc.text
@@ -282,9 +288,15 @@ async def test_non_admin_cannot_open_contract(monkeypatch):
         lambda _token: {"sub": "ordinary-user", "pwd_chg_required": False},
     )
     monkeypatch.setattr(auth, "_load_active_user", fake_user)
+    async def fake_session(_token):
+        return SimpleNamespace(user_id=8, password_fingerprint=auth.password_fingerprint("hash"))
+    async def fake_user_by_id(_id):
+        return SimpleNamespace(is_admin=False, is_active=True, password_hash="hash", username="ordinary-user", must_change_password=False)
+    monkeypatch.setattr(auth, "load_browser_session", fake_session)
+    monkeypatch.setattr(auth, "_load_active_user_by_id", fake_user_by_id)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/openapi.json", headers={"Cookie": "ag_token=user-token"})
+        response = await client.get("/api/openapi.json", headers={"Cookie": "ag_session=user-token"})
     assert response.status_code == 403
     assert response.json()["detail"] == "Administrator access required"

@@ -329,11 +329,11 @@ async function fulfillAssist(route: Route) {
 
 async function installSearchFixtures(context: BrowserContext) {
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "search-test-token",
     domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     window.localStorage.setItem("ag_token", "search-test-token");
     window.localStorage.setItem("auto-gallery-lang", "en");

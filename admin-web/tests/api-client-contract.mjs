@@ -3,20 +3,20 @@ import test from "node:test";
 
 import { ApiError, assertBackupArchiveResponse, request, requestBlob } from "../src/lib/api/client.ts";
 
-function installBrowserToken(token = "jwt-fixture") {
+function installBrowserToken() {
   const removed = [];
   const redirects = [];
   globalThis.window = { location: { pathname: "/admin/settings/backup", replace(path) { redirects.push(path); } } };
-  globalThis.document = { cookie: "" };
+  globalThis.document = { cookie: "ag_csrf=csrf-fixture" };
   globalThis.localStorage = {
-    getItem(key) { return key === "ag_token" ? token : null; },
+    getItem() { return null; },
     removeItem(key) { removed.push(`local:${key}`); },
   };
   globalThis.sessionStorage = { removeItem(key) { removed.push(`session:${key}`); } };
   return { removed, redirects };
 }
 
-test("request merges JWT authorization with caller headers", async () => {
+test("request uses session cookie and keeps caller headers", async () => {
   installBrowserToken();
   let received;
   globalThis.fetch = async (_url, init) => {
@@ -31,9 +31,21 @@ test("request merges JWT authorization with caller headers", async () => {
     headers: { "X-Restore-Token": "restore-fixture" },
   });
 
-  assert.equal(received.get("authorization"), "Bearer jwt-fixture");
+  assert.equal(received.get("authorization"), null);
   assert.equal(received.get("x-restore-token"), "restore-fixture");
   assert.equal(received.get("content-type"), "application/json");
+});
+
+test("writes attach the session CSRF value", async () => {
+  installBrowserToken();
+  let received;
+  globalThis.fetch = async (_url, init) => {
+    received = new Headers(init.headers);
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  await request("/api/v1/tasks/task-1/retry", { method: "POST" });
+  assert.equal(received.get("x-csrf-token"), "csrf-fixture");
+  assert.equal(received.get("authorization"), null);
 });
 
 test("request keeps structured business rejection details", async () => {
@@ -93,9 +105,11 @@ test("protected structured 401 clears auth and retains the rich rejection", asyn
     assert.deepEqual(error.body, body);
     return true;
   });
-  assert.deepEqual(browser.removed, ["local:ag_token", "session:danbooru_batch_job"]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(browser.removed.includes("local:ag_token"));
+  assert.ok(browser.removed.includes("session:danbooru_batch_job"));
   assert.deepEqual(browser.redirects, ["/admin/login"]);
-  assert.equal(received.get("authorization"), "Bearer jwt-fixture");
+  assert.equal(received.get("authorization"), null);
   assert.match(globalThis.document.cookie, /max-age=0/);
 });
 
@@ -132,7 +146,7 @@ test("request distinguishes network failures and preserves 204 responses", async
   assert.equal(await request("/api/v1/no-content", { method: "DELETE" }), undefined);
 });
 
-test("requestBlob shares auth/header/error handling and preserves response metadata", async () => {
+test("requestBlob shares session/header/error handling and preserves response metadata", async () => {
   installBrowserToken();
   let received;
   globalThis.fetch = async (_url, init) => {
@@ -148,7 +162,7 @@ test("requestBlob shares auth/header/error handling and preserves response metad
   const result = await requestBlob("/api/v1/admin/backup/download?filename=backup.zip", {
     headers: { "X-Trace": "binary" },
   });
-  assert.equal(received.get("authorization"), "Bearer jwt-fixture");
+  assert.equal(received.get("authorization"), null);
   assert.equal(received.get("x-trace"), "binary");
   assert.equal(received.has("content-type"), false);
   assert.equal(result.contentDisposition, "attachment; filename*=UTF-8''backup%20safe.zip");
@@ -166,6 +180,7 @@ test("requestBlob shares auth/header/error handling and preserves response metad
     assert.equal(error.message, "Expired");
     return true;
   });
+  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(browser.redirects, ["/admin/login"]);
 
   installBrowserToken();

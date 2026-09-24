@@ -12,8 +12,9 @@ PREFIX = "ws_task_isolation_"
 
 class RecordingWebSocket:
     def __init__(self, *, token: str | None = None, messages: list[dict] | None = None):
-        self.cookies = {"ag_token": token} if token else {}
-        self.query_params: dict[str, str] = {}
+        self.cookies = {}
+        self.headers = {"origin": "http://localhost:13000"}
+        self.query_params: dict[str, str] = {"ticket": token} if token else {}
         self.messages = list(messages or [])
         self.sent: list[dict] = []
         self.accepted = False
@@ -358,11 +359,8 @@ async def test_subscribe_ack_requires_current_visible_task_without_existence_lea
             legacy_id = rows["legacy_task"].id
 
         monkeypatch.setattr(
-            ws_api,
-            "decode_access_token_payload",
-            lambda token: {"sub": username, "pwd_chg_required": False}
-            if token == "member-token"
-            else None,
+            ws_api, "consume_ws_ticket",
+            lambda ticket: username if ticket == "member-token" else None,
         )
         socket = RecordingWebSocket(
             token="member-token",
@@ -394,9 +392,8 @@ async def test_subscribe_ack_requires_current_visible_task_without_existence_lea
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", ("cookie", "ticket"))
 async def test_websocket_rejects_active_user_without_tasks_permission(
-    monkeypatch, auth_mode
+    monkeypatch,
 ):
     """Authentication alone cannot bypass the REST tasks module permission."""
 
@@ -409,23 +406,11 @@ async def test_websocket_rejects_active_user_without_tasks_permission(
             rows = await _seed(db)
             username = rows["no_tasks"].username
 
-        if auth_mode == "cookie":
-            monkeypatch.setattr(
-                ws_api,
-                "decode_access_token_payload",
-                lambda token: {"sub": username, "pwd_chg_required": False}
-                if token == "no-tasks-token"
-                else None,
-            )
-            socket = RecordingWebSocket(token="no-tasks-token")
-        else:
-            monkeypatch.setattr(
-                ws_api,
-                "consume_ws_ticket",
-                lambda ticket: username if ticket == "no-tasks-ticket" else None,
-            )
-            socket = RecordingWebSocket()
-            socket.query_params["ticket"] = "no-tasks-ticket"
+        monkeypatch.setattr(
+            ws_api, "consume_ws_ticket",
+            lambda ticket: username if ticket == "no-tasks-ticket" else None,
+        )
+        socket = RecordingWebSocket(token="no-tasks-ticket")
         await ws_api.websocket_endpoint(socket)
 
         assert socket.accepted is False

@@ -18,7 +18,6 @@ servers:
       host:
         default: gallery.example.test
     security:
-      - sessionCookie: []
       - oneTimeTicket: []
 channels:
   /api/v1/ws:
@@ -43,16 +42,11 @@ channels:
           - $ref: "#/components/messages/Progress"
 components:
   securitySchemes:
-    sessionCookie:
-      type: apiKey
-      in: cookie
-      name: ag_token
-      description: JWT session cookie created by the admin web login flow.
     oneTimeTicket:
       type: apiKey
       in: query
       name: ticket
-      description: Short-lived ticket returned by POST /api/v1/auth/ws-ticket.
+      description: Single-use ticket returned by POST /api/v1/auth/ws-ticket. Browser tickets are bound to a revocable Redis session; an exact allowed Origin is required.
   schemas:
     TaskIdentity:
       type: object

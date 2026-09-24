@@ -95,15 +95,15 @@ async function installMediaRoutes(
   options: { failFirstImageAsset?: boolean } = {},
 ) {
   let imageAssetAttempts = 0;
-  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+  await context.routeWebSocket("**/api/v1/ws*", (webSocket) => {
     webSocket.send(JSON.stringify({ type: "connected" }));
   });
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "media-test-token",
     domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     window.localStorage.setItem("ag_token", "media-test-token");
     window.localStorage.setItem("auto-gallery-lang", "en");

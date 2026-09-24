@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     personal_auth_tmp_root: str = "/run/auto-gallery-secrets"
 
     cors_origins: str = "http://localhost:13000"
+    browser_session_origins: str = "http://localhost:13000"
     log_level: str = "INFO"
 
     timezone: str = "UTC"
@@ -176,6 +177,20 @@ class Settings(BaseSettings):
                 f"ADMIN_PASSWORD may only use the documented bootstrap default "
                 f"{DEFAULT_ADMIN_PASSWORD!r}; replace other placeholder values."
             )
+        if self.access_token_expire_minutes <= 0:
+            errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must be positive.")
+        origins = [value.strip() for value in self.browser_session_origins.split(",")]
+        if not origins or any(
+            not value
+            or "*" in value
+            or urlparse(value).scheme not in {"http", "https"}
+            or not urlparse(value).netloc
+            or urlparse(value).path
+            or urlparse(value).query
+            or urlparse(value).fragment
+            for value in origins
+        ):
+            errors.append("BROWSER_SESSION_ORIGINS must list exact http(s) origins without paths or wildcards.")
         if _is_placeholder(self.meili_master_key):
             errors.append("MEILI_MASTER_KEY is still a factory placeholder.")
         if len(self.meili_index_prefix) > 64 or any(

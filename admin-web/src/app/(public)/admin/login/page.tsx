@@ -1,10 +1,10 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useRef, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
-import { AuthUserLookupError, clearToken, loadUser, loginAndLoadUser, saveToken, storedToken } from "@/lib/authFlow";
+import { AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -31,9 +31,12 @@ export default function LoginPage() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const loginGeneration = useRef(0);
   const copy = COPY[lang];
 
   useEffect(() => {
+    const generation = loginGeneration.current;
+    let active = true;
     try {
       const storedLang = localStorage.getItem("auto-gallery-lang");
       if (storedLang === "zh" || storedLang === "en") setLang(storedLang);
@@ -45,14 +48,21 @@ export default function LoginPage() {
       document.documentElement.classList.toggle("dark", resolveTheme(initialTheme) === "dark");
     } catch {}
 
-    const token = storedToken();
-    if (!token) return;
-    loadUser(token)
+    clearLegacyToken();
+    if (!csrfToken()) return;
+    loadUser()
       .then((user) => {
-        router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
+        if (active && generation === loginGeneration.current) {
+          router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
+        }
       })
-      .catch(() => clearToken());
-  }, [router]);
+      .catch((error: Error & { status?: number }) => {
+        if (active && generation === loginGeneration.current && error.status === 503) {
+          setError(copy.sessionUnavailable);
+        }
+      });
+    return () => { active = false; };
+  }, [router, copy.sessionUnavailable]);
 
   const changeLang = () => {
     const next = lang === "zh" ? "en" : "zh";
@@ -70,11 +80,11 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    loginGeneration.current += 1;
     setLoading(true);
     setError("");
     try {
-      const { token, user: authUser } = await loginAndLoadUser(username, password);
-      saveToken(token);
+      const authUser = await loginAndLoadUser(username, password);
       if (authUser.must_change_password) {
         router.replace(adminRoutes.profile);
       } else {
@@ -82,7 +92,7 @@ export default function LoginPage() {
       }
     } catch (err: unknown) {
       const message = err instanceof AuthUserLookupError
-        ? copy.invalidCredentials
+        ? err.status === 503 ? copy.sessionUnavailable : copy.invalidCredentials
         : err instanceof Error ? err.message : copy.invalidCredentials;
       setError(message);
     } finally {

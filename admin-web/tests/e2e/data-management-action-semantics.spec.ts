@@ -46,8 +46,8 @@ type Handler = (route: Route, url: URL, method: string) => Promise<boolean>;
 
 async function openFixture(browser: Browser, handler: Handler) {
   const context = await browser.newContext();
-  await context.routeWebSocket("**/api/v1/ws", (socket) => socket.close({ code: 1000, reason: "fixture" }));
-  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+  await context.routeWebSocket("**/api/v1/ws*", (socket) => socket.close({ code: 1000, reason: "fixture" }));
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");

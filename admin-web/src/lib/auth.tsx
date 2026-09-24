@@ -1,9 +1,9 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
-import { clearToken, loadUser, loginAndLoadUser, saveToken, storedToken, type AuthUser } from "@/lib/authFlow";
+import { clearLegacyToken, loadUser, loginAndLoadUser, logoutBrowser, type AuthUser } from "@/lib/authFlow";
 
 const ME_QUERY_KEY = ["me"] as const;
 
@@ -11,12 +11,12 @@ export type { AuthUser } from "@/lib/authFlow";
 
 interface AuthContextValue {
   user: AuthUser | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<AuthUser>;
-  updateAccessToken: (token: string) => Promise<void>;
-  logout: () => void;
+  refreshUser: () => Promise<void>;
+  authUnavailable: boolean;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -24,69 +24,76 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [authUnavailable, setAuthUnavailable] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const loginGeneration = useRef(0);
 
-  // Validate token on mount
   useEffect(() => {
-    const stored = storedToken();
-    if (!stored) {
-      setIsLoading(false);
-      return;
-    }
-    // Verify with backend
-    loadUser(stored)
-      .then((data: AuthUser) => {
+    const generation = loginGeneration.current;
+    clearLegacyToken();
+    loadUser()
+      .then((data) => {
+        if (generation !== loginGeneration.current) return;
         queryClient.setQueryData(ME_QUERY_KEY, data);
-        setToken(stored);
         setUser(data);
+        setAuthUnavailable(false);
       })
-      .catch(() => {
+      .catch((error: Error & { status?: number }) => {
+        if (generation !== loginGeneration.current) return;
+        if (error.status === 503) {
+          setAuthUnavailable(true);
+          return;
+        }
         queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        clearToken();
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === loginGeneration.current) setIsLoading(false);
+      });
   }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
-    const { token: accessToken, user: me } = await loginAndLoadUser(username, password);
+    loginGeneration.current += 1;
+    const me = await loginAndLoadUser(username, password);
 
     clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    saveToken(accessToken);
-    setToken(accessToken);
     setUser(me);
+    setAuthUnavailable(false);
+    setIsLoading(false);
     return me;
   }, [queryClient]);
 
-  const updateAccessToken = useCallback(async (nextToken: string) => {
-    const me = await loadUser(nextToken);
+  const refreshUser = useCallback(async () => {
+    const me = await loadUser();
     if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    saveToken(nextToken);
-    setToken(nextToken);
     setUser(me);
+    setAuthUnavailable(false);
   }, [queryClient, user?.id]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await logoutBrowser();
+    } catch {
+      setAuthUnavailable(true);
+      return;
+    }
     clearPrivateDiscoveryCache(queryClient);
     queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-    clearToken();
-    // Clean up batch import state so re-login doesn't recover stale jobs
     try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
-    setToken(null);
     setUser(null);
+    setAuthUnavailable(false);
   }, [queryClient]);
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        token,
         isAuthenticated: !!user,
         isLoading,
         login,
-        updateAccessToken,
+        refreshUser,
+        authUnavailable,
         logout,
       }}
     >

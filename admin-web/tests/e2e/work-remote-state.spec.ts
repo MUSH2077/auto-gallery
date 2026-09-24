@@ -64,7 +64,7 @@ async function json(route: Route, value: unknown, status = 200) {
 }
 
 async function installWorkFixtures(context: BrowserContext, options: WorkFixtureOptions = {}) {
-  await context.addCookies([{ name: "ag_token", value: "pixiv-live-test-token", domain: host, path: "/" }]);
+  await context.addCookies([{ name: "ag_session", value: "pixiv-live-test-token", domain: host, path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "pixiv-live-test-token");
     localStorage.setItem("auto-gallery-lang", "en");

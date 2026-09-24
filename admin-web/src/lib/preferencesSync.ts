@@ -16,7 +16,7 @@ const THEME_KEY = "auto-gallery-theme";
 const LANG_KEY = "auto-gallery-lang";
 const APPEARANCE_KEY = "auto-gallery-appearance-v1";
 const SLIDESHOW_KEY = "auto-gallery-slideshow-v1";
-const TOKEN_KEY = "ag_token";
+import { csrfToken } from "@/lib/authFlow";
 
 const DEBOUNCE_MS = 800;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -48,13 +48,13 @@ function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
  * callers/readability; the payload actually sent is always the full merged
  * object (see readFullPreferencesFromLocalStorage).
  *
- * No-ops while unauthenticated (no ag_token in localStorage) — this keeps
+ * No-ops while unauthenticated (no session CSRF cookie) — this keeps
  * the login page (which also has theme/lang toggles) localStorage-only,
  * per spec, instead of firing a doomed 401 request.
  */
 export function pushPreferences(_partial?: Record<string, unknown>) {
   if (typeof window === "undefined") return;
-  if (!localStorage.getItem(TOKEN_KEY)) return;
+  if (!csrfToken()) return;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;

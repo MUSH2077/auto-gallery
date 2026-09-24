@@ -34,3 +34,27 @@ def test_ws_ticket_rejects_missing_or_unknown_ticket(monkeypatch):
 
     assert ws_tickets.consume_ws_ticket("") is None
     assert ws_tickets.consume_ws_ticket("missing") is None
+
+
+def test_browser_ticket_carries_session_and_is_consumed_once(monkeypatch):
+    redis = _FakeRedis()
+    monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
+    ticket, ttl = ws_tickets.issue_ws_ticket("alice", "opaque-session")
+    assert ttl == 30
+    assert ws_tickets.consume_ws_ticket(ticket) == ws_tickets.BrowserTicket("alice", "opaque-session")
+    assert ws_tickets.consume_ws_ticket(ticket) is None
+
+
+def test_json_looking_legacy_username_remains_a_username(monkeypatch):
+    redis = _FakeRedis()
+    monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
+    username = '{"username": "alice", "session_token": "not-a-browser-ticket"}'
+    ticket, _ = ws_tickets.issue_ws_ticket(username)
+    assert ws_tickets.consume_ws_ticket(ticket) == username
+
+
+def test_malformed_browser_ticket_is_rejected(monkeypatch):
+    redis = _FakeRedis()
+    monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
+    redis.setex("ws:ticket:broken", 30, b"\x00ag-browser-v1:{broken")
+    assert ws_tickets.consume_ws_ticket("broken") is None

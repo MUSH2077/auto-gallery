@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { invalidateJobEventQueries } from "@/lib/jobEventInvalidation";
+import { csrfToken } from "@/lib/authFlow";
 
 export type WsMessage = {
   type: "status_change" | "progress" | "heartbeat" | "connected" | "pong";
@@ -41,16 +42,11 @@ function resolveWebSocketUrl(ticket?: string): string | null {
 }
 
 async function createWebSocketTicket(): Promise<string | null> {
-  if (typeof window === "undefined") return null;
-  const token = localStorage.getItem("ag_token");
-  if (!token) return null;
-
+  if (typeof window === "undefined" || !csrfToken()) return null;
   const res = await fetch("/api/v1/auth/ws-ticket", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken() || "" },
   });
   if (!res.ok) return null;
   const body = await res.json().catch(() => null);
@@ -65,7 +61,6 @@ export function useJobWebSocket(options?: UseWsOptions) {
   const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef({ onStatusChange, onProgress });
-  const ticketFallbackTriedRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const connectGenerationRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,7 +71,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
 
   const connect = useCallback((ticket?: string) => {
     if (typeof window === "undefined") return;
-    if (!localStorage.getItem("ag_token")) {
+    if (!csrfToken()) {
       setConnected(false);
       setStatus("idle");
       return;
@@ -87,6 +82,13 @@ export function useJobWebSocket(options?: UseWsOptions) {
       return;
     }
 
+    if (!ticket) {
+      void createWebSocketTicket().then((nextTicket) => {
+        if (nextTicket && !intentionalCloseRef.current) connect(nextTicket);
+        else setStatus("polling");
+      }).catch(() => setStatus("polling"));
+      return;
+    }
     const wsUrl = resolveWebSocketUrl(ticket);
     if (!wsUrl) return;
 
@@ -101,7 +103,6 @@ export function useJobWebSocket(options?: UseWsOptions) {
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null;
         if (intentionalCloseRef.current || generation !== connectGenerationRef.current) return;
-        ticketFallbackTriedRef.current = false;
         connect();
       }, RECONNECT_DELAY_MS);
     };
@@ -109,11 +110,9 @@ export function useJobWebSocket(options?: UseWsOptions) {
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
-      let opened = false;
 
       ws.onopen = () => {
         if (generation !== connectGenerationRef.current) return;
-        opened = true;
         if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
         setConnected(true);
@@ -126,17 +125,6 @@ export function useJobWebSocket(options?: UseWsOptions) {
         setConnected(false);
         if (intentionalCloseRef.current) return;
 
-        if (!opened && !ticket && !ticketFallbackTriedRef.current) {
-          ticketFallbackTriedRef.current = true;
-          const nextTicket = await createWebSocketTicket().catch(() => null);
-          if (generation !== connectGenerationRef.current || intentionalCloseRef.current) {
-            return;
-          }
-          if (nextTicket) {
-            connect(nextTicket);
-            return;
-          }
-        }
         scheduleReconnect();
       };
 
@@ -175,7 +163,6 @@ export function useJobWebSocket(options?: UseWsOptions) {
       return;
     }
 
-    ticketFallbackTriedRef.current = false;
     intentionalCloseRef.current = false;
     connect();
 

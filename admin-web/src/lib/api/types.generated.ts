@@ -1263,6 +1263,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/browser/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Browser Change Password
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_auth_browser_change_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Browser Login
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_auth_browser_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Browser Logout
+         * @description See the request, response, permission, and risk metadata for this operation.
+         */
+        post: operations["post_api_v1_auth_browser_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/change-password": {
         parameters: {
             query?: never;
@@ -9913,7 +9973,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -9965,7 +10025,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10012,7 +10072,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10059,7 +10119,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10108,7 +10168,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10161,7 +10221,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10213,7 +10273,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10260,7 +10320,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10307,7 +10367,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10354,7 +10414,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10401,7 +10461,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10452,7 +10512,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreReceiptResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10503,7 +10563,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreUploadCreatedResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10554,7 +10614,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreUploadSessionResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10611,7 +10671,7 @@ export interface operations {
                     "application/json": components["schemas"]["RestoreChunkResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10662,7 +10722,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10713,7 +10773,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10764,7 +10824,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10813,7 +10873,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10860,7 +10920,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10907,7 +10967,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -10956,7 +11016,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11009,7 +11069,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11056,7 +11116,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11103,7 +11163,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11150,7 +11210,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11201,7 +11261,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetDedupCasePage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11250,7 +11310,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetDedupCaseRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11303,7 +11363,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetDedupDecisionRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11350,7 +11410,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11397,7 +11457,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11448,7 +11508,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetDedupScanAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11495,7 +11555,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11544,7 +11604,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetDedupScanRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11593,7 +11653,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11644,7 +11704,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11694,7 +11754,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11747,7 +11807,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11796,7 +11856,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11843,7 +11903,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitllerySettingsResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11890,7 +11950,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11937,7 +11997,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -11984,7 +12044,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12035,7 +12095,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12082,7 +12142,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12133,7 +12193,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAcceptedMessage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12180,7 +12240,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12229,7 +12289,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12276,7 +12336,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12323,7 +12383,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12374,7 +12434,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12423,7 +12483,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12472,7 +12532,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12521,7 +12581,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12568,7 +12628,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12615,7 +12675,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12662,7 +12722,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12714,7 +12774,7 @@ export interface operations {
                     "application/json": components["schemas"]["SchedulerBatchItemPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12765,7 +12825,7 @@ export interface operations {
                     "application/json": components["schemas"]["SchedulerSyncAcceptance"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12812,7 +12872,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12859,7 +12919,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12910,7 +12970,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -12957,7 +13017,7 @@ export interface operations {
                     "application/json": components["schemas"]["StorageBreakdownResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13004,7 +13064,138 @@ export interface operations {
                     "application/json": components["schemas"]["SystemInfoResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Request or search-language validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_auth_browser_change_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Authenticated but not permitted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_auth_browser_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_auth_browser_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonValue"];
+                };
+            };
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13055,7 +13246,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13135,7 +13326,7 @@ export interface operations {
                     "application/json": components["schemas"]["MeOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13186,7 +13377,7 @@ export interface operations {
                     "application/json": components["schemas"]["PreferencesOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13233,7 +13424,7 @@ export interface operations {
                     "application/json": components["schemas"]["WebSocketTicketResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13284,7 +13475,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorListResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13335,7 +13526,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13395,7 +13586,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13446,7 +13637,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13493,7 +13684,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13540,7 +13731,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13593,7 +13784,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13642,7 +13833,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13702,7 +13893,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13755,7 +13946,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13806,7 +13997,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorAliasRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13859,7 +14050,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationCommitRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13908,7 +14099,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -13957,7 +14148,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14006,7 +14197,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14055,7 +14246,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorLinkRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14108,7 +14299,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorLinkRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14156,7 +14347,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14210,7 +14401,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorLinkRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14259,7 +14450,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatorReferencesRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14308,7 +14499,7 @@ export interface operations {
                     "application/json": components["schemas"]["SourceCreatorRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14361,7 +14552,7 @@ export interface operations {
                     "application/json": components["schemas"]["SourceCreatorRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14410,7 +14601,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14459,7 +14650,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14511,7 +14702,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14558,7 +14749,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14605,7 +14796,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOperationSnapshotResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14652,7 +14843,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationBackfillStatusResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14706,7 +14897,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationCommitListResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14755,7 +14946,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationCommitRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14804,7 +14995,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationRevertResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14851,7 +15042,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14898,7 +15089,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14949,7 +15140,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryBuildOperationResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -14998,7 +15189,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryBuildRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15051,7 +15242,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryVerifyOperationResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15102,7 +15293,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryCommandResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15153,7 +15344,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryCommandResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15200,7 +15391,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15247,7 +15438,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15297,7 +15488,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15346,7 +15537,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15395,7 +15586,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryStatusResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15446,7 +15637,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryVerifyOperationResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15497,7 +15688,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationCommitRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15548,7 +15739,7 @@ export interface operations {
                     "application/json": components["schemas"]["PurgePreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15599,7 +15790,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryLogResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15650,7 +15841,7 @@ export interface operations {
                     "application/json": components["schemas"]["GitlleryStatusResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15697,7 +15888,7 @@ export interface operations {
                     "application/json": components["schemas"]["RuleSuggestionRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15753,7 +15944,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15804,7 +15995,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15856,7 +16047,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteCreatorDetailRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15909,7 +16100,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteWorkImportRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -15962,7 +16153,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteWorkPageRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16015,7 +16206,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16066,7 +16257,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16117,7 +16308,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16175,7 +16366,7 @@ export interface operations {
                     "application/json": components["schemas"]["DownloadJobRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16226,7 +16417,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16279,7 +16470,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16332,7 +16523,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16385,7 +16576,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskBulkClearResult"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16432,7 +16623,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16479,7 +16670,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskBulkStatusResult"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16528,7 +16719,7 @@ export interface operations {
                     "application/json": components["schemas"]["DownloadJobRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16577,7 +16768,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16632,7 +16823,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16681,7 +16872,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportJobRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16736,7 +16927,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16785,7 +16976,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16840,7 +17031,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16889,7 +17080,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16942,7 +17133,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepeatSyncAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16991,7 +17182,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17040,7 +17231,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17094,7 +17285,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportJobPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17147,7 +17338,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskBulkResult"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17194,7 +17385,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17243,7 +17434,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportJobRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17292,7 +17483,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17347,7 +17538,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17402,7 +17593,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17451,7 +17642,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17500,7 +17691,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17551,7 +17742,7 @@ export interface operations {
                     "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17604,7 +17795,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17657,7 +17848,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17706,7 +17897,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17759,7 +17950,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17812,7 +18003,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17865,7 +18056,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17918,7 +18109,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -17967,7 +18158,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18014,7 +18205,7 @@ export interface operations {
                     "application/json": components["schemas"]["DanbooruMappingRefreshEnqueueResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18063,7 +18254,7 @@ export interface operations {
                     "application/json": components["schemas"]["DanbooruMappingRefreshStatusResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18116,7 +18307,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18169,7 +18360,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18216,7 +18407,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18266,7 +18457,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18317,7 +18508,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18366,7 +18557,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18417,7 +18608,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18466,7 +18657,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18513,7 +18704,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18566,7 +18757,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18615,7 +18806,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18668,7 +18859,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18715,7 +18906,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18764,7 +18955,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteAccountRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18856,7 +19047,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18907,7 +19098,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -18956,7 +19147,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepositoryDetailResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19016,7 +19207,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19070,7 +19261,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepositoryGraphResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19119,7 +19310,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19168,7 +19359,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19220,7 +19411,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19280,7 +19471,7 @@ export interface operations {
                     "application/json": components["schemas"]["SearchResponseRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19331,7 +19522,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19382,7 +19573,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReferenceNameAnchorsRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19429,7 +19620,7 @@ export interface operations {
                     "application/json": components["schemas"]["SourceListResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19480,7 +19671,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19531,7 +19722,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19591,7 +19782,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19642,7 +19833,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19695,7 +19886,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19742,7 +19933,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19791,7 +19982,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionSummariesResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19840,7 +20031,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19900,7 +20091,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -19953,7 +20144,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20002,7 +20193,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionPreviewResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20051,7 +20242,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionSourceRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20104,7 +20295,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionSourceRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20165,7 +20356,7 @@ export interface operations {
                     "application/json": components["schemas"]["DeletionResultResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20219,7 +20410,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionSourceRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20268,7 +20459,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20315,7 +20506,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20395,7 +20586,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20442,7 +20633,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20518,7 +20709,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20572,7 +20763,7 @@ export interface operations {
                     "application/json": components["schemas"]["SchedulerDecisionPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20619,7 +20810,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20668,7 +20859,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkbenchSummary"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20721,7 +20912,7 @@ export interface operations {
                     "application/json": components["schemas"]["TagRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20772,7 +20963,7 @@ export interface operations {
                     "application/json": components["schemas"]["TagRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20825,7 +21016,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20879,7 +21070,7 @@ export interface operations {
                     "application/json": components["schemas"]["TagPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20928,7 +21119,7 @@ export interface operations {
                     "application/json": components["schemas"]["TagDetail"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20981,7 +21172,7 @@ export interface operations {
                     "application/json": components["schemas"]["TagRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21030,7 +21221,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21085,7 +21276,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21142,7 +21333,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskPage"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21192,7 +21383,7 @@ export interface operations {
                     "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21243,7 +21434,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21294,7 +21485,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21345,7 +21536,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21394,7 +21585,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21443,7 +21634,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21492,7 +21683,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21547,7 +21738,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21596,7 +21787,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21648,7 +21839,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21698,7 +21889,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21751,7 +21942,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21806,7 +21997,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21859,7 +22050,7 @@ export interface operations {
                     "application/json": components["schemas"]["RepeatSyncAccepted"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21908,7 +22099,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -21957,7 +22148,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22008,7 +22199,7 @@ export interface operations {
                     "application/json": components["schemas"]["UploadResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22055,7 +22246,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserOut"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22106,7 +22297,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22155,7 +22346,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22204,7 +22395,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22257,7 +22448,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22306,7 +22497,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResetPasswordOut"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22357,7 +22548,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkListResponse"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22408,7 +22599,7 @@ export interface operations {
                     "application/json": components["schemas"]["CurationCommitRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22461,7 +22652,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22514,7 +22705,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22561,7 +22752,7 @@ export interface operations {
                     "application/json": components["schemas"]["MediaDerivativeProgressRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22610,7 +22801,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22657,7 +22848,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22706,7 +22897,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkAssetRead"][];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22756,7 +22947,7 @@ export interface operations {
                     "application/json": components["schemas"]["PlaybackTicketRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22805,7 +22996,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22856,7 +23047,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteWorkStateRead"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -22959,7 +23150,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -23008,7 +23199,7 @@ export interface operations {
                     "application/json": components["schemas"]["JsonValue"];
                 };
             };
-            /** @description Missing, invalid, or expired JWT. */
+            /** @description Missing, invalid, or expired Bearer token or browser session. */
             401: {
                 headers: {
                     [name: string]: unknown;

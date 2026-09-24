@@ -251,6 +251,17 @@ async def verify_docs() -> None:
         cookies={"ag_token": token},
         timeout=20,
     ) as client:
+        legacy_cookie = await client.get("/api/docs")
+        if legacy_cookie.status_code != 401:
+            raise RuntimeError(
+                f"Legacy ag_token cookie still opened API docs ({legacy_cookie.status_code})"
+            )
+        business = await client.get("/api/v1/system/storage")
+        if business.status_code != 401:
+            raise RuntimeError(
+                f"Legacy ag_token cookie still opened a business API ({business.status_code})"
+            )
+        client.headers["Authorization"] = f"Bearer {token}"
         for path in (
             "/api/docs",
             "/api/redoc",
@@ -273,10 +284,7 @@ async def verify_docs() -> None:
                     f"{response.status_code} -> {response.headers.get('location')}"
                 )
         business = await client.get("/api/v1/system/storage")
-        if business.status_code != 401:
-            raise RuntimeError(
-                f"Business API accepted cookie-only authentication ({business.status_code})"
-            )
+        business.raise_for_status()
 
 
 asyncio.run(verify_docs())

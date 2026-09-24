@@ -205,15 +205,15 @@ const NAVIGATION_SELECTION_MATRIX = [
 ] as const;
 
 async function installFixtureRoutes(context: BrowserContext) {
-  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+  await context.routeWebSocket("**/api/v1/ws*", (webSocket) => {
     webSocket.send(JSON.stringify({ type: "connected" }));
   });
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "ui-test-token",
     domain: acceptanceHost,
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     window.localStorage.setItem("ag_token", "ui-test-token");
     if (!window.localStorage.getItem("auto-gallery-lang")) {

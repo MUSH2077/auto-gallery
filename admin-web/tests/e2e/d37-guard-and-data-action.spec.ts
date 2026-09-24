@@ -46,7 +46,7 @@ async function openFixture(
   init?: (context: BrowserContext) => Promise<void>,
 ) {
   const context = await browser.newContext();
-  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");
@@ -200,12 +200,24 @@ test("a subscriptions user still resumes a saved Danbooru batch", async ({ brows
 test("logout and account change stop saved Danbooru polling despite cached prior permissions", async ({ browser }) => {
   let statusRequests = 0;
   let deniedPermissionQueries = 0;
+  let deniedUser = false;
+  let fixtureContext: BrowserContext | null = null;
   const opened = await openFixture(browser, "/admin/upload/danbooru", ["subscriptions"], async (route, url, method) => {
-    if (url.pathname === "/api/v1/auth/login" && method === "POST") {
-      await json(route, { access_token: "denied-token", token_type: "bearer" });
+    if (url.pathname === "/api/v1/auth/browser/logout" && method === "POST") {
+      await fixtureContext?.clearCookies();
+      await json(route, { ok: true });
       return true;
     }
-    if (url.pathname === "/api/v1/auth/me" && route.request().headers()["authorization"] === "Bearer denied-token") {
+    if (url.pathname === "/api/v1/auth/browser/login" && method === "POST") {
+      deniedUser = true;
+      await fixtureContext?.addCookies([
+        { name: "ag_session", value: "denied-session", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+        { name: "ag_csrf", value: "denied-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+      ]);
+      await json(route, { ok: true });
+      return true;
+    }
+    if (url.pathname === "/api/v1/auth/me" && deniedUser) {
       if (route.request().headers()["content-type"]) deniedPermissionQueries += 1;
       await json(route, { ...principal([]), id: 99, username: "next-denied" });
       return true;
@@ -224,6 +236,7 @@ test("logout and account change stop saved Danbooru polling despite cached prior
       sessionStorage.setItem("danbooru_batch_job", JSON.stringify({ jobId: "logout-fixture", importType: "pixiv", total: 2, startedAt: Date.now() }));
     });
   });
+  fixtureContext = opened.context;
   try {
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
     await opened.page.getByRole("button", { name: "User menu", exact: true }).click();
@@ -240,7 +253,8 @@ test("logout and account change stop saved Danbooru polling despite cached prior
     await opened.page.getByLabel("Username", { exact: true }).fill("next-denied");
     await opened.page.getByLabel("Password", { exact: true }).fill("fixture-password");
     await opened.page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect.poll(() => opened.page.evaluate(() => localStorage.getItem("ag_token"))).toBe("denied-token");
+    await expect.poll(async () => (await opened.context.cookies()).find((cookie) => cookie.name === "ag_session")?.value).toBe("denied-session");
+    await expect.poll(() => opened.page.evaluate(() => localStorage.getItem("ag_token"))).toBeNull();
     const requestsAfterAccountChange = statusRequests;
     await opened.page.waitForTimeout(2_500);
     expect(statusRequests).toBe(requestsAfterAccountChange);

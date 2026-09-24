@@ -119,13 +119,14 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
   let accounts = [...(options.accounts || [])];
   let candidates = [...(options.candidates || [])];
   let collectionsAttempts = 0;
-  await context.addCookies([{ name: "ag_token", value: "fixture-token-a", domain: host, path: "/" }]);
+  let activeUser: "a" | "b" = "a";
+  await context.addCookies([{ name: "ag_session", value: "fixture-token-a", domain: host, path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture-token-a");
     localStorage.setItem("auto-gallery-lang", "en");
     localStorage.setItem("auto-gallery-theme", "light");
   });
-  await context.routeWebSocket("**/api/v1/ws", (socket) => {
+  await context.routeWebSocket("**/api/v1/ws*", (socket) => {
     socket.close({ code: 1000, reason: "fixture" });
   });
   await context.route("https://images.example/**", async (route) => {
@@ -140,9 +141,20 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     const url = new URL(request.url());
     const path = url.pathname;
     const body = request.postDataJSON?.() as Record<string, unknown> | null;
-    const actingUser = request.headers().authorization?.includes("fixture-token-b") ? "b" : "a";
-    if (path === "/api/v1/auth/login") return json(route, { access_token: "fixture-token-b" });
-    if (path === "/api/v1/auth/me") return json(route, actingUser === "b" ? meB : me);
+    const actingUser = activeUser;
+    if (path === "/api/v1/auth/browser/logout") {
+      await context.clearCookies();
+      return json(route, { ok: true });
+    }
+    if (path === "/api/v1/auth/browser/login") {
+      activeUser = "b";
+      await context.addCookies([
+        { name: "ag_session", value: "fixture-session-b", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+        { name: "ag_csrf", value: "fixture-csrf-b", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+      ]);
+      return json(route, { ok: true });
+    }
+    if (path === "/api/v1/auth/me") return json(route, activeUser === "b" ? meB : me);
     if (path === "/api/v1/sources") {
       return json(route, { sources: [
         { source_name: "pixiv", display_name: "Pixiv", capabilities: { can_download: true, can_import_local: false, supports_gallerydl: true, supports_tags: true, is_reference_only: false, supports_remote_discovery: true, discovery_auth_methods: ["refresh_token"], supports_collection_selectors: true, remote_discovery_rollout: options.rollout?.pixiv || { manual_preview: true, auto_import: true, unavailable_reason: null } } },

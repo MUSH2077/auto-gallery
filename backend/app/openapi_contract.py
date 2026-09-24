@@ -113,7 +113,7 @@ def _permission_metadata(route: Any) -> dict[str, Any]:
             permission_mode = "anyOf"
 
     metadata: dict[str, Any] = {
-        "x-authentication": "bearer" if authenticated else "public",
+        "x-authentication": "bearer-or-session" if authenticated else "public",
         "x-admin-only": admin_only,
     }
     if permissions:
@@ -266,7 +266,8 @@ def build_openapi_schema(app: FastAPI) -> dict[str, Any]:
         version=app.version,
         description=(
             "Authenticated HTTP contract for browsing, transferring, importing, curating, and operating "
-            "an auto-gallery library. Obtain a JWT with `POST /api/v1/auth/login`, then use `Bearer <token>`. "
+            "an auto-gallery library. Scripts may obtain a JWT with `POST /api/v1/auth/login` and send `Bearer <token>`. "
+            "Browsers use revocable Redis sessions from `POST /api/v1/auth/browser/login`; writes require exact Origin and X-CSRF-Token. "
             "Realtime task events are described by the linked AsyncAPI contract."
         ),
         routes=app.routes,
@@ -283,6 +284,10 @@ def build_openapi_schema(app: FastAPI) -> dict[str, Any]:
     _ensure_shared_schemas(schema)
     _sanitize_public_examples(schema)
 
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})["BrowserSession"] = {
+        "type": "apiKey", "in": "cookie", "name": "ag_session",
+        "description": "Revocable browser session. Write requests also require exact Origin and X-CSRF-Token.",
+    }
     route_index = _route_index(app)
     for path, path_item in schema.get("paths", {}).items():
         for method, operation in path_item.items():
@@ -296,11 +301,22 @@ def build_openapi_schema(app: FastAPI) -> dict[str, Any]:
             operation.setdefault("description", "See the request, response, permission, and risk metadata for this operation.")
             _ensure_response_contract(operation)
 
-            if operation.get("x-authentication") == "bearer":
+            if path in {"/api/v1/auth/browser/logout", "/api/v1/auth/browser/change-password"}:
+                operation["x-authentication"] = "browser-session"
+            if path == "/api/v1/auth/browser/login":
+                operation["x-browser-origin-required"] = True
+            if operation.get("x-authentication") == "bearer-or-session":
+                operation["security"] = [{"HTTPBearer": []}, {"BrowserSession": []}]
+                if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+                    operation["x-browser-csrf-required"] = True
+            elif operation.get("x-authentication") == "browser-session":
+                operation["security"] = [{"BrowserSession": []}]
+                operation["x-browser-csrf-required"] = True
+            if operation.get("x-authentication") in {"bearer-or-session", "browser-session"}:
                 operation.setdefault(
                     "responses",
                     {},
-                ).setdefault("401", {"description": "Missing, invalid, or expired JWT.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}})
+                ).setdefault("401", {"description": "Missing, invalid, or expired Bearer token or browser session.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}})
                 operation["responses"].setdefault("403", {"description": "Authenticated but not permitted.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}})
             operation.setdefault(
                 "responses",

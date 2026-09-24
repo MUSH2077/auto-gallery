@@ -10,7 +10,7 @@ import Banner from "@/components/Banner";
 
 export default function ProfilePage() {
   const t = useT();
-  const { user, updateAccessToken } = useAuth();
+  const { user, refreshUser } = useAuth();
   const toast = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -31,8 +31,8 @@ export default function ProfilePage() {
 
     setLoading(true);
     try {
-      const refreshed = await authChangePassword(currentPassword, newPassword);
-      await updateAccessToken(refreshed.access_token);
+      await authChangePassword(currentPassword, newPassword);
+      await refreshUser();
       toast.success(t("auth.change_password_success"));
       setCurrentPassword("");
       setNewPassword("");

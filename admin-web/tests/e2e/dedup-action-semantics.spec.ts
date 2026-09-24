@@ -11,7 +11,7 @@ test("dedup caller submits its HTTP-origin UUID and exact selected representativ
   const unhandled: string[] = [];
   let decision: any = null;
   const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: baseUrl }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: baseUrl }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   await context.route("**/media/**", (route) => route.fulfill({ status: 200, contentType: "image/png", body: "pixel" }));
   await context.route("**/api/v1/**", async (route) => {
@@ -42,7 +42,7 @@ test("dedup caller submits its HTTP-origin UUID and exact selected representativ
 
 test("separate requires confirmation while defer is immediate and both report completion", async ({ context, page }) => {
   const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: baseUrl }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: baseUrl }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   await context.route("**/media/**", (route) => route.fulfill({ status: 200, contentType: "image/png", body: "pixel" }));
   const decisions: { caseId: string; body: any }[] = [];
@@ -96,7 +96,7 @@ test("separate requires confirmation while defer is immediate and both report co
 
 test("asset scan follows its durable task through reload and refreshes cases on completion", async ({ context, page }) => {
   const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: baseUrl }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: baseUrl }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   let scanPosts = 0;
   let taskReads = 0;
@@ -139,7 +139,7 @@ test("asset scan follows its durable task through reload and refreshes cases on 
 
 test("failed asset scan retries the same durable task instead of creating another scan", async ({ context, page }) => {
   const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: baseUrl }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: baseUrl }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   let scanPosts = 0;
   let retryPosts = 0;

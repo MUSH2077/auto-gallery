@@ -28,9 +28,10 @@ CI 会以 check 模式重新生成契约，并比较生成的 TypeScript 类型�
 - `/api/openapi.json`
 - `/api/asyncapi.yaml`
 
-有效的管理员会话 Cookie 可以打开文档；从 Swagger 执行业务操作时，仍需在
-**Authorize** 中填写 `POST /api/v1/auth/login` 返回的显式 JWT Bearer。
-业务 API 不接受 Cookie 鉴权。
+有效的管理员浏览器会话 Cookie 可以打开文档，也可调用受保护的业务 API。
+浏览器写请求需要精确允许的 `Origin` 与会话绑定的 `X-CSRF-Token`。
+Swagger 的 **Authorize** 仍使用 `POST /api/v1/auth/login` 返回的显式
+JWT Bearer；Bearer 客户端无需浏览器 CSRF 值。
 
 旧 `/docs`、`/redoc` 与 `/openapi.json` 会永久重定向到受保护的 `/api/*`
 地址。

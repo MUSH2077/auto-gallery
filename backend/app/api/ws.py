@@ -1,59 +1,62 @@
-"""
-WebSocket endpoint for real-time task status updates.
-
-Authentication prefers the JWT cookie (``ag_token``) set by the admin-web
-login flow. The browser sends this cookie automatically on the WebSocket
-upgrade request. A short-lived one-time ``?ticket=`` fallback is accepted for
-cross-port or reverse-proxy deployments where the cookie is not visible to the
-backend.
-
-Every connection is rebound to a current active database user with tasks-module
-permission. Redis task references are resolved server-side and forwarded only
-when that user has the same durable visibility as the REST task detail API.
-"""
+"""WebSocket task updates authenticated by single-use tickets and exact browser origins."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from redis.exceptions import RedisError
 
-from app.auth import decode_access_token_payload
-from app.services.ws_tickets import consume_ws_ticket
+from app.config import settings
+from app.services.browser_sessions import SessionStoreUnavailable, load_browser_session, password_fingerprint
+from app.auth import _load_active_user_by_id
+from app.services.ws_tickets import BrowserTicket, consume_ws_ticket
 from app.services.ws_manager import manager
 
 logger = logging.getLogger(__name__)
 
 # No router-level RequireAdmin — WebSocket upgrades cannot send custom headers.
-# Admin auth is validated inline in the handler via JWT cookie payload.
+# Task permission and the session-bound ticket are validated in the handler.
 router = APIRouter()
 
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Real-time task event stream. Authenticated via JWT cookie or ticket."""
-    username = "unknown"
-    token = websocket.cookies.get("ag_token")
-    if token:
-        payload = decode_access_token_payload(token)
-        if not payload:
-            await websocket.close(code=4001, reason="Invalid or expired token")
+    """Real-time task event stream using a single-use ticket."""
+    allowed_origins = {value.strip() for value in settings.browser_session_origins.split(",") if value.strip()}
+    if websocket.headers.get("origin") not in allowed_origins:
+        await websocket.close(code=4003, reason="Untrusted origin")
+        return
+    ticket = websocket.query_params.get("ticket")
+    if not ticket:
+        await websocket.close(code=4001, reason="Missing ticket")
+        return
+    try:
+        identity = consume_ws_ticket(ticket)
+    except RedisError:
+        await websocket.close(code=1013, reason="Ticket service unavailable")
+        return
+    if identity is None:
+        await websocket.close(code=4001, reason="Invalid or expired ticket")
+        return
+    if isinstance(identity, BrowserTicket):
+        try:
+            browser_session = await load_browser_session(identity.session_token)
+            if browser_session is None:
+                raise ValueError("Session expired")
+            user = await _load_active_user_by_id(browser_session.user_id)
+            if (user.username != identity.username
+                    or password_fingerprint(user.password_hash) != browser_session.password_fingerprint
+                    or user.must_change_password):
+                raise ValueError("Session is no longer valid")
+        except (SessionStoreUnavailable, HTTPException, ValueError):
+            await websocket.close(code=4001, reason="Browser session unavailable")
             return
-        username = payload.get("sub", "unknown")
-        if payload.get("pwd_chg_required"):
-            await websocket.close(code=4003, reason="Password change required")
-            return
+        username = identity.username
     else:
-        ticket = websocket.query_params.get("ticket")
-        if not ticket:
-            await websocket.close(code=4001, reason="Missing auth cookie or ticket")
-            return
-        ticket_username = consume_ws_ticket(ticket)
-        if not ticket_username:
-            await websocket.close(code=4001, reason="Invalid or expired ticket")
-            return
-        username = ticket_username
+        username = identity
 
     if (
         not isinstance(username, str)
@@ -68,7 +71,32 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_json()
+            if isinstance(identity, BrowserTicket):
+                try:
+                    current = await load_browser_session(identity.session_token)
+                except SessionStoreUnavailable:
+                    await websocket.close(code=1013, reason="Browser session unavailable")
+                    break
+                if current is None:
+                    await websocket.close(code=4001, reason="Browser session expired")
+                    break
+                try:
+                    user = await _load_active_user_by_id(current.user_id)
+                    valid = (
+                        user.username == username
+                        and password_fingerprint(user.password_hash) == current.password_fingerprint
+                        and not user.must_change_password
+                        and await manager.is_current_tasks_user(username)
+                    )
+                except HTTPException:
+                    valid = False
+                if not valid:
+                    await websocket.close(code=4001, reason="Browser session invalid")
+                    break
+            try:
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+            except asyncio.TimeoutError:
+                continue
             action = data.get("action", "")
             if action == "ping":
                 await websocket.send_json({"type": "pong"})

@@ -99,7 +99,7 @@ function UserMenu() {
           </Link>
           <button
             type="button"
-            onClick={() => { setOpen(false); logout(); }}
+            onClick={() => { setOpen(false); void logout(); }}
             role="menuitem"
             className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-danger transition-colors hover:bg-subtle focus-visible:bg-subtle"
           >

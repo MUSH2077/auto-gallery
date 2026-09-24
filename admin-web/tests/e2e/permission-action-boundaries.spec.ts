@@ -79,7 +79,7 @@ type ApiHandler = (route: Route, path: string, method: string) => Promise<boolea
 async function openFixture(browser: Browser, pathname: string, me: Principal, handler: ApiHandler, init?: (context: BrowserContext) => Promise<void>) {
   const context = await browser.newContext();
   const fixtureOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").origin;
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: fixtureOrigin }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: fixtureOrigin }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   await init?.(context);
   const unhandled: string[] = [];
