@@ -40,6 +40,24 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 └─────────────────────────────────────────────────┘
 ```
 
+## Maintained Module Boundaries
+
+- `SearchService` remains the backend search interface.
+  `search_language.py` parses queries; `search_pagination.py` owns stable
+  cursors and sort rules; `search_filters.py` compiles Meilisearch filters;
+  `search_projection_fields.py` builds deterministic index fields. The
+  service still coordinates SQL/Meilisearch execution and index delivery.
+- `import_runner.py` processes work slices, while `import_execution.py`
+  owns the claim, lease and terminal parent projection boundary. A retry
+  must retain the same durable task ownership and idempotent result.
+- `resource_pressure.py` coordinates sampling, state and shared snapshots
+  delegated to `resource_pressure_sampling.py`,
+  `resource_pressure_state.py` and `resource_pressure_snapshot.py`.
+- The Jobs page keeps URL state in `jobsRoute.ts` and
+  `useJobsRouteState.ts`, and pure task-tree grouping in `jobTree.ts`.
+  The page consumes these contracts to render accessible desktop and mobile
+  views with polling fallback when WebSocket is unavailable.
+
 ## Domain Model
 
 All models use source-agnostic naming. Shared data vs user-scoped data:
@@ -371,7 +389,7 @@ Key environment variables used by the application:
 | `BACKEND_PORT` | `8818` | Host port for backend API (maps to container 8000) |
 | `ADMIN_WEB_PORT` | `13000` | Host port for admin web (maps to container 3000) |
 | `CORS_ORIGINS` | `http://localhost:13000` | Allowed origins for cross-origin API clients |
-| `BROWSER_SESSION_ORIGINS` | (required for browser login) | Exact allowed HTTP/HTTPS browser origins for session, CSRF and WebSocket checks |
+| `BROWSER_SESSION_ORIGINS` | `http://localhost:13000` | Exact allowed HTTP/HTTPS browser origins for session, CSRF and WebSocket checks |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | Internal URL for admin-web SSR to reach backend |
 | `MEDIA_PLAYBACK_TTL_SECONDS` | `7200` | Lifetime of an asset-scoped MP4/WebM playback ticket |
 | `NEXT_PUBLIC_WS_URL` | current site `/api/v1/ws` | Public browser WebSocket URL for live job updates |

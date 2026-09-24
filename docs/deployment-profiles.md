@@ -21,6 +21,28 @@ wait for it to complete, while Meilisearch is deliberately not a backend startup
 dependency: an unavailable search index must degrade search, not take down the
 whole application.
 
+## Browser sessions · 浏览器会话
+
+Set `BROWSER_SESSION_ORIGINS` to the exact browser origins used at this
+deployment, for example `http://192.0.2.10:13000` and the HTTPS reverse
+proxy origin. Include the scheme and port, separated by commas. This list
+governs browser login, credentialed reads, CSRF-protected writes and WebSocket
+handshakes; it is separate from `CORS_ORIGINS` for API clients. Browser
+sessions use the existing Redis service and fail closed when it is
+unavailable. Changing from legacy browser tokens requires users to sign in
+again. HTTPS gives the session cookie the Secure attribute. The supported
+LAN HTTP entry transmits cookies without HTTPS protection; limit that entry
+to a trusted network or use the HTTPS reverse proxy.
+
+将 `BROWSER_SESSION_ORIGINS` 设置为当前部署实际使用的精确浏览器来源，
+例如 `http://192.0.2.10:13000` 以及 HTTPS 反向代理来源。每项都要
+包含协议与端口，并以逗号分隔。此配置控制浏览器登录、携带会话的读取、
+受 CSRF 保护的写入和 WebSocket 握手；它与 API 客户端使用的
+`CORS_ORIGINS` 不同。浏览器会话使用现有 Redis，Redis 不可用时拒绝
+会话。旧浏览器令牌迁移后用户需重新登录。HTTPS 入口的会话 Cookie
+带 Secure；保留的局域网 HTTP 入口没有 HTTPS 传输保护，应限制在可信
+网络或改用 HTTPS 反向代理。
+
 ## Resource limits · 资源上限
 
 | Service | Memory / swap total | CPU | PIDs | OOM score |

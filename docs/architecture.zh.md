@@ -40,6 +40,22 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 └─────────────────────────────────────────────────┘
 ```
 
+## 当前模块边界
+
+- `SearchService` 仍是后端搜索对外接口。`search_language.py` 解析查询，
+  `search_pagination.py` 管理稳定游标和排序，
+  `search_filters.py` 编译 Meilisearch 过滤条件，
+  `search_projection_fields.py` 生成确定性的索引字段。服务本身继续协调
+  SQL/Meilisearch 执行和索引投递。
+- `import_runner.py` 处理作品微批；`import_execution.py` 管理任务领取、
+  租约和父任务最终状态。重试必须保持持久任务归属与结果幂等。
+- `resource_pressure.py` 协调采样、状态和共享快照，分别委托给
+  `resource_pressure_sampling.py`、`resource_pressure_state.py` 和
+  `resource_pressure_snapshot.py`。
+- Jobs 页用 `jobsRoute.ts`、`useJobsRouteState.ts` 管理 URL 状态，
+  用 `jobTree.ts` 纯函数整理任务树；页面负责桌面与移动端展示，
+  WebSocket 不可用时退回轮询。
+
 ## 领域模型
 
 所有模型使用与来源无关的命名。共享数据 vs 用户隔离数据：
@@ -336,7 +352,7 @@ tmpfs `/run/auto-gallery-secrets`，并在使用前验证该边界。
 | `MEDIA_PLAYBACK_TTL_SECONDS` | `7200` | 单资产 MP4/WebM 播放票据的有效期（秒） |
 | `ADMIN_WEB_PORT` | `13000` | 管理端主机端口（映射容器 3000） |
 | `CORS_ORIGINS` | `http://localhost:13000` | 跨来源 API 客户端允许来源 |
-| `BROWSER_SESSION_ORIGINS` | （浏览器登录必需） | 会话、CSRF 和 WebSocket 的精确 HTTP/HTTPS 浏览器允许来源 |
+| `BROWSER_SESSION_ORIGINS` | `http://localhost:13000` | 会话、CSRF 和 WebSocket 的精确 HTTP/HTTPS 浏览器允许来源 |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | admin-web SSR 访问后端的内部 URL |
 | `NEXT_PUBLIC_WS_URL` | 当前站点 `/api/v1/ws` | 浏览器连接实时任务 WebSocket 的公开地址 |
 | `DATABASE_URL` | （必需） | PostgreSQL 连接字符串 |
