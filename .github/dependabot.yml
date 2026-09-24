@@ -1,18 +1,22 @@
 version: 2
+# Routine version updates are intentionally low-volume. Dependabot security
+# updates remain event-driven and are not restricted by allow.update-types.
 updates:
   - package-ecosystem: "npm"
     directory: "/admin-web"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "javascript"
     commit-message:
       prefix: "build(deps)"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "04:00"
-      timezone: "UTC"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     groups:
       admin-web:
         patterns:
@@ -23,17 +27,19 @@ updates:
 
   - package-ecosystem: "pip"
     directory: "/backend"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "python"
     commit-message:
       prefix: "build(deps)"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "04:20"
-      timezone: "UTC"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     groups:
       backend-python:
         patterns:
@@ -44,17 +50,19 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "github_actions"
     commit-message:
       prefix: "build(deps)"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "04:40"
-      timezone: "UTC"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     groups:
       actions:
         patterns:
@@ -65,28 +73,32 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/backend"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "build(deps)"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:00"
-      timezone: "UTC"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: "docker"
     directory: "/admin-web"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "build(deps)"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:20"
-      timezone: "UTC"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
