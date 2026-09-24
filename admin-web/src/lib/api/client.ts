@@ -1,3 +1,5 @@
+import { csrfToken, logoutBrowser } from "../authFlow.ts";
+
 const BASE = "";
 
 /** Public unified-search contract: backend accepts at most 100 rows per page. */
@@ -27,16 +29,11 @@ export class ApiError extends Error {
 
 export function clearAuthOn401() {
   if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem("ag_token");
-    sessionStorage.removeItem("danbooru_batch_job");
-    document.cookie = "ag_token=; path=/; max-age=0";
-  } catch {}
-  // Redirect to login unless already on login page
-  if (!window.location.pathname.startsWith("/admin/login")) {
-    window.location.replace("/admin/login");
-  }
+  try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
+  if (window.location.pathname.startsWith("/admin/login")) return;
+  void logoutBrowser().catch(() => {}).finally(() => window.location.replace("/admin/login"));
 }
+
 
 async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => "");
@@ -67,12 +64,9 @@ async function fetchApiResponse(path: string, options: RequestInit | undefined, 
   if (jsonContentType && !headers.has("Content-Type") && !(options?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  // Attach JWT token if present in localStorage
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("ag_token");
-    if (token && !headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
+  if (typeof window !== "undefined" && !["GET", "HEAD", "OPTIONS"].includes((options?.method || "GET").toUpperCase())) {
+    const csrf = csrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
   }
 
   let res: Response;
@@ -80,6 +74,7 @@ async function fetchApiResponse(path: string, options: RequestInit | undefined, 
     res = await fetch(`${BASE}${path}`, {
       ...options,
       headers,
+      credentials: "same-origin",
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;

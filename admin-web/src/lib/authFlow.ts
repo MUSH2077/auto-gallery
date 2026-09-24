@@ -1,9 +1,13 @@
 /** Shared browser login flow for the public login page and AuthProvider. */
 
-const TOKEN_KEY = "ag_token";
-const TOKEN_COOKIE_AGE_SECONDS = 7 * 24 * 60 * 60;
+export class AuthUserLookupError extends Error {
+  readonly status: number;
 
-export class AuthUserLookupError extends Error {}
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export interface AuthUser {
   id: number;
@@ -13,34 +17,47 @@ export interface AuthUser {
   preferences?: Record<string, unknown> | null;
 }
 
-export function storedToken(): string | null {
-  return typeof window === "undefined" ? null : localStorage.getItem(TOKEN_KEY);
+export function clearLegacyToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("ag_token");
+  document.cookie = "ag_token=; path=/; max-age=0";
 }
 
-export function saveToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-  document.cookie = `${TOKEN_KEY}=${token}; path=/; SameSite=Lax; max-age=${TOKEN_COOKIE_AGE_SECONDS}`;
+export function csrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("ag_csrf="))?.slice(8) || null;
 }
 
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  document.cookie = `${TOKEN_KEY}=; path=/; max-age=0`;
-}
-
-export async function loadUser(token: string): Promise<AuthUser> {
-  const response = await fetch("/api/v1/auth/me", {
-    headers: { Authorization: `Bearer ${token}` },
+export async function logoutBrowser(): Promise<void> {
+  const csrf = csrfToken();
+  clearLegacyToken();
+  const response = await fetch("/api/v1/auth/browser/logout", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: csrf ? { "X-CSRF-Token": csrf } : {},
   });
-  if (!response.ok) throw new AuthUserLookupError("Invalid or expired login");
+  if (!response.ok) throw new Error("Logout failed");
+}
+
+export async function loadUser(): Promise<AuthUser> {
+  const response = await fetch("/api/v1/auth/me", { credentials: "same-origin" });
+  if (!response.ok) {
+    throw new AuthUserLookupError(
+      response.status === 503 ? "Session service temporarily unavailable" : "Invalid or expired login",
+      response.status,
+    );
+  }
   return response.json() as Promise<AuthUser>;
 }
 
 export async function loginAndLoadUser(
   username: string,
   password: string,
-): Promise<{ token: string; user: AuthUser }> {
-  const response = await fetch("/api/v1/auth/login", {
+): Promise<AuthUser> {
+  clearLegacyToken();
+  const response = await fetch("/api/v1/auth/browser/login", {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
@@ -48,8 +65,10 @@ export async function loginAndLoadUser(
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || "Login failed");
   }
-  const body = await response.json();
-  const token: string = body.access_token;
-  const user = await loadUser(token);
-  return { token, user };
+  try {
+    return await loadUser();
+  } catch (error) {
+    await logoutBrowser().catch(() => {});
+    throw error;
+  }
 }

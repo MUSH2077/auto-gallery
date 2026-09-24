@@ -23,11 +23,22 @@ for the interactive Swagger UI or `/api/redoc` for the read-only reference.
 Both interfaces and their assets are served locally. The versioned HTTP and
 WebSocket contracts are documented in [LAN API contracts](api/README.md).
 
-Swagger's **Authorize** action requires the explicit JWT Bearer token returned
-by `POST /api/v1/auth/login`; the browser session cookie only grants access to
-the documentation itself. When a separate LAN application calls the API, add
-its exact scheme, host, and port to the comma-separated `CORS_ORIGINS`
-allowlist. Do not use `*` with credentials.
+The admin web now uses a revocable Redis browser session. Its `ag_session`
+cookie is `HttpOnly`, host-only, `SameSite=Lax`, and scoped to `/`.
+HTTPS origins receive a `Secure` cookie. Browser writes additionally require
+a session-bound `X-CSRF-Token` header and an exact allowed `Origin`.
+Set `BROWSER_SESSION_ORIGINS` to the complete, comma-separated list of admin
+web origins (scheme, host, and port). It defaults to
+`http://localhost:13000`, so configure the real NAS addresses before
+deploying. Include every LAN HTTP and HTTPS entry you actually use, without
+wildcards.
+
+An independent script can still call `POST /api/v1/auth/login` and send the
+returned JWT as `Bearer <token>`. Swagger's **Authorize** action uses this
+Bearer flow; opening the docs with a browser session does not expose a token
+to JavaScript. Add separate LAN clients to `CORS_ORIGINS` as needed.
+A LAN HTTP connection remains supported, but its cookie travels without
+HTTPS transport protection. Prefer HTTPS where available.
 
 The Jobs page uses WebSocket for live progress. By default it connects to the
 current site's `/api/v1/ws`; if your NAS reverse proxy does not forward
@@ -42,10 +53,10 @@ NEXT_PUBLIC_WS_URL=ws://192.0.2.10:8818/api/v1/ws
 NEXT_PUBLIC_WS_URL=wss://autogallery.example.com/api/v1/ws
 ```
 
-If WebSocket is unavailable, the Jobs page automatically falls back to 3-second
-polling and still updates task status. When cross-port auth fallback is needed,
-admin-web requests a 30-second one-time ticket over the normal API and never
-puts the long-lived login JWT in the WebSocket URL.
+If WebSocket is unavailable, the Jobs page falls back to polling. Every browser
+WebSocket connection requests a 30-second single-use ticket over the normal API.
+The handshake must carry an allowed `Origin`; a ticket issued for a browser
+session stops working after that session is revoked.
 
 The admin interface links to the Corresponding Source for AGPL network use.
 Official builds use the upstream repository. Forks and modified deployments

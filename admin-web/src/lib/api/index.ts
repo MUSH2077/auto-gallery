@@ -1,4 +1,5 @@
 import { assertBackupArchiveResponse, request, requestBlob, ApiError, clearAuthOn401 } from "./client";
+import { csrfToken } from "@/lib/authFlow";
 import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
@@ -14,10 +15,8 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/v1/upload");
     xhr.timeout = 10 * 60 * 1000; // 10 min — large files over LAN
-    if (typeof window !== "undefined") {
-      const token = localStorage.getItem("ag_token");
-      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    }
+    const csrf = csrfToken();
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
@@ -1168,8 +1167,8 @@ export async function authMe(): Promise<AuthUser> {
   return request<AuthUser>("/api/v1/auth/me");
 }
 
-export async function authChangePassword(currentPassword: string, newPassword: string): Promise<AuthTokenResponse> {
-  return request<AuthTokenResponse>("/api/v1/auth/change-password", {
+export async function authChangePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean; must_change_password: boolean }> {
+  return request<{ ok: boolean; must_change_password: boolean }>("/api/v1/auth/browser/change-password", {
     method: "POST",
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   });

@@ -3,7 +3,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
-import { clearToken, loadUser, loginAndLoadUser, saveToken, storedToken, type AuthUser } from "@/lib/authFlow";
+import { clearLegacyToken, loadUser, loginAndLoadUser, logoutBrowser, type AuthUser } from "@/lib/authFlow";
 
 const ME_QUERY_KEY = ["me"] as const;
 
@@ -11,12 +11,12 @@ export type { AuthUser } from "@/lib/authFlow";
 
 interface AuthContextValue {
   user: AuthUser | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<AuthUser>;
-  updateAccessToken: (token: string) => Promise<void>;
-  logout: () => void;
+  refreshUser: () => Promise<void>;
+  authUnavailable: boolean;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -24,57 +24,53 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [authUnavailable, setAuthUnavailable] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Validate token on mount
   useEffect(() => {
-    const stored = storedToken();
-    if (!stored) {
-      setIsLoading(false);
-      return;
-    }
-    // Verify with backend
-    loadUser(stored)
-      .then((data: AuthUser) => {
+    clearLegacyToken();
+    loadUser()
+      .then((data) => {
         queryClient.setQueryData(ME_QUERY_KEY, data);
-        setToken(stored);
         setUser(data);
       })
-      .catch(() => {
+      .catch(async (error: Error & { status?: number }) => {
+        if (error.status === 503) {
+          setAuthUnavailable(true);
+          return;
+        }
         queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        clearToken();
+        await logoutBrowser().catch(() => {});
       })
       .finally(() => setIsLoading(false));
   }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
-    const { token: accessToken, user: me } = await loginAndLoadUser(username, password);
+    const me = await loginAndLoadUser(username, password);
 
     clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    saveToken(accessToken);
-    setToken(accessToken);
     setUser(me);
     return me;
   }, [queryClient]);
 
-  const updateAccessToken = useCallback(async (nextToken: string) => {
-    const me = await loadUser(nextToken);
+  const refreshUser = useCallback(async () => {
+    const me = await loadUser();
     if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    saveToken(nextToken);
-    setToken(nextToken);
     setUser(me);
   }, [queryClient, user?.id]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await logoutBrowser();
+    } catch {
+      setAuthUnavailable(true);
+      return;
+    }
     clearPrivateDiscoveryCache(queryClient);
     queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-    clearToken();
-    // Clean up batch import state so re-login doesn't recover stale jobs
     try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
-    setToken(null);
     setUser(null);
   }, [queryClient]);
 
@@ -82,11 +78,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        token,
         isAuthenticated: !!user,
         isLoading,
         login,
-        updateAccessToken,
+        refreshUser,
+        authUnavailable,
         logout,
       }}
     >

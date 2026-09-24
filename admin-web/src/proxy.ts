@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { resolveLegacyAdminRoute } from "@/lib/adminRoutes";
 
-const TOKEN_COOKIE = "ag_token";
+const TOKEN_COOKIE = "ag_session";
 const LOGIN = "/admin/login";
 
 const PUBLIC_PREFIXES = [
@@ -49,9 +49,6 @@ export function proxy(request: NextRequest) {
   }
 
   if (isPublicPath(pathname)) {
-    if (pathname === LOGIN && token) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
     return NextResponse.next();
   }
 
@@ -67,7 +64,7 @@ export function proxy(request: NextRequest) {
 export const config = {
   // "/" is included explicitly: the homepage now renders real content
   // (Task 4) instead of an unconditional server redirect into "/admin", so
-  // it needs the same ag_token gate every /admin/* route gets — without
+  // it needs the same session cookie gate every /admin/* route gets — without
   // this the root path bypasses the middleware function entirely.
   matcher: ["/", "/admin/:path*"],
 };

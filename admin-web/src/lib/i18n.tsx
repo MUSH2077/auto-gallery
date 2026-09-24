@@ -47,6 +47,8 @@ const zh: Record<string, string> = {
   // Auth
   "auth.login": "登录",
   "auth.logout": "退出登录",
+  "auth.session_unavailable": "登录服务暂时不可用，请稍后重试。",
+  "auth.retry": "重试",
   "auth.username": "用户名",
   "auth.password": "密码",
   "auth.show_password": "显示密码",
@@ -3239,6 +3241,8 @@ function buildEn(): Record<string, string> {
     // Auth
     "auth.login": "Sign In",
     "auth.logout": "Sign Out",
+    "auth.session_unavailable": "Sign-in service is temporarily unavailable. Please try again later.",
+    "auth.retry": "Retry",
     "auth.username": "Username",
     "auth.password": "Password",
     "auth.show_password": "Show password",

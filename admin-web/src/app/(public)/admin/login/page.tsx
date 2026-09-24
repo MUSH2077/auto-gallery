@@ -4,7 +4,7 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
-import { AuthUserLookupError, clearToken, loadUser, loginAndLoadUser, saveToken, storedToken } from "@/lib/authFlow";
+import { AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser, logoutBrowser } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -45,14 +45,17 @@ export default function LoginPage() {
       document.documentElement.classList.toggle("dark", resolveTheme(initialTheme) === "dark");
     } catch {}
 
-    const token = storedToken();
-    if (!token) return;
-    loadUser(token)
+    clearLegacyToken();
+    if (!csrfToken()) return;
+    loadUser()
       .then((user) => {
         router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
       })
-      .catch(() => clearToken());
-  }, [router]);
+      .catch((error: Error & { status?: number }) => {
+        if (error.status === 503) setError(copy.sessionUnavailable);
+        else void logoutBrowser().catch(() => {});
+      });
+  }, [router, copy.sessionUnavailable]);
 
   const changeLang = () => {
     const next = lang === "zh" ? "en" : "zh";
@@ -73,8 +76,7 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const { token, user: authUser } = await loginAndLoadUser(username, password);
-      saveToken(token);
+      const authUser = await loginAndLoadUser(username, password);
       if (authUser.must_change_password) {
         router.replace(adminRoutes.profile);
       } else {
@@ -82,7 +84,7 @@ export default function LoginPage() {
       }
     } catch (err: unknown) {
       const message = err instanceof AuthUserLookupError
-        ? copy.invalidCredentials
+        ? err.status === 503 ? copy.sessionUnavailable : copy.invalidCredentials
         : err instanceof Error ? err.message : copy.invalidCredentials;
       setError(message);
     } finally {

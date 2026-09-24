@@ -73,11 +73,11 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
   }];
 
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "scheduler-fixture-token",
     domain: "127.0.0.1",
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript((language) => {
     localStorage.setItem("ag_token", "scheduler-fixture-token");
     localStorage.setItem("auto-gallery-lang", language);
@@ -427,7 +427,7 @@ test("cancelled batch remains tracked and refreshes final details after cleanup"
   await expect(page.getByText("Publication stopped; child cleanup is still running")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Current sync batch" })).toBeVisible();
   await expect.poll(() => fixture.taskReads(), { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
-  await expect.poll(() => fixture.wsTicketReads(), { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => fixture.wsTicketReads(), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
   await expect(page.getByText("Publication stopped; child cleanup is still running")).toHaveCount(0);
   await expect(page.getByText("2 cancelled", { exact: true })).toBeVisible();
   await expect(page.getByText("Cancelled after cleanup completed", { exact: true })).toBeVisible();

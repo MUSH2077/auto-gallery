@@ -123,11 +123,11 @@ async function installRoutes(
   theme: "dark" | "light" = "dark",
 ) {
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "reference-list-token",
     domain: acceptanceHost,
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript((selectedTheme) => {
     localStorage.setItem("ag_token", "reference-list-token");
     localStorage.setItem("auto-gallery-lang", "en");

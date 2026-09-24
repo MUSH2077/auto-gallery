@@ -5,10 +5,10 @@ const me = { id: 1, username: "admin", display_name: "Admin", is_admin: true, is
 const workbench = { updated_at: "2026-09-08T00:00:00Z", queue: { default: 0, scheduled: 0, failed: 0, active_download_count: 0, active_import_count: 0, failed_download_count: 0, failed_import_count: 0, stale_download_count: 0, stale_import_count: 0, stale_count: 0 }, scheduler: { enabled: true, mode: "interval", timezone: "UTC", scan_interval_minutes: 60 }, storage: { disk_total_bytes: 1, disk_free_bytes: 1, disk_used_bytes: 0, risk_level: "ok" }, health: {}, attention: { auth_unhealthy_count: 0, failed_download_count: 0, failed_import_count: 0, stale_job_count: 0, low_disk_warning: false, scheduler_disabled_warning: false }, recent: { download_jobs: [], import_jobs: [], works: [], successful_syncs: [] } };
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-test("backup delete retains its dialog on failure and download sends bearer", async ({ context, page }) => {
-  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+test("backup delete retains its dialog on failure and download uses the browser session", async ({ context, page }) => {
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
-  let deletes = 0; let downloadAuth = ""; let downloads = 0; const unhandled: string[] = [];
+  let deletes = 0; let downloadAuth = ""; let downloadCookie = ""; let downloads = 0; const unhandled: string[] = [];
   await context.route("**/api/v1/**", async (route) => {
     const req = route.request(); const url = new URL(req.url()); const path = url.pathname;
     if (path === "/api/v1/auth/me") return json(route, me);
@@ -17,7 +17,7 @@ test("backup delete retains its dialog on failure and download sends bearer", as
     if (path.includes("/latest")) return json(route, { current: null, snapshot: null });
     if (path === "/api/v1/admin/backup/safe.tar.gz" && req.method() === "DELETE") { deletes += 1; return deletes === 1 ? json(route, { detail: "Backup is in use" }, 409) : json(route, { status: "ok", message: "deleted" }); }
     if (path === "/api/v1/admin/backup/download") {
-      downloadAuth = req.headers()["authorization"] || ""; downloads += 1;
+      downloadAuth = req.headers()["authorization"] || ""; downloadCookie = req.headers()["cookie"] || ""; downloads += 1;
       if (downloads === 1) return route.fulfill({ status: 200, headers: { "Content-Type": "application/gzip", "Content-Disposition": "attachment; filename=server-safe.tar.gz" }, body: "bytes" });
       if (downloads === 2) return json(route, { status: "error", message: "No backups available" });
       if (downloads === 3) return route.fulfill({ status: 200, headers: { "Content-Type": "text/html" }, body: "<h1>gateway</h1>" });
@@ -48,7 +48,8 @@ test("backup delete retains its dialog on failure and download sends bearer", as
     HTMLAnchorElement.prototype.click = function click() { (window as any).__downloads.push({ filename: this.download, href: this.href }); };
   });
   await page.getByRole("button", { name: "Download" }).click();
-  await expect.poll(() => downloadAuth).toBe("Bearer fixture");
+  await expect.poll(() => downloadCookie).toContain("ag_session=fixture");
+  expect(downloadAuth).toBe("");
   await expect.poll(() => page.evaluate(() => (window as any).__downloads)).toEqual([{ type: "application/gzip", size: 5 }, { filename: "server-safe.tar.gz", href: "blob:fixture" }]);
   await page.getByRole("button", { name: "Download" }).click();
   await expect(page.getByText("No backups available")).toBeVisible();

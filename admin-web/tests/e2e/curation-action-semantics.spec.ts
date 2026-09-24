@@ -61,7 +61,7 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function auth(context: BrowserContext, principal = me) {
   const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
-  await context.addCookies([{ name: "ag_token", value: "fixture", url: baseUrl }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", url: baseUrl }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");

@@ -129,7 +129,7 @@ type Fixture = {
 
 async function openFixture(browser: Browser, pathname: string, isAdmin: boolean, subscriptionActive = true): Promise<Fixture> {
   const context = await browser.newContext();
-  await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");

@@ -8,6 +8,10 @@ import jwt
 from jwt import InvalidTokenError
 
 from app.config import settings
+from app.services.browser_sessions import (
+    SESSION_COOKIE, SessionStoreUnavailable, browser_origin, load_browser_session,
+    password_fingerprint, verify_browser_csrf,
+)
 
 # ── Password hashing ──────────────────────────────────────────────────────────
 ALGORITHM = "HS256"
@@ -64,19 +68,42 @@ async def get_admin_key(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
-    """Require Bearer JWT token for admin APIs."""
+    """Resolve an explicit Bearer token or a revocable browser session."""
     if credentials and credentials.credentials:
         payload = decode_access_token_payload(credentials.credentials)
-        if not payload:
+        if not payload or not payload.get("sub"):
             raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+        if payload.get("pwd_chg_required") and request.url.path not in (
+            "/api/v1/auth/change-password", "/api/v1/auth/me"
+        ):
+            raise HTTPException(status_code=403, detail="Password change required")
+        return payload["sub"]
 
-        username = payload.get("sub")
-        if username:
-            if payload.get("pwd_chg_required") and request.url.path not in ("/api/v1/auth/change-password", "/api/v1/auth/me"):
-                raise HTTPException(status_code=403, detail="Password change required")
-            return username
-
-    raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    if request.headers.get("authorization"):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    try:
+        browser_session = await load_browser_session(token)
+    except SessionStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Browser session service unavailable") from exc
+    if browser_session is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    user = await _load_active_user_by_id(browser_session.user_id)
+    if password_fingerprint(user.password_hash) != browser_session.password_fingerprint:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    if user.must_change_password and request.url.path not in (
+        "/api/v1/auth/browser/change-password", "/api/v1/auth/me"
+    ):
+        raise HTTPException(status_code=403, detail="Password change required")
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        browser_origin(request)
+        verify_browser_csrf(request, browser_session)
+    request.state.auth_user = user
+    request.state.browser_session = browser_session
+    request.state.browser_session_token = token
+    return user.username
 
 
 # Dependency alias
@@ -84,6 +111,17 @@ RequireAdmin = Depends(get_admin_key)
 
 
 # ── Per-user permission dependencies ──────────────────────────────────────────
+
+async def _load_active_user_by_id(user_id: int):
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models.user import User
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    return user
+
 
 async def _load_active_user(username: str):
     from sqlalchemy import select
@@ -100,20 +138,9 @@ async def require_docs_admin(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
-    """Authenticate the human-facing API contract without weakening APIs.
-
-    Swagger/ReDoc can be opened from the signed-in admin browser via the
-    existing ``ag_token`` cookie. Programmatic schema clients may instead send
-    the same JWT as a Bearer token. Business endpoints continue to accept
-    Bearer authentication only, avoiding cookie-authenticated mutations.
-    """
-    token = credentials.credentials if credentials and credentials.credentials else request.cookies.get("ag_token")
-    payload = decode_access_token_payload(token) if token else None
-    if not payload or not payload.get("sub"):
-        raise HTTPException(status_code=401, detail="Administrator authentication required")
-    if payload.get("pwd_chg_required"):
-        raise HTTPException(status_code=403, detail="Password change required")
-    user = await _load_active_user(payload["sub"])
+    """Authenticate API documentation using the shared auth resolver."""
+    username = await get_admin_key(request, credentials)
+    user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Administrator access required")
     return user
@@ -125,7 +152,7 @@ def RequirePermission(module: str):
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         username = await get_admin_key(request, credentials)  # existing 401 + pwd-change logic
-        user = await _load_active_user(username)
+        user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
         if user.is_admin or module in (user.permissions or []):
             return user
         raise HTTPException(status_code=403, detail=f"Missing permission: {module}")
@@ -150,7 +177,7 @@ def RequireAnyPermission(*modules: str):
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
         username = await get_admin_key(request, credentials)
-        user = await _load_active_user(username)
+        user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
         if user.is_admin or any(module in (user.permissions or []) for module in required):
             return user
         raise HTTPException(status_code=403, detail=f"Missing any permission: {', '.join(required)}")
@@ -163,7 +190,7 @@ async def _admin_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     username = await get_admin_key(request, credentials)
-    user = await _load_active_user(username)
+    user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     return user

@@ -60,17 +60,17 @@ const WORKBENCH = {
 
 test("an idle admin tab makes no more than four recurring API requests per minute", async ({ context, page }) => {
   let recurringRequests = 0;
-  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+  await context.routeWebSocket("**/api/v1/ws*", (webSocket) => {
     webSocket.send(JSON.stringify({ type: "connected" }));
   });
   await context.addCookies([
     {
-      name: "ag_token",
+      name: "ag_session",
       value: "performance-token",
       domain: "127.0.0.1",
       path: "/",
     },
-  ]);
+  { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "performance-token");
     localStorage.setItem("auto-gallery-lang", "en");

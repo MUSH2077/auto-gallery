@@ -183,15 +183,15 @@ async function installDashboardRoutes(
     calls?: string[];
   } = {},
 ) {
-  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+  await context.routeWebSocket("**/api/v1/ws*", (webSocket) => {
     webSocket.send(JSON.stringify({ type: "connected" }));
   });
   await context.addCookies([{
-    name: "ag_token",
+    name: "ag_session",
     value: "dashboard-test-token",
     domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname,
     path: "/",
-  }]);
+  }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     window.localStorage.setItem("ag_token", "dashboard-test-token");
     window.localStorage.setItem("auto-gallery-lang", "en");
@@ -267,8 +267,12 @@ test("root route sends unauthenticated users to login and login lands on dashboa
   });
   await context.route("**/api/v1/**", async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/auth/login") {
-      return route.fulfill({ json: { access_token: "fresh-login-token", token_type: "bearer" } });
+    if (path === "/api/v1/auth/browser/login") {
+      await context.addCookies([
+        { name: "ag_session", value: "fresh-login-session", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+        { name: "ag_csrf", value: "fresh-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+      ]);
+      return route.fulfill({ json: { ok: true } });
     }
     if (path === "/api/v1/auth/me") return route.fulfill({ json: ADMIN });
     if (path === "/api/v1/system/workbench") return route.fulfill({ json: WORKBENCH });
@@ -297,15 +301,23 @@ test("root route sends unauthenticated users to login and login lands on dashboa
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
 });
 
-test("failed user lookup after login does not persist the returned token", async ({ context, page }) => {
+test("failed user lookup after login clears the browser session", async ({ context, page }) => {
   await context.addInitScript(() => {
     localStorage.removeItem("ag_token");
     localStorage.setItem("auto-gallery-lang", "zh");
   });
   await context.route("**/api/v1/**", async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/auth/login") {
-      return route.fulfill({ json: { access_token: "unusable-token", token_type: "bearer" } });
+    if (path === "/api/v1/auth/browser/login") {
+      await context.addCookies([
+        { name: "ag_session", value: "unusable-session", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+        { name: "ag_csrf", value: "unusable-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
+      ]);
+      return route.fulfill({ json: { ok: true } });
+    }
+    if (path === "/api/v1/auth/browser/logout") {
+      await context.clearCookies();
+      return route.fulfill({ json: { ok: true } });
     }
     if (path === "/api/v1/auth/me") {
       return route.fulfill({ status: 401, json: { detail: "Invalid token" } });
@@ -320,7 +332,41 @@ test("failed user lookup after login does not persist the returned token", async
   await expect(page).toHaveURL(/\/admin\/login/);
   await expect(page.locator("p[role=alert]")).toContainText("用户名或密码错误");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("ag_token"))).toBeNull();
-  expect((await context.cookies()).some((cookie) => cookie.name === "ag_token")).toBe(false);
+  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(false);
+});
+
+test("expired browser session clears cookies without redirecting back from login", async ({ context, page }) => {
+  const origin = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
+  await context.addCookies([
+    { name: "ag_session", value: "expired-session", url: origin },
+    { name: "ag_csrf", value: "expired-csrf", url: origin },
+  ]);
+  await context.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/auth/me") return route.fulfill({ status: 401, json: { detail: "Expired" } });
+    if (path === "/api/v1/auth/browser/logout") {
+      await context.clearCookies();
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fulfill({ status: 501, json: { detail: "Unhandled fixture" } });
+  });
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/admin\/login/);
+  await expect(page.getByTestId("login-hero")).toBeVisible();
+  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(false);
+});
+
+test("session store outage keeps the cookie and displays a retryable error", async ({ context, page }) => {
+  const origin = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
+  await context.addCookies([{ name: "ag_session", value: "still-present", url: origin }]);
+  await context.addInitScript(() => localStorage.setItem("auto-gallery-lang", "en"));
+  await context.route("**/api/v1/auth/me", (route) => route.fulfill({
+    status: 503, json: { detail: "Browser session service unavailable" },
+  }));
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("alert")).toContainText("Sign-in service is temporarily unavailable");
+  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(true);
 });
 
 test("root route redirects authenticated users to the dashboard", async ({ context, page }) => {

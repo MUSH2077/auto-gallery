@@ -24,12 +24,12 @@ type ViewportTier = "mobile" | "mid" | "wide";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const t = useT();
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading, authUnavailable, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && pathname !== "/admin/login") {
+    if (!isLoading && !isAuthenticated && !authUnavailable && pathname !== "/admin/login") {
       router.replace("/admin/login");
       return;
     }
@@ -42,7 +42,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     ) {
       router.replace(adminRoutes.profile);
     }
-  }, [isAuthenticated, isLoading, pathname, router, user?.must_change_password]);
+  }, [isAuthenticated, isLoading, authUnavailable, pathname, router, user?.must_change_password]);
 
   if (isLoading) {
     return (
@@ -53,6 +53,13 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  if (authUnavailable) {
+    return <div role="alert" className="m-8 rounded border p-6">
+      {t("auth.session_unavailable")}
+      <button type="button" className="btn-primary ml-4" onClick={() => window.location.reload()}>{t("auth.retry")}</button>
+    </div>;
   }
 
   if (!isAuthenticated && pathname !== "/admin/login") return null;

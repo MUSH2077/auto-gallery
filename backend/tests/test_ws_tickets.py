@@ -34,3 +34,12 @@ def test_ws_ticket_rejects_missing_or_unknown_ticket(monkeypatch):
 
     assert ws_tickets.consume_ws_ticket("") is None
     assert ws_tickets.consume_ws_ticket("missing") is None
+
+
+def test_browser_ticket_carries_session_and_is_consumed_once(monkeypatch):
+    redis = _FakeRedis()
+    monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
+    ticket, ttl = ws_tickets.issue_ws_ticket("alice", "opaque-session")
+    assert ttl == 30
+    assert ws_tickets.consume_ws_ticket(ticket) == ws_tickets.BrowserTicket("alice", "opaque-session")
+    assert ws_tickets.consume_ws_ticket(ticket) is None

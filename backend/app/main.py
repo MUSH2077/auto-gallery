@@ -427,6 +427,8 @@ async def lifespan(app: FastAPI):
         await health_aggregation_task
     except asyncio.CancelledError:
         pass
+    from app.services.browser_sessions import close_browser_session_store
+    await close_browser_session_store()
     await engine.dispose()
     logger.info("backend stopped")
 

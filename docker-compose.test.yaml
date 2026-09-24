@@ -27,6 +27,7 @@ services:
       RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-shadow}
       GITLLERY_PROJECTION_MODE: shadow
       CORS_ORIGINS: http://127.0.0.1:${ADMIN_WEB_PORT}
+      BROWSER_SESSION_ORIGINS: http://127.0.0.1:${ADMIN_WEB_PORT}
   worker-download:
     restart: "no"
     labels: *test-labels
