@@ -3,28 +3,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
+import { clearToken, loadUser, loginAndLoadUser, saveToken, storedToken, type AuthUser } from "@/lib/authFlow";
 
-const TOKEN_KEY = "ag_token";
 const ME_QUERY_KEY = ["me"] as const;
 
-function setTokenCookie(token: string) {
-  if (typeof document === "undefined") return;
-  document.cookie = `${TOKEN_KEY}=${token}; path=/; SameSite=Lax; max-age=${7 * 24 * 60 * 60}`;
-}
-
-function clearTokenCookie() {
-  if (typeof document === "undefined") return;
-  document.cookie = `${TOKEN_KEY}=; path=/; max-age=0`;
-}
-
-export interface AuthUser {
-  id: number;
-  username: string;
-  display_name: string | null;
-  must_change_password: boolean;
-  // Server-side preferences blob (whole-replace shape from `/me`).
-  preferences?: Record<string, unknown> | null;
-}
+export type { AuthUser } from "@/lib/authFlow";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -46,19 +29,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Validate token on mount
   useEffect(() => {
-    const stored = typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+    const stored = storedToken();
     if (!stored) {
       setIsLoading(false);
       return;
     }
     // Verify with backend
-    fetch("/api/v1/auth/me", {
-      headers: { Authorization: `Bearer ${stored}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("invalid");
-        return res.json();
-      })
+    loadUser(stored)
       .then((data: AuthUser) => {
         queryClient.setQueryData(ME_QUERY_KEY, data);
         setToken(stored);
@@ -66,52 +43,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {
         queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        localStorage.removeItem(TOKEN_KEY);
-        clearTokenCookie();
+        clearToken();
       })
       .finally(() => setIsLoading(false));
   }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
-    const res = await fetch("/api/v1/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || "Login failed");
-    }
-    const data = await res.json();
-    const accessToken: string = data.access_token;
-
-    // Fetch user info
-    const meRes = await fetch("/api/v1/auth/me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const me: AuthUser = await meRes.json();
+    const { token: accessToken, user: me } = await loginAndLoadUser(username, password);
 
     clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    localStorage.setItem(TOKEN_KEY, accessToken);
-    setTokenCookie(accessToken);
+    saveToken(accessToken);
     setToken(accessToken);
     setUser(me);
     return me;
   }, [queryClient]);
 
   const updateAccessToken = useCallback(async (nextToken: string) => {
-    const meRes = await fetch("/api/v1/auth/me", {
-      headers: { Authorization: `Bearer ${nextToken}` },
-    });
-    if (!meRes.ok) {
-      throw new Error("Failed to refresh session");
-    }
-    const me: AuthUser = await meRes.json();
+    const me = await loadUser(nextToken);
     if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
-    localStorage.setItem(TOKEN_KEY, nextToken);
-    setTokenCookie(nextToken);
+    saveToken(nextToken);
     setToken(nextToken);
     setUser(me);
   }, [queryClient, user?.id]);
@@ -119,8 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     clearPrivateDiscoveryCache(queryClient);
     queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-    localStorage.removeItem(TOKEN_KEY);
-    clearTokenCookie();
+    clearToken();
     // Clean up batch import state so re-login doesn't recover stale jobs
     try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
     setToken(null);

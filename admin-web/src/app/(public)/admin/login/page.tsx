@@ -4,6 +4,7 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
+import { AuthUserLookupError, clearToken, loadUser, loginAndLoadUser, saveToken, storedToken } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -44,18 +45,13 @@ export default function LoginPage() {
       document.documentElement.classList.toggle("dark", resolveTheme(initialTheme) === "dark");
     } catch {}
 
-    const token = localStorage.getItem("ag_token");
+    const token = storedToken();
     if (!token) return;
-    fetch("/api/v1/auth/me", { headers: { Authorization: `Bearer ${token}` } })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("invalid");
-        const user = await response.json();
+    loadUser(token)
+      .then((user) => {
         router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
       })
-      .catch(() => {
-        localStorage.removeItem("ag_token");
-        document.cookie = "ag_token=; path=/; max-age=0";
-      });
+      .catch(() => clearToken());
   }, [router]);
 
   const changeLang = () => {
@@ -77,30 +73,18 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/v1/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || copy.invalidCredentials);
-      }
-      const { access_token: accessToken } = await response.json();
-      const meResponse = await fetch("/api/v1/auth/me", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!meResponse.ok) throw new Error(copy.invalidCredentials);
-      const authUser = await meResponse.json();
-      localStorage.setItem("ag_token", accessToken);
-      document.cookie = `ag_token=${accessToken}; path=/; SameSite=Lax; max-age=${7 * 24 * 60 * 60}`;
+      const { token, user: authUser } = await loginAndLoadUser(username, password);
+      saveToken(token);
       if (authUser.must_change_password) {
         router.replace(adminRoutes.profile);
       } else {
         router.replace(adminRoutes.dashboard);
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : copy.invalidCredentials);
+      const message = err instanceof AuthUserLookupError
+        ? copy.invalidCredentials
+        : err instanceof Error ? err.message : copy.invalidCredentials;
+      setError(message);
     } finally {
       setLoading(false);
     }
