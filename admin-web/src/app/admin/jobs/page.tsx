@@ -2,7 +2,7 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -31,6 +31,9 @@ import { actionErrorReason, actionReason, clearRepeatSyncIntent, createRepeatSyn
 import { secureRandomUuid } from "@/lib/random";
 import { BatchByFilter } from "@/components/BatchByFilter";
 import { usePermissions } from "@/lib/usePermissions";
+import { aggregateTaskGroup, buildTaskTree, flattenTaskNode, isAttentionStatus, taskRunProgress, type TaskNode } from "@/lib/jobTree";
+import { useJobsRouteState } from "@/lib/useJobsRouteState";
+import type { JobsTab } from "@/lib/jobsRoute";
 
 const TaskDetailDrawer = dynamic(
   () => import("@/components/JobDrawers").then((module) => module.TaskDetailDrawer),
@@ -52,7 +55,6 @@ const STATUS_OPTIONS = ["", "enqueued", "downloading", "paused", "downloaded", "
 const IMPORT_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "failed", "stale"];
 const TASK_STATUS_OPTIONS = ["", "enqueued", "running", "paused", "recovering", "failed", "stale"];
 const SOURCE_OPTIONS = ["", "pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
-type JobsTab = "all" | "downloads" | "imports" | "admin";
 type BatchAction = "retry" | "pause" | "resume" | "cancel" | "delete";
 type UtilityOutcome = {
   kind: "clear" | "retry_all";
@@ -84,10 +86,6 @@ function isActiveImport(status: string) {
 
 function isActiveTask(status: string) {
   return ["enqueued", "running", "recovering"].includes(status);
-}
-
-function isAttentionStatus(status: string) {
-  return ["enqueued", "running", "recovering", "downloading", "downloaded", "importing", "failed", "stale"].includes(status);
 }
 
 function fallbackProgress(stage: string): JobProgress {
@@ -520,72 +518,6 @@ function JobsBatchToolbar({
   );
 }
 
-type TaskNode = {
-  task: TaskRun;
-  children: TaskNode[];
-};
-
-function taskRunProgress(task: TaskRun): JobProgress | null {
-  const progress = task.progress_data as JobProgress | null;
-  if (progress) return progress;
-  if (!task.progress_stage) return null;
-  return {
-    stage: task.progress_stage,
-    current: task.progress_current || undefined,
-    total: task.progress_total || undefined,
-  };
-}
-
-function flattenTaskNode(node: TaskNode): TaskRun[] {
-  return [node.task, ...node.children.flatMap(flattenTaskNode)];
-}
-
-function buildTaskTree(tasks: TaskRun[]): TaskNode[] {
-  const nodes = new Map<string, TaskNode>();
-  for (const task of tasks) nodes.set(task.id, { task, children: [] });
-  const roots: TaskNode[] = [];
-  for (const task of tasks) {
-    const node = nodes.get(task.id)!;
-    const parent = task.parent_task_id ? nodes.get(task.parent_task_id) : null;
-    if (parent && parent.task.id !== task.id) parent.children.push(node);
-    else roots.push(node);
-  }
-  return roots;
-}
-
-function aggregateTaskGroup(node: TaskNode): { status: string; progress: JobProgress | null; active: number; failed: number; complete: number; total: number } {
-  const tasks = flattenTaskNode(node).filter((task) => task.id !== node.task.id);
-  if (!tasks.length) {
-    return {
-      status: node.task.status,
-      progress: taskRunProgress(node.task),
-      active: 0,
-      failed: 0,
-      complete: node.task.status === "complete" ? 1 : 0,
-      total: 1,
-    };
-  }
-  const failed = tasks.filter((task) => ["failed", "stale", "cancelled"].includes(task.status)).length;
-  const active = tasks.filter((task) => isAttentionStatus(task.status) && !["failed", "stale", "cancelled"].includes(task.status)).length;
-  const complete = tasks.filter((task) => task.status === "complete").length;
-  const total = tasks.length;
-  const status = failed > 0 ? "failed" : active > 0 ? "running" : complete === total ? "complete" : node.task.status;
-  return {
-    status,
-    progress: {
-      stage: status,
-      current: complete,
-      total,
-      percent: total ? (complete / total) * 100 : undefined,
-      message: `${complete}/${total}`,
-    },
-    active,
-    failed,
-    complete,
-    total,
-  };
-}
-
 function TaskRunRow({
   task,
   batchMode,
@@ -1009,22 +941,11 @@ function JobsContent() {
       }
     },
   });
-  const router = useRouter();
-  const pathname = usePathname();
-  const sp = useSearchParams();
-
-  const tabParam = sp.get("tab");
-  const activeTab = (tabParam === "downloads" || tabParam === "imports" || tabParam === "admin" ? tabParam : "all") as JobsTab;
-  const subscriptionSourceId = sp.get("subscription_source_id") || "";
-  const downloadJobId = sp.get("download_job_id") || "";
-  const search = sp.get("q") || "";
-  const rawPage = Number.parseInt(sp.get("page") || "1", 10);
-  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
-  const taskOffset = (page - 1) * SEARCH_PAGE_SIZE;
-  const selectedDownloadJobId = sp.get("job");
-  const selectedImportJobId = sp.get("import_job");
-  const selectedTaskId = sp.get("task");
-  const selectedJobId = selectedTaskId ? null : selectedImportJobId || selectedDownloadJobId;
+  const {
+    activeTab, subscriptionSourceId, downloadJobId, search, page, taskOffset,
+    selectedDownloadJobId, selectedImportJobId, selectedTaskId, selectedJobId,
+    updateParams, openTaskDetail, openDownloadDetail, openImportDetail, closeDetail,
+  } = useJobsRouteState();
   const taskDrawerVisited = useRef(false);
   const jobDrawerVisited = useRef(false);
   if (selectedTaskId) taskDrawerVisited.current = true;
@@ -1046,19 +967,6 @@ function JobsContent() {
     setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
   }, [user?.id]);
 
-  const updateParams = (updates: Record<string, string | null>, replace = true) => {
-    const next = new URLSearchParams(sp.toString());
-    Object.entries(updates).forEach(([key, value]) => {
-      if (!value) next.delete(key); else next.set(key, value);
-    });
-    const href = next.toString() ? `${pathname}?${next.toString()}` : pathname;
-    if (replace) router.replace(href, { scroll: false }); else router.push(href, { scroll: false });
-  };
-
-  const openTaskDetail = (id: string) => updateParams({ task: id, job: null, import_job: null }, false);
-  const openDownloadDetail = (id: string) => updateParams({ tab: "downloads", job: id, import_job: null, task: null }, false);
-  const openImportDetail = (id: string) => updateParams({ tab: "imports", import_job: id, job: null, task: null }, false);
-  const closeDetail = () => updateParams({ job: null, import_job: null, task: null });
   const searchAssist = useQuery({
     queryKey: ["search-assist", "tasks", search],
     queryFn: () => api.assistSearch({ before_cursor: search, scope: "tasks" }),
