@@ -4,7 +4,7 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
-import { clearToken, loadUser, loginAndLoadUser, saveToken, storedToken } from "@/lib/authFlow";
+import { AuthUserLookupError, clearToken, loadUser, loginAndLoadUser, saveToken, storedToken } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -81,7 +81,10 @@ export default function LoginPage() {
         router.replace(adminRoutes.dashboard);
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : copy.invalidCredentials);
+      const message = err instanceof AuthUserLookupError
+        ? copy.invalidCredentials
+        : err instanceof Error ? err.message : copy.invalidCredentials;
+      setError(message);
     } finally {
       setLoading(false);
     }

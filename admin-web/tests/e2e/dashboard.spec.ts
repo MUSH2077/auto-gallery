@@ -300,7 +300,7 @@ test("root route sends unauthenticated users to login and login lands on dashboa
 test("failed user lookup after login does not persist the returned token", async ({ context, page }) => {
   await context.addInitScript(() => {
     localStorage.removeItem("ag_token");
-    localStorage.setItem("auto-gallery-lang", "en");
+    localStorage.setItem("auto-gallery-lang", "zh");
   });
   await context.route("**/api/v1/**", async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
@@ -314,10 +314,11 @@ test("failed user lookup after login does not persist the returned token", async
   });
 
   await page.goto("/admin/login");
-  await page.getByLabel("Username").fill("admin");
-  await page.getByLabel("Password", { exact: true }).fill("test-password");
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.getByLabel("用户名").fill("admin");
+  await page.getByLabel("密码", { exact: true }).fill("test-password");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/login/);
+  await expect(page.locator("p[role=alert]")).toContainText("用户名或密码错误");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("ag_token"))).toBeNull();
   expect((await context.cookies()).some((cookie) => cookie.name === "ag_token")).toBe(false);
 });

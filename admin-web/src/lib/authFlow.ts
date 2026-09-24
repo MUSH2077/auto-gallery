@@ -3,6 +3,8 @@
 const TOKEN_KEY = "ag_token";
 const TOKEN_COOKIE_AGE_SECONDS = 7 * 24 * 60 * 60;
 
+export class AuthUserLookupError extends Error {}
+
 export interface AuthUser {
   id: number;
   username: string;
@@ -29,7 +31,7 @@ export async function loadUser(token: string): Promise<AuthUser> {
   const response = await fetch("/api/v1/auth/me", {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!response.ok) throw new Error("Invalid or expired login");
+  if (!response.ok) throw new AuthUserLookupError("Invalid or expired login");
   return response.json() as Promise<AuthUser>;
 }
 
