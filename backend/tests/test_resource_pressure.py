@@ -420,8 +420,10 @@ def test_foreground_p95_always_requires_three_new_slow_evaluations(monkeypatch):
 def test_foreground_latency_recorder_excludes_derivative_progress(monkeypatch):
     from app.services import resource_pressure as pressure_module
 
-    monkeypatch.setattr(pressure_module, "_foreground_latencies", pressure_module.deque(maxlen=4096))
-    monkeypatch.setattr(pressure_module, "_foreground_latency_generation", 0)
+    from app.services import resource_pressure_sampling
+
+    monkeypatch.setattr(resource_pressure_sampling, "_foreground_latencies", pressure_module.deque(maxlen=4096))
+    monkeypatch.setattr(resource_pressure_sampling, "_foreground_latency_generation", 0)
 
     pressure_module.record_foreground_latency("/api/v1/works", 100.0)
     pressure_module.record_foreground_latency(
@@ -1187,9 +1189,11 @@ def test_backend_cgroup_warning_forces_shared_health_snapshot_publish(monkeypatc
 
     redis = _FakeRedis()
     machine = ResourcePressureStateMachine(PressureThresholds())
-    monkeypatch.setattr(pressure_module, "_last_published_signature", None)
-    monkeypatch.setattr(pressure_module, "_last_published_at", 0.0)
-    monkeypatch.setattr(pressure_module, "_last_publish_client_id", None)
+    from app.services import resource_pressure_snapshot
+
+    monkeypatch.setattr(resource_pressure_snapshot, "_last_published_signature", None)
+    monkeypatch.setattr(resource_pressure_snapshot, "_last_published_at", 0.0)
+    monkeypatch.setattr(resource_pressure_snapshot, "_last_publish_client_id", None)
 
     assert pressure_module.publish_resource_pressure_snapshot(
         machine.update(_sample(), now=0), redis
