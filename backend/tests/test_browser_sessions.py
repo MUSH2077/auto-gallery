@@ -274,6 +274,18 @@ async def test_websocket_requires_origin_and_live_single_use_session(store, monk
     await ws_api.websocket_endpoint(valid)
     assert manager.connected == 1
 
+    class PasswordChanged(Socket):
+        async def receive_json(self):
+            user.password_hash = "hash-changed"
+            return {"action": "ping"}
+        async def send_json(self, _data):
+            pass
+
+    changed = PasswordChanged(origin="http://test", ticket="ticket")
+    await ws_api.websocket_endpoint(changed)
+    assert changed.closed == [4001]
+    user.password_hash = "hash-1"
+
     await browser_sessions.revoke_browser_session(token)
     revoked = Socket(origin="http://test", ticket="ticket")
     await ws_api.websocket_endpoint(revoked)

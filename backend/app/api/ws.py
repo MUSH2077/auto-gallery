@@ -18,7 +18,7 @@ from app.services.ws_manager import manager
 logger = logging.getLogger(__name__)
 
 # No router-level RequireAdmin — WebSocket upgrades cannot send custom headers.
-# Admin auth is validated inline in the handler via JWT cookie payload.
+# Task permission and the session-bound ticket are validated in the handler.
 router = APIRouter()
 
 
@@ -79,6 +79,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     break
                 if current is None:
                     await websocket.close(code=4001, reason="Browser session expired")
+                    break
+                try:
+                    user = await _load_active_user_by_id(current.user_id)
+                    valid = (
+                        user.username == username
+                        and password_fingerprint(user.password_hash) == current.password_fingerprint
+                        and not user.must_change_password
+                        and await manager.is_current_tasks_user(username)
+                    )
+                except HTTPException:
+                    valid = False
+                if not valid:
+                    await websocket.close(code=4001, reason="Browser session invalid")
                     break
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
