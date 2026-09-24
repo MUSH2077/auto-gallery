@@ -1,6 +1,6 @@
 "use client";
 import { ReactNode } from "react";
-import { EmptyState } from "@/components";
+import EmptyState from "@/components/EmptyState";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
 

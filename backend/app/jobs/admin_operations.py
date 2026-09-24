@@ -520,6 +520,8 @@ async def _execute_registered_admin_operation(
         return await _run_curation_backfill_operation(task_id, options)
     if operation_type == "admin-gitllery-verify":
         return await _run_gitllery_verify_operation(task_id, options)
+    if operation_type == "admin-gitllery-build":
+        return await _run_gitllery_build_operation(task_id, options)
     if operation_type == "admin-gitllery-sync":
         return await _run_gitllery_sync_operation(task_id, options)
     if operation_type == "hierarchy-delete":
@@ -1287,12 +1289,40 @@ def run_gitllery_verify_operation(job_id: str, options: dict | None = None) -> d
     return asyncio.run(_run_gitllery_verify_operation(job_id, options or {}))
 
 
+def run_gitllery_build_operation(job_id: str, options: dict | None = None) -> dict:
+    return asyncio.run(_run_gitllery_build_operation(job_id, options or {}))
+
+
+async def _run_gitllery_build_operation(job_id: str, options: dict) -> dict:
+    """Resume one durable side-by-side build until it reaches staged state."""
+
+    from app.services.gitllery.builds import GitlleryBuildService
+
+    build_id = str(options.get("build_id") or "")
+    if not build_id:
+        raise ValueError("Gitllery build operation requires build_id")
+    await update_current_admin_operation_progress(
+        job_id,
+        {"phase": "running", "label": "Building Gitllery generation"},
+    )
+    async with async_session() as db:
+        build = await GitlleryBuildService(db).run(build_id)
+        return {
+            "build_id": str(build.id),
+            "state": build.state,
+            "generation": build.generation,
+            "stats": build.stats or {},
+        }
+
+
 async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
     from uuid import UUID
     from app.services.gitllery import GitlleryService
     from app.services.tasks import TaskService
 
     repository_id = str(options.get("repository_id") or "")
+    build_id = str(options.get("build_id") or "")
+    verification_id = str(options.get("verification_id") or "")
     deep = bool(options.get("deep"))
     registered = current_admin_operation_attempt() is not None
     running_progress = {
@@ -1321,10 +1351,28 @@ async def _run_gitllery_verify_operation(job_id: str, options: dict) -> dict:
     )
     try:
         async with async_session() as db:
-            result = await GitlleryService(db).verify_segment_repository(
-                repository_id,
-                deep=deep,
-            )
+            if verification_id:
+                from app.services.gitllery.builds import GitlleryBuildService
+
+                result = await GitlleryBuildService(db).run_verification(
+                    verification_id
+                )
+            elif build_id:
+                from app.services.gitllery.builds import GitlleryBuildService
+
+                result = await GitlleryBuildService(db).verify(
+                    build_id,
+                    evidence=options.get("evidence") or {},
+                )
+            elif repository_id:
+                result = await GitlleryService(db).verify_segment_repository(
+                    repository_id,
+                    deep=deep,
+                )
+            else:
+                from app.services.gitllery.builds import GitlleryBuildService
+
+                result = await GitlleryBuildService(db).verify_library(deep=deep)
         status = "complete" if result["ok"] else "failed"
         if not registered:
             async with async_session() as db:

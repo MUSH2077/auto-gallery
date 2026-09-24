@@ -1,17 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { pushPreferences } from "@/lib/preferencesSync";
 
 export type WorkPreviewDelayMs = 150 | 250 | 400;
 export type WorkPreviewSize = "medium" | "large" | "fit";
 export type WorkPreviewWheelSensitivity = "normal" | "relaxed";
+export type WorksViewMode = "grid" | "list" | "masonry";
+export type WorkCardSize = "small" | "medium" | "large";
 
 export interface AppearanceSettings {
   workPreviewEnabled: boolean;
   workPreviewDelayMs: WorkPreviewDelayMs;
   workPreviewSize: WorkPreviewSize;
   workPreviewWheelSensitivity: WorkPreviewWheelSensitivity;
+  worksViewMode: WorksViewMode;
+  workCardSize: WorkCardSize;
+  workCardShowCheckbox: boolean;
+  workCardShowAi: boolean;
+  workCardShowNsfw: boolean;
+  workCardShowFavorite: boolean;
+  blurNsfw: boolean;
 }
 
 export const APPEARANCE_STORAGE_KEY = "auto-gallery-appearance-v1";
@@ -23,6 +32,13 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   workPreviewDelayMs: 250,
   workPreviewSize: "large",
   workPreviewWheelSensitivity: "normal",
+  worksViewMode: "grid",
+  workCardSize: "medium",
+  workCardShowCheckbox: true,
+  workCardShowAi: true,
+  workCardShowNsfw: true,
+  workCardShowFavorite: true,
+  blurNsfw: true,
 };
 
 function isPreviewDelay(value: unknown): value is WorkPreviewDelayMs {
@@ -37,7 +53,15 @@ function isWheelSensitivity(value: unknown): value is WorkPreviewWheelSensitivit
   return value === "normal" || value === "relaxed";
 }
 
-function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
+function isWorksViewMode(value: unknown): value is WorksViewMode {
+  return value === "grid" || value === "list" || value === "masonry";
+}
+
+function isWorkCardSize(value: unknown): value is WorkCardSize {
+  return value === "small" || value === "medium" || value === "large";
+}
+
+export function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
   if (!value || typeof value !== "object") return DEFAULT_APPEARANCE_SETTINGS;
   const raw = value as Partial<AppearanceSettings>;
   return {
@@ -47,6 +71,13 @@ function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
     workPreviewWheelSensitivity: isWheelSensitivity(raw.workPreviewWheelSensitivity)
       ? raw.workPreviewWheelSensitivity
       : DEFAULT_APPEARANCE_SETTINGS.workPreviewWheelSensitivity,
+    worksViewMode: isWorksViewMode(raw.worksViewMode) ? raw.worksViewMode : DEFAULT_APPEARANCE_SETTINGS.worksViewMode,
+    workCardSize: isWorkCardSize(raw.workCardSize) ? raw.workCardSize : DEFAULT_APPEARANCE_SETTINGS.workCardSize,
+    workCardShowCheckbox: typeof raw.workCardShowCheckbox === "boolean" ? raw.workCardShowCheckbox : DEFAULT_APPEARANCE_SETTINGS.workCardShowCheckbox,
+    workCardShowAi: typeof raw.workCardShowAi === "boolean" ? raw.workCardShowAi : DEFAULT_APPEARANCE_SETTINGS.workCardShowAi,
+    workCardShowNsfw: typeof raw.workCardShowNsfw === "boolean" ? raw.workCardShowNsfw : DEFAULT_APPEARANCE_SETTINGS.workCardShowNsfw,
+    workCardShowFavorite: typeof raw.workCardShowFavorite === "boolean" ? raw.workCardShowFavorite : DEFAULT_APPEARANCE_SETTINGS.workCardShowFavorite,
+    blurNsfw: typeof raw.blurNsfw === "boolean" ? raw.blurNsfw : DEFAULT_APPEARANCE_SETTINGS.blurNsfw,
   };
 }
 
@@ -71,12 +102,17 @@ function writeAppearanceSettings(settings: AppearanceSettings) {
 
 export function useAppearanceSettings() {
   const [settings, setSettingsState] = useState<AppearanceSettings>(() => readAppearanceSettings());
+  const settingsRef = useRef(settings);
 
   useEffect(() => {
-    const applyCurrent = () => setSettingsState(readAppearanceSettings());
+    const apply = (next: AppearanceSettings) => {
+      settingsRef.current = next;
+      setSettingsState(next);
+    };
+    const applyCurrent = () => apply(readAppearanceSettings());
     const onCustom = (event: Event) => {
       const detail = (event as CustomEvent<AppearanceSettings>).detail;
-      setSettingsState(sanitizeAppearanceSettings(detail));
+      apply(sanitizeAppearanceSettings(detail));
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === APPEARANCE_STORAGE_KEY || event.key === LEGACY_WORK_PREVIEW_KEY) applyCurrent();
@@ -91,14 +127,14 @@ export function useAppearanceSettings() {
   }, []);
 
   const updateSettings = useCallback((patch: Partial<AppearanceSettings>) => {
-    setSettingsState((current) => {
-      const next = sanitizeAppearanceSettings({ ...current, ...patch });
-      try { writeAppearanceSettings(next); } catch {}
-      return next;
-    });
+    const next = sanitizeAppearanceSettings({ ...settingsRef.current, ...patch });
+    settingsRef.current = next;
+    setSettingsState(next);
+    try { writeAppearanceSettings(next); } catch {}
   }, []);
 
   const resetSettings = useCallback(() => {
+    settingsRef.current = DEFAULT_APPEARANCE_SETTINGS;
     setSettingsState(DEFAULT_APPEARANCE_SETTINGS);
     try { writeAppearanceSettings(DEFAULT_APPEARANCE_SETTINGS); } catch {}
   }, []);

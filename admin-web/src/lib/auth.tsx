@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
 
 const TOKEN_KEY = "ag_token";
+const ME_QUERY_KEY = ["me"] as const;
 
 function setTokenCookie(token: string) {
   if (typeof document === "undefined") return;
@@ -59,15 +60,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return res.json();
       })
       .then((data: AuthUser) => {
+        queryClient.setQueryData(ME_QUERY_KEY, data);
         setToken(stored);
         setUser(data);
       })
       .catch(() => {
+        queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
         localStorage.removeItem(TOKEN_KEY);
         clearTokenCookie();
       })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
     const res = await fetch("/api/v1/auth/login", {
@@ -89,6 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const me: AuthUser = await meRes.json();
 
     clearPrivateDiscoveryCache(queryClient);
+    queryClient.setQueryData(ME_QUERY_KEY, me);
     localStorage.setItem(TOKEN_KEY, accessToken);
     setTokenCookie(accessToken);
     setToken(accessToken);
@@ -105,6 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const me: AuthUser = await meRes.json();
     if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
+    queryClient.setQueryData(ME_QUERY_KEY, me);
     localStorage.setItem(TOKEN_KEY, nextToken);
     setTokenCookie(nextToken);
     setToken(nextToken);
@@ -113,6 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     clearPrivateDiscoveryCache(queryClient);
+    queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
     localStorage.removeItem(TOKEN_KEY);
     clearTokenCookie();
     // Clean up batch import state so re-login doesn't recover stale jobs

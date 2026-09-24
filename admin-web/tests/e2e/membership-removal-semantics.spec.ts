@@ -71,6 +71,23 @@ const repositoryDetail = {
   work_total: 0,
 };
 
+const creator = {
+  id: "creator-0001",
+  name: "Fixture Creator",
+  display_name: "Fixture Creator",
+  description: null,
+  is_active: true,
+  is_favorite: false,
+  danbooru_artist_id: null,
+  last_synced_at: null,
+  repository_count: 1,
+  source_count: 1,
+  subscription_count: 1,
+  thumbnail_url: null,
+  created_at: NOW,
+  updated_at: NOW,
+};
+
 const preview = (entityType: "subscription" | "repository") => ({
   entity_type: entityType,
   entity_ids: [entityType === "subscription" ? SUBSCRIPTION_ID : REPOSITORY_ID],
@@ -139,6 +156,7 @@ async function openFixture(browser: Browser, pathname: string, isAdmin: boolean,
     if (path === "/api/v1/download-jobs") return json(route, []);
     if (path === "/api/v1/sources") return json(route, []);
     if (path === "/api/v1/creators") return json(route, []);
+    if (path === `/api/v1/creators/${creator.id}`) return json(route, creator);
     if (path === "/api/v1/search/name-anchors") return json(route, { scope: "subscriptions", direction: "asc", total: 1, items: [] });
 
     if (path === "/api/v1/search" && method === "GET") {

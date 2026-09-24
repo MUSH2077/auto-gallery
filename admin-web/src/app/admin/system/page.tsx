@@ -11,6 +11,7 @@ import { api, queryKeys } from "@/lib/api";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
+import { pollInterval } from "@/lib/polling";
 
 type SystemTab = "services" | "sources";
 
@@ -83,7 +84,8 @@ export default function SystemPage() {
     queryKey: queryKeys.health,
     queryFn: api.health,
     enabled: canViewServices && activeTab === "services",
-    refetchInterval: canViewServices && activeTab === "services" ? 15000 : false,
+    refetchInterval: canViewServices && activeTab === "services" ? () => pollInterval(false) : false,
+    refetchIntervalInBackground: false,
   });
   const sources = useQuery({
     queryKey: queryKeys.sources,
@@ -392,6 +394,8 @@ export default function SystemPage() {
               {health.data && (
                 <p className="mt-4 text-xs text-muted">
                   {t("system_health.version")} {health.data.version}
+                  {" · "}
+                  {t("system_health.build_revision")} {health.data.build_revision}
                   {" · "}
                   {t("system_health.last_update")}{" "}
                   {health.dataUpdatedAt

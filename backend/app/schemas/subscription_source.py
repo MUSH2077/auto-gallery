@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -38,6 +39,8 @@ class SubscriptionSourceRead(BaseModel):
     last_attempted_at: datetime | None = None
     next_sync_at: datetime | None = None
     auth_status: str | None = None
+    auth_state: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+    credential_state: Literal["ready", "missing", "not_required", "unknown"] = "unknown"
     auth_error_reason: str | None = None
     last_auth_checked_at: datetime | None = None
     created_at: datetime

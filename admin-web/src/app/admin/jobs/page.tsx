@@ -1,23 +1,49 @@
 "use client";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Suspense, useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useT, type TFunction } from "@/lib/i18n";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, JobProgress, queryKeys, SEARCH_PAGE_SIZE, TaskRun, type SearchToken } from "@/lib/api";
-import { PageHeader, PageShell, Pagination, EmptyState, ErrorState, ConfirmDialog, SourceBadge, RealProgressBar, StatusBadge, PermissionGuard, CompactUrl, ErrorSummary, OverflowText, RowActionMenu, SmartSearchInput, SyncOutcomeNotice } from "@/components";
-import { TaskDetailDrawer, JobDetailDrawer, shortId } from "@/components/JobDrawers";
-import { useJobWebSocket } from "@/lib/useWebSocket";
+import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
+import Pagination from "@/components/Pagination";
+import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import SourceBadge from "@/components/SourceBadge";
+import { RealProgressBar } from "@/components/RealProgressBar";
+import StatusBadge from "@/components/StatusBadge";
+import PermissionGuard from "@/components/PermissionGuard";
+import { CompactUrl, ErrorSummary, OverflowText } from "@/components/OverflowText";
+import RowActionMenu from "@/components/RowActionMenu";
+import { SmartSearchInput } from "@/components/SmartSearchInput";
+import { SyncOutcomeNotice } from "@/components/SyncOutcomeBadge";
+import { useJobEvents } from "@/lib/useWebSocket";
 import { statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { classifyJob, categoryBorderClass, estimatedRetryBackoff } from "@/lib/jobCategory";
-import { POLL_ACTIVE_MS as REFETCH_ACTIVE_MS, POLL_IDLE_MS as REFETCH_IDLE_MS } from "@/lib/polling";
+import { pollInterval } from "@/lib/polling";
 import { useStaggeredEntrance, type StaggeredEntranceProps } from "@/lib/motion";
 import { parseSyncOutcome } from "@/lib/syncOutcome";
 import { actionErrorReason, actionReason, clearRepeatSyncIntent, createRepeatSyncIntent, hasTaskAction, listRepeatSyncIntents, partitionTaskAction, readRepeatSyncIntent, reconcileTaskBulkResult, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance, type RepeatSyncIntent, type TaskAction, type TaskBulkSubmission } from "@/lib/task-actions";
 import { secureRandomUuid } from "@/lib/random";
 import { BatchByFilter } from "@/components/BatchByFilter";
 import { usePermissions } from "@/lib/usePermissions";
+
+const TaskDetailDrawer = dynamic(
+  () => import("@/components/JobDrawers").then((module) => module.TaskDetailDrawer),
+  { ssr: false },
+);
+const JobDetailDrawer = dynamic(
+  () => import("@/components/JobDrawers").then((module) => module.JobDetailDrawer),
+  { ssr: false },
+);
+
+function shortId(id?: string | null) {
+  return id ? id.slice(0, 8) : "-";
+}
 
 
 const JOB_LIST_LIMIT = 200;
@@ -298,7 +324,14 @@ function JobRowShell({
       : <OverflowText value={detail} className="text-xs text-muted" />
     : detail || <span className="text-xs text-muted">—</span>;
   return (
-    <div className={entrance?.className} style={entrance?.style}>
+    <div
+      className={entrance?.className}
+      style={{
+        ...entrance?.style,
+        contentVisibility: "auto",
+        containIntrinsicSize: "auto 68px",
+      }}
+    >
       <div
         onClick={onClick}
         className={`card min-h-[68px] w-full min-w-0 cursor-pointer p-3 text-sm transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
@@ -943,7 +976,7 @@ function JobsContent() {
   }, []);
 
   // WebSocket: invalidate queries on status change, update progress on progress events
-  useJobWebSocket({
+  useJobEvents({
     onStatusChange: (msg) => {
       const terminal = ["complete", "cancelled", "resolved", "acknowledged"].includes(msg.new_status || "");
       if (terminal && msg.task_id) {
@@ -961,10 +994,6 @@ function JobsContent() {
         qc.setQueriesData({ queryKey: queryKeys.tasks.all }, removeCompleted);
         toast.info(t("jobs.completed_hidden"));
       }
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      qc.invalidateQueries({ queryKey: ["workbench"] });
       if (msg.task_id && msg.new_status && !terminal) {
         triggerFlash(msg.task_id);
         toast.info(`${msg.task_id.slice(0, 8)}: ${msg.old_status} → ${msg.new_status}`);
@@ -995,6 +1024,11 @@ function JobsContent() {
   const selectedDownloadJobId = sp.get("job");
   const selectedImportJobId = sp.get("import_job");
   const selectedTaskId = sp.get("task");
+  const selectedJobId = selectedTaskId ? null : selectedImportJobId || selectedDownloadJobId;
+  const taskDrawerVisited = useRef(false);
+  const jobDrawerVisited = useRef(false);
+  if (selectedTaskId) taskDrawerVisited.current = true;
+  if (selectedJobId) jobDrawerVisited.current = true;
 
   const [retryId, setRetryId] = useState<string | null>(null);
   const [repeatId, setRepeatId] = useState<string | null>(null);
@@ -1088,17 +1122,14 @@ function JobsContent() {
     queryKey: [...queryKeys.downloadJobs.all, dlParams],
     queryFn: () => api.listDownloadJobs(dlParams),
     enabled: activeTab === "downloads",
-    refetchInterval: (!status || isActiveDownload(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: false,
   });
 
   const workbench = useQuery({
     queryKey: queryKeys.workbench,
     queryFn: api.workbench,
     enabled: has("system"),
-    refetchInterval: (query) => {
-      const active = (query.state.data?.queue.active_download_count || 0) + (query.state.data?.queue.active_import_count || 0);
-      return active > 0 ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS;
-    },
+    refetchInterval: false,
   });
 
   const imports = useQuery({
@@ -1112,7 +1143,7 @@ function JobsContent() {
       limit: JOB_LIST_LIMIT,
     }),
     enabled: activeTab === "imports",
-    refetchInterval: (!status || isActiveImport(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: false,
   });
   const downloadEntrance = useStaggeredEntrance((downloads.data ?? []).map((job) => job.id));
   const importEntrance = useStaggeredEntrance((imports.data?.items ?? []).map((job) => job.id));
@@ -1126,13 +1157,16 @@ function JobsContent() {
       limit: SEARCH_PAGE_SIZE,
     }),
     enabled: activeTab === "all" || activeTab === "admin",
-    refetchInterval: (!status || isActiveTask(status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: false,
   });
 
   const summaryTasks = useQuery({
     queryKey: [...queryKeys.tasks.all, "actionable-summary"],
     queryFn: () => api.listTasks({ visibility: "actionable", offset: 0, limit: JOB_LIST_LIMIT }),
-    refetchInterval: (query) => (query.state.data?.items || []).some((task) => isActiveTask(task.status)) ? REFETCH_ACTIVE_MS : REFETCH_IDLE_MS,
+    refetchInterval: (query) => pollInterval(
+      (query.state.data?.items || []).some((task) => isActiveTask(task.status)),
+    ),
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
@@ -1778,7 +1812,7 @@ function JobsContent() {
         </div>
       </details>}
 
-      <TaskDetailDrawer
+      {taskDrawerVisited.current && <TaskDetailDrawer
         id={selectedTaskId}
         onClose={closeDetail}
         onRetryTask={(id) => retryTask.mutate(id)}
@@ -1787,11 +1821,11 @@ function JobsContent() {
         actionPending={retryTask.isPending}
         actionError={retryTask.error}
         onRepeatAccepted={openDownloadDetail}
-      />
+      />}
 
-      <JobDetailDrawer
+      {jobDrawerVisited.current && <JobDetailDrawer
         kind={selectedImportJobId ? "import" : "download"}
-        id={selectedTaskId ? null : selectedImportJobId || selectedDownloadJobId}
+        id={selectedJobId}
         onClose={closeDetail}
         onRetryDownload={(id) => retryDL.mutate(id)}
         onPauseDownload={(id) => pauseDL.mutate(id)}
@@ -1802,7 +1836,7 @@ function JobsContent() {
         onDeleteImport={(id) => { setDeleteId(id); setDeleteType("im"); }}
         actionPending={retryDL.isPending || pauseDL.isPending || resumeDL.isPending || retryIM.isPending}
         actionError={retryDL.error || pauseDL.error || resumeDL.error || retryIM.error}
-      />
+      />}
 
       {repeatId && (
         <ConfirmDialog open title={t("jobs.repeat_sync_title")} message={t("jobs.repeat_sync_confirm")}

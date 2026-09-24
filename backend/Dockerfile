@@ -1,6 +1,9 @@
 ARG PYTHON_BASE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 FROM ${PYTHON_BASE}
 
+ARG BUILD_REVISION=development
+LABEL org.opencontainers.image.revision="${BUILD_REVISION}"
+
 WORKDIR /app
 
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
@@ -59,6 +62,7 @@ RUN mkdir -p /downloads /library /gallerydl-config /app-config
 # - PYTHONMALLOC=malloc: use system malloc (lower RSS than pymalloc for multi-process)
 # - PYTHONHASHSEED=0: disable hash randomization (saves a few KB per process)
 ENV PYTHONMALLOC=malloc \
+    BUILD_REVISION=${BUILD_REVISION} \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

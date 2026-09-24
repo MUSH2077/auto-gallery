@@ -263,6 +263,19 @@ def load_gallerydl_config() -> dict:
     return ensure_gallerydl_config()
 
 
+def read_gallerydl_config(path: Path | None = None) -> dict:
+    """Read the effective config without repairing or creating it on disk.
+
+    Read-only status paths use this variant so an ordinary dashboard request
+    cannot turn into a configuration write.  Explicit configuration and job
+    preparation flows continue to use :func:`load_gallerydl_config`.
+    """
+
+    config = _read_gallerydl_config(path or gallerydl_config_path())
+    merged, _changed = apply_gallerydl_defaults(config)
+    return merged
+
+
 def _deep_merge_missing(base: Any, fallback: Any) -> Any:
     """Return base with missing values filled from fallback; base/user wins."""
     if not isinstance(base, dict) or not isinstance(fallback, dict):

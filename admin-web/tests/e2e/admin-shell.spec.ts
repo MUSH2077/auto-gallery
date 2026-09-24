@@ -205,6 +205,9 @@ const NAVIGATION_SELECTION_MATRIX = [
 ] as const;
 
 async function installFixtureRoutes(context: BrowserContext) {
+  await context.routeWebSocket("**/api/v1/ws", (webSocket) => {
+    webSocket.send(JSON.stringify({ type: "connected" }));
+  });
   await context.addCookies([{
     name: "ag_token",
     value: "ui-test-token",

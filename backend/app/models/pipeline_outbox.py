@@ -144,6 +144,10 @@ class GitlleryProjectionTarget(TimestampMixin, Base):
             "commit_created_at",
             "commit_id",
         ),
+        Index(
+            "ix_gitllery_projection_targets_intent_id",
+            "intent_id",
+        ),
     )
 
     intent_id: Mapped[UUID] = mapped_column(
@@ -219,6 +223,11 @@ class GitlleryBuild(TimestampMixin, Base):
         CheckConstraint(
             "state IN ('pending', 'running', 'staged', 'complete', 'failed', 'cancelled')",
             name="ck_gitllery_build_state",
+        ),
+        Index(
+            "ix_gitllery_builds_recent",
+            text("created_at DESC"),
+            text("id DESC"),
         ),
     )
 

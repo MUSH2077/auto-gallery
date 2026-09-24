@@ -276,6 +276,8 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
             data-testid="slideshow-backdrop"
             src={currentVisual.url}
             alt=""
+            loading="eager"
+            decoding="async"
             className="no-outline absolute inset-[-5%] h-[110%] w-[110%] scale-110 object-cover opacity-35 blur-3xl"
             aria-hidden="true"
           />
@@ -286,7 +288,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
 
         {previousVisual ? (
           <div className="slide-layer absolute inset-0 flex items-center justify-center opacity-0" aria-hidden="true">
-            <img src={previousVisual.url} alt="" className="no-outline max-h-[calc(100vh-8rem)] max-w-full object-contain" />
+            <img src={previousVisual.url} alt="" loading="eager" decoding="async" className="no-outline max-h-[calc(100vh-8rem)] max-w-full object-contain" />
           </div>
         ) : null}
 
@@ -299,6 +301,8 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
             <img
               src={currentVisual.url}
               alt={currentVisual.item.title || ""}
+              loading="eager"
+              decoding="async"
               className={`no-outline h-full w-full object-contain drop-shadow-2xl ${kenBurns && !currentVisual.videoPoster ? "slide-kenburns" : ""}`}
               style={kenBurns && !currentVisual.videoPoster ? ({ "--slide-dwell": `${config.slideDwellMs}ms` } as CSSProperties) : undefined}
               onError={() => void navigateTo(indexRef.current, true)}

@@ -36,6 +36,7 @@ export function EntityRow({
   className = "",
   positionInSet,
   setSize,
+  deferOffscreen = true,
 }: {
   children: ReactNode;
   label: string;
@@ -45,6 +46,7 @@ export function EntityRow({
   className?: string;
   positionInSet?: number;
   setSize?: number;
+  deferOffscreen?: boolean;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -60,7 +62,13 @@ export function EntityRow({
       aria-posinset={positionInSet}
       aria-setsize={setSize}
       className={entrance?.className}
-      style={entrance?.style}
+      style={{
+        ...entrance?.style,
+        ...(deferOffscreen ? {
+          contentVisibility: "auto",
+          containIntrinsicSize: "auto 72px",
+        } : {}),
+      }}
     >
       <div
         role="link"

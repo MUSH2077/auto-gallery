@@ -281,6 +281,12 @@ bash scripts/deploy.sh
 
 ## Rollback
 
+For the authentication, queue, frontend, and Gitllery maintenance release, use
+the ordered gates and observation checklists in
+[Stability and performance rollout](stability-performance-rollout.md). The
+24-hour Gitllery gate and seven-day soak are operational evidence and cannot be
+closed by build-time tests.
+
 ### Git-based rollback
 
 ```bash

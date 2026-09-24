@@ -18,6 +18,8 @@ type:subscription is:never-synced
 kind:download status:failed source:pixiv
 is:due -source:x
 posted:>=2026-01-01 posted:<2026-07-01 sort:posted-desc
+sort:heat-desc
+sort:random
 ```
 
 - Plain Unicode words are full-text terms. Quote values that contain spaces.
@@ -49,7 +51,7 @@ posted:>=2026-01-01 posted:<2026-07-01 sort:posted-desc
 | Operations | `status:`, `kind:`, `source:`, `repo:` |
 | Scheduler | `is:due\|blocked\|waiting\|manual\|disabled` |
 | Dates | `posted:`, `created:`, `updated:`, `synced:` with `<`, `<=`, `=`, `>=`, `>` |
-| Sorting | `sort:relevance\|posted-desc\|posted-asc\|created-desc\|created-asc\|updated-desc\|updated-asc\|name-asc\|name-desc\|usage-desc\|last-sync-desc\|last-sync-asc` |
+| Sorting | `sort:relevance\|heat-desc\|random\|posted-desc\|posted-asc\|created-desc\|created-asc\|updated-desc\|updated-asc\|title-asc\|title-desc\|name-asc\|name-desc\|usage-desc\|last-sync-desc\|last-sync-asc` |
 
 The first version intentionally has no explicit `OR`, parentheses, or
 side-effect commands. Search input can only navigate or filter.
@@ -60,6 +62,7 @@ side-effect commands. Search input can only navigate or filter.
 
 ```http
 GET /api/v1/search?q=type%3Awork%20tag%3A%22landscape%22&scope=global&offset=0&limit=20
+GET /api/v1/search?q=sort%3Arandom&scope=works&limit=30&seed=1234567890
 GET /api/v1/search/name-anchors?scope=creators&q=sort%3Aname-asc
 POST /api/v1/search/assist
 Content-Type: application/json
@@ -91,6 +94,24 @@ non-name-sorted queries.
 and optional server-composed replacements. Invalid dates, incompatible
 qualifiers, conflicting states, unknown values, and ambiguous identities
 return positional diagnostics.
+
+Work relevance is available only when the query contains plain full-text
+terms. `sort:heat-desc` uses a materialized, source-aware score: fresh official
+rankings take precedence within their source, while unranked works use
+age-cohort native engagement and stable tie breaking. Missing metrics sort
+last and never trigger provider calls from a list request. `sort:random` uses a
+stable UUID-derived hash ring; pass the same non-negative 32-bit `seed` to keep
+pagination, return navigation, and shared links deterministic. Changing the
+seed starts a new order. Random cursors are bound to the normalized query,
+permission scope, sort, seed, ring phase, and boundary, so they cannot be reused
+across searches.
+
+作品相关度仅在查询含普通全文关键词时可用。`sort:heat-desc` 使用预先计算、区分来源的
+热度分数：来源内优先采用未过期的官方榜单，未上榜作品再按发布时间年龄段比较来源原生
+互动指标，并使用稳定规则处理同分。缺少指标的作品排在末尾，列表请求不会逐件访问外部
+平台。`sort:random` 使用由作品 UUID 派生的稳定哈希环；分页、返回或分享链接时传入相同的
+非负 32 位 `seed` 即可保持顺序，更换种子会生成新顺序。随机游标绑定规范化查询、权限、
+排序、种子、环形阶段和边界，不能跨查询复用。
 
 `GET /api/v1/search` 返回 `canonical_query`、解析 token，以及分组后的
 `{total, items}`。全局结果包含作品、创作者、标签、仓库和订阅，并按权限裁剪。

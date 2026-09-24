@@ -84,6 +84,8 @@ class ControlListener:
         self._command: str | None = None
         self._reason: str | None = None
         self._thread: threading.Thread | None = None
+        self._pubsub_lock = threading.Lock()
+        self._pubsub: Any | None = None
 
     @property
     def command(self) -> str | None:
@@ -105,6 +107,34 @@ class ControlListener:
 
     def stop(self) -> None:
         self._stop_event.set()
+        # ``PubSub.listen()`` blocks while no command is arriving.  Closing the
+        # subscriber is what releases that socket back to the shared bounded
+        # Redis pool; setting the event alone can strand one connection per
+        # completed job indefinitely.
+        with self._pubsub_lock:
+            pubsub = self._pubsub
+            self._pubsub = None
+        if pubsub is not None:
+            try:
+                pubsub.close()
+            except Exception:
+                logger.debug(
+                    "Unable to close control subscriber for job %s",
+                    self.job_id,
+                    exc_info=True,
+                )
+        thread = self._thread
+        if (
+            thread is not None
+            and thread is not threading.current_thread()
+            and thread.is_alive()
+        ):
+            thread.join(timeout=1)
+            if thread.is_alive():
+                logger.warning(
+                    "Control listener for job %s did not stop within one second",
+                    self.job_id,
+                )
 
     def detach_process(self, expected_pid: int) -> bool:
         """Stop signalling one completed child, fenced by its known pid.
@@ -128,6 +158,11 @@ class ControlListener:
         channel = TaskChannel.control(self.job_id)
 
         try:
+            with self._pubsub_lock:
+                self._pubsub = pubsub
+                stopped_before_subscribe = self._stop_event.is_set()
+            if stopped_before_subscribe:
+                return
             pubsub.subscribe(channel)
             logger.debug("Control listener started for job %s", self.job_id)
 
@@ -161,12 +196,24 @@ class ControlListener:
                     self._stop_event.set()
                     break
 
+        except Exception:
+            if not self._stop_event.is_set():
+                logger.warning(
+                    "Control listener failed for job %s",
+                    self.job_id,
+                    exc_info=True,
+                )
         finally:
-            try:
-                pubsub.unsubscribe(channel)
-                pubsub.close()
-            except Exception:
-                pass
+            with self._pubsub_lock:
+                owns_pubsub = self._pubsub is pubsub
+                if owns_pubsub:
+                    self._pubsub = None
+            if owns_pubsub:
+                try:
+                    pubsub.unsubscribe(channel)
+                    pubsub.close()
+                except Exception:
+                    pass
 
     def _handle_pause(self) -> None:
         self._kill_process_group(signal.SIGTERM)

@@ -3,6 +3,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_thumb_sets_cache_control(tmp_path, monkeypatch):
+    from fastapi import Request
     from fastapi.responses import FileResponse
     from app.api import media
 
@@ -15,8 +16,62 @@ async def test_thumb_sets_cache_control(tmp_path, monkeypatch):
 
     monkeypatch.setattr(media, "_serve", fake_serve)
 
-    resp = await media.thumb("any-asset-id")
-    assert resp.headers["cache-control"] == "public, max-age=86400"
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    resp = await media.thumb("any-asset-id", request)
+    assert resp.headers["cache-control"] == "private, max-age=86400"
+    assert resp.headers["etag"].startswith('"any-asset-id-thumb-')
+
+
+@pytest.mark.asyncio
+async def test_thumb_returns_not_modified_for_matching_etag(tmp_path, monkeypatch):
+    from fastapi import Request
+    from fastapi.responses import FileResponse
+    from app.api import media
+
+    f = tmp_path / "t.webp"
+    f.write_bytes(b"fake-webp")
+
+    async def fake_serve(asset_id, size):
+        return FileResponse(str(f), media_type="image/webp")
+
+    monkeypatch.setattr(media, "_serve", fake_serve)
+    first = await media.thumb(
+        "any-asset-id",
+        Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+    )
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"if-none-match", first.headers["etag"].encode())],
+    })
+
+    resp = await media.thumb("any-asset-id", request)
+
+    assert resp.status_code == 304
+    assert resp.headers["cache-control"] == "private, max-age=86400"
+    assert resp.headers["etag"] == first.headers["etag"]
+
+
+@pytest.mark.asyncio
+async def test_thumb_conditional_request_still_verifies_resource(monkeypatch):
+    from fastapi import HTTPException, Request
+    from app.api import media
+
+    async def missing(_asset_id, _size):
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    monkeypatch.setattr(media, "_serve", missing)
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"if-none-match", b'"missing-thumb"')],
+    })
+
+    with pytest.raises(HTTPException) as error:
+        await media.thumb("missing", request)
+    assert error.value.status_code == 404
 
 
 @pytest.mark.asyncio

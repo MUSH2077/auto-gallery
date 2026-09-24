@@ -8,10 +8,10 @@ import type {
   AdminOperationSnapshotResponse,
   AdminOperationStatus,
 } from "@/lib/api/types";
+import { ADMIN_OPERATION_CONFIRM_MS, pollInterval } from "@/lib/polling";
 
 const ACTIVE_STATUSES = new Set(["enqueued", "running", "recovering", "paused"]);
 const RETRYABLE_STATUSES = new Set(["failed", "stale", "cancelled"]);
-const ADMIN_OPERATION_POLL_MS = 1_000;
 
 export interface AdminOperationController<TResult, TVariables = void> {
   operationType: string;
@@ -71,6 +71,7 @@ export function useAdminOperation<TResult, TVariables = void>({
   } | null>(null);
   const notifiedCompletion = useRef<string | null>(null);
   const reconciledTerminal = useRef<string | null>(null);
+  const confirmedRunningTasks = useRef<Set<string>>(new Set());
   const snapshotKey = useMemo(
     () => ["admin-operation-snapshot", operationType, scope] as const,
     [operationType, scope],
@@ -103,9 +104,10 @@ export function useAdminOperation<TResult, TVariables = void>({
     refetchInterval: (query) => {
       const task = query.state.data;
       return !task || ACTIVE_STATUSES.has(task.status)
-        ? ADMIN_OPERATION_POLL_MS
+        ? pollInterval(true)
         : false;
     },
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
   });
 
@@ -141,6 +143,9 @@ export function useAdminOperation<TResult, TVariables = void>({
           error: null,
         },
       );
+      void queryClient.invalidateQueries({
+        queryKey: ["admin-operation-task", accepted.task_id],
+      });
     },
     onError: () => {
       const target = pendingStartTarget.current;
@@ -205,6 +210,18 @@ export function useAdminOperation<TResult, TVariables = void>({
   });
 
   const task = taskQuery.data ?? null;
+  const refetchTask = taskQuery.refetch;
+  useEffect(() => {
+    if (!taskId || task?.status !== "running") return;
+    const confirmationKey = `${identity}:${taskId}`;
+    if (confirmedRunningTasks.current.has(confirmationKey)) return;
+    confirmedRunningTasks.current.add(confirmationKey);
+    const timer = window.setTimeout(() => {
+      void refetchTask();
+    }, ADMIN_OPERATION_CONFIRM_MS);
+    return () => window.clearTimeout(timer);
+  }, [identity, refetchTask, task?.status, taskId]);
+
   useEffect(() => {
     if (
       !taskId

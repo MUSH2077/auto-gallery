@@ -179,6 +179,8 @@ QUALIFIER_HELP: dict[str, tuple[str, str, str]] = {
 
 SORT_TARGETS: dict[str, frozenset[SearchTarget]] = {
     "relevance": frozenset(SCOPE_TARGETS["global"] + ("tasks", "scheduler")),
+    "heat-desc": frozenset({"works"}),
+    "random": frozenset({"works"}),
     "posted-desc": frozenset({"works"}),
     "posted-asc": frozenset({"works"}),
     "created-desc": frozenset({"works", "creators", "tags", "repositories", "subscriptions", "tasks"}),
@@ -598,6 +600,19 @@ def _validate_query(tokens: tuple[SearchToken, ...], scope: SearchScope) -> tupl
             end=token.end,
             token=_canonical_token(token),
         ))
+    if (
+        sort_tokens
+        and sort_tokens[0].value == "relevance"
+        and not any(isinstance(token, SearchTerm) for token in tokens)
+    ):
+        token = sort_tokens[0]
+        raise SearchQueryError(SearchDiagnostic(
+            code="relevance_requires_text",
+            message="Relevance sorting requires a text search term.",
+            start=token.start,
+            end=token.end,
+            token=_canonical_token(token),
+        ))
 
     if not allowed:
         token = qualifiers[0] if qualifiers else SearchTerm("", False, 0, 0)
@@ -707,7 +722,11 @@ def compose_search_query(
     if operation == "set":
         existing = [
             token for token in existing
-            if not (isinstance(token, SearchQualifier) and token.key == normalized_key)
+            if not (
+                isinstance(token, SearchQualifier)
+                and token.key == normalized_key
+                and token.negated == negated
+            )
         ]
         if probe:
             existing.append(probe)
@@ -755,6 +774,7 @@ def compose_search_query(
                 isinstance(token, SearchQualifier)
                 and token.key == normalized_key
                 and token.value in normalized_values
+                and token.negated == negated
             )
         ]
         if probe:

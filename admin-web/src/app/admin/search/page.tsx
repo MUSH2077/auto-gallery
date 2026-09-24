@@ -26,6 +26,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { useToast } from "@/components/Toast";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { usePermissions } from "@/lib/usePermissions";
+import { authHealthPresentation } from "@/lib/auth-health";
 
 type SearchTab = "all" | "work" | "creator" | "tag" | "repo" | "subscription";
 
@@ -362,7 +363,7 @@ function SearchContent() {
                           <span className="mt-1 block truncate text-xs text-muted">{repository.creator_name} · {repository.source_url || repository.source_creator_id}</span>
                           <span className="mt-1 block"><MatchedIdentityBadge identity={repository.matched_identity} /></span>
                         </span>
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${repository.auth_healthy ? "bg-success" : "bg-danger"}`} aria-hidden />
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${authHealthPresentation(repository).dotClass}`} aria-hidden />
                       </Link>
                     );
                   })}

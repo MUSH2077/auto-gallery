@@ -3,10 +3,9 @@
 import { Code2 } from "lucide-react";
 
 import { useT } from "@/lib/i18n";
+import { SOURCE_CODE_URL } from "@/lib/sourceCode";
 
-const DEFAULT_SOURCE_CODE_URL = "https://github.com/MUSH2077/auto-gallery";
-export const SOURCE_CODE_URL =
-  process.env.NEXT_PUBLIC_SOURCE_CODE_URL || DEFAULT_SOURCE_CODE_URL;
+export { SOURCE_CODE_URL } from "@/lib/sourceCode";
 
 export default function SourceCodeLink({
   compact = false,

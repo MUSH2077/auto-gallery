@@ -708,7 +708,7 @@ async def test_remote_account_delete_tombstones_imported_provenance_and_create_r
             assert binding.next_sync_at is None
             await db.refresh(canonical_source)
             assert canonical_source.is_enabled is False
-            assert canonical_source.auth_healthy is False
+            assert canonical_source.auth_healthy is True
             assert canonical_source.next_sync_at is None
             assert await select_eligible_membership_source(
                 db,
@@ -857,7 +857,7 @@ async def test_hard_deleted_account_binding_cannot_fall_back_to_legacy_null_auth
             assert binding.auth_error_reason == "Remote account deleted"
             assert binding.next_sync_at is None
             assert source.is_enabled is False
-            assert source.auth_healthy is False
+            assert source.auth_healthy is True
             assert source.next_sync_at is None
             assert await service.list() == []
             assert await select_eligible_membership_source(

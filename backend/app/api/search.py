@@ -21,6 +21,7 @@ from app.services.search import (
     SearchService,
 )
 from app.services.search_language import SCOPE_TARGETS, SearchQueryError
+from app.services.auth_health import classify_source_health
 
 _require_search = RequireAnyPermission("library", "curation", "subscriptions", "tasks", "upload")
 
@@ -87,6 +88,12 @@ async def search(
         None,
         description="Optional seek cursor for adjacent structured work pages",
     ),
+    seed: int | None = Query(
+        None,
+        ge=0,
+        le=4_294_967_295,
+        description="Stable random-order seed for work searches",
+    ),
     user: User = _require_search,
     db: AsyncSession = Depends(get_db),
 ):
@@ -120,6 +127,7 @@ async def search(
             permissions=_permissions(user),
             force_sfw=not user.nsfw_visible,
             cursor=cursor,
+            seed=seed,
             allowed_repository_ids=set(bindings_by_repository),
             user_id=user_id,
         )
@@ -169,12 +177,21 @@ async def search(
             if binding is None:
                 continue
             membership = memberships_by_subscription.get(binding.subscription_id)
+            health = (
+                classify_source_health(binding, membership)
+                if membership is not None
+                else None
+            )
             item.update(
                 {
                     "subscription_name": membership.name if membership else None,
                     "is_enabled": binding.is_enabled,
                     "auth_healthy": binding.auth_healthy,
                     "auth_status": binding.auth_status,
+                    "auth_state": health.auth_state if health else "unknown",
+                    "credential_state": (
+                        health.credential_state if health else "unknown"
+                    ),
                     "last_synced_at": (
                         binding.last_synced_at.isoformat()
                         if binding.last_synced_at

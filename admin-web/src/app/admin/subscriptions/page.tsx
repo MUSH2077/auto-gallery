@@ -19,6 +19,7 @@ import {
   referenceSessionStorageKey,
   referenceSortFromTokens,
 } from "@/lib/reference-list-state";
+import { pollInterval } from "@/lib/polling";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
 
@@ -273,8 +274,9 @@ function SubscriptionsContent() {
         queryKey: queryKeys.subscriptions.summaries(ids),
         queryFn: () => api.subscriptionSummaries(ids),
         enabled: visible && ids.length > 0,
-        refetchInterval: visible ? 15_000 : (false as const),
-        staleTime: 15_000,
+        refetchInterval: visible ? () => pollInterval(false) : (false as const),
+        refetchIntervalInBackground: false,
+        staleTime: 60_000,
       };
     }),
   });
@@ -611,6 +613,7 @@ function SubscriptionsContent() {
                 selected={selected.has(s.id)}
                 positionInSet={index + 1}
                 setSize={total}
+                deferOffscreen={false}
                 onOpen={() => {
                   persistListSession();
                   router.push(`/admin/subscriptions/${s.id}`);

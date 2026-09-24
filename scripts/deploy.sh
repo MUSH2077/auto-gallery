@@ -207,6 +207,7 @@ print(payload["images"]["admin_web"])
 PY
 )" || return 1
     CANDIDATE_SOURCE_DIGEST="$(sed -n '1p' <<<"$values")"
+    export BUILD_REVISION="$CANDIDATE_SOURCE_DIGEST"
     backend_id="$(sed -n '2p' <<<"$values")"
     admin_id="$(sed -n '3p' <<<"$values")"
     current_digest="$(source_digest)"
@@ -234,6 +235,7 @@ PY
 build_local_candidate() {
     local builder_name build_status
     CANDIDATE_SOURCE_DIGEST="$(source_digest)"
+    export BUILD_REVISION="$CANDIDATE_SOURCE_DIGEST"
     CANDIDATE_BACKEND_IMAGE="auto-gallery-backend:candidate-$CANDIDATE_SOURCE_DIGEST"
     CANDIDATE_ADMIN_IMAGE="auto-gallery-admin-web:candidate-$CANDIDATE_SOURCE_DIGEST"
     export BACKEND_IMAGE="$CANDIDATE_BACKEND_IMAGE"
@@ -317,6 +319,7 @@ import tempfile
 
 path = Path(".env")
 updates = {
+    "BUILD_REVISION": os.environ["BUILD_REVISION"],
     "RESOURCE_GOVERNANCE_MODE": "enforce",
     "RESOURCE_GOVERNANCE_MAX_SCALE": "1.0",
     "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance",
@@ -706,6 +709,7 @@ DEPLOYMENT_ID=$DEPLOYMENT_ID
 ROLLBACK_DIR=$ROLLBACK_DIR
 ACCEPTANCE_MANIFEST=$([[ "$DEPLOY_MODE" == verified ]] && echo "$ROLLBACK_DIR/acceptance.json" || true)
 SOURCE_DIGEST=$CANDIDATE_SOURCE_DIGEST
+BUILD_REVISION=$BUILD_REVISION
 ALEMBIC_REVISION=$CANDIDATE_REVISION
 BACKEND_IMAGE=$CANDIDATE_BACKEND_IMAGE
 BACKEND_IMAGE_ID=$(docker image inspect "$CANDIDATE_BACKEND_IMAGE" --format '{{.Id}}')

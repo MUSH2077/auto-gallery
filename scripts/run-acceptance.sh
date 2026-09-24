@@ -66,11 +66,21 @@ fault() {
 performance() {
   load_state
   [[ -f "$TEST_ROOT/functional.pass" ]]
+  [[ -s "$TEST_ROOT/reports/work-search-baseline.json" ]]
   compose up -d postgres redis meilisearch migrate backend worker-import worker-operations
   guardian performance load-soak docker compose --project-directory "$PROJECT_ROOT" -p "$TEST_PROJECT" \
     --env-file "$TEST_ENV" -f docker-compose.yaml -f docker-compose.test.yaml \
-    run --rm --no-deps backend python scripts/benchmark_work_search.py \
-    --require-scale --target-ms 500 --sql-budget 4 --count-concurrency 20
+    run --rm --no-deps -v "$TEST_ROOT:/acceptance" backend \
+    python scripts/benchmark_work_search.py \
+    --require-scale --target-ms 500 --sql-budget 6 --count-concurrency 20 \
+    --baseline-file /acceptance/reports/work-search-baseline.json --require-baseline \
+    --output /acceptance/reports/work-search-current.json
+  guardian performance load-soak docker compose --project-directory "$PROJECT_ROOT" -p "$TEST_PROJECT" \
+    --env-file "$TEST_ENV" -f docker-compose.yaml -f docker-compose.test.yaml \
+    run --rm --no-deps backend python scripts/benchmark_stability_hot_paths.py \
+    --mode synthetic --confirm-disposable --allow-non-loopback-disposable \
+    --assets 100000 --intents 70000 --repositories 804 --enforce-targets \
+    --output /tmp/stability-hot-paths.json
   install -d -m 700 "$TEST_ROOT/pipeline-scaling"
   guardian performance load-soak docker compose --project-directory "$PROJECT_ROOT" -p "$TEST_PROJECT" \
     --env-file "$TEST_ENV" -f docker-compose.yaml -f docker-compose.test.yaml \

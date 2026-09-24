@@ -25,7 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { api, queryKeys } from "@/lib/api";
+import { api, queryKeys, type WorkbenchSummary } from "@/lib/api";
 import {
   ADMIN_LINK_MODULE,
   ADMIN_NAV_GROUPS,
@@ -36,6 +36,7 @@ import {
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
 import SourceCodeLink from "@/components/SourceCodeLink";
+import { pollInterval } from "@/lib/polling";
 
 const ICONS: Record<AdminIconName, LucideIcon> = {
   home: Home,
@@ -62,24 +63,22 @@ function NavIcon({ name }: { name: AdminIconName }) {
   return <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} aria-hidden />;
 }
 
-function SidebarStatus({ enabled, compact }: { enabled: boolean; compact: boolean }) {
+function SidebarStatus({
+  enabled,
+  compact,
+  workbench,
+}: {
+  enabled: boolean;
+  compact: boolean;
+  workbench?: WorkbenchSummary;
+}) {
   const t = useT();
-  const workbench = useQuery({
-    queryKey: queryKeys.workbench,
-    queryFn: api.workbench,
-    enabled,
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const active = (data?.queue.active_download_count || 0) + (data?.queue.active_import_count || 0);
-      return active > 0 ? 10000 : 30000;
-    },
-  });
-  if (!enabled || !workbench.data) return null;
+  if (!enabled || !workbench) return null;
 
-  const queue = workbench.data.queue;
+  const queue = workbench.queue;
   const active = (queue.active_download_count || 0) + (queue.active_import_count || 0);
-  const usedPercent = workbench.data.storage.disk_used_percent ?? null;
-  const risk = workbench.data.storage.risk_level;
+  const usedPercent = workbench.storage.disk_used_percent ?? null;
+  const risk = workbench.storage.risk_level;
   const barColor = risk === "critical" ? "bg-danger" : risk === "warning" ? "bg-warning" : "bg-success";
   const statusLabel = active > 0
     ? t("sidebar.running", { downloads: queue.active_download_count, imports: queue.active_import_count })
@@ -129,6 +128,19 @@ export default function AppSidebar({
   const { has } = usePermissions();
   const canSeeStatus = has("system");
   const canSeeTasks = has("tasks");
+  const workbench = useQuery({
+    queryKey: queryKeys.workbench,
+    queryFn: api.workbench,
+    enabled: canSeeStatus,
+    refetchInterval: (query) => {
+      const queue = query.state.data?.queue;
+      const active = (queue?.active_download_count || 0) + (queue?.active_import_count || 0);
+      return pollInterval(active > 0);
+    },
+    refetchIntervalInBackground: false,
+  });
+  // Tasks-only users cannot read the system workbench. Keep their badge on
+  // the tasks endpoint, while system users reuse the already-polled summary.
   const operationBadge = useQuery({
     queryKey: [...queryKeys.tasks.all, "attention-badge"],
     queryFn: () => api.listTasks({
@@ -137,12 +149,19 @@ export default function AppSidebar({
       offset: 0,
       limit: 1,
     }),
-    enabled: canSeeTasks,
+    enabled: canSeeTasks && !canSeeStatus,
     staleTime: 15_000,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
-  const attentionCount = operationBadge.data?.total || 0;
+  const attention = workbench.data?.attention;
+  const attentionCount = !canSeeTasks ? 0 : canSeeStatus
+    ? (attention?.failed_download_count || 0)
+      + (attention?.failed_import_count || 0)
+      + (attention?.stale_job_count || 0)
+    : (operationBadge.data?.total || 0);
+  // The workbench warning flag omits actionable scheduler failures and
+  // overdue sources; the attention query supplies the complete count.
   const schedulerBadge = useQuery({
     queryKey: [...queryKeys.schedulerDecisions, "attention", "badge"],
     queryFn: () => api.schedulerDecisionsView("attention", 0, 1),
@@ -244,7 +263,7 @@ export default function AppSidebar({
           );
         })}
       </nav>
-      <SidebarStatus enabled={canSeeStatus} compact={compact} />
+      <SidebarStatus enabled={canSeeStatus} compact={compact} workbench={workbench.data} />
       <SourceCodeLink compact={compact} className="mx-2 mb-2" />
     </div>
   );

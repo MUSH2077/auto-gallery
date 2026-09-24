@@ -24,6 +24,7 @@ from app.models import (
     GitlleryRepositoryState,
 )
 from app.services.gitllery.slicing import RepoDescriptor, RepoResolver
+from app.services.outbox_coordinator import mark_outbox_wake_pending
 from gitllery_format import SegmentRepository
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,8 @@ async def request_gitllery_projection(
             existing.state = "pending"
             existing.available_at = _now()
             existing.last_error = None
+        if existing.state in {"pending", "failed"}:
+            mark_outbox_wake_pending(db, "gitllery")
         return existing
     row = GitlleryProjectionOutbox(
         commit_id=commit_id,
@@ -60,6 +63,7 @@ async def request_gitllery_projection(
     )
     db.add(row)
     await db.flush()
+    mark_outbox_wake_pending(db, "gitllery")
     return row
 
 
@@ -332,6 +336,10 @@ def _repository_path(target: dict) -> Path:
 def _write_target(target: dict) -> dict:
     repo = SegmentRepository(_repository_path(target))
     repo.root.relative_to(Path(settings.library_root).resolve())
+    if settings.gitllery_projection_mode.strip().lower() == "active":
+        from app.services.gitllery.builds import assert_active_repository_ready
+
+        assert_active_repository_ready(repo)
     with repo.projection_lock():
         repo.initialise(
             repository_id=target["repository_key"],

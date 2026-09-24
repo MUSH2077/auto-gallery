@@ -11,8 +11,10 @@ import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { authHealthPresentation, hasActionableAuthFailure } from "@/lib/auth-health";
 import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
+import { pollInterval } from "@/lib/polling";
 
 type TabKey = "overview" | "content" | "history" | "settings";
 
@@ -348,7 +350,7 @@ function ConfigRows({ detail, decision }: { detail: RepositoryDetailResponse; de
 function nextActionHint(detail: RepositoryDetailResponse, decision?: SchedulerDecisionItem): { tone: "neutral" | "good" | "warn" | "bad"; text: string } {
   const repo = detail.repository;
   if (!repo.is_enabled) return { tone: "warn", text: "repo_detail.hint_enable_repo" };
-  if (!repo.auth_healthy) return { tone: "bad", text: "repo_detail.hint_fix_auth" };
+  if (hasActionableAuthFailure(repo) || repo.credential_state === "missing") return { tone: "bad", text: "repo_detail.hint_fix_auth" };
   if (!repo.url_valid) return { tone: "bad", text: "repo_detail.hint_fix_url" };
   if (repo.latest_job && ["failed", "stale"].includes(repo.latest_job.status)) return { tone: "bad", text: "repo_detail.hint_open_failed_jobs" };
   if (repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status)) return { tone: "neutral", text: "repo_detail.hint_job_running" };
@@ -373,8 +375,8 @@ export default function RepositoryDetailPage() {
   const [deleteFiles, setDeleteFiles] = useState(false);
   const tagLimit = 50;
 
-  const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: 12000 });
-  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, refetchInterval: 15000 });
+  const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: () => pollInterval(false), refetchIntervalInBackground: false });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, staleTime: 60_000 });
   const repositoryTags = useQuery({
     queryKey: queryKeys.repositories.tags(id, tagPage),
     queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
@@ -443,6 +445,7 @@ export default function RepositoryDetailPage() {
   const syncHistory = detail.data.sync_history || detail.data.recent_jobs || [];
   const running = !!repo.latest_job && ["pending", "downloading", "downloaded", "importing"].includes(repo.latest_job.status);
   const canSync = repo.is_repository && repo.is_enabled && !running;
+  const auth = authHealthPresentation(repo);
   const hint = nextActionHint(detail.data, decision);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "overview", label: t("repo_detail.tab_overview") },
@@ -469,7 +472,7 @@ export default function RepositoryDetailPage() {
               <SourceBadge source={repo.source} />
               <h1 className="min-w-0 truncate text-2xl font-semibold tracking-normal text-fg">{repoName(repo)}</h1>
               <Pill tone={repo.is_enabled ? "good" : "neutral"}>{repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}</Pill>
-              <Pill tone={repo.auth_healthy ? "good" : "bad"}>{repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue")}</Pill>
+              <Pill tone={auth.tone}>{t(auth.labelKey)}</Pill>
               <Pill tone={repo.url_valid ? "good" : "warn"}>{repo.url_valid ? t("repo_detail.valid_url") : t("repo.invalid_url")}</Pill>
             </div>
             <p className="mt-2 max-w-4xl truncate font-mono text-xs text-muted">{repo.source_url || t("repo.no_source_url")}</p>
@@ -524,7 +527,7 @@ export default function RepositoryDetailPage() {
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <StatCard label={t("repo_detail.latest_job")} value={repo.latest_job ? statusLabel(t, repo.latest_job.status) : t("repo.no_jobs")} hint={repo.latest_job ? fmt.relative(repo.latest_job.created_at) : undefined} />
               <StatCard label={t("repo_detail.last_attempt")} value={fmt.relative(repo.last_attempted_at)} hint={fmt.dateTime(repo.last_attempted_at)} />
-              <StatCard label={t("repo_detail.auth_status")} value={repo.auth_status || (repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue"))} hint={fmt.dateTime(repo.last_auth_checked_at)} />
+              <StatCard label={t("repo_detail.auth_status")} value={t(auth.labelKey)} hint={fmt.dateTime(repo.last_auth_checked_at)} />
               <StatCard label={t("repo_detail.schedule")} value={decision ? schedulerDecisionLabel(t, decision.reason, decision.due) : scheduleModeLabel(t, subscription.schedule_mode)} hint={decision?.next_due_at ? fmt.dateTime(decision.next_due_at) : undefined} />
             </div>
             {repo.latest_job?.outcome && <SyncOutcomeNotice outcome={repo.latest_job.outcome} />}

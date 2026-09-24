@@ -7,15 +7,34 @@ from app.models import SubscriptionSource, Subscription, Creator
 from app.services.settings import get_scheduler_config
 from app.jobs.subscription_sync import schedule_decision_snapshot
 from app.services.subscription_calendar import effective_calendar_rule
+from app.services.auth_health import (
+    actionable_binding_exists,
+    credential_issue_binding_exists,
+)
 
 
-def decision_item(ss, sub, creator, *, config, now, tz, tz_name, scheduler_enabled, overdue_cutoff):
+def decision_item(
+    ss,
+    sub,
+    creator,
+    binding_auth_actionable=False,
+    binding_credential_issue=False,
+    *,
+    config,
+    now,
+    tz,
+    tz_name,
+    scheduler_enabled,
+    overdue_cutoff,
+):
     from app.api.system import _provider_state, _iso
+    from app.services.auth_health import classify_source_health
 
     suppressed = False
     provider_state = _provider_state(ss.source, ss.source_url)
     can_download = bool(provider_state["can_download"])
     url_valid = bool(provider_state["url_valid"])
+    auth_health = classify_source_health(ss, sub)
     auth_healthy = ss.auth_healthy is not False
     decision = schedule_decision_snapshot(
         sub,
@@ -30,18 +49,28 @@ def decision_item(ss, sub, creator, *, config, now, tz, tz_name, scheduler_enabl
     reason = str(decision.get("reason"))
     suppression_reason = None
 
+    effective_auth_state = (
+        "unhealthy" if binding_auth_actionable else auth_health.auth_state
+    )
+    effective_credential_state = (
+        "missing" if binding_credential_issue else auth_health.credential_state
+    )
+
     if not sub.is_active:
         due = False
         reason = "subscription_inactive"
     elif not sub.sync_enabled:
         due = False
         reason = "subscription_sync_disabled"
+    elif binding_auth_actionable or auth_health.actionable:
+        due = False
+        reason = "auth_unhealthy"
+    elif binding_credential_issue:
+        due = False
+        reason = "credential_missing"
     elif not ss.is_enabled:
         due = False
         reason = "source_disabled"
-    elif not auth_healthy:
-        due = False
-        reason = "auth_unhealthy"
     elif not can_download:
         due = False
         reason = provider_state["skip_reason"] or "provider_not_downloadable"
@@ -69,6 +98,7 @@ def decision_item(ss, sub, creator, *, config, now, tz, tz_name, scheduler_enabl
         reason
         in {
             "auth_unhealthy",
+            "credential_missing",
             "url_invalid",
             "provider_not_downloadable",
         }
@@ -103,6 +133,8 @@ def decision_item(ss, sub, creator, *, config, now, tz, tz_name, scheduler_enabl
         "window_start": decision.get("window_start"),
         "window_end": decision.get("window_end"),
         "auth_healthy": auth_healthy,
+        "auth_state": effective_auth_state,
+        "credential_state": effective_credential_state,
         "url_valid": url_valid,
         "can_download": can_download,
         "is_overdue": is_overdue,
@@ -127,7 +159,13 @@ async def decision_page(db, *, view="all", q=None, state="all", subscription_ids
         overdue_cutoff=now - timedelta(minutes=max(5, int(config.get("scheduler_scan_interval_minutes", 60))) * 2),
     )
     base = (
-        select(SubscriptionSource, Subscription, Creator)
+        select(
+            SubscriptionSource,
+            Subscription,
+            Creator,
+            actionable_binding_exists().label("binding_auth_actionable"),
+            credential_issue_binding_exists().label("binding_credential_issue"),
+        )
         .join(Subscription, SubscriptionSource.subscription_id == Subscription.id)
         .join(Creator, Subscription.creator_id == Creator.id)
     )

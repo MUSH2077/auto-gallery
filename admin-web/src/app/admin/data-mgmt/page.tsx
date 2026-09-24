@@ -16,6 +16,7 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation } from "@/lib/useAdminOperation";
+import { pollInterval } from "@/lib/polling";
 
 type Severity = "error" | "warning" | "info";
 type IntegrityResult = {
@@ -88,7 +89,8 @@ function DataManagementContent() {
   const systemInfo = useQuery({
     queryKey: ["system-info"],
     queryFn: () => api.getSystemInfo(),
-    refetchInterval: 60000,
+    refetchInterval: () => pollInterval(false),
+    refetchIntervalInBackground: false,
     placeholderData: (previousData) => previousData,
   });
   const storageBreakdown = useQuery({

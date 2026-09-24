@@ -64,6 +64,8 @@ function GitllerySettingsContent() {
   const data = settings.data;
   const repositories = data?.status.repositories ?? [];
   const integrityFailures = repositories.filter((repo) => !repo.object_integrity_ok).length;
+  const projectionState = data?.status.projection_state
+    ?? (data?.projection_mode === "active" ? "active" : "shadow_unbuilt");
 
   return (
       <PageShell>
@@ -135,16 +137,30 @@ function GitllerySettingsContent() {
 
             <section aria-labelledby="gitllery-status" className="space-y-3">
               <h2 id="gitllery-status" className="section-title">{t("gitllery_settings.status")}</h2>
+              {data.status.projection_error && (
+                <div role="alert" className="rounded-lg border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
+                  {data.status.projection_error}
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {([
                   [t("gitllery_settings.repositories"), repositories.length],
-                  [t("gitllery_settings.missing"), data.status.missing_repos],
+                  [t("gitllery_settings.segment_repositories"), data.status.segment_repositories ?? repositories.filter((repo) => repo.exists).length],
+                  [t("gitllery_settings.legacy_repositories"), data.status.legacy_repositories ?? data.status.missing_repos],
+                  [t("gitllery_settings.unplanned_intents"), data.status.unplanned_intents ?? 0],
                   [t("gitllery_settings.backlog"), data.status.behind_total],
                   [t("gitllery_settings.integrity_failures"), integrityFailures],
+                  [t("gitllery_settings.projection_state"), t(`gitllery_settings.state.${projectionState}`)],
+                  [
+                    t("gitllery_settings.last_verified"),
+                    data.status.last_verified_at
+                      ? new Date(data.status.last_verified_at).toLocaleString()
+                      : "—",
+                  ],
                 ] as const).map(([label, value]) => (
                   <div key={label} className="card p-4">
                     <div className="text-xs text-muted">{label}</div>
-                    <div className="mt-1 text-2xl font-semibold tabular-nums text-fg">{value}</div>
+                    <div className="mt-1 break-words text-lg font-semibold tabular-nums text-fg">{value}</div>
                   </div>
                 ))}
               </div>
@@ -171,6 +187,9 @@ function GitllerySettingsContent() {
                           <span className={repo.object_integrity_ok ? "text-success" : "text-danger"}>
                             {repo.object_integrity_ok ? t("gitllery_settings.integrity_ok") : t("gitllery_settings.integrity_failed")}
                           </span>
+                          {repo.drift[0] && (
+                            <div className="mt-1 max-w-xs text-xs text-danger">{repo.drift[0]}</div>
+                          )}
                         </td>
                         <td className="px-4 py-3 font-mono text-xs" title={repo.head_segment ?? undefined}>{shortId(repo.head_segment)}</td>
                         <td className="px-4 py-3 font-mono text-xs" title={repo.last_complete_commit_id ?? undefined}>{shortId(repo.last_complete_commit_id)}</td>

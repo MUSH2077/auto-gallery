@@ -71,6 +71,8 @@ class RepositoryRead(BaseModel):
     is_enabled: bool
     auth_healthy: bool
     auth_status: str | None = None
+    auth_state: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+    credential_state: Literal["ready", "missing", "not_required", "unknown"] = "unknown"
     auth_error_reason: str | None = None
     last_auth_checked_at: str | None = None
     last_successful_auth: str | None = None

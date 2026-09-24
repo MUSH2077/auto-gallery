@@ -14,7 +14,10 @@
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [{"name": "next"}],
-    "paths": {"@/*": ["./src/*"]}
+    "paths": {
+      "@/lib/i18n": ["./src/lib/i18n-runtime.tsx"],
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
   "exclude": ["node_modules"]

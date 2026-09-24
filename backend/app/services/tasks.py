@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
 from app.models.task_run import TaskEvent, TaskRun
+from app.services.workbench_cache import mark_workbench_invalidation_pending
 
 
 NONTERMINAL_STATUSES = {"enqueued", "running", "paused", "recovering"}
@@ -263,6 +264,7 @@ class TaskService:
         )
         self.db.add(event)
         await self.db.flush()
+        mark_workbench_invalidation_pending(self.db)
         return event
 
     async def create_task(

@@ -7,13 +7,14 @@ import type { CreatorRepository, RepositoryLatestJob, SchedulerDecisionItem } fr
 import { scheduleModeLabel, schedulerDecisionLabel, useI18nFormat } from "@/lib/i18n-format";
 import { useT } from "@/lib/i18n";
 import { adminRoutes } from "@/lib/adminRoutes";
+import { authHealthPresentation } from "@/lib/auth-health";
 import SourceBadge from "./SourceBadge";
 import StatusBadge from "./StatusBadge";
 import { SyncOutcomeBadge } from "./SyncOutcomeBadge";
 
 type RepoLike = Pick<CreatorRepository,
   "id" | "subscription_id" | "source" | "source_display_name" | "source_creator_id" |
-  "source_url" | "is_enabled" | "auth_healthy" | "last_synced_at" | "last_attempted_at" |
+  "source_url" | "is_enabled" | "auth_healthy" | "auth_state" | "credential_state" | "last_synced_at" | "last_attempted_at" |
   "can_download" | "url_valid" | "is_repository" | "latest_job"
 >;
 
@@ -40,7 +41,7 @@ function DecisionPill({ decision, loaded = true }: { decision?: SchedulerDecisio
   const t = useT();
   if (!decision) return loaded ? null : <span className="text-xs text-muted">{t("subscriptions.decision_unloaded")}</span>;
   const displayReason = decision.suppression_reason || decision.reason;
-  const warning = ["auth_unhealthy", "url_invalid"].includes(decision.reason);
+  const warning = ["auth_unhealthy", "credential_missing", "url_invalid"].includes(decision.reason);
   const waiting = ["already_attempted_in_window", "manual_mode", "source_disabled"].includes(decision.reason);
   const cls = decision.due
     ? "border-accent/30 bg-accent-subtle text-accent dark:border-accent/30 dark:bg-accent-subtle dark:text-accent"
@@ -71,6 +72,7 @@ function JobPill({ job }: { job?: RepositoryLatestJob | null }) {
 function RepoHealthLine({ repo }: { repo: RepoLike }) {
   const t = useT();
   const fmt = useI18nFormat();
+  const auth = authHealthPresentation(repo);
   return (
     <>
       <span className="inline-flex items-center gap-1.5">
@@ -78,8 +80,8 @@ function RepoHealthLine({ repo }: { repo: RepoLike }) {
         {repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className={`h-2 w-2 rounded-full ${repo.auth_healthy ? "bg-success" : "bg-danger"}`} />
-        {repo.auth_healthy ? t("repo.auth_healthy") : t("repo.auth_issue")}
+        <span className={`h-2 w-2 rounded-full ${auth.dotClass}`} />
+        {t(auth.labelKey)}
       </span>
       <span>{t("repo.last_sync", { time: fmt.relative(repo.last_synced_at, "repo.never_synced") })}</span>
       <span>{t("repo.last_try", { time: fmt.relative(repo.last_attempted_at) })}</span>

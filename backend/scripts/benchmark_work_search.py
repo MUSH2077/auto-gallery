@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 import sys
@@ -30,22 +32,81 @@ from app.services.search_language import parse_search_query
 from app.services.stage_metrics import measure_stage
 
 
-QUERIES = (
-    ("default", ""),
-    ("posted", "sort:posted-desc"),
-    ("updated", "sort:updated-desc"),
-    ("source", "source:pixiv"),
-    ("favorite", "is:favorite"),
-    ("title", "is:sfw sort:title-asc"),
-    ("multi_asset", "has:multiple-assets"),
+NEW_SORT_TARGET_MS = 500.0
+MAX_EXISTING_SORT_REGRESSION = 0.10
+WORK_SEARCH_SQL_BUDGET = 6
+EXISTING_SORT_CASES = frozenset(
+    {
+        "default",
+        "created-desc",
+        "created-asc",
+        "posted-desc",
+        "posted-asc",
+        "updated-desc",
+        "updated-asc",
+        "title-desc",
+        "title-asc",
+    }
+)
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    name: str
+    query: str
+    seed: int | None = None
+    cursor_page: bool = False
+
+
+BENCHMARK_CASES = (
+    BenchmarkCase("default", "", cursor_page=True),
+    BenchmarkCase("created-desc", "sort:created-desc"),
+    BenchmarkCase("created-asc", "sort:created-asc"),
+    BenchmarkCase("posted-desc", "sort:posted-desc"),
+    BenchmarkCase("posted-asc", "sort:posted-asc"),
+    BenchmarkCase("updated-desc", "sort:updated-desc"),
+    BenchmarkCase("updated-asc", "sort:updated-asc"),
+    BenchmarkCase("title-desc", "is:sfw sort:title-desc"),
+    BenchmarkCase("title-asc", "is:sfw sort:title-asc"),
+    BenchmarkCase("source", "source:pixiv"),
+    BenchmarkCase("favorite", "is:favorite"),
+    BenchmarkCase("multi_asset", "has:multiple-assets"),
+    BenchmarkCase("heat", "sort:heat-desc", cursor_page=True),
+    BenchmarkCase(
+        "random",
+        "sort:random",
+        seed=1_234_567_890,
+        cursor_page=True,
+    ),
 )
 
 SCALE_REQUIREMENTS = {
-    "works": 67_000,
+    "works": 70_000,
     "assets": 90_000,
     "tag_relations": 470_000,
     "artifacts": 330_000,
 }
+
+
+def existing_sort_regressions(
+    current: dict[str, float],
+    baseline: dict[str, float],
+    *,
+    maximum: float = MAX_EXISTING_SORT_REGRESSION,
+) -> dict[str, dict[str, float]]:
+    """Return existing-sort measurements that exceed the release baseline."""
+
+    failures: dict[str, dict[str, float]] = {}
+    for key, baseline_ms in baseline.items():
+        if key.split(":", 1)[0] not in EXISTING_SORT_CASES or key not in current:
+            continue
+        current_ms = current[key]
+        if current_ms > baseline_ms * (1 + maximum):
+            failures[key] = {
+                "baseline_ms": float(baseline_ms),
+                "current_ms": float(current_ms),
+            }
+    return failures
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -82,6 +143,7 @@ async def _sample_search(
     query: str,
     offset: int,
     cursor: str | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     metrics: dict[str, Any]
     with measure_stage(
@@ -97,6 +159,7 @@ async def _sample_search(
             scope="works",
             permissions={"library", "curation"},
             cursor=cursor,
+            seed=seed,
         )
         latency_ms = (time.perf_counter() - started) * 1000
     return {**metrics, "latency_ms": latency_ms}
@@ -109,6 +172,7 @@ async def _measure(
     query: str,
     offset: int,
     repeats: int,
+    seed: int | None = None,
 ) -> list[dict[str, Any]]:
     # Warm query plans, relation pages, and the exact-count cache outside the
     # measured window.
@@ -118,6 +182,7 @@ async def _measure(
         30,
         scope="works",
         permissions={"library", "curation"},
+        seed=seed,
     )
     return [
         await _sample_search(
@@ -125,6 +190,7 @@ async def _measure(
             case=case,
             query=query,
             offset=offset,
+            seed=seed,
         )
         for _ in range(repeats)
     ]
@@ -233,8 +299,13 @@ async def _main(
     sql_budget: int,
     require_scale: bool,
     count_concurrency: int,
+    baseline_file: Path | None,
+    require_baseline: bool,
+    output: Path | None,
 ) -> int:
     failed = False
+    measurements: dict[str, float] = {}
+    scale: dict[str, int] = {}
     async with async_session() as db:
         scale = await _scale_snapshot(db)
         print(
@@ -252,49 +323,70 @@ async def _main(
                 failed = True
 
         service = SearchService(db)
-        for name, query in QUERIES:
-            for offset in offsets:
+        for case in BENCHMARK_CASES:
+            case_offsets = (0,) if case.cursor_page else offsets
+            case_target_ms = (
+                min(target_ms, NEW_SORT_TARGET_MS)
+                if case.name in {"heat", "random"}
+                else target_ms
+            )
+            for offset in case_offsets:
                 samples = await _measure(
                     service,
-                    case=name,
-                    query=query,
+                    case=case.name,
+                    query=case.query,
                     offset=offset,
                     repeats=repeats,
+                    seed=case.seed,
                 )
                 p95, max_sql = _print_samples(
-                    case=name,
+                    case=case.name,
                     offset=offset,
                     samples=samples,
-                    target_ms=target_ms,
+                    target_ms=case_target_ms,
                 )
-                failed = failed or p95 >= target_ms or max_sql > sql_budget
+                key = f"{case.name}:first" if offset == 0 else f"{case.name}:offset-{offset}"
+                measurements[key] = p95
+                failed = failed or p95 > case_target_ms or max_sql > sql_budget
 
-        first = await service.search(
-            "",
-            0,
-            30,
-            scope="works",
-            permissions={"library", "curation"},
-        )
-        cursor = first.get("next_cursor")
-        if cursor:
+        for case in (item for item in BENCHMARK_CASES if item.cursor_page):
+            first = await service.search(
+                case.query,
+                0,
+                30,
+                scope="works",
+                permissions={"library", "curation"},
+                seed=case.seed,
+            )
+            cursor = first.get("next_cursor")
+            if not cursor:
+                print(f"phase=work_list case={case.name}_cursor_next status=missing_cursor")
+                failed = failed or require_scale
+                continue
+            case_target_ms = (
+                min(target_ms, NEW_SORT_TARGET_MS)
+                if case.name in {"heat", "random"}
+                else target_ms
+            )
             samples = [
                 await _sample_search(
                     service,
-                    case="cursor_next",
-                    query="",
+                    case=f"{case.name}_cursor_next",
+                    query=case.query,
                     offset=0,
                     cursor=cursor,
+                    seed=case.seed,
                 )
                 for _ in range(repeats)
             ]
             p95, max_sql = _print_samples(
-                case="cursor_next",
+                case=f"{case.name}_cursor_next",
                 offset="seek",
                 samples=samples,
-                target_ms=target_ms,
+                target_ms=case_target_ms,
             )
-            failed = failed or p95 >= target_ms or max_sql > sql_budget
+            measurements[f"{case.name}:next"] = p95
+            failed = failed or p95 > case_target_ms or max_sql > sql_budget
 
     # Use fresh sessions for the concurrent round.  A single AsyncSession is
     # intentionally never shared by concurrent tasks.  This validates the SQL
@@ -312,6 +404,40 @@ async def _main(
         delete_stale=False,
     )
     failed = failed or int(cold["sql_count"]) != 1 or int(stale["sql_count"]) != 1
+
+    baseline: dict[str, float] = {}
+    if baseline_file and baseline_file.is_file():
+        payload = json.loads(baseline_file.read_text())
+        raw_baseline = payload.get("measurements", payload)
+        baseline = {str(key): float(value) for key, value in raw_baseline.items()}
+    elif require_baseline:
+        print(f"phase=existing_sort_regression status=failed missing_baseline={baseline_file}")
+        failed = True
+
+    if require_baseline:
+        required = {f"{name}:first" for name in EXISTING_SORT_CASES}
+        missing = sorted(required - baseline.keys())
+        if missing:
+            print(f"phase=existing_sort_regression status=failed missing_cases={missing}")
+            failed = True
+    regressions = existing_sort_regressions(measurements, baseline)
+    if regressions:
+        print(f"phase=existing_sort_regression status=failed regressions={regressions}")
+        failed = True
+
+    report = {
+        "scale": scale,
+        "measurements": measurements,
+        "targets": {
+            "heat_random_p95_ms": NEW_SORT_TARGET_MS,
+            "existing_sort_max_regression": MAX_EXISTING_SORT_REGRESSION,
+            "sql_budget": sql_budget,
+        },
+        "existing_sort_regressions": regressions,
+    }
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return 1 if failed else 0
 
 
@@ -319,8 +445,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--target-ms", type=float, default=500.0)
-    parser.add_argument("--sql-budget", type=int, default=4)
+    parser.add_argument("--sql-budget", type=int, default=WORK_SEARCH_SQL_BUDGET)
     parser.add_argument("--count-concurrency", type=int, default=20)
+    parser.add_argument("--baseline-file", type=Path)
+    parser.add_argument(
+        "--require-baseline",
+        action="store_true",
+        help="Fail unless a complete pre-release existing-sort baseline is provided",
+    )
+    parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--require-scale",
         action="store_true",
@@ -340,4 +473,7 @@ if __name__ == "__main__":
         sql_budget=max(1, args.sql_budget),
         require_scale=bool(args.require_scale),
         count_concurrency=max(2, args.count_concurrency),
+        baseline_file=args.baseline_file,
+        require_baseline=bool(args.require_baseline),
+        output=args.output,
     )))

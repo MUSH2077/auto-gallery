@@ -15,6 +15,7 @@ class StorageArtifact(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("storage_root", "file_path", name="uq_storage_artifacts_root_path"),
         Index("ix_storage_artifacts_download_state", "download_job_id", "artifact_type", "state"),
+        Index("ix_storage_artifacts_import_job_id", "import_job_id"),
         Index("ix_storage_artifacts_source_work", "source", "source_work_id"),
         Index("ix_storage_artifacts_lease", "state", "lease_expires_at"),
         Index(

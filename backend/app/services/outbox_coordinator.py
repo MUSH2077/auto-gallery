@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 
 from rq import Queue
-from sqlalchemy import and_, exists, func, or_, select, tuple_
+from sqlalchemy import and_, delete, event, exists, func, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from app.config import settings
 from app.models import (
@@ -53,6 +56,15 @@ return 0
 WAKE_DEBOUNCE_SECONDS = 0
 
 _ACTIVE_STATES = ("pending", "failed", "processing")
+OUTBOX_HEALTH_CACHE_TTL_SECONDS = 30.0
+OUTBOX_HEALTH_REDIS_TTL_SECONDS = 90
+OUTBOX_HEALTH_REDIS_KEY = "outbox:health:v1"
+_OUTBOX_WAKE_INTENTS = "outbox_wake_intents"
+_OUTBOX_WAKE_COMMITTING = "outbox_wake_committing"
+_outbox_health_cache: dict[str, dict] | None = None
+_outbox_health_cache_ts = 0.0
+_outbox_health_cache_mode: str | None = None
+_published_outbox_health: dict[str, dict] | None = None
 _SPECS = {
     "import_projection": (
         "app.jobs.import_projection.run_import_projection_outbox",
@@ -71,16 +83,12 @@ _SPECS = {
 }
 
 
-async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[str, int]:
-    """Count only work that is ready to run or whose processing lease expired.
+def _projection_mode() -> str:
+    return settings.gitllery_projection_mode.strip().lower()
 
-    Active rows must not generate another RQ coordinator every 15 seconds.  A
-    job clears its wake marker when its bounded slice ends; if backlog remains,
-    the next health tick publishes exactly one successor.
-    """
 
-    now = datetime.now(timezone.utc)
-    leased_ready = lambda model: or_(  # noqa: E731 - compact scalar subqueries
+def _leased_ready(model, now: datetime):
+    return or_(
         and_(
             model.state.in_(("pending", "failed")),
             model.available_at <= now,
@@ -91,8 +99,11 @@ async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[s
             model.lease_expires_at < now,
         ),
     )
+
+
+def _import_ready(now: datetime):
     import_ready = or_(
-        leased_ready(ImportCurationOutbox),
+        _leased_ready(ImportCurationOutbox, now),
         and_(
             ImportCurationOutbox.metadata_state.in_(("pending", "failed")),
             ImportCurationOutbox.metadata_available_at <= now,
@@ -103,6 +114,12 @@ async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[s
             ImportCurationOutbox.metadata_lease_expires_at < now,
         ),
     )
+    return import_ready
+
+
+def _gitllery_ready(now: datetime):
+    """Build Gitllery readiness only after active mode is explicitly selected."""
+
     git_parent = aliased(GitlleryProjectionOutbox)
     git_head = (
         select(
@@ -159,64 +176,103 @@ async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[s
     )
     git_target_ready = and_(
         ~target_has_earlier,
-        leased_ready(GitlleryProjectionTarget),
+        _leased_ready(GitlleryProjectionTarget, now),
     )
-    if ready_only:
-        from app.models.search_delivery_receipt import SearchDeliveryReceipt
-        from app.models.repository_sync_receipt import SearchIndexState
-        from app.services.search_delivery import checkpoint_due_condition
-        active_delivery = exists().where(SearchDeliveryReceipt.state.not_in(("complete", "failed")))
-        from app.models.search_rebuild import SearchRebuild
-        from app.services.search_rebuild import membership_bootstrap_due_condition
-        search_due = or_(
-            and_(~active_delivery, membership_bootstrap_due_condition()),
-            exists().where(SearchRebuild.state.not_in(("complete", "failed"))),
-            and_(~active_delivery, exists().where(
+    return or_(
+        exists(select(1).select_from(git_head).where(git_head_ready)),
+        exists().where(git_target_ready),
+    )
+
+
+def _search_ready(now: datetime):
+    from app.models.repository_sync_receipt import SearchIndexState
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_rebuild import SearchRebuild
+    from app.services.search_delivery import checkpoint_due_condition
+    from app.services.search_rebuild import membership_bootstrap_due_condition
+
+    active_delivery = exists().where(
+        SearchDeliveryReceipt.state.not_in(("complete", "failed"))
+    )
+    return or_(
+        and_(~active_delivery, membership_bootstrap_due_condition()),
+        exists().where(SearchRebuild.state.not_in(("complete", "failed"))),
+        and_(
+            ~active_delivery,
+            exists().where(
                 SearchProjectionOutbox.completed_at.is_(None),
                 SearchProjectionOutbox.available_at <= now,
-            )),
-            and_(~active_delivery, exists().where(checkpoint_due_condition(SearchIndexState))),
-            exists().where(
-                SearchDeliveryReceipt.state.not_in(("complete", "failed", "ambiguous")),
-                SearchDeliveryReceipt.available_at <= now,
-                or_(SearchDeliveryReceipt.lease_until.is_(None), SearchDeliveryReceipt.lease_until <= now),
+                or_(
+                    SearchProjectionOutbox.lease_until.is_(None),
+                    SearchProjectionOutbox.lease_until <= now,
+                ),
             ),
-        )
-        stmt = select(
-            exists().where(import_ready).label("import_projection"),
-            exists().where(leased_ready(MediaDerivativeOutbox)).label("media"),
-            or_(exists(select(1).select_from(git_head).where(git_head_ready)),
-                exists().where(git_target_ready)).label("gitllery"),
-            exists().where(or_(
-                and_(AssetDedupOutbox.state.in_(("pending", "failed")), AssetDedupOutbox.available_at <= now),
-                and_(AssetDedupOutbox.state == "processing", AssetDedupOutbox.updated_at <= now - timedelta(minutes=15)),
-            )).label("dedup"),
-            search_due.label("search"),
-        )
-        row = (await db.execute(stmt)).one()
-        values = {key: int(bool(getattr(row, key))) for key in _SPECS}
-        if settings.gitllery_projection_mode.strip().lower() != "active":
-            values["gitllery"] = 0
-        return values
-    stmt = select(
+        ),
+        and_(
+            ~active_delivery,
+            exists().where(checkpoint_due_condition(SearchIndexState)),
+        ),
+        exists().where(
+            SearchDeliveryReceipt.state.not_in(
+                ("complete", "failed", "ambiguous")
+            ),
+            SearchDeliveryReceipt.available_at <= now,
+            or_(
+                SearchDeliveryReceipt.lease_until.is_(None),
+                SearchDeliveryReceipt.lease_until <= now,
+            ),
+        ),
+    )
+
+
+def outbox_readiness_statement(now: datetime | None = None):
+    """Return one indexed ``EXISTS`` probe for each durable queue.
+
+    Shadow mode deliberately substitutes a SQL literal for Gitllery before any
+    Gitllery join or subquery is constructed.  This keeps the ordinary fallback
+    independent of both the 70k captured intents and repository metadata.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    gitllery_ready = (
+        _gitllery_ready(now) if _projection_mode() == "active" else literal(False)
+    )
+    dedup_ready = or_(
+        and_(
+            AssetDedupOutbox.state.in_(("pending", "failed")),
+            AssetDedupOutbox.available_at <= now,
+        ),
+        and_(
+            AssetDedupOutbox.state == "processing",
+            AssetDedupOutbox.updated_at <= now - timedelta(minutes=15),
+        ),
+    )
+    return select(
+        exists().where(_import_ready(now)).label("import_projection"),
+        exists().where(_leased_ready(MediaDerivativeOutbox, now)).label("media"),
+        gitllery_ready.label("gitllery"),
+        exists().where(dedup_ready).label("dedup"),
+        _search_ready(now).label("search"),
+    )
+
+
+async def outbox_readiness(db: AsyncSession) -> dict[str, int]:
+    row = (await db.execute(outbox_readiness_statement())).one()
+    return {key: int(bool(getattr(row, key))) for key in _SPECS}
+
+
+def _exact_ready_counts_statement(now: datetime):
+    """Compatibility count used only by explicit administrator operations."""
+
+    columns = [
         select(func.count(ImportCurationOutbox.id))
-        .where(import_ready)
+        .where(_import_ready(now))
         .scalar_subquery()
         .label("import_projection"),
         select(func.count(MediaDerivativeOutbox.id))
-        .where(leased_ready(MediaDerivativeOutbox))
+        .where(_leased_ready(MediaDerivativeOutbox, now))
         .scalar_subquery()
         .label("media"),
-        (
-            select(func.count())
-            .select_from(git_head)
-            .where(git_head_ready)
-            .scalar_subquery()
-            + select(func.count(GitlleryProjectionTarget.id))
-            .where(git_target_ready)
-            .scalar_subquery()
-        )
-        .label("gitllery"),
         select(func.count(AssetDedupOutbox.id))
         .where(
             or_(
@@ -243,15 +299,102 @@ async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[s
         )
         .scalar_subquery()
         .label("search"),
+    ]
+    if _projection_mode() == "active":
+        # The compatibility endpoint only needs a useful non-zero magnitude;
+        # the fallback coordinator itself always uses indexed EXISTS probes.
+        columns.insert(
+            2,
+            select(func.count(GitlleryProjectionOutbox.id))
+            .where(GitlleryProjectionOutbox.state != "complete")
+            .scalar_subquery()
+            .label("gitllery"),
+        )
+    else:
+        columns.insert(2, literal(0).label("gitllery"))
+    return select(*columns)
+
+
+async def outbox_counts(db: AsyncSession, *, ready_only: bool = False) -> dict[str, int]:
+    """Compatibility wrapper for readiness and explicit exact counts."""
+
+    if ready_only:
+        return await outbox_readiness(db)
+    row = (
+        await db.execute(_exact_ready_counts_statement(datetime.now(timezone.utc)))
+    ).one()
+    return {key: int(getattr(row, key) or 0) for key in _SPECS}
+
+
+def mark_outbox_wake_pending(db: AsyncSession, kind: str) -> None:
+    """Stage one Redis wake to be published only after the outer commit."""
+
+    if kind not in _SPECS:
+        raise ValueError(f"Unknown outbox kind: {kind}")
+    session = getattr(db, "sync_session", db)
+    info = getattr(session, "info", None)
+    if not isinstance(info, dict):
+        return
+    get_transaction = getattr(session, "get_transaction", None)
+    get_nested_transaction = getattr(session, "get_nested_transaction", None)
+    transaction = (
+        (get_nested_transaction() if callable(get_nested_transaction) else None)
+        or (get_transaction() if callable(get_transaction) else None)
     )
-    row = (await db.execute(stmt)).one()
-    counts = {
-        key: int(getattr(row, key) or 0)
-        for key in _SPECS
-    }
-    if settings.gitllery_projection_mode.strip().lower() != "active":
-        counts["gitllery"] = 0
-    return counts
+    if transaction is None:
+        # Lightweight test doubles have no transaction object.  Keep a single
+        # outer bucket so the event helpers remain directly testable.
+        transaction = "outer"
+    intents = info.setdefault(_OUTBOX_WAKE_INTENTS, {})
+    intents.setdefault(transaction, set()).add(kind)
+
+
+@event.listens_for(Session, "before_commit")
+def _arm_outbox_wakes_after_outer_commit(session: Session) -> None:
+    if session.in_nested_transaction():
+        return
+    intents = session.info.get(_OUTBOX_WAKE_INTENTS, {})
+    transaction = session.get_transaction()
+    kinds = intents.get(transaction, set()) or intents.get("outer", set())
+    if kinds:
+        session.info[_OUTBOX_WAKE_COMMITTING] = set(kinds)
+
+
+@event.listens_for(Session, "after_commit")
+def _publish_outbox_wakes_after_commit(session: Session) -> None:
+    intents = session.info.get(_OUTBOX_WAKE_INTENTS, {})
+    nested = session.get_nested_transaction()
+    if nested is not None:
+        kinds = intents.pop(nested, set())
+        intents.setdefault(nested.parent, set()).update(kinds)
+        return
+    kinds = session.info.pop(_OUTBOX_WAKE_COMMITTING, set())
+    session.info.pop(_OUTBOX_WAKE_INTENTS, None)
+    if not kinds:
+        return
+    invalidate_outbox_health_cache()
+    try:
+        from app.services.redis_budget import budget_redis
+
+        # A best-effort optimization must stay below the foreground 500 ms
+        # protection line.  PostgreSQL plus the scheduler fallback preserve
+        # delivery when Redis is unavailable.
+        with budget_redis(seconds=0.45, reserve_seconds=0):
+            wake_pending_outboxes({kind: 1 for kind in sorted(kinds)})
+    except Exception:
+        # PostgreSQL is authoritative.  The unique scheduler fallback retries
+        # after Redis or the queue becomes available again.
+        logger.warning("Post-commit outbox wake failed", exc_info=True)
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _discard_rolled_back_outbox_wakes(session: Session, previous_transaction) -> None:
+    intents = session.info.get(_OUTBOX_WAKE_INTENTS, {})
+    if previous_transaction.parent is None:
+        session.info.pop(_OUTBOX_WAKE_INTENTS, None)
+        session.info.pop(_OUTBOX_WAKE_COMMITTING, None)
+    else:
+        intents.pop(previous_transaction, None)
 
 
 def clear_outbox_wake(kind: str) -> None:
@@ -287,7 +430,7 @@ def clear_and_wake_outbox_successor(
     exhausted. Production workers compare/swap the marker to the successor id
     before publication, closing the clear-then-health race that could bypass a
     scheduled cooldown. Exceptions pass ``None`` and deliberately rely on the
-    15-second health aggregation fallback rather than creating a crash loop.
+    60-second scheduler fallback rather than creating a crash loop.
     """
 
     if not isinstance(result, dict) or not bool(result.get("more_likely")):
@@ -317,7 +460,7 @@ def clear_and_wake_outbox_successor(
     except Exception:
         # A completed domain slice must not be reported failed merely because
         # Redis disappeared during the optimization.  PostgreSQL remains the
-        # source of truth and the health loop retries within 15 seconds.
+        # source of truth and the scheduler fallback retries within 60 seconds.
         logger.warning("Immediate outbox successor wake failed for %s", kind, exc_info=True)
         return {"enqueued": 0, "deferred": 1}
 
@@ -370,13 +513,15 @@ def _wake_job_is_active(redis_client, job_id: str) -> bool:
     return normalized in {"queued", "started", "deferred", "scheduled"}
 
 
-async def outbox_health(db: AsyncSession) -> dict[str, dict]:
-    """Small background-only aggregation for the 15-second health snapshot."""
+async def _load_outbox_health(db: AsyncSession) -> dict[str, dict]:
+    """Load exact health in the unique scheduler process."""
+
     models = {
         "media": MediaDerivativeOutbox,
-        "gitllery": GitlleryProjectionOutbox,
         "dedup": AssetDedupOutbox,
     }
+    if _projection_mode() == "active":
+        models["gitllery"] = GitlleryProjectionOutbox
     now = datetime.now(timezone.utc)
     result: dict[str, dict] = {}
     for name, model in models.items():
@@ -399,55 +544,76 @@ async def outbox_health(db: AsyncSession) -> dict[str, dict]:
                 max(0.0, (now - oldest).total_seconds()) if oldest else None
             ),
         }
-    git_target_row = (
-        await db.execute(
-            select(
-                func.count(GitlleryProjectionTarget.id).filter(
-                    GitlleryProjectionTarget.state.in_(("pending", "failed"))
-                ),
-                func.count(GitlleryProjectionTarget.id).filter(
-                    GitlleryProjectionTarget.state == "processing"
-                ),
-                func.count(GitlleryProjectionTarget.id).filter(
-                    GitlleryProjectionTarget.state == "failed"
-                ),
-                func.min(GitlleryProjectionTarget.created_at).filter(
-                    GitlleryProjectionTarget.state != "complete"
-                ),
-            )
-        )
-    ).one()
-    repository_modes = {
-        mode: int(count)
-        for mode, count in (
+    if _projection_mode() == "active":
+        git_target_row = (
             await db.execute(
                 select(
-                    GitlleryRepositoryState.mode,
-                    func.count(GitlleryRepositoryState.id),
-                ).group_by(GitlleryRepositoryState.mode)
+                    func.count(GitlleryProjectionTarget.id).filter(
+                        GitlleryProjectionTarget.state.in_(("pending", "failed"))
+                    ),
+                    func.count(GitlleryProjectionTarget.id).filter(
+                        GitlleryProjectionTarget.state == "processing"
+                    ),
+                    func.count(GitlleryProjectionTarget.id).filter(
+                        GitlleryProjectionTarget.state == "failed"
+                    ),
+                    func.min(GitlleryProjectionTarget.created_at).filter(
+                        GitlleryProjectionTarget.state != "complete"
+                    ),
+                )
             )
-        ).all()
-    }
-    target_waiting, target_processing, target_failed, target_oldest = git_target_row
-    git_health = result["gitllery"]
-    git_health.update(
-        {
+        ).one()
+        repository_modes = {
+            mode: int(count)
+            for mode, count in (
+                await db.execute(
+                    select(
+                        GitlleryRepositoryState.mode,
+                        func.count(GitlleryRepositoryState.id),
+                    ).group_by(GitlleryRepositoryState.mode)
+                )
+            ).all()
+        }
+        target_waiting, target_processing, target_failed, target_oldest = (
+            git_target_row
+        )
+        git_health = result["gitllery"]
+        git_health.update(
+            {
+                "product_version": "v1",
+                "format_id": "gitllery-segment",
+                "format_revision": 1,
+                "projection_mode": settings.gitllery_projection_mode,
+                "target_waiting": int(target_waiting or 0),
+                "target_processing": int(target_processing or 0),
+                "target_failed": int(target_failed or 0),
+                "repository_modes": repository_modes,
+            }
+        )
+        if target_oldest:
+            target_age = max(0.0, (now - target_oldest).total_seconds())
+            existing_age = git_health.get("oldest_age_seconds")
+            git_health["oldest_age_seconds"] = (
+                target_age if existing_age is None else max(target_age, existing_age)
+            )
+    else:
+        # Captured shadow intents are intentionally not ordinary queue work.
+        # Task 4 exposes their separate build/verification status from compact
+        # metadata without scanning these tables here.
+        result["gitllery"] = {
+            "waiting": 0,
+            "processing": 0,
+            "failed": 0,
+            "oldest_age_seconds": None,
             "product_version": "v1",
             "format_id": "gitllery-segment",
             "format_revision": 1,
             "projection_mode": settings.gitllery_projection_mode,
-            "target_waiting": int(target_waiting or 0),
-            "target_processing": int(target_processing or 0),
-            "target_failed": int(target_failed or 0),
-            "repository_modes": repository_modes,
+            "target_waiting": 0,
+            "target_processing": 0,
+            "target_failed": 0,
+            "repository_modes": {},
         }
-    )
-    if target_oldest:
-        target_age = max(0.0, (now - target_oldest).total_seconds())
-        existing_age = git_health.get("oldest_age_seconds")
-        git_health["oldest_age_seconds"] = (
-            target_age if existing_age is None else max(target_age, existing_age)
-        )
     import_waiting = or_(
         ImportCurationOutbox.state.in_(("pending", "failed")),
         ImportCurationOutbox.metadata_state.in_(("pending", "failed")),
@@ -544,6 +710,189 @@ async def outbox_health(db: AsyncSession) -> dict[str, dict]:
                         if active_receipt.state in ("ambiguous", "submitting") else None,
         }
     return result
+
+
+def invalidate_outbox_health_cache() -> None:
+    global _outbox_health_cache, _outbox_health_cache_ts, _outbox_health_cache_mode
+    _outbox_health_cache = None
+    _outbox_health_cache_ts = 0.0
+    _outbox_health_cache_mode = None
+
+
+async def outbox_health(
+    db: AsyncSession,
+    *,
+    refresh: bool = False,
+) -> dict[str, dict]:
+    """Return an exact snapshot cached for scheduler/background callers."""
+
+    global _outbox_health_cache, _outbox_health_cache_ts, _outbox_health_cache_mode
+    now = monotonic()
+    mode = _projection_mode()
+    if (
+        not refresh
+        and _outbox_health_cache is not None
+        and _outbox_health_cache_mode == mode
+        and now - _outbox_health_cache_ts < OUTBOX_HEALTH_CACHE_TTL_SECONDS
+    ):
+        return _outbox_health_cache
+    snapshot = await _load_outbox_health(db)
+    _outbox_health_cache = snapshot
+    _outbox_health_cache_ts = now
+    _outbox_health_cache_mode = mode
+    return snapshot
+
+
+async def publish_outbox_health(db: AsyncSession) -> dict[str, dict]:
+    """Refresh exact counts and publish them for HTTP processes to read."""
+
+    global _published_outbox_health
+    snapshot = await outbox_health(db, refresh=True)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "outboxes": snapshot,
+    }
+    get_redis().setex(
+        OUTBOX_HEALTH_REDIS_KEY,
+        OUTBOX_HEALTH_REDIS_TTL_SECONDS,
+        json.dumps(payload, separators=(",", ":")),
+    )
+    _published_outbox_health = snapshot
+    return snapshot
+
+
+def _empty_outbox_health() -> dict[str, dict]:
+    empty = {
+        "waiting": 0,
+        "processing": 0,
+        "failed": 0,
+        "oldest_age_seconds": None,
+    }
+    result = {
+        kind: dict(empty)
+        for kind in ("import_projection", "media", "search", "dedup")
+    }
+    result["gitllery"] = {
+        **empty,
+        "projection_mode": settings.gitllery_projection_mode,
+        "target_waiting": 0,
+        "target_processing": 0,
+        "target_failed": 0,
+        "repository_modes": {},
+    }
+    return result
+
+
+def read_published_outbox_health() -> dict[str, dict]:
+    """Read scheduler-published health without ever scanning PostgreSQL."""
+
+    global _published_outbox_health
+    try:
+        raw = get_redis().get(OUTBOX_HEALTH_REDIS_KEY)
+        if raw:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            payload = json.loads(raw)
+            snapshot = payload.get("outboxes")
+            if isinstance(snapshot, dict):
+                _published_outbox_health = snapshot
+                return snapshot
+    except Exception:
+        logger.debug("Published outbox health unavailable", exc_info=True)
+    return _published_outbox_health or _empty_outbox_health()
+
+
+@dataclass(frozen=True)
+class CompletedOutboxCleanupSpec:
+    model: type
+    conditions: tuple
+    limit: int
+
+
+def completed_outbox_cleanup_specs(
+    cutoff: datetime,
+    *,
+    batch_size: int = 500,
+) -> tuple[CompletedOutboxCleanupSpec, ...]:
+    """Describe retained ordinary outboxes; Gitllery is excluded forever."""
+
+    limit = max(1, min(int(batch_size), 500))
+    return (
+        CompletedOutboxCleanupSpec(
+            SearchProjectionOutbox,
+            (SearchProjectionOutbox.completed_at < cutoff,),
+            limit,
+        ),
+        CompletedOutboxCleanupSpec(
+            MediaDerivativeOutbox,
+            (
+                MediaDerivativeOutbox.state == "complete",
+                MediaDerivativeOutbox.completed_at < cutoff,
+            ),
+            limit,
+        ),
+        CompletedOutboxCleanupSpec(
+            AssetDedupOutbox,
+            (
+                AssetDedupOutbox.state == "complete",
+                AssetDedupOutbox.completed_at < cutoff,
+            ),
+            limit,
+        ),
+        CompletedOutboxCleanupSpec(
+            ImportCurationOutbox,
+            (
+                ImportCurationOutbox.state == "complete",
+                ImportCurationOutbox.metadata_state == "complete",
+                ImportCurationOutbox.completed_at < cutoff,
+                ImportCurationOutbox.metadata_completed_at < cutoff,
+            ),
+            limit,
+        ),
+    )
+
+
+async def cleanup_completed_outboxes(
+    db: AsyncSession,
+    *,
+    retention_days: int = 30,
+    batch_size: int = 500,
+) -> dict[str, object]:
+    """Delete at most one 500-row batch of settled, ordinary outbox history."""
+
+    cap = max(1, min(int(batch_size), 500))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, retention_days))
+    remaining = cap
+    by_outbox: dict[str, int] = {}
+    for spec in completed_outbox_cleanup_specs(cutoff, batch_size=cap):
+        if remaining <= 0:
+            break
+        ids = tuple(
+            (
+                await db.execute(
+                    select(spec.model.id)
+                    .where(*spec.conditions)
+                    .order_by(spec.model.completed_at, spec.model.id)
+                    .limit(min(spec.limit, remaining))
+                )
+            ).scalars()
+        )
+        if not ids:
+            continue
+        result = await db.execute(delete(spec.model).where(spec.model.id.in_(ids)))
+        deleted_count = max(0, int(result.rowcount or 0))
+        by_outbox[spec.model.__tablename__] = deleted_count
+        remaining -= deleted_count
+    deleted = cap - remaining
+    if deleted:
+        await db.commit()
+        invalidate_outbox_health_cache()
+    return {
+        "deleted": deleted,
+        "by_outbox": by_outbox,
+        "batch_size": cap,
+        "more_likely": deleted == cap,
+    }
 
 
 def wake_pending_outboxes(

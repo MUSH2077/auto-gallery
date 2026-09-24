@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateJobEventQueries } from "@/lib/jobEventInvalidation";
 
-type WsMessage = {
+export type WsMessage = {
   type: "status_change" | "progress" | "heartbeat" | "connected" | "pong";
   task_id?: string;
   task_type?: "download" | "import";
@@ -60,6 +62,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [lastEvent, setLastEvent] = useState<WsMessage | null>(null);
+  const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef({ onStatusChange, onProgress });
   const ticketFallbackTriedRef = useRef(false);
@@ -147,8 +150,14 @@ export function useJobWebSocket(options?: UseWsOptions) {
         try {
           const data: WsMessage = JSON.parse(event.data);
           setLastEvent(data);
-          if (data.type === "status_change") handlersRef.current.onStatusChange?.(data);
+          if (data.type === "status_change") {
+            void invalidateJobEventQueries(queryClient);
+            handlersRef.current.onStatusChange?.(data);
+          }
           if (data.type === "progress") handlersRef.current.onProgress?.(data);
+          if (data.type === "status_change" || data.type === "progress") {
+            window.dispatchEvent(new CustomEvent("auto-gallery:job-event", { detail: data }));
+          }
         } catch {
           // Ignore malformed push messages; polling remains the source of truth.
         }
@@ -157,7 +166,7 @@ export function useJobWebSocket(options?: UseWsOptions) {
       setConnected(false);
       scheduleReconnect();
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     if (!enabled) {
@@ -188,4 +197,24 @@ export function useJobWebSocket(options?: UseWsOptions) {
   }, [enabled, connect]);
 
   return { connected, status, lastEvent, ws: wsRef.current };
+}
+
+export function useJobEvents(options?: UseWsOptions) {
+  const { enabled = true, onStatusChange, onProgress } = options ?? {};
+  const handlersRef = useRef({ onStatusChange, onProgress });
+
+  useEffect(() => {
+    handlersRef.current = { onStatusChange, onProgress };
+  }, [onStatusChange, onProgress]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const onEvent = (event: Event) => {
+      const data = (event as CustomEvent<WsMessage>).detail;
+      if (data.type === "status_change") handlersRef.current.onStatusChange?.(data);
+      if (data.type === "progress") handlersRef.current.onProgress?.(data);
+    };
+    window.addEventListener("auto-gallery:job-event", onEvent);
+    return () => window.removeEventListener("auto-gallery:job-event", onEvent);
+  }, [enabled]);
 }

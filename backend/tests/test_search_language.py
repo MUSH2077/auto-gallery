@@ -68,6 +68,21 @@ def test_date_comparison_is_accepted():
     assert query.values("posted") == (">=2026-07-01",)
 
 
+@pytest.mark.parametrize("sort", ["heat-desc", "random"])
+def test_works_accepts_heat_and_random_sort(sort):
+    query = parse_search_query(f"sort:{sort}", "works")
+    assert query.values("sort") == (sort,)
+
+
+def test_relevance_sort_requires_a_text_term():
+    with pytest.raises(SearchQueryError) as error:
+        parse_search_query("source:pixiv sort:relevance", "works")
+    assert error.value.diagnostic.code == "relevance_requires_text"
+
+    query = parse_search_query("landscape source:pixiv sort:relevance", "works")
+    assert query.values("sort") == ("relevance",)
+
+
 def test_source_identity_qualifiers_are_generic_exact_and_source_paired():
     query = parse_search_query(
         "uid:PIXIV/1980643 pid:twitter/1234567890123456789",
@@ -146,6 +161,31 @@ def test_compose_replace_group_preserves_unrelated_tokens():
         replace_values=("nsfw", "sfw"),
     )
     assert query.canonical == "portrait is:favorite source:x is:sfw"
+
+
+def test_compose_visual_positive_filters_preserve_negated_advanced_tokens():
+    query = compose_search_query(
+        "cat -source:x source:pixiv -has:video has:image -is:favorite is:nsfw",
+        "works",
+        key="source",
+        value="weibo",
+        operation="set",
+    )
+    assert query.canonical == (
+        "cat -source:x -has:video has:image -is:favorite is:nsfw source:weibo"
+    )
+
+    query = compose_search_query(
+        query.canonical,
+        "works",
+        key="has",
+        value="animation",
+        operation="replace-group",
+        replace_values=("image", "animation", "video", "multiple-assets"),
+    )
+    assert query.canonical == (
+        "cat -source:x -has:video -is:favorite is:nsfw source:weibo has:animation"
+    )
 
 
 def test_catalog_is_scope_aware():

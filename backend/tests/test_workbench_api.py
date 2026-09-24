@@ -13,6 +13,9 @@ class _Scalars:
     def all(self):
         return self._rows
 
+    def one(self):
+        return self._rows[0]
+
 
 class _Result:
     def __init__(self, *, scalar_value=None, rows=None, scalar_rows=None):
@@ -25,6 +28,9 @@ class _Result:
 
     def all(self):
         return self._rows
+
+    def one(self):
+        return self._rows[0]
 
     def scalars(self):
         return _Scalars(self._scalar_rows)
@@ -81,9 +87,7 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
     source = SimpleNamespace(id=uuid4(), source="pixiv", source_url=download.source_url, last_synced_at=now)
 
     session = _Session([
-        _Result(scalar_value=0),
-        _Result(scalar_value=0),
-        _Result(scalar_value=0),
+        _Result(rows=[(1, 0, 0, 1, 0, 0)]),
         _Result(rows=[(download, subscription, creator)]),
         _Result(rows=[(import_job, download, subscription, creator)]),
         _Result(scalar_rows=[work]),
@@ -112,10 +116,14 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
         "timezone": "Asia/Shanghai",
         "scheduler_scan_interval_minutes": 15,
     }))
-    monkeypatch.setattr(system, "_count_statuses", AsyncMock(side_effect=[1, 0, 1, 0]))
     monkeypatch.setattr(system, "_count_active_rebuilds", AsyncMock(return_value=0))
     monkeypatch.setattr(system, "_get_proxy_health_summary", AsyncMock(return_value={}))
     monkeypatch.setattr(system, "_quick_service_health", AsyncMock(return_value={"backend": "up"}))
+    monkeypatch.setattr(system, "auth_attention_counts", AsyncMock(return_value={
+        "auth_actionable_count": 0,
+        "auth_disabled_or_unchecked_count": 0,
+        "credential_issue_count": 0,
+    }))
 
     actor = SimpleNamespace(id=1, is_admin=True, permissions=[])
     async def enrich(_db, rows, **kwargs):
@@ -137,4 +145,38 @@ async def test_workbench_refresh_populates_cache_and_exposes_recent_context(monk
 
     cached = await system.workbench_summary(refresh=False, db=SimpleNamespace(), user=actor)
     assert cached is payload
-    assert session.execute_count == 9
+    assert session.execute_count == 7
+
+
+@pytest.mark.asyncio
+async def test_task_event_marks_shared_workbench_invalidation(monkeypatch):
+    from app.services import tasks
+
+    marked = []
+    monkeypatch.setattr(
+        tasks,
+        "mark_workbench_invalidation_pending",
+        lambda db: marked.append(db),
+    )
+
+    class Session:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            self.rows.append(row)
+
+        async def flush(self):
+            return None
+
+    db = Session()
+    task = SimpleNamespace(id=uuid4())
+
+    await tasks.TaskService(db).add_event(
+        task,
+        "status_changed",
+        from_status="running",
+        to_status="complete",
+    )
+
+    assert marked == [db]

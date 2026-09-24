@@ -125,6 +125,9 @@ async function installFixtures(context: BrowserContext, options: FixtureOptions 
     localStorage.setItem("auto-gallery-lang", "en");
     localStorage.setItem("auto-gallery-theme", "light");
   });
+  await context.routeWebSocket("**/api/v1/ws", (socket) => {
+    socket.close({ code: 1000, reason: "fixture" });
+  });
   await context.route("https://images.example/**", async (route) => {
     await route.fulfill({
       status: 200,

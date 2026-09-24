@@ -517,9 +517,11 @@ export const api = {
     scope: T.SearchScope = "global",
     signal?: AbortSignal,
     cursor?: string | null,
+    seed?: number | null,
   ) => {
     const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit), scope });
     if (cursor) params.set("cursor", cursor);
+    if (seed !== undefined && seed !== null) params.set("seed", String(seed));
     return request<T.SearchResponse>(`/api/v1/search?${params.toString()}`, { signal });
   },
 

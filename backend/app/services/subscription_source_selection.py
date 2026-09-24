@@ -15,6 +15,7 @@ from app.models.source_creator import SourceCreator
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.providers import registry
+from app.services.auth_health import auth_state_for
 
 
 PROVIDER_PRIORITY = {
@@ -134,7 +135,7 @@ async def select_primary_subscription_source(
             (
                 category,
                 category_rank,
-                0 if source.auth_healthy else 1,
+                1 if auth_state_for(source) == "unhealthy" else 0,
                 PROVIDER_PRIORITY.get(source.source, 100),
                 source.created_at.isoformat() if source.created_at else "",
                 str(source.id),

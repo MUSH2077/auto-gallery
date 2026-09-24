@@ -34,6 +34,7 @@ test("backup delete retains its dialog on failure and download sends bearer", as
   const menu = page.getByRole("button", { name: "More actions" });
   await menu.focus();
   await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeFocused();
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Confirm" }).click();

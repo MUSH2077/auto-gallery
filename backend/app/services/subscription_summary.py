@@ -20,6 +20,7 @@ from app.providers import registry
 from app.services.operation_attention import ACTIVE_TASK_STATUSES
 from app.services.tasks import task_visibility_condition
 from app.services.settings import get_scheduler_config
+from app.services.auth_health import classify_source_health
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -30,8 +31,8 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _source_blocked(source: SubscriptionSource) -> bool:
-    if source.auth_healthy is False or not source.source_url:
+def _source_blocked(source: SubscriptionSource, subscription_policy) -> bool:
+    if classify_source_health(source, subscription_policy).actionable or not source.source_url:
         return True
     try:
         provider = registry.get(source.source)
@@ -302,10 +303,13 @@ async def subscription_summaries(
             "blocked_sources": sum(
                 1
                 for source in eligible_sources
-                if _source_blocked(source)
+                if _source_blocked(source, policy)
                 or (
                     user_id is not None
-                    and not bindings_by_source[source.id].auth_healthy
+                    and classify_source_health(
+                        bindings_by_source[source.id],
+                        policy,
+                    ).actionable
                 )
             ),
         }

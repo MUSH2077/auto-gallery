@@ -63,6 +63,8 @@ function WorkLightbox({
         <img
           src={images[page]}
           alt={t("discovery.work_page_alt", { title: work.title, page: page + 1 })}
+          loading="eager"
+          decoding="async"
           className="max-h-[72vh] w-full rounded-md bg-black object-contain"
         />
       ) : (

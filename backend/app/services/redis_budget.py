@@ -83,11 +83,12 @@ def budget_redis(*, seconds=20, reserve_seconds=3, url=None):
         return
     started = time.monotonic()
     deadline = started + max(0.01, seconds)
+    socket_deadline = min(0.5, max(0.01, float(seconds)))
     pool = redis.ConnectionPool.from_url(
         url or settings.redis_url,
         max_connections=4,
-        socket_connect_timeout=0.5,
-        socket_timeout=0.5,
+        socket_connect_timeout=socket_deadline,
+        socket_timeout=socket_deadline,
         retry_on_timeout=False,
         retry=Retry(NoBackoff(), 0),
         health_check_interval=0,

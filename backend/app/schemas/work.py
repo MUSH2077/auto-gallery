@@ -12,6 +12,8 @@ class WorkList(BaseModel):
     title: str | None = None
     posted_at: datetime | None = None
     thumbnail_asset_id: UUID | None = None
+    thumbnail_width: int | None = Field(default=None, ge=1)
+    thumbnail_height: int | None = Field(default=None, ge=1)
     asset_count: int = 1
     is_nsfw: bool
     is_ai_generated: bool = False

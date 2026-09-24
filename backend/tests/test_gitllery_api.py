@@ -12,7 +12,9 @@ ADMIN_USERNAME = "gitllery_test_admin"
 
 async def _clear(db):
     await db.execute(text(
-        "TRUNCATE curation_changes, curation_commits, work_sources, works, "
+        "TRUNCATE gitllery_builds, gitllery_projection_targets, "
+        "gitllery_projection_outbox, gitllery_repository_state, "
+        "curation_changes, curation_commits, work_sources, works, "
         "source_creators, creators RESTART IDENTITY CASCADE"))
     await db.commit()
 
@@ -168,6 +170,124 @@ async def test_rebuild_endpoint_dry_run(tmp_path, monkeypatch):
             assert body["dry_run"] is True
             assert body["projection_mode"] == "shadow"
             assert body["legacy_layout_will_remain_read_only"] is True
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+            await _clear_admin(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_build_routes_are_shadow_safe_async_operations(tmp_path, monkeypatch):
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services.gitllery import builds as build_module
+    from app.services import operations
+
+    monkeypatch.setattr(build_module.settings, "library_root", str(tmp_path))
+    enqueued = []
+
+    async def fake_enqueue(**kwargs):
+        enqueued.append(kwargs)
+        return {
+            "task_id": "00000000-0000-0000-0000-000000000101",
+            "job_id": "gitllery-test-job",
+            "status": "enqueued",
+            "operation_type": kwargs["operation_type"],
+        }
+
+    monkeypatch.setattr(operations, "enqueue_admin_operation", fake_enqueue)
+    headers = _admin_headers()
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_admin(db)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/v1/curation/gitllery/builds",
+                headers=headers,
+                json={"scope": "canary", "generation": "api-r1"},
+            )
+            assert created.status_code == 202
+            body = created.json()
+            assert body["build"]["stats"]["scope"] == "canary"
+            assert body["build"]["high_water_commit_id"] is None
+            build_id = body["build"]["id"]
+            assert enqueued[-1]["operation_type"] == "admin-gitllery-build"
+            assert enqueued[-1]["options"]["build_id"] == build_id
+
+            status = await client.get(
+                f"/api/v1/curation/gitllery/builds/{build_id}", headers=headers
+            )
+            assert status.status_code == 200
+            assert status.json()["generation"] == "api-r1"
+
+            async with async_session() as db:
+                from uuid import UUID
+
+                from app.models import GitlleryBuild
+
+                persisted = await db.get(GitlleryBuild, UUID(build_id))
+                persisted.state = "cancelled"
+                await db.commit()
+
+            # The historical /build entry remains usable in shadow mode and
+            # now delegates to the durable side-by-side builder.
+            compatibility = await client.post(
+                "/api/v1/curation/gitllery/build", headers=headers
+            )
+            assert compatibility.status_code == 202
+            assert compatibility.json()["status"] == "enqueued"
+            assert compatibility.json()["projection_mode"] == "shadow"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+            await _clear_admin(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_library_verify_is_registered_async_work(monkeypatch):
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services import operations
+
+    calls = []
+
+    async def fake_enqueue(**kwargs):
+        calls.append(kwargs)
+        return {
+            "task_id": "00000000-0000-0000-0000-000000000102",
+            "job_id": "gitllery-verify-job",
+            "status": "enqueued",
+            "operation_type": kwargs["operation_type"],
+        }
+
+    monkeypatch.setattr(operations, "enqueue_admin_operation", fake_enqueue)
+    headers = _admin_headers()
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            await _seed_admin(db)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/curation/gitllery/verify",
+                headers=headers,
+                json={"deep": True},
+            )
+            assert response.status_code == 202
+            assert calls[-1]["lock_key"] == "gitllery:verify:library"
+            options = calls[-1]["options"]
+            assert options["repository_id"] is None
+            assert options["build_id"] is None
+            assert options["deep"] is True
+            assert options["evidence"] == {}
+            assert options["verification_id"]
     finally:
         async with async_session() as db:
             await _clear(db)

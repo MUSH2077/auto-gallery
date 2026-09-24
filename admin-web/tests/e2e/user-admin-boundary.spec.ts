@@ -132,26 +132,26 @@ test("an administrator still mounts list and detail controls", async ({ browser 
   }
 });
 
-test("permission lookup failure renders retry before admin content", async ({ context, page }) => {
+test("validated session permissions are reused without a duplicate lookup", async ({ context, page }) => {
   await context.addCookies([{ name: "ag_token", value: "fixture", domain: "127.0.0.1", path: "/" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");
   });
-  let permissionRequests = 0;
+  let sessionRequests = 0;
+  let duplicatePermissionRequests = 0;
   let userRequests = 0;
   const unknownRequests: string[] = [];
   await context.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const apiPath = new URL(request.url()).pathname;
     if (apiPath === "/api/v1/auth/me") {
-      // The API client adds JSON content type even for GET; AuthProvider's raw
-      // session check does not. Keep the session valid while the shared query
-      // exhausts its initial attempt and retry before manual retry succeeds.
-      if (!request.headers()["content-type"]) return json(route, me([], true));
-      permissionRequests += 1;
-      if (permissionRequests >= 3) return json(route, me([], true));
-      return json(route, { detail: "permission lookup unavailable" }, 503);
+      if (!request.headers()["content-type"]) {
+        sessionRequests += 1;
+        return json(route, me([], true));
+      }
+      duplicatePermissionRequests += 1;
+      return json(route, { detail: "duplicate permission lookup" }, 503);
     }
     if (apiPath === "/api/v1/users") {
       userRequests += 1;
@@ -167,13 +167,9 @@ test("permission lookup failure renders retry before admin content", async ({ co
   });
 
   await page.goto("/admin/settings/users");
-  await expect(page.getByText("permission lookup unavailable", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "+ New", exact: true })).toHaveCount(0);
-  expect(userRequests).toBe(0);
-
-  await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByRole("button", { name: "+ New", exact: true })).toBeVisible();
+  expect(sessionRequests).toBe(1);
+  expect(duplicatePermissionRequests).toBe(0);
   expect(userRequests).toBe(1);
   expect(unknownRequests).toEqual([]);
 });

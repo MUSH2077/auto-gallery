@@ -11,6 +11,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
 import { useAuth } from "@/lib/auth";
 import { taskRunDestination } from "@/lib/taskRoutes";
+import { pollInterval } from "@/lib/polling";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
 
@@ -436,8 +437,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     staleTime: 0, // Always refetch on mount to restore result after navigation
     refetchInterval: (query) => {
       if (!batchJob) return false;
-      return query.state.data?.status === "completed" ? false : 2000;
+      return query.state.data?.status === "completed" ? false : pollInterval(true);
     },
+    refetchIntervalInBackground: false,
   });
 
   const operationStatusQuery = useQuery({
@@ -450,8 +452,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     refetchInterval: (query) => {
       if (!operationJob) return false;
       const status = query.state.data?.status;
-      return status === "complete" || status === "failed" ? false : 2000;
+      return status === "complete" || status === "failed" ? false : pollInterval(true);
     },
+    refetchIntervalInBackground: false,
     retry: 2,
   });
 

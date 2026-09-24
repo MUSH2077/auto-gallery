@@ -326,6 +326,51 @@ async def test_legacy_null_account_binding_remains_eligible_for_global_config():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_unchecked_legacy_false_binding_remains_eligible():
+    """A legacy boolean without an attempt result must not suppress work."""
+
+    from app.database import async_session, engine
+    from app.services.subscription_membership import (
+        recompute_subscription_membership_cache,
+        select_eligible_membership_source,
+    )
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with async_session() as db:
+            (
+                _users,
+                _creator,
+                subscription,
+                source,
+                members,
+                _accounts,
+                bindings,
+                _dues,
+            ) = await _seed_shared_source(db, now=now)
+            binding = bindings[1]
+            binding.auth_healthy = False
+            binding.auth_status = None
+            binding.auth_error_reason = None
+            binding.last_auth_checked_at = None
+            await recompute_subscription_membership_cache(db, subscription.id)
+
+            selected = await select_eligible_membership_source(
+                db,
+                source,
+                now=now,
+                preferred_membership_id=members[1].id,
+            )
+
+            assert selected is not None
+            assert selected.binding.id == binding.id
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_member_selection_has_no_global_fallback_when_every_credential_is_unhealthy():
     """Personal bindings never silently fall through to another/global credential."""
 
@@ -355,7 +400,8 @@ async def test_member_selection_has_no_global_fallback_when_every_credential_is_
 
             assert selected is None
             assert source.is_enabled is False
-            assert source.auth_healthy is False
+            # Canonical auth_healthy is no longer a credential-readiness cache.
+            assert source.auth_healthy is True
             await db.rollback()
     finally:
         await engine.dispose()
@@ -3302,7 +3348,7 @@ async def test_update_source_explicit_detach_restores_public_auth_eligibility():
 
             assert target.remote_account_id is None
             assert target.auth_healthy is True
-            assert target.auth_status == "healthy"
+            assert target.auth_status is None
             assert target.auth_error_reason is None
             assert target.last_auth_checked_at is None
             selected = await select_eligible_membership_source(

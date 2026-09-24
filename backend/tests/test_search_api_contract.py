@@ -6,6 +6,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+def test_search_response_contract_exposes_random_seed():
+    from app.main import app
+
+    schema = app.openapi()
+    response = schema["components"]["schemas"]["SearchResponseRead"]
+    assert "seed" in response["properties"]
+
+
 @pytest.mark.asyncio
 async def test_search_accepts_100_and_rejects_101(monkeypatch):
     from app.api import search as search_api
@@ -45,3 +53,39 @@ async def test_search_accepts_100_and_rejects_101(monkeypatch):
     issue = rejected.json()["detail"][0]
     assert issue["loc"][-1] == "limit"
     assert issue["type"] == "less_than_equal"
+
+
+@pytest.mark.asyncio
+async def test_search_accepts_uint32_seed_and_forwards_it(monkeypatch):
+    from app.api import search as search_api
+    from app.database import get_db
+    from app.main import app
+    from app.services.search import SearchService
+
+    seen: list[int | None] = []
+
+    async def fake_search(self, query, offset, limit, **kwargs):
+        seen.append(kwargs.get("seed"))
+        return {"query": query, "canonical_query": query, "groups": {"works": {"total": 0, "items": []}}}
+
+    async def fake_user():
+        return SimpleNamespace(id=None, is_admin=True, permissions=[], nsfw_visible=True)
+
+    async def fake_db():
+        yield None
+
+    monkeypatch.setattr(SearchService, "search", fake_search)
+    app.dependency_overrides[search_api._require_search.dependency] = fake_user
+    app.dependency_overrides[get_db] = fake_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            accepted = await client.get("/api/v1/search?scope=works&seed=4294967295")
+            negative = await client.get("/api/v1/search?scope=works&seed=-1")
+            overflow = await client.get("/api/v1/search?scope=works&seed=4294967296")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert accepted.status_code == 200, accepted.text
+    assert seen == [4294967295]
+    assert negative.status_code == 422
+    assert overflow.status_code == 422

@@ -17,7 +17,12 @@ from rq.job import Job
 from rq.registry import ScheduledJobRegistry, StartedJobRegistry
 
 from app.services.queue_admission import checked_enqueue_in
+from app.services.pixiv_ranking_scheduler import (
+    ensure_latest_pixiv_heat_expiry,
+    ensure_pixiv_ranking_sync,
+)
 from app.services.redis_client import get_redis
+from app.services.work_heat_queue import reconcile_deferred_work_heat_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -313,8 +318,30 @@ def scheduler_watchdog() -> dict:
         interval = max(5, int(_decode(interval_raw) or DEFAULT_SCAN_INTERVAL_MINUTES))
     except (TypeError, ValueError):
         interval = DEFAULT_SCAN_INTERVAL_MINUTES
-    return ensure_next_subscription_scan(
+    outcome = ensure_next_subscription_scan(
         interval,
         redis_client=redis_client,
         watchdog=True,
     )
+    try:
+        outcome["pixiv_ranking"] = ensure_pixiv_ranking_sync(
+            redis_client=redis_client,
+        )
+    except Exception as exc:
+        logger.warning("Unable to ensure Pixiv ranking sync", exc_info=True)
+        outcome["pixiv_ranking"] = {"status": "error", "error": str(exc)}
+    try:
+        outcome["pixiv_heat_expiry"] = ensure_latest_pixiv_heat_expiry(
+            redis_client=redis_client,
+        )
+    except Exception as exc:
+        logger.warning("Unable to ensure Pixiv heat expiry", exc_info=True)
+        outcome["pixiv_heat_expiry"] = {"status": "error", "error": str(exc)}
+    try:
+        outcome["work_heat_queue"] = reconcile_deferred_work_heat_jobs(
+            redis_client=redis_client,
+        )
+    except Exception as exc:
+        logger.warning("Unable to reconcile deferred work heat jobs", exc_info=True)
+        outcome["work_heat_queue"] = {"status": "error", "error": str(exc)}
+    return outcome

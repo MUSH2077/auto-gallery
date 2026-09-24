@@ -402,6 +402,55 @@ def test_scheduler_disabled_is_global_suppression_not_one_attention_per_source()
     assert '"scheduler_disabled",' not in source[source.index("is_attention =") :]
 
 
+def test_unchecked_legacy_auth_flag_does_not_block_scheduler_decision():
+    from app.services.scheduler_decisions import decision_item
+
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=ZoneInfo("UTC"))
+    source = SimpleNamespace(
+        id="source-1",
+        source="pixiv",
+        source_url="https://www.pixiv.net/users/123",
+        source_creator_id="123",
+        is_enabled=True,
+        auth_healthy=False,
+        auth_status=None,
+        auth_error_reason=None,
+        last_auth_checked_at=None,
+        last_synced_at=now - timedelta(hours=1),
+        last_attempted_at=None,
+        next_sync_at=None,
+    )
+    subscription = SimpleNamespace(
+        id="subscription-1",
+        name="Unchecked auth",
+        is_active=True,
+        sync_enabled=True,
+        schedule_mode="interval",
+        scheduled_times=None,
+        schedule_rule=None,
+        sync_interval_hours=6,
+        created_at=now - timedelta(days=1),
+    )
+    creator = SimpleNamespace(id="creator-1", name="creator", display_name=None)
+
+    item, _suppressed = decision_item(
+        source,
+        subscription,
+        creator,
+        config={"schedule_mode": "interval", "scheduler_scan_interval_minutes": 60},
+        now=now,
+        tz=ZoneInfo("UTC"),
+        tz_name="UTC",
+        scheduler_enabled=True,
+        overdue_cutoff=now - timedelta(hours=2),
+    )
+
+    assert item["auth_healthy"] is False
+    assert item["auth_state"] == "unknown"
+    assert item["reason"] != "auth_unhealthy"
+    assert item["is_attention"] is False
+
+
 def test_rq_can_import_scheduler_job_path():
     from rq.utils import import_attribute
 

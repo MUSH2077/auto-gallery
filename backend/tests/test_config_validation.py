@@ -72,3 +72,22 @@ def test_default_automatic_memory_reserve_keeps_the_2560_mib_ceiling(monkeypatch
     assert isolated.resource_memory_reserve_ratio == 0.15
     assert isolated.resource_memory_reserve_min_mb == 384
     assert isolated.resource_memory_reserve_max_mb == 2560
+
+
+def test_gitllery_active_mode_requires_matching_verified_generation() -> None:
+    with pytest.raises(RuntimeError, match="GITLLERY_ACTIVE_VERIFIED_GENERATION"):
+        Settings(
+            **_settings_kwargs(
+                gitllery_projection_mode="active",
+                gitllery_build_generation="next-r1",
+            )
+        )
+
+    isolated = Settings(
+        **_settings_kwargs(
+            gitllery_projection_mode="active",
+            gitllery_build_generation="next-r1",
+            gitllery_active_verified_generation="next-r1",
+        )
+    )
+    assert isolated.gitllery_projection_mode == "active"

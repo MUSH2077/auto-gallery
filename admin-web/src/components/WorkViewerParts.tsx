@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
-import { isArchiveAsset } from "@/components";
+import { isArchiveAsset } from "@/components/work-interactions";
 import type { DerivativeStatus, MediaKind } from "@/lib/media";
 
 export interface AssetData {
@@ -107,6 +107,8 @@ export function FullImageLightbox({ asset, onClose }: { asset: AssetData | null;
         <img
           src={shown.original_url || ""}
           alt={shown.file_name}
+          loading="eager"
+          decoding="async"
           className={`mx-auto h-auto max-h-none max-w-full object-contain ${closing ? "overlay-panel-exit" : "overlay-panel"}`}
         />
       </div>

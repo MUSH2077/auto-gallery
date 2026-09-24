@@ -6,12 +6,19 @@ import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } fr
 import { useT } from "@/lib/i18n";
 import { sha256Blob } from "@/lib/sha256";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, ConfirmDialog, EmptyState, ErrorState, RowActionMenu, PermissionGuard } from "@/components";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
+import PageHeader from "@/components/PageHeader";
+import PageShell from "@/components/PageShell";
+import PermissionGuard from "@/components/PermissionGuard";
+import RowActionMenu from "@/components/RowActionMenu";
 import { useToast } from "@/components/Toast";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { Archive, Database, FileJson, FileText, Settings } from "lucide-react";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation } from "@/lib/useAdminOperation";
+import { ADMIN_OPERATION_CONFIRM_MS, pollInterval } from "@/lib/polling";
 
 const ALL_CONTENTS = ["database", "gallerydl-config", "app-config", "download-archives", "library-metadata"] as const;
 type BackupEstimateResult = { components: Record<string, number>; message?: string };
@@ -100,7 +107,13 @@ function RestoreValidationFlow({ flow }: { flow: RestoreFlow }) {
     queryKey: ["restore-receipt", requestId],
     queryFn: () => api.getRestoreReceipt(requestId!, flow.token),
     enabled: requestId !== null,
-    refetchInterval: (query) => query.state.data?.status === "pending" ? 1_000 : false,
+    refetchInterval: (query) => {
+      if (query.state.data?.status !== "pending") return false;
+      return query.state.dataUpdateCount <= 1
+        ? ADMIN_OPERATION_CONFIRM_MS
+        : pollInterval(true);
+    },
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
   });
   const rollbackComplete = receipt.data?.status === "rolled_back"

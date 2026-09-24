@@ -54,7 +54,7 @@ export default function CreatorReferences({
                 <div className="flex items-start gap-3">
                   {identity.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={identity.avatar_url} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+                    <img src={identity.avatar_url} alt="" loading="lazy" decoding="async" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
                   ) : (
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-surface text-muted">
                       <UserRound aria-hidden="true" className="h-5 w-5" />
