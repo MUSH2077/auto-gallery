@@ -302,7 +302,7 @@ jobs:
         run: npm run typecheck
       - name: Check Jobs route and task tree
         working-directory: admin-web
-        run: node --test tests/job-tree.mjs tests/jobs-route.mjs
+        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
