@@ -8,7 +8,6 @@ dispatches the resulting AST to either the Meilisearch or SQL adapter.
 from __future__ import annotations
 
 import asyncio
-import base64
 from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -96,6 +95,48 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.search_projection_fields import (
+    _iso,
+    _timestamp,
+    _thumbnail_projection,
+    _with_projection_hash,
+    _normalize_reference_name,
+    _alias_projection_fields,
+    _merge_alias_projection_fields,
+)
+from app.services.search_filters import (
+    DEFAULT_SORT,
+    HAS_FIELD,
+    IS_FIELD,
+    MEILI_FIELD,
+    SORT_FIELD,
+    ResolvedSourceURL,
+    _compile_meili_filter,
+    _date_bounds,
+    _date_expression,
+    _grouped_qualifiers,
+    _matching_strategy,
+    _meili_literal,
+    _meili_sort,
+    _resolved_source_url,
+    _resolved_value,
+)
+from app.services.search_pagination import (
+    MEILI_SHUFFLE_FIELDS,
+    RandomWorkCursor,
+    SHUFFLE_RING_SIZE,
+    _apply_sql_sort,
+    _decode_random_work_cursor,
+    _decode_work_cursor,
+    _encode_random_work_cursor,
+    _encode_work_cursor,
+    _meili_random_phase_filter,
+    _meili_shuffle_key,
+    _meili_shuffle_parts,
+    _meili_tuple_comparison,
+    _shuffle_ring_start,
+    _sql_sort_spec,
+)
 from app.services.creator_aliases import normalize_creator_alias
 from app.services.operations import inaccessible_admin_operation_types_for_permissions
 from app.services.source_search_identity import (
@@ -111,23 +152,6 @@ from app.services.tasks import (
 
 logger = logging.getLogger(__name__)
 _REBUILD_REPLAY_RECORD = struct.Struct(">16sQ")
-
-
-@dataclass(frozen=True)
-class ResolvedSourceURL:
-    parsed: ParsedSourceURL
-    work_ids: tuple[str, ...] = ()
-    creator_ids: tuple[str, ...] = ()
-    repository_ids: tuple[str, ...] = ()
-    subscription_ids: tuple[str, ...] = ()
-
-    def ids_for(self, target: SearchTarget) -> tuple[str, ...]:
-        return {
-            "works": self.work_ids,
-            "creators": self.creator_ids,
-            "repositories": self.repository_ids,
-            "subscriptions": self.subscription_ids,
-        }.get(target, ())
 
 
 def _validate_index_namespace(database_url: str, index_prefix: str) -> str:
@@ -150,14 +174,7 @@ TAGS_INDEX = f"{_INDEX_PREFIX}tags"
 REPOSITORIES_INDEX = f"{_INDEX_PREFIX}repositories"
 SUBSCRIPTIONS_INDEX = f"{_INDEX_PREFIX}subscriptions"
 MEMBERSHIPS_INDEX = f"{_INDEX_PREFIX}subscription_memberships_v1"
-MEILI_SHUFFLE_FIELDS = (
-    "shuffle_high",
-    "shuffle_low",
-    "shuffle_id_0",
-    "shuffle_id_1",
-    "shuffle_id_2",
-    "shuffle_id_3",
-)
+
 
 INDEX_LABELS = {
     WORKS_INDEX: "works",
@@ -474,129 +491,6 @@ def _can_search_target(target: SearchTarget, permissions: set[str]) -> bool:
     if required == "library":
         return bool({"library", "curation"} & permissions)
     return required in permissions
-
-DEFAULT_SORT = {
-    "works": "created_ts:desc",
-    "creators": "name_sort:asc",
-    "tags": "usage_count:desc",
-    "repositories": "updated_ts:desc",
-    "subscriptions": "name_sort:asc",
-}
-
-SORT_FIELD = {
-    "heat-desc": ("heat_score", "desc"),
-    "posted-desc": ("posted_ts", "desc"),
-    "posted-asc": ("posted_ts", "asc"),
-    "created-desc": ("created_ts", "desc"),
-    "created-asc": ("created_ts", "asc"),
-    "updated-desc": ("updated_ts", "desc"),
-    "updated-asc": ("updated_ts", "asc"),
-    "name-asc": ("name_sort", "asc"),
-    "name-desc": ("name_sort", "desc"),
-    "usage-desc": ("usage_count", "desc"),
-    "last-sync-desc": ("synced_ts", "desc"),
-    "last-sync-asc": ("synced_ts", "asc"),
-    "title-asc": ("title", "asc"),
-    "title-desc": ("title", "desc"),
-}
-
-MEILI_FIELD = {
-    "works": {
-        "repo": "repository_ids",
-        "creator": "creator_ids",
-        "tag": "tags",
-        "source": "sources",
-        "uid": "source_creator_keys",
-        "pid": "source_work_keys",
-        "posted": "posted_ts",
-        "created": "created_ts",
-        "updated": "updated_ts",
-    },
-    "creators": {
-        "creator": "id",
-        "source": "sources",
-        "uid": "source_creator_keys",
-        "created": "created_ts",
-        "updated": "updated_ts",
-    },
-    "tags": {
-        "tag": "normalized_name",
-        "created": "created_ts",
-        "updated": "updated_ts",
-    },
-    "repositories": {
-        "repo": "id",
-        "creator": "creator_id",
-        "source": "source",
-        "uid": "source_creator_keys",
-        "created": "created_ts",
-        "updated": "updated_ts",
-        "synced": "synced_ts",
-    },
-    "subscriptions": {
-        "repo": "repository_ids",
-        "creator": "creator_id",
-        "source": "sources",
-        "uid": "source_creator_keys",
-        "created": "created_ts",
-        "updated": "updated_ts",
-        "synced": "synced_ts",
-    },
-}
-
-IS_FIELD = {
-    "works": {
-        "favorite": ("is_favorite", True),
-        "nsfw": ("is_nsfw", True),
-        "sfw": ("is_nsfw", False),
-        "ai": ("is_ai_generated", True),
-        "human": ("is_ai_generated", False),
-        "visible": ("visibility", "visible"),
-        "trashed": ("visibility", "trashed"),
-    },
-    "creators": {
-        "favorite": ("is_favorite", True),
-        "active": ("is_active", True),
-        "inactive": ("is_active", False),
-    },
-    "repositories": {
-        "enabled": ("is_enabled", True),
-        "disabled": ("is_enabled", False),
-        "auth-ok": ("auth_state", "healthy"),
-        "auth-error": ("auth_state", "unhealthy"),
-    },
-    "subscriptions": {
-        "active": ("is_active", True),
-        "inactive": ("is_active", False),
-        "sync-enabled": ("sync_enabled", True),
-        "sync-disabled": ("sync_enabled", False),
-        "never-synced": ("never_synced", True),
-    },
-}
-
-HAS_FIELD = {
-    "works": {
-        "tags": "has_tags",
-        "description": "has_description",
-        "multiple-assets": "has_multiple_assets",
-        "image": "has_image",
-        "animation": "has_animation",
-        "video": "has_video",
-    },
-    "creators": {
-        "subscription": "has_subscription",
-        "repository": "has_repository",
-        "danbooru": "has_danbooru",
-    },
-    "repositories": {
-        "last-sync": "has_last_sync",
-        "source-creator-id": "has_source_creator_id",
-    },
-    "subscriptions": {
-        "last-sync": "has_last_sync",
-    },
-}
-
 
 class SearchBackendUnavailable(RuntimeError):
     pass
@@ -1131,52 +1025,6 @@ def _delete_all_documents(index_name: str) -> None:
     _wait_for_task(client, client.index(index_name).delete_all_documents())
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
-def _timestamp(value: datetime | None) -> int | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return int(value.timestamp())
-
-
-def _thumbnail_projection(
-    work: Any,
-    preview_asset_ids: list[str],
-    dimensions: dict[str, tuple[int | None, int | None]],
-) -> tuple[str | None, int | None, int | None]:
-    selected = (
-        str(work.thumbnail_asset_id)
-        if getattr(work, "thumbnail_asset_id", None)
-        else (preview_asset_ids[0] if preview_asset_ids else None)
-    )
-    width, height = dimensions.get(selected, (None, None)) if selected else (None, None)
-    return (
-        selected,
-        int(width) if width is not None and int(width) > 0 else None,
-        int(height) if height is not None and int(height) > 0 else None,
-    )
-
-
-def _with_projection_hash(document: dict[str, Any], *, version: int = 1) -> dict[str, Any]:
-    """Attach a deterministic projection fingerprint for sampled audits."""
-
-    projected = dict(document)
-    projected["projection_version"] = version
-    payload = json.dumps(
-        projected,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    projected["projection_hash"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return projected
-
-
 def _normalize_url(value: str | None) -> str:
     return (value or "").strip().rstrip("/").lower()
 
@@ -1200,42 +1048,6 @@ def _source_url_identity_hint(parsed: ParsedSourceURL) -> str | None:
     return hint or None
 
 
-def _meili_literal(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return "null"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return json.dumps(str(value), ensure_ascii=False)
-
-
-def _date_bounds(raw: str) -> tuple[str, int, int | None]:
-    operator = "="
-    value = raw
-    for candidate in ("<=", ">=", "<", ">", "="):
-        if raw.startswith(candidate):
-            operator = candidate
-            value = raw[len(candidate):]
-            break
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    start = int(parsed.timestamp())
-    if "T" not in value.upper():
-        end = int(datetime.combine(parsed.date(), time.max, tzinfo=parsed.tzinfo).timestamp())
-    else:
-        end = None
-    return operator, start, end
-
-
-def _date_expression(field: str, raw: str) -> str:
-    operator, start, end = _date_bounds(raw)
-    if operator == "=" and end is not None:
-        return f"({field} >= {start} AND {field} <= {end})"
-    return f"{field} {operator} {start}"
-
-
 def _sql_date_expression(column, raw: str):
     operator, start, end = _date_bounds(raw)
     start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
@@ -1251,260 +1063,6 @@ def _sql_date_expression(column, raw: str):
     if operator == "<=":
         return column <= start_dt
     return column == start_dt
-
-
-def _sql_sort_spec(query: SearchQuery, model) -> tuple[Any, str, bool]:
-    selected = query.values("sort")
-    value = selected[0] if selected else "created-desc"
-    field = value.rsplit("-", 1)[0]
-    attribute = {
-        "created": "created_at",
-        "updated": "updated_at",
-        "posted": "posted_at",
-        "heat": "heat_score",
-        "title": "title",
-        "name": "name",
-        "last-sync": "last_synced_at",
-    }.get(field, "created_at")
-    column = getattr(model, attribute, model.created_at)
-    direction_asc = value.endswith("-asc")
-    return column, attribute, direction_asc
-
-
-def _apply_sql_sort(stmt, query: SearchQuery, model, *, reverse: bool = False):
-    column, _attribute, direction_asc = _sql_sort_spec(query, model)
-    if reverse:
-        direction_asc = not direction_asc
-    ordered = column.asc() if direction_asc else column.desc()
-    # A deterministic UUID tie-breaker keeps offset pages stable when titles or
-    # timestamps collide. Nullable fields need explicit NULL placement for
-    # cursor boundaries; nonnullable fields retain the existing index order.
-    if column.nullable:
-        ordered = ordered.nulls_first() if reverse else ordered.nulls_last()
-    identity_order = model.id.asc() if direction_asc else model.id.desc()
-    return stmt.order_by(ordered, identity_order)
-
-
-def _encode_work_cursor(
-    query: SearchQuery,
-    work: Work,
-    *,
-    seek: str,
-    force_sfw: bool,
-) -> str:
-    _column, attribute, _ascending = _sql_sort_spec(query, Work)
-    boundary = getattr(work, attribute)
-    if isinstance(boundary, datetime):
-        boundary = boundary.isoformat()
-    payload = {
-        "v": 1,
-        "q": hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16],
-        "sfw": bool(force_sfw),
-        "sort": (query.values("sort") or ("created-desc",))[0],
-        "seek": seek,
-        "value": boundary,
-        "id": str(work.id),
-    }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
-    ).decode("ascii")
-    return encoded.rstrip("=")
-
-
-def _decode_work_cursor(
-    cursor: str,
-    query: SearchQuery,
-    *,
-    force_sfw: bool,
-) -> tuple[str, Any, UUID]:
-    try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        expected_query = hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16]
-        expected_sort = (query.values("sort") or ("created-desc",))[0]
-        if (
-            payload.get("v") != 1
-            or payload.get("q") != expected_query
-            or bool(payload.get("sfw")) != bool(force_sfw)
-            or payload.get("sort") != expected_sort
-            or payload.get("seek") not in {"after", "before"}
-        ):
-            raise ValueError
-        identity = UUID(str(payload["id"]))
-        _column, attribute, _ascending = _sql_sort_spec(query, Work)
-        value = payload.get("value")
-        if value is not None and attribute in {"created_at", "updated_at", "posted_at"}:
-            value = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        elif value is not None and attribute == "heat_score":
-            value = float(value)
-        elif value is not None:
-            value = str(value)
-        return str(payload["seek"]), value, identity
-    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("Invalid or stale works cursor") from exc
-
-
-SHUFFLE_RING_SIZE = 1 << 63
-
-
-@dataclass(frozen=True)
-class RandomWorkCursor:
-    seek: str
-    key: int
-    identity: UUID
-    phase: int
-
-
-def _shuffle_ring_start(seed: int) -> int:
-    """Map a public uint32 seed to a uniformly distributed hash-ring point."""
-
-    if not 0 <= seed <= 0xFFFFFFFF:
-        raise ValueError("Random seed must be an unsigned 32-bit integer")
-    digest = hashlib.blake2b(
-        seed.to_bytes(4, "big", signed=False),
-        digest_size=8,
-        person=b"ag-random",
-    ).digest()
-    return int.from_bytes(digest, "big") & (SHUFFLE_RING_SIZE - 1)
-
-
-def _meili_shuffle_key(value: int) -> str:
-    """Keep 63-bit hash order exact across Meilisearch's JSON number boundary."""
-
-    if not 0 <= int(value) < SHUFFLE_RING_SIZE:
-        raise ValueError("Shuffle key is outside the stable hash ring")
-    return f"{int(value):019d}"
-
-
-def _meili_shuffle_parts(value: int, identity: UUID) -> dict[str, int]:
-    key = int(value)
-    if not 0 <= key < SHUFFLE_RING_SIZE:
-        raise ValueError("Shuffle key is outside the stable hash ring")
-    identity_value = identity.int
-    return {
-        "shuffle_high": key >> 31,
-        "shuffle_low": key & ((1 << 31) - 1),
-        "shuffle_id_0": (identity_value >> 96) & 0xFFFFFFFF,
-        "shuffle_id_1": (identity_value >> 64) & 0xFFFFFFFF,
-        "shuffle_id_2": (identity_value >> 32) & 0xFFFFFFFF,
-        "shuffle_id_3": identity_value & 0xFFFFFFFF,
-    }
-
-
-def _meili_tuple_comparison(
-    fields: tuple[str, ...],
-    values: tuple[int, ...],
-    operator: str,
-    *,
-    inclusive_last: bool = False,
-) -> str:
-    clauses = []
-    for index, (field, value) in enumerate(zip(fields, values, strict=True)):
-        prefix = " AND ".join(
-            f"{fields[position]} = {values[position]}"
-            for position in range(index)
-        )
-        comparison = (
-            f"{field} {operator}= {value}"
-            if inclusive_last and index == len(fields) - 1
-            else f"{field} {operator} {value}"
-        )
-        clauses.append(f"({prefix} AND {comparison})" if prefix else comparison)
-    return "(" + " OR ".join(clauses) + ")"
-
-
-def _meili_random_phase_filter(
-    base_filter: str | None,
-    *,
-    start: int,
-    phase: int,
-    boundary: RandomWorkCursor | None = None,
-    reverse: bool = False,
-) -> str:
-    if phase not in {0, 1}:
-        raise ValueError("Invalid random ring phase")
-    start_parts = _meili_shuffle_parts(start, UUID(int=0))
-    key_fields = MEILI_SHUFFLE_FIELDS[:2]
-    key_values = tuple(start_parts[field] for field in key_fields)
-    parts = [_meili_tuple_comparison(
-        key_fields,
-        key_values,
-        ">" if phase == 0 else "<",
-        inclusive_last=phase == 0,
-    )]
-    if boundary is not None:
-        boundary_parts = _meili_shuffle_parts(boundary.key, boundary.identity)
-        operator = "<" if reverse else ">"
-        parts.append(_meili_tuple_comparison(
-            MEILI_SHUFFLE_FIELDS,
-            tuple(boundary_parts[field] for field in MEILI_SHUFFLE_FIELDS),
-            operator,
-        ))
-    if base_filter:
-        parts.insert(0, base_filter)
-    return " AND ".join(f"({part})" for part in parts)
-
-
-def _encode_random_work_cursor(
-    query: SearchQuery,
-    work: Work,
-    *,
-    seek: str,
-    force_sfw: bool,
-    seed: int,
-    phase: int,
-) -> str:
-    if seek not in {"after", "before"} or phase not in {0, 1}:
-        raise ValueError("Invalid random cursor boundary")
-    payload = {
-        "v": 2,
-        "q": hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16],
-        "sfw": bool(force_sfw),
-        "sort": "random",
-        "seed": seed,
-        "phase": phase,
-        "seek": seek,
-        "key": int(work.shuffle_key),
-        "id": str(work.id),
-    }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    ).decode("ascii")
-    return encoded.rstrip("=")
-
-
-def _decode_random_work_cursor(
-    cursor: str,
-    query: SearchQuery,
-    *,
-    force_sfw: bool,
-    seed: int,
-) -> RandomWorkCursor:
-    try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        expected_query = hashlib.sha256(query.canonical.encode("utf-8")).hexdigest()[:16]
-        if (
-            payload.get("v") != 2
-            or payload.get("q") != expected_query
-            or bool(payload.get("sfw")) != bool(force_sfw)
-            or payload.get("sort") != "random"
-            or payload.get("seed") != seed
-            or payload.get("phase") not in {0, 1}
-            or payload.get("seek") not in {"after", "before"}
-        ):
-            raise ValueError
-        key = int(payload["key"])
-        if not 0 <= key < SHUFFLE_RING_SIZE:
-            raise ValueError
-        return RandomWorkCursor(
-            seek=str(payload["seek"]),
-            key=key,
-            identity=UUID(str(payload["id"])),
-            phase=int(payload["phase"]),
-        )
-    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("Invalid or stale works cursor") from exc
 
 
 async def _fetch_random_work_page(
@@ -1649,69 +1207,6 @@ def _free_text(query: SearchQuery) -> str:
     return " ".join(values)
 
 
-def _normalize_reference_name(value: str) -> str:
-    """Match PostgreSQL's reference-list normalization in search documents."""
-
-    return unicodedata.normalize("NFKC", value).casefold()
-
-
-def _alias_projection_fields(aliases: Iterable[Any]) -> dict[str, list[Any]]:
-    name_kinds = {"name", "other_name"}
-    ordered = sorted(
-        aliases,
-        key=lambda item: (
-            not bool(item.is_current),
-            0 if item.kind == "name" else 1 if item.kind == "other_name" else 2,
-            str(item.source),
-            str(item.normalized_value),
-        ),
-    )
-    fields: dict[str, list[Any]] = {
-        "alias_names_current": [],
-        "alias_names_historical": [],
-        "alias_identities_current": [],
-        "alias_identities_historical": [],
-        "alias_records": [],
-    }
-    seen: dict[str, set[str]] = {
-        key: set() for key in fields if key != "alias_records"
-    }
-    for item in ordered:
-        family = "names" if item.kind in name_kinds else "identities"
-        suffix = "current" if item.is_current else "historical"
-        field = f"alias_{family}_{suffix}"
-        normalized = str(item.normalized_value)
-        if normalized not in seen[field]:
-            seen[field].add(normalized)
-            fields[field].append(str(item.value))
-        fields["alias_records"].append(
-            {
-                "value": str(item.value),
-                "normalized_value": normalized,
-                "source": str(item.source),
-                "kind": str(item.kind),
-                "is_current": bool(item.is_current),
-            }
-        )
-    return fields
-
-
-def _merge_alias_projection_fields(
-    projections: Iterable[dict[str, list[Any]]],
-) -> dict[str, list[Any]]:
-    merged = _alias_projection_fields(())
-    seen = {key: set() for key in merged if key != "alias_records"}
-    for projection in projections:
-        for key in seen:
-            for value in projection.get(key, []):
-                normalized = _normalize_reference_name(str(value))
-                if normalized not in seen[key]:
-                    seen[key].add(normalized)
-                    merged[key].append(value)
-        merged["alias_records"].extend(projection.get("alias_records", []))
-    return merged
-
-
 _ALIAS_PROJECTION_FIELDS = (
     "alias_names_current",
     "alias_names_historical",
@@ -1816,119 +1311,6 @@ def _reference_name_expressions(name_expression: Any) -> tuple[Any, Any, Any]:
         else_=29,
     )
     return normalized, anchor_key, anchor_rank
-
-
-def _grouped_qualifiers(query: SearchQuery, target: SearchTarget) -> dict[tuple[str, bool], list[SearchQualifier]]:
-    grouped: dict[tuple[str, bool], list[SearchQualifier]] = defaultdict(list)
-    for token in query.qualifiers:
-        if token.key in {"type", "sort"}:
-            continue
-        if token.key == "is" and target not in IS_TARGETS.get(token.value, frozenset()):
-            continue
-        if token.key == "has" and target not in HAS_TARGETS.get(token.value, frozenset()):
-            continue
-        grouped[(token.key, token.negated)].append(token)
-    return grouped
-
-
-def _resolved_value(token: SearchQualifier, resolved: dict[tuple[str, str], Any]) -> str:
-    value = resolved.get((token.key, token.value), token.value)
-    return value if isinstance(value, str) else token.value
-
-
-def _resolved_source_url(
-    token: SearchQualifier,
-    resolved: dict[tuple[str, str], Any],
-) -> ResolvedSourceURL | None:
-    value = resolved.get((token.key, token.value))
-    return value if isinstance(value, ResolvedSourceURL) else None
-
-
-def _compile_meili_filter(
-    query: SearchQuery,
-    target: SearchTarget,
-    resolved: dict[tuple[str, str], Any],
-    *,
-    force_sfw: bool,
-    identity_field: str = "id",
-) -> str | None:
-    parts: list[str] = []
-    fields = MEILI_FIELD[target]
-    for (key, negated), tokens in _grouped_qualifiers(query, target).items():
-        expressions: list[str] = []
-        if key == "is":
-            for token in tokens:
-                field, value = IS_FIELD[target][token.value]
-                expressions.append(f"{field} {'!=' if negated else '='} {_meili_literal(value)}")
-        elif key == "has":
-            for token in tokens:
-                field = HAS_FIELD[target][token.value]
-                expressions.append(f"{field} = {'false' if negated else 'true'}")
-        elif key in {"posted", "created", "updated", "synced"}:
-            for token in tokens:
-                expression = _date_expression(fields[key], token.value)
-                expressions.append(f"NOT ({expression})" if negated else expression)
-        elif key == "url":
-            for token in tokens:
-                source_url = _resolved_source_url(token, resolved)
-                identities = source_url.ids_for(target) if source_url else ()
-                if identities:
-                    identity_expression = " OR ".join(
-                        f"{identity_field} = {_meili_literal(identity)}" for identity in identities
-                    )
-                    expression = f"({identity_expression})"
-                else:
-                    expression = f'{identity_field} = "__source_url_no_match__"'
-                expressions.append(f"NOT ({expression})" if negated else expression)
-        elif key in fields:
-            field = fields[key]
-            for token in tokens:
-                value = _resolved_value(token, resolved)
-                expressions.append(f"{field} {'!=' if negated else '='} {_meili_literal(value)}")
-        if expressions:
-            # Positive values of the same qualifier are alternatives. Negative
-            # values all have to be absent.
-            parts.append(f"({' AND '.join(expressions)})" if negated else f"({' OR '.join(expressions)})")
-
-    if target == "works":
-        visibility_values = {
-            token.value
-            for token in query.qualifiers
-            if token.key == "is" and not token.negated and token.value in {"visible", "trashed"}
-        }
-        if not visibility_values:
-            parts.append('visibility = "visible"')
-        if force_sfw:
-            parts.append("is_nsfw = false")
-    return " AND ".join(parts) or None
-
-
-def _meili_sort(query: SearchQuery, target: SearchTarget) -> list[str] | None:
-    selected = query.values("sort")
-    if selected and selected[0] != "relevance":
-        if selected[0] == "heat-desc":
-            return ["heat_available:desc", "heat_score:desc", "id:desc"]
-        if selected[0] == "random":
-            return [f"{field}:asc" for field in MEILI_SHUFFLE_FIELDS]
-        field, direction = SORT_FIELD[selected[0]]
-        order = [f"{field}:{direction}"]
-        if target in {"works", "creators", "repositories", "subscriptions"} and field != "id":
-            order.append(f"id:{direction}")
-        return order
-    if query.terms or selected == ("relevance",):
-        return None
-    default = DEFAULT_SORT.get(target)
-    if not default:
-        return None
-    order = [default]
-    if target in {"works", "creators", "repositories", "subscriptions"}:
-        direction = default.rsplit(":", 1)[-1]
-        order.append(f"id:{direction}")
-    return order
-
-
-def _matching_strategy(target: SearchTarget) -> str:
-    return "last" if target == "works" else "all"
 
 
 def _search_hits(result: Any) -> tuple[list[dict], int]:

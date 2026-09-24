@@ -290,7 +290,7 @@ async def test_import_claim_waits_for_publication_lock_then_claims_attempt_once(
             claim_session_started.set()
             yield db
 
-    monkeypatch.setattr(import_runner, "async_session", instrumented_claim_session)
+    monkeypatch.setattr("app.jobs.import_execution.async_session", instrumented_claim_session)
     try:
         async with async_session() as setup_db:
             await _clear(setup_db)
@@ -370,7 +370,7 @@ async def test_import_claim_rechecks_cancelled_status_after_publication_unlock(m
             claim_session_started.set()
             yield db
 
-    monkeypatch.setattr(import_runner, "async_session", instrumented_claim_session)
+    monkeypatch.setattr("app.jobs.import_execution.async_session", instrumented_claim_session)
     try:
         async with async_session() as setup_db:
             await _clear(setup_db)
