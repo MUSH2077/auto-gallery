@@ -160,20 +160,101 @@ jobs:
         if: ${{ always() && matrix.shard == 'n-z' }}
         run: docker stop auto-gallery-ci-meilisearch || true
 
+  extracted-python-quality:
+    name: Extracted Python quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        env:
+          POSTGRES_USER: autogallery
+          POSTGRES_PASSWORD: test-db
+          POSTGRES_DB: autogallery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7@sha256:595cc6f2bb3af6e03347b90deb6123c6aa2c81dea05ce08128de8a174b6ac67b
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - name: Install runtime dependencies
+        working-directory: backend
+        run: pip install --require-hashes -r requirements.txt
+      - name: Install pinned development quality tools
+        run: pip install mypy==2.3.1 pytest-cov==7.1.0
+      - name: Check extracted module types and expanded lint rules
+        working-directory: backend
+        run: |
+          modules=(
+            app/services/search_pagination.py
+            app/services/search_filters.py
+            app/services/search_projection_fields.py
+            app/jobs/import_execution.py
+            app/services/resource_pressure_sampling.py
+            app/services/resource_pressure_state.py
+            app/services/resource_pressure_snapshot.py
+          )
+          ruff check --select E4,E7,E9,F "${modules[@]}"
+          mypy --cache-dir=/tmp/auto-gallery-mypy --follow-imports=skip --ignore-missing-imports "${modules[@]}"
+      - name: Report extracted module coverage
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://autogallery:test-db@localhost:5432/autogallery
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          python -m pytest \
+            --cov=app.services.search_pagination \
+            --cov=app.services.search_filters \
+            --cov=app.services.search_projection_fields \
+            --cov=app.jobs.import_execution \
+            --cov=app.services.resource_pressure_sampling \
+            --cov=app.services.resource_pressure_state \
+            --cov=app.services.resource_pressure_snapshot \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage-extracted.xml \
+            tests/test_search_algorithms.py \
+            tests/test_import_finalization_recovery.py \
+            tests/test_resource_pressure.py
+          {
+            echo '### Extracted Python module coverage'
+            echo '```'
+            python -m coverage report -m
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   backend:
     name: Backend checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [backend-static, backend-tests]
+    needs: [backend-static, backend-tests, extracted-python-quality]
     if: ${{ always() }}
     steps:
       - name: Verify backend checks
         env:
           STATIC_RESULT: ${{ needs.backend-static.result }}
           TEST_RESULT: ${{ needs.backend-tests.result }}
+          QUALITY_RESULT: ${{ needs.extracted-python-quality.result }}
         run: |
           test "$STATIC_RESULT" = success
           test "$TEST_RESULT" = success
+          test "$QUALITY_RESULT" = success
 
   admin-web:
     name: Admin checks
@@ -213,6 +294,9 @@ jobs:
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
+      - name: Check Jobs route and task tree
+        working-directory: admin-web
+        run: node --test tests/job-tree.mjs tests/jobs-route.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
@@ -224,7 +308,14 @@ jobs:
         env:
           PLAYWRIGHT_MANAGE_SERVER: "1"
           PLAYWRIGHT_SERVER_MODE: "production"
-        run: npx playwright test tests/e2e/admin-shell.spec.ts tests/e2e/search.spec.ts --project=chromium --workers=1
+        run: >-
+          npx playwright test
+          tests/e2e/admin-shell.spec.ts
+          tests/e2e/dashboard.spec.ts
+          tests/e2e/search.spec.ts
+          tests/e2e/task-action-capabilities.spec.ts
+          tests/e2e/task5-r3-regressions.spec.ts
+          --project=chromium --workers=1
 
   dependency-review:
     name: Dependency review
