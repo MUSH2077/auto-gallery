@@ -8,7 +8,7 @@ export * from "./endpoints";
 
 // Multipart upload via XHR — fetch() cannot report upload progress, so the
 // manual upload page needs `xhr.upload.onprogress`. Mirrors request()'s auth
-// handling (Bearer token from localStorage, 401 -> clearAuthOn401) instead of
+// handling (session cookie, CSRF value and 401 redirect) instead of
 // duplicating it silently.
 function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
   return new Promise((resolve, reject) => {
@@ -27,7 +27,7 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
       let body: any = {};
       try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
       if (xhr.status === 401) {
-        clearAuthOn401();
+        clearAuthOn401(csrf);
         reject(new ApiError(401, "Session expired — redirecting to login"));
         return;
       }

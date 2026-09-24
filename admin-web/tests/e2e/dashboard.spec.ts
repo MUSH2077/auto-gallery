@@ -301,7 +301,7 @@ test("root route sends unauthenticated users to login and login lands on dashboa
   await expect(page.getByRole("heading", { name: "Recently added works" })).toBeVisible();
 });
 
-test("failed user lookup after login clears the browser session", async ({ context, page }) => {
+test("failed user lookup after login leaves the session for the next login to replace", async ({ context, page }) => {
   await context.addInitScript(() => {
     localStorage.removeItem("ag_token");
     localStorage.setItem("auto-gallery-lang", "zh");
@@ -332,20 +332,21 @@ test("failed user lookup after login clears the browser session", async ({ conte
   await expect(page).toHaveURL(/\/admin\/login/);
   await expect(page.locator("p[role=alert]")).toContainText("用户名或密码错误");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("ag_token"))).toBeNull();
-  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(false);
+  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(true);
 });
 
-test("expired browser session clears cookies without redirecting back from login", async ({ context, page }) => {
+test("expired browser session stays on login without an automatic logout request", async ({ context, page }) => {
   const origin = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
   await context.addCookies([
     { name: "ag_session", value: "expired-session", url: origin },
     { name: "ag_csrf", value: "expired-csrf", url: origin },
   ]);
+  let logoutCalls = 0;
   await context.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/v1/auth/me") return route.fulfill({ status: 401, json: { detail: "Expired" } });
     if (path === "/api/v1/auth/browser/logout") {
-      await context.clearCookies();
+      logoutCalls += 1;
       return route.fulfill({ json: { ok: true } });
     }
     return route.fulfill({ status: 501, json: { detail: "Unhandled fixture" } });
@@ -353,7 +354,60 @@ test("expired browser session clears cookies without redirecting back from login
   await page.goto("/admin");
   await expect(page).toHaveURL(/\/admin\/login/);
   await expect(page.getByTestId("login-hero")).toBeVisible();
-  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(false);
+  expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(true);
+  expect(logoutCalls).toBe(0);
+});
+
+test("late initial 401 cannot revoke a newer browser login", async ({ context, page }) => {
+  const origin = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000";
+  await context.addCookies([
+    { name: "ag_session", value: "stale-session", url: origin },
+    { name: "ag_csrf", value: "stale-csrf", url: origin },
+  ]);
+  let releaseInitial: (() => void) | undefined;
+  const initialGate = new Promise<void>((resolve) => { releaseInitial = resolve; });
+  let meCalls = 0;
+  let initialCompleted = false;
+  let logoutCalls = 0;
+  await context.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/auth/me") {
+      meCalls += 1;
+      if (meCalls === 1) {
+        await initialGate;
+        await route.fulfill({ status: 401, json: { detail: "Expired" } });
+        initialCompleted = true;
+        return;
+      }
+      return route.fulfill({ json: ADMIN });
+    }
+    if (path === "/api/v1/auth/browser/login") {
+      await context.addCookies([
+        { name: "ag_session", value: "fresh-login-session", url: origin },
+        { name: "ag_csrf", value: "fresh-csrf", url: origin },
+      ]);
+      return route.fulfill({ json: { ok: true } });
+    }
+    if (path === "/api/v1/auth/browser/logout") {
+      logoutCalls += 1;
+      return route.fulfill({ json: { ok: true } });
+    }
+    if (path === "/api/v1/system/workbench") return route.fulfill({ json: WORKBENCH });
+    if (path.includes("/notifications")) return route.fulfill({ json: { items: [], total: 0, unread_count: 0 } });
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto("/admin/login");
+  await expect.poll(() => meCalls).toBe(1);
+  await page.getByLabel("用户名").fill("admin");
+  await page.getByLabel("密码", { exact: true }).fill("test-password");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin$/);
+  releaseInitial?.();
+  await expect.poll(() => initialCompleted).toBe(true);
+  await expect(page.getByRole("heading", { name: "最近加入的作品" })).toBeVisible();
+  expect((await context.cookies()).find((cookie) => cookie.name === "ag_session")?.value).toBe("fresh-login-session");
+  expect(logoutCalls).toBe(0);
 });
 
 test("session store outage keeps the cookie and displays a retryable error", async ({ context, page }) => {

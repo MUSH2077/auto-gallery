@@ -18,7 +18,7 @@ class FakeRedis:
         self.values = {}
         self.fail = False
 
-    async def set(self, key, value, *, ex, nx):
+    def set(self, key, value, *, ex, nx):
         if self.fail:
             raise browser_sessions.RedisError("unavailable")
         if nx and key in self.values:
@@ -26,18 +26,15 @@ class FakeRedis:
         self.values[key] = value.encode()
         return True
 
-    async def get(self, key):
+    def get(self, key):
         if self.fail:
             raise browser_sessions.RedisError("unavailable")
         return self.values.get(key)
 
-    async def delete(self, key):
+    def delete(self, key):
         if self.fail:
             raise browser_sessions.RedisError("unavailable")
         return self.values.pop(key, None) is not None
-
-    async def aclose(self):
-        pass
 
 
 def _user():
@@ -67,7 +64,7 @@ def _request(method="GET", *, token=None, csrf=None, origin=None):
 @pytest.fixture
 def store(monkeypatch):
     fake = FakeRedis()
-    monkeypatch.setattr(browser_sessions, "_client", fake)
+    monkeypatch.setattr(browser_sessions, "_redis", lambda: fake)
     monkeypatch.setattr(settings, "browser_session_origins", "http://test,https://test")
     return fake
 
@@ -159,6 +156,13 @@ async def test_browser_login_cookie_csrf_logout(store, monkeypatch, origin, secu
         )
         assert granted.status_code == 200
         assert granted.json()["ticket"] == "one-use"
+        legacy_change = await client.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": "pw", "new_password": "new-password"},
+            headers={"Origin": origin, "X-CSRF-Token": csrf},
+        )
+        assert legacy_change.status_code == 401
+        assert "access_token" not in legacy_change.text
         logout = await client.post(
             "/api/v1/auth/browser/logout",
             headers={"Origin": origin, "X-CSRF-Token": csrf},

@@ -1,10 +1,10 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useRef, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
-import { AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser, logoutBrowser } from "@/lib/authFlow";
+import { AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -31,9 +31,12 @@ export default function LoginPage() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const loginGeneration = useRef(0);
   const copy = COPY[lang];
 
   useEffect(() => {
+    const generation = loginGeneration.current;
+    let active = true;
     try {
       const storedLang = localStorage.getItem("auto-gallery-lang");
       if (storedLang === "zh" || storedLang === "en") setLang(storedLang);
@@ -49,12 +52,16 @@ export default function LoginPage() {
     if (!csrfToken()) return;
     loadUser()
       .then((user) => {
-        router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
+        if (active && generation === loginGeneration.current) {
+          router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
+        }
       })
       .catch((error: Error & { status?: number }) => {
-        if (error.status === 503) setError(copy.sessionUnavailable);
-        else void logoutBrowser().catch(() => {});
+        if (active && generation === loginGeneration.current && error.status === 503) {
+          setError(copy.sessionUnavailable);
+        }
       });
+    return () => { active = false; };
   }, [router, copy.sessionUnavailable]);
 
   const changeLang = () => {
@@ -73,6 +80,7 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    loginGeneration.current += 1;
     setLoading(true);
     setError("");
     try {

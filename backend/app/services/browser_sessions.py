@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import secrets
 from dataclasses import dataclass
 
-import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from fastapi import HTTPException, Request
 
 from app.config import settings
+from app.services.redis_client import get_redis
 
 SESSION_COOKIE = "ag_session"
 CSRF_COOKIE = "ag_csrf"
 CSRF_HEADER = "x-csrf-token"
 _KEY_PREFIX = "browser:session:"
-_client: aioredis.Redis | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,24 +31,10 @@ class SessionStoreUnavailable(RuntimeError):
     pass
 
 
-def _redis() -> aioredis.Redis:
-    global _client
-    if _client is None:
-        _client = aioredis.Redis.from_url(
-            settings.redis_url,
-            max_connections=8,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-            health_check_interval=30,
-        )
-    return _client
-
-
-async def close_browser_session_store() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+def _redis():
+    # Reuse the process-wide bounded Redis pool. Run synchronous operations in
+    # a worker thread so authentication never blocks the event loop.
+    return get_redis()
 
 
 def _key(token: str) -> str:
@@ -71,7 +57,8 @@ async def create_browser_session(user) -> tuple[str, BrowserSession]:
         password_fingerprint=password_fingerprint(user.password_hash),
     )
     try:
-        created = await _redis().set(
+        created = await asyncio.to_thread(
+            _redis().set,
             _key(token),
             json.dumps({
                 "user_id": session.user_id,
@@ -92,7 +79,7 @@ async def load_browser_session(token: str) -> BrowserSession | None:
     if not token or len(token) > 128 or not token.isascii():
         return None
     try:
-        raw = await _redis().get(_key(token))
+        raw = await asyncio.to_thread(_redis().get, _key(token))
     except RedisError as exc:
         raise SessionStoreUnavailable from exc
     if raw is None:
@@ -112,7 +99,7 @@ async def revoke_browser_session(token: str) -> None:
     if not token or len(token) > 128 or not token.isascii():
         return
     try:
-        await _redis().delete(_key(token))
+        await asyncio.to_thread(_redis().delete, _key(token))
     except RedisError as exc:
         raise SessionStoreUnavailable from exc
 

@@ -223,9 +223,12 @@ async def create_websocket_ticket(request: Request, username: str = Depends(get_
 @router.post("/change-password")
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
+    if getattr(request.state, "browser_session", None) is not None:
+        raise HTTPException(status_code=401, detail="Bearer credentials required")
     user = await _change_password(body, current_user, session)
     token = create_access_token(user.username, must_change_password=False)
     return {"ok": True, "access_token": token, "token_type": "bearer", "must_change_password": False}

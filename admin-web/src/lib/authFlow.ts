@@ -65,10 +65,7 @@ export async function loginAndLoadUser(
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || "Login failed");
   }
-  try {
-    return await loadUser();
-  } catch (error) {
-    await logoutBrowser().catch(() => {});
-    throw error;
-  }
+  // A failed lookup leaves the session cookie to be replaced by the next
+  // successful login. Automatic logout could race with a newer login.
+  return loadUser();
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearPrivateDiscoveryCache } from "@/lib/remoteDiscoveryPrivateCache";
 import { clearLegacyToken, loadUser, loginAndLoadUser, logoutBrowser, type AuthUser } from "@/lib/authFlow";
@@ -26,33 +26,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authUnavailable, setAuthUnavailable] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const loginGeneration = useRef(0);
 
   useEffect(() => {
+    const generation = loginGeneration.current;
     clearLegacyToken();
     loadUser()
       .then((data) => {
+        if (generation !== loginGeneration.current) return;
         queryClient.setQueryData(ME_QUERY_KEY, data);
         setUser(data);
         setAuthUnavailable(false);
       })
-      .catch(async (error: Error & { status?: number }) => {
+      .catch((error: Error & { status?: number }) => {
+        if (generation !== loginGeneration.current) return;
         if (error.status === 503) {
           setAuthUnavailable(true);
           return;
         }
         queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        await logoutBrowser().catch(() => {});
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === loginGeneration.current) setIsLoading(false);
+      });
   }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthUser> => {
+    loginGeneration.current += 1;
     const me = await loginAndLoadUser(username, password);
 
     clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
     setUser(me);
     setAuthUnavailable(false);
+    setIsLoading(false);
     return me;
   }, [queryClient]);
 

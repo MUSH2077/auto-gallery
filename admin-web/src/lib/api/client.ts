@@ -1,4 +1,4 @@
-import { csrfToken, logoutBrowser } from "../authFlow.ts";
+import { csrfToken } from "../authFlow.ts";
 
 const BASE = "";
 
@@ -27,11 +27,11 @@ export class ApiError extends Error {
   }
 }
 
-export function clearAuthOn401() {
-  if (typeof window === "undefined") return;
+export function clearAuthOn401(requestSessionMarker: string | null) {
+  if (typeof window === "undefined" || csrfToken() !== requestSessionMarker) return;
   try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
   if (window.location.pathname.startsWith("/admin/login")) return;
-  void logoutBrowser().catch(() => {}).finally(() => window.location.replace("/admin/login"));
+  window.location.replace("/admin/login");
 }
 
 
@@ -69,6 +69,7 @@ async function fetchApiResponse(path: string, options: RequestInit | undefined, 
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
 
+  const requestSessionMarker = typeof window === "undefined" ? null : csrfToken();
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, {
@@ -89,7 +90,7 @@ async function fetchApiResponse(path: string, options: RequestInit | undefined, 
     const error = await apiErrorFromResponse(res);
     // Global protected-route 401 handler: preserve the server rejection while
     // clearing auth state and redirecting. Auth endpoints avoid redirect loops.
-    if (res.status === 401 && !path.startsWith("/api/v1/auth/")) clearAuthOn401();
+    if (res.status === 401 && !path.startsWith("/api/v1/auth/")) clearAuthOn401(requestSessionMarker);
     throw error;
   }
   return res;
