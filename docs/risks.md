@@ -2,25 +2,17 @@
 
 ## HIGH Severity
 
-### 1. Multi-user data model transition
+### 1. Multi-user ownership and permission regression
 
-**Risk**: The current Phase 1-5 design has no user model. Adding it in Phase 6 requires:
-- Schema migration: add `user_id` to `subscription` table
-- API breaking change: all subscription endpoints change scope from global to per-user
-- Auth migration: from API key to JWT
-- Data migration: existing subscriptions must be assigned to a default admin user
+**Risk**: The current application already has users, private subscription
+intent, owner-scoped tasks and module permissions. Refactoring search, imports
+or the Jobs page can expose another user's data or hide authorized work.
 
-**Impact**: If not planned for, Phase 6 becomes a major refactor instead of an addition. Existing API consumers (admin-web) break.
-
-**Mitigation**:
-- Design Phase 1-5 with awareness that `user_id` will be added to subscription
-- Keep subscription endpoints behind admin routes until Phase 6 (avoid premature public API)
-- Use repository pattern so data access layer changes are localized
-- Reserve the `user_id` column name; don't use it for anything else
-- Write Phase 6 migration as: add nullable `user_id`, backfill with default admin, make non-nullable
-- Admin-web built against `/api/v1/admin/*` routes (unchanged by user model addition)
-
-**Decision**: Phase 1-5 stays admin-only. Phase 6 adds user model + migration path. No premature user model.
+**Mitigation**: Keep the owner-first task visibility checks, permission
+dependencies and private membership scoping as shared contracts. Test regular,
+restricted and admin users against task details, WebSocket subscriptions,
+search and recovery after restart. Treat the prior Phase 6 migration notes in
+dated audits as history, not as an upcoming migration.
 
 ---
 
@@ -150,18 +142,22 @@ parallelism after mixed-load validation.
 
 ---
 
-### 10. Client auth token lifecycle
+### 10. Browser session and LAN transport
 
-**Risk**: JWT access tokens expire every 15 minutes. Flutter client must transparently refresh. If refresh logic is buggy, user sees auth errors. If refresh token expires (30 days), user must re-login. Remote re-login when not on LAN is impossible without VPN.
+**Risk**: A stale 401 response, Redis outage, password change, or a
+cross-origin request could mishandle a browser session. The optional LAN HTTP
+entry exposes cookies to observers on that connection.
 
-**Mitigation**:
-- Flutter HTTP interceptor (dio) handles 401 -> refresh -> retry transparently
-- Refresh token stored in platform secure storage
-- On refresh failure: clear tokens, redirect to login screen
-- Refresh token expiry: show notification 7 days before expiry
-- Admin can issue long-lived access tokens for trusted clients (future)
+**Mitigation**: Use revocable Redis sessions with bounded shared Redis
+connections, HttpOnly/SameSite cookies, exact Origin checks, session-bound
+CSRF values and one-use WebSocket tickets. Fail closed when Redis is
+unavailable. Do not automatically revoke a session in response to an old 401;
+compare the request's session marker before redirecting. Use HTTPS for
+transport protection. Keep explicit Bearer clients separate and regression
+test both paths.
 
-**Decision**: Standard JWT access+refresh pattern. dio interceptor for transparent refresh.
+**Decision**: Browser sessions and Bearer API clients coexist. LAN HTTP
+remains a documented operator choice with residual transport risk.
 
 ---
 
@@ -226,7 +222,10 @@ Items below were risks that have been addressed by implementation.
 
 **Original concern**: Need to decide on admin auth before Phase 6.
 
-**Resolution**: JWT authentication with access + refresh token pattern fully implemented. Backend: `auth.py` with `create_access_token`/`decode_access_token`, `auth_api.py` with login/refresh/me endpoints, admin routes require Bearer JWT. Admin-web: `AuthProvider` context in `auth.tsx` wraps the app, transparent token refresh, localStorage persistence, login page with username/password.
+**Resolution**: Script clients use Bearer JWT. Admin-web uses a revocable
+Redis browser session with HttpOnly cookie, CSRF and exact Origin validation;
+`AuthProvider` and the login page share the login/user lookup flow. The
+browser does not persist an access token in localStorage.
 
 ---
 
@@ -307,7 +306,7 @@ As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinter
 | Integration smoke test for gallery-dl output format | #2 (was #1) | Test suite |
 | X provider explicitly disabled (placeholder) | #A (was #3) | x.py provider -- can_download=False |
 | pyvips preferred over Pillow | #11 | CLAUDE.md -- Risk-Derived Decisions |
-| JWT auth with access+refresh token | #E (was #14) | auth.py, auth_api.py, auth.tsx |
+| Browser session and Bearer API auth | #E (was #14) | browser_sessions.py, auth_api.py, auth.tsx |
 | Iwara fully enabled (was placeholder) | #D (was #13) | iwara.py provider -- can_download=True |
 | Connectivity test per source | #C (was #7) | admin.py POST /gallerydl-config/test-connection |
 | Auth status page in admin-web | #C (was #7) | Settings -> Auth Status |

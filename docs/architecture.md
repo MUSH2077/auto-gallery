@@ -8,7 +8,7 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Admin Web (Next.js 14)                          │
+│  Admin Web (Next.js 16)                          │
 │  TypeScript · Tailwind CSS · TanStack Query      │
 │  Port 13000 (host) ← 3000 (container)            │
 └──────────────────┬──────────────────────────────┘
@@ -18,9 +18,8 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 │  Routes → Services → Repositories → SQLAlchemy   │
 │  Providers: Pixiv · X · Iwara · Danbooru ·      │
 │   Weibo · Bilibili · Pinterest · LOFTER          │
-│   (+ Danbooru reference; local/manual planned)   │
 │  Port 8818 (host) ← 8000 (container)             │
-│  JWT auth (access + refresh tokens)              │
+│  Redis browser sessions + Bearer JWT             │
 └──────┬────────────┬──────────────┬──────────────┘
        │            │              │
        │   ┌────────▼────────────┐ │
@@ -69,7 +68,7 @@ storage_artifact               # download → import ledger — see "Job Queue"
 
 ### Key relationships
 
-- **user**: A user account (admin or regular user). Added Phase 6+.
+- **user**: An active admin or regular account with module permissions.
 - **creator**: A canonical local identity (e.g., "Artist A") — shared across all users
 - **source_creator**: A platform-specific account (e.g., Pixiv user 123456)
 - **creator_link**: URLs linking a creator to external profiles
@@ -255,14 +254,26 @@ A one-way, git-isomorphic projection of the authoritative curation DAG (`curatio
 
 ## Authentication
 
-Admin Web and backend API use JWT-based authentication:
+Admin Web uses a revocable random browser session stored in Redis. The session
+cookie is host-only, HttpOnly, SameSite=Lax, and scoped to /; HTTPS browser
+origins receive Secure cookies. JavaScript reads only a session-bound CSRF
+value. Browser writes require that value and an exact allowed Origin. One-use
+WebSocket tickets are bound to the browser session and the handshake Origin is
+checked. Logout revokes the session, password changes rotate it, and Redis
+failure returns a service-unavailable response instead of admitting a stale
+session.
 
-- **Login**: POST `/api/v1/auth/login` with username/password returns an access token.
-- **Token format**: JWT access tokens signed with the server's secret key.
-- **Auth methods**: Admin endpoints require `Authorization: Bearer <jwt>`.
-- **Token expiry**: Configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` (default 30 minutes).
-- **First-login rotation**: Bootstrap admin accounts are marked `must_change_password=true` and can only continue after changing password.
-- All admin API routes require authentication via the `RequireAdmin` dependency.
+Script/API clients continue to use JWT Bearer tokens from
+`POST /api/v1/auth/login`. An explicit Bearer header takes precedence over a
+cookie and an invalid Bearer token never falls back to a browser session.
+Disabled users, forced password change, and module permissions apply to both.
+`ACCESS_TOKEN_EXPIRE_MINUTES` governs both login durations: the application
+default is 10080 minutes, while the Compose default is 1440 minutes. Browser
+users sign in again when migrating from legacy `ag_token` storage.
+
+LAN HTTP remains supported for local access. Its cookies are exposed to anyone
+who can observe that connection; use the HTTPS reverse-proxy entry for
+transport protection.
 
 ## Backup System
 
@@ -359,14 +370,15 @@ Key environment variables used by the application:
 |---|---|---|
 | `BACKEND_PORT` | `8818` | Host port for backend API (maps to container 8000) |
 | `ADMIN_WEB_PORT` | `13000` | Host port for admin web (maps to container 3000) |
-| `CORS_ORIGINS` | `http://localhost:13000` | Allowed CORS origins |
+| `CORS_ORIGINS` | `http://localhost:13000` | Allowed origins for cross-origin API clients |
+| `BROWSER_SESSION_ORIGINS` | (required for browser login) | Exact allowed HTTP/HTTPS browser origins for session, CSRF and WebSocket checks |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | Internal URL for admin-web SSR to reach backend |
 | `MEDIA_PLAYBACK_TTL_SECONDS` | `7200` | Lifetime of an asset-scoped MP4/WebM playback ticket |
 | `NEXT_PUBLIC_WS_URL` | current site `/api/v1/ws` | Public browser WebSocket URL for live job updates |
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `REDIS_URL` | (required) | Redis connection string |
-| `SECRET_KEY` | (required) | JWT signing secret |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | JWT token expiry |
+| `SECRET_KEY` | (required) | Bearer JWT signing secret |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Compose: `1440` | Bearer token and browser session lifetime in minutes |
 | `TIMEZONE` | `UTC` | Timezone for scheduler and display |
 | `DOWNLOAD_ROOT` | `/downloads` | Original file storage path |
 | `LIBRARY_ROOT` | `/library` | Metadata + thumbnail storage path |
@@ -544,9 +556,12 @@ Endpoints include:
 Authentication endpoints.
 
 Endpoints:
-- `POST /login` — login, returns JWT access token
+- `POST /login` — script-client login, returns a Bearer JWT
+- `POST /browser/login`, `POST /browser/logout` — create or revoke a Redis browser session
+- `POST /browser/change-password` — rotate the browser session without returning a JWT
+- `POST /ws-ticket` — issue a one-use WebSocket ticket
 - `GET /me` — current authenticated user info
-- `POST /change-password` — change password for current user
+- `POST /change-password` — Bearer-only password change
 
 
 ### `/media` (unversioned)

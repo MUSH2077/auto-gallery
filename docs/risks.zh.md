@@ -2,25 +2,14 @@
 
 ## 高风险
 
-### 1. 多用户数据模型过渡
+### 1. 多用户归属与权限回归
 
-**风险**：当前 Phase 1-5 设计没有用户模型。在 Phase 6 添加需要：
-- Schema 迁移：向 `subscription` 表添加 `user_id`
-- API 破坏性变更：所有订阅端点从全局变为按用户隔离
-- 认证迁移：从 API key 到 JWT
-- 数据迁移：现有订阅必须分配给默认管理员用户
+**风险**：项目已有用户、私有订阅意图、任务归属与模块权限。拆分搜索、
+导入或 Jobs 页面时，可能泄露其他用户的数据，或隐藏当前用户有权查看的任务。
 
-**影响**：如果不提前规划，Phase 6 将变成重大重构而非增量添加。已有 API 消费者（admin-web）将损坏。
-
-**缓解措施**：
-- Phase 1-5 设计时意识到 `user_id` 将被添加到 subscription
-- 在 Phase 6 前将订阅端点保持在 admin 路由后（避免过早公开 API）
-- 使用 repository 模式使数据访问层变更局部化
-- 预留 `user_id` 列名；不要用于其他用途
-- Phase 6 迁移方案：添加可空 `user_id` -> 用默认 admin 回填 -> 设为非空
-- Admin-web 基于 `/api/v1/admin/*` 路由构建（不因用户模型添加而改变）
-
-**决策**：Phase 1-5 保持 admin-only。Phase 6 添加用户模型+迁移路径。不提前引入用户模型。
+**缓解措施**：保持任务归属优先的可见性规则、权限依赖和私有成员关系边界。
+针对管理员、普通用户和受限用户测试任务详情、WebSocket 订阅、搜索及重启恢复。
+旧审计中关于 Phase 6 的迁移设想属于历史背景，不是当前待实施迁移。
 
 ---
 
@@ -149,18 +138,18 @@
 
 ---
 
-### 10. 客户端认证 token 生命周期
+### 10. 浏览器会话与局域网传输
 
-**风险**：JWT access token 每 15 分钟过期。Flutter 客户端必须透明刷新。如果刷新逻辑有 bug，用户看到认证错误。如果 refresh token 过期（30 天），用户必须重新登录。不在局域网时远程重新登录在没有 VPN 的情况下不可能。
+**风险**：过时的 401 响应、Redis 故障、改密或跨来源请求可能错误处理浏览器
+会话。可选的局域网 HTTP 入口会让该连接上的 Cookie 被链路观察者看到。
 
-**缓解措施**：
-- Flutter HTTP 拦截器（dio）处理 401 -> 刷新 -> 重试，对用户透明
-- Refresh token 存储在平台安全存储中
-- 刷新失败时：清除 token，重定向到登录页面
-- Refresh token 到期：到期前 7 天显示通知
-- 管理员可为受信任客户端发放长期 access token（未来）
+**缓解措施**：使用可撤销的 Redis 会话、共享有界 Redis 连接、HttpOnly/
+SameSite Cookie、精确 Origin、会话绑定 CSRF 和一次性 WebSocket 票据。
+Redis 不可用时拒绝会话。旧请求返回 401 时不自动撤销会话；重定向前比较
+发出请求时的会话标记。需要保护传输时使用 HTTPS，并回归测试 Bearer 客户端。
 
-**决策**：标准 JWT access+refresh 模式。dio 拦截器实现透明刷新。
+**决策**：浏览器会话与 Bearer API 客户端并存。局域网 HTTP 是保留的部署
+选项，其传输剩余风险须明确记录。
 
 ---
 
@@ -225,7 +214,9 @@
 
 **原始担忧**：Phase 6 前需确定管理员认证方案。
 
-**解决方案**：JWT access + refresh token 模式已完整实现。后端：`auth.py` 中的 `create_access_token`/`decode_access_token`，`auth_api.py` 中的 login/refresh/me 端点，admin 路由要求 Bearer JWT。Admin-web：`auth.tsx` 中的 `AuthProvider` 上下文包裹整个应用，透明 token 刷新，localStorage 持久化，用户名/密码登录页面。
+**解决方案**：脚本客户端使用 Bearer JWT。管理端使用可撤销的 Redis
+浏览器会话、HttpOnly Cookie、CSRF 与精确 Origin 校验；`AuthProvider`
+和登录页共享登录及用户信息获取流程。浏览器不在 localStorage 持久化访问令牌。
 
 ---
 
@@ -299,7 +290,7 @@ gallery-dl 的 SQLite 归档文件追踪已下载的 URL。维护固定在 03:30
 | gallery-dl 输出格式冒烟测试 | #2（原 #1） | 测试套件 |
 | X provider 显式禁用（占位符） | #A（原 #3） | x.py provider -- can_download=False |
 | pyvips 优先于 Pillow | #11 | CLAUDE.md -- 风险衍生决策 |
-| JWT 认证 access+refresh token | #E（原 #14） | auth.py、auth_api.py、auth.tsx |
+| 浏览器会话与 Bearer API 认证 | #E（原 #14） | browser_sessions.py、auth_api.py、auth.tsx |
 | Iwara 完全启用（原为占位） | #D（原 #13） | iwara.py provider -- can_download=True |
 | 按来源连通性测试 | #C（原 #7） | admin.py POST /gallerydl-config/test-connection |
 | admin-web 认证状态页面 | #C（原 #7） | Settings -> Auth Status |
