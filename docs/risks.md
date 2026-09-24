@@ -313,3 +313,13 @@ As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinter
 | Scheduler tolerance window + restart dedup | #F (new) | subscription_sync.py, seed_sync.py |
 | Timezone-aware scheduling | #G (new) | subscription_sync.py, ZoneInfo, TIMEZONE config |
 | Dockerfile removes SearchTimeline fallback | #H (new) | Dockerfile |
+
+## Refactor failure-boundary review (2026-09-24)
+
+| Path | Exception outcome and durable authority | Regression evidence |
+|---|---|---|
+| Search index gate and Meilisearch (search.py) | A failed consistency check uses the authoritative PostgreSQL result. A Meilisearch error becomes an explicit unavailable response when no safe SQL result exists; the circuit breaker records the failure. A database error only uses a freshly validated Meilisearch result. | Search algorithm, cursor, and index-consistency tests; disposable search benchmark required before rollout. |
+| Import claim, lease and completion (import_runner.py, import_execution.py) | A failed initial lease check aborts the execution. Renewal failures are logged with the import ID and retried after five seconds; lost ownership suppresses a stale retry. The outer failure path commits a bounded retry intent before queue publication or records a terminal failure. | Import finalization, ownership and recovery tests. |
+| Admin dispatch (operations.py, admin_dispatch_recovery.py) | PostgreSQL selects at most 25 due attempts. A queue publication failure leaves a durable pending intent with retry time and logs the task ID. Compensation commits the task failure before best-effort Redis status and lock cleanup. | Admin operation dispatch and scheduler recovery tests. |
+
+Import file cleanup and lease release remain best-effort cleanup operations. Lease-release failures are logged; non-benign leftover-file deletion failures are logged with the import ID. Durable database task and lease state remain authoritative, but leftover files can accumulate. Review disk cleanup logs, pending-task age and import-list growth during the seven-day soak.

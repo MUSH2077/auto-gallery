@@ -297,3 +297,13 @@ gallery-dl 的 SQLite 归档文件追踪已下载的 URL。维护固定在 03:30
 | 调度器容差窗口 + 重启去重 | #F（新增） | subscription_sync.py、seed_sync.py |
 | 时区感知调度 | #G（新增） | subscription_sync.py、ZoneInfo、TIMEZONE 配置 |
 | Dockerfile 移除 SearchTimeline 回退 | #H（新增） | Dockerfile |
+
+## 重构失败边界核对（2026-09-24）
+
+| 路径 | 异常后的结果与持久状态依据 | 回归依据 |
+|---|---|---|
+| 搜索索引校验与 Meilisearch（search.py） | 一致性校验失败时使用 PostgreSQL 权威结果。没有安全的 SQL 结果时，Meilisearch 故障明确返回不可用并计入熔断；数据库失败时只采用重新校验过的 Meilisearch 结果。 | 搜索算法、游标及索引一致性测试；发布前还须通过一次性环境基准。 |
+| 导入领取、租约和结束（import_runner.py、import_execution.py） | 初始租约验证失败即停止执行。续租失败记录导入 ID，五秒后重试；丢失归属时不再派发旧执行的重试。主失败路径先提交有上限的重试意图再发布队列，或记录最终失败。 | 导入完成、归属和恢复测试。 |
+| 管理任务派发（operations.py、admin_dispatch_recovery.py） | PostgreSQL 每次最多选 25 个到期尝试。队列发布失败时保留带下次重试时间的持久意图，并记录任务 ID。补偿先提交任务失败，再尽力清理 Redis 状态和锁。 | 管理任务派发与调度恢复测试。 |
+
+导入文件清理和租约释放属于尽力完成的收尾操作。租约释放失败会记录日志；非正常的逐个删除残留文件失败会携带导入 ID 记录日志，可能累积残留文件。数据库中的任务和租约状态仍是判定依据。七天观察期需检查清理日志、待处理任务积压时长和导入清单增长。
