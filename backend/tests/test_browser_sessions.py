@@ -84,6 +84,7 @@ async def test_session_is_revocable_and_fails_closed(store, monkeypatch):
     for request in (
         _request("POST", token=token, origin="http://test"),
         _request("POST", token=token, csrf=session.csrf, origin="http://evil"),
+        _request(token=token, origin="http://evil"),
     ):
         with pytest.raises(HTTPException) as rejected:
             await auth.get_admin_key(request, None)
@@ -141,6 +142,9 @@ async def test_browser_login_cookie_csrf_logout(store, monkeypatch, origin, secu
         csrf = client.cookies.get("ag_csrf")
         assert csrf
         assert (await client.get("/api/v1/auth/me")).status_code == 200
+        user.is_admin = True
+        assert (await client.get("/api/openapi.json")).status_code == 200
+        user.is_admin = False
 
         missing = await client.post("/api/v1/auth/ws-ticket", headers={"Origin": origin})
         assert missing.status_code == 403
@@ -161,6 +165,60 @@ async def test_browser_login_cookie_csrf_logout(store, monkeypatch, origin, secu
         )
         assert logout.status_code == 200
         assert (await client.get("/api/v1/auth/me")).status_code == 401
+
+
+
+@pytest.mark.asyncio
+async def test_browser_upload_requires_permission_and_session_csrf(store, monkeypatch, tmp_path):
+    from app.main import app
+    from app.services.manual_upload import ManualUploadService
+
+    user = _user()
+    user.permissions = ["upload"]
+
+    async def fake_authenticate(*_args):
+        return user
+
+    async def fake_lookup(_id):
+        return user
+
+    async def fake_save_upload(_self, _db, _user, _files, _metadata):
+        return SimpleNamespace(
+            work_id="work-1", download_job_id="download-1", import_job_id=None,
+            used_bytes=3, quota_bytes=None,
+        )
+
+    monkeypatch.setattr(auth_api, "_authenticate_login", fake_authenticate)
+    monkeypatch.setattr(auth, "_load_active_user_by_id", fake_lookup)
+    monkeypatch.setattr(ManualUploadService, "save_upload", fake_save_upload)
+    monkeypatch.setattr(settings, "download_root", str(tmp_path))
+
+    origin = "http://test"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=origin) as client:
+        login = await client.post(
+            "/api/v1/auth/browser/login", json={"username": "alice", "password": "pw"},
+            headers={"Origin": origin},
+        )
+        assert login.status_code == 200
+        files = {"files": ("probe.jpg", b"abc", "image/jpeg")}
+        csrf = client.cookies.get("ag_csrf")
+        assert (await client.post("/api/v1/upload", files=files, headers={"Origin": origin})).status_code == 403
+        assert (await client.post(
+            "/api/v1/upload", files=files,
+            headers={"Origin": "http://evil", "X-CSRF-Token": csrf},
+        )).status_code == 403
+        user.permissions = []
+        assert (await client.post(
+            "/api/v1/upload", files=files,
+            headers={"Origin": origin, "X-CSRF-Token": csrf},
+        )).status_code == 403
+        user.permissions = ["upload"]
+        accepted = await client.post(
+            "/api/v1/upload", files=files,
+            headers={"Origin": origin, "X-CSRF-Token": csrf},
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["work_id"] == "work-1"
 
 
 def test_origin_rejects_invalid_values(store):

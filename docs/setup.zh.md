@@ -22,10 +22,17 @@
 UI，或在 `/api/redoc` 查看只读参考。两个界面及其静态资源都由本机提供。
 版本化 HTTP 与 WebSocket 契约详见[局域网 API 契约](api/README.zh.md)。
 
-Swagger 中的 **Authorize** 必须填写 `POST /api/v1/auth/login` 返回的显式
-JWT Bearer；浏览器会话 Cookie 只用于打开文档本身。独立的局域网客户端调用
-API 时，必须把它的协议、主机和端口完整加入逗号分隔的 `CORS_ORIGINS`
-白名单。携带凭据时不要使用 `*`。
+管理网页使用 Redis 中可撤销的浏览器会话。`ag_session` Cookie 为
+`HttpOnly`、仅当前主机、`SameSite=Lax`，路径为 `/`；HTTPS 入口还设置
+`Secure`。浏览器写请求必须携带会话绑定的 `X-CSRF-Token` 和精确匹配的
+`Origin`。部署前把实际使用的 HTTP、HTTPS 管理网页来源（含协议、主机、端口）
+加入逗号分隔的 `BROWSER_SESSION_ORIGINS`；默认值只包含
+`http://localhost:13000`，不接受通配符。局域网 HTTP 仍可用，但其 Cookie
+传输没有 HTTPS 的保护。
+
+独立脚本继续通过 `POST /api/v1/auth/login` 获取 JWT Bearer。Swagger 的
+**Authorize** 使用此 Bearer 流程；仅打开文档页面的浏览器会话不会把令牌交给
+JavaScript。其他局域网客户端按需配置 `CORS_ORIGINS`，携带凭据时不要使用 `*`。
 
 任务页实时进度使用 WebSocket。默认会连接当前站点的 `/api/v1/ws`；如果你的 NAS 反向代理没有转发 WebSocket upgrade，或你直接通过 `admin-web` 端口访问页面，请在 `.env` 中设置公开地址后重新构建 admin-web：
 

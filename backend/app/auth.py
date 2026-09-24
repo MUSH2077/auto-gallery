@@ -97,8 +97,11 @@ async def get_admin_key(
         "/api/v1/auth/browser/change-password", "/api/v1/auth/me"
     ):
         raise HTTPException(status_code=403, detail="Password change required")
-    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+    # Credentialed cross-origin reads must use the browser-session allowlist,
+    # even when a separate API client is present in CORS_ORIGINS.
+    if request.headers.get("origin") or request.method not in {"GET", "HEAD", "OPTIONS"}:
         browser_origin(request)
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
         verify_browser_csrf(request, browser_session)
     request.state.auth_user = user
     request.state.browser_session = browser_session

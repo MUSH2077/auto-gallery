@@ -33,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((data) => {
         queryClient.setQueryData(ME_QUERY_KEY, data);
         setUser(data);
+        setAuthUnavailable(false);
       })
       .catch(async (error: Error & { status?: number }) => {
         if (error.status === 503) {
@@ -51,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
     setUser(me);
+    setAuthUnavailable(false);
     return me;
   }, [queryClient]);
 
@@ -59,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user?.id !== me.id) clearPrivateDiscoveryCache(queryClient);
     queryClient.setQueryData(ME_QUERY_KEY, me);
     setUser(me);
+    setAuthUnavailable(false);
   }, [queryClient, user?.id]);
 
   const logout = useCallback(async () => {
@@ -72,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryClient.removeQueries({ queryKey: ME_QUERY_KEY, exact: true });
     try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
     setUser(null);
+    setAuthUnavailable(false);
   }, [queryClient]);
 
   return (
