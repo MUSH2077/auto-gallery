@@ -15,9 +15,20 @@ from uuid import UUID, uuid4
 import redis as redis_lib
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import DateTime, cast, func as sql_func, or_, select
+from sqlalchemy import func as sql_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.admin_dispatch_recovery import (
+    ADMIN_DISPATCH_META_KEY,
+    ADMIN_DISPATCH_PENDING,
+    ADMIN_DISPATCH_PUBLISHED,
+    ADMIN_DISPATCH_FAILED,
+    ADMIN_DISPATCH_RECOVERY_LIMIT,
+    ADMIN_DISPATCH_GRACE_SECONDS,
+    _ACTIVE_ADMIN_STATUSES,
+    _admin_dispatch,
+    select_due_admin_dispatches,
+)
 from app.services.redis_client import get_redis
 from app.services.queue_admission import (
     QueueAdmissionError,
@@ -31,19 +42,12 @@ from app.services.queue_admission import (
 OPERATION_TTL_SECONDS = 8 * 24 * 60 * 60
 logger = logging.getLogger(__name__)
 
-ADMIN_DISPATCH_META_KEY = "admin_dispatch"
-ADMIN_DISPATCH_PENDING = "pending"
-ADMIN_DISPATCH_PUBLISHED = "published"
-ADMIN_DISPATCH_FAILED = "failed"
 ADMIN_DISPATCH_RECOVERY_INTERVAL_SECONDS = 30
 ADMIN_ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 10
 ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS = 90
-ADMIN_DISPATCH_RECOVERY_LIMIT = 25
-ADMIN_DISPATCH_GRACE_SECONDS = 15
 ADMIN_DISPATCH_RETRY_MIN_SECONDS = 30
 ADMIN_DISPATCH_RETRY_MAX_SECONDS = 15 * 60
 ADMIN_RQ_FUNCTION = "app.jobs.admin_operations.run_registered_admin_operation"
-_ACTIVE_ADMIN_STATUSES = frozenset({"enqueued", "running", "paused", "recovering"})
 ADMIN_PARENT_ADMISSION_OPERATION_TYPES = frozenset({
     "admin-integrity-scan",
     "admin-backup-estimate",
@@ -943,11 +947,6 @@ def _validated_options(options: dict[str, Any] | None) -> dict[str, Any]:
     # A round trip rejects values which PostgreSQL JSONB and a later worker
     # could interpret differently. The resulting object is the worker payload.
     return json.loads(json.dumps(encoded, separators=(",", ":"), sort_keys=True))
-
-
-def _admin_dispatch(task) -> dict[str, Any] | None:
-    value = (task.meta or {}).get(ADMIN_DISPATCH_META_KEY)
-    return dict(value) if isinstance(value, dict) else None
 
 
 def _scope_for_task(task) -> str | None:
@@ -1984,79 +1983,16 @@ async def recover_admin_operation_dispatches(
     """Repair at most 25 due TaskRun publication intents in one pass."""
 
     from app.database import async_session
-    from app.models.task_run import TaskRun
 
     current = now or _utcnow()
-    bounded_limit = max(1, min(int(limit), ADMIN_DISPATCH_RECOVERY_LIMIT))
-    prepared_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["prepared_at"].astext
-    prepared_at = cast(prepared_text, DateTime(timezone=True))
-    retry_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["next_retry_at"].astext
-    retry_at = cast(retry_text, DateTime(timezone=True))
-    grace_cutoff = current - timedelta(seconds=max(0, grace_seconds))
-    common_filters = (
-        TaskRun.kind == "admin",
-        TaskRun.status.in_(_ACTIVE_ADMIN_STATUSES),
-        prepared_at <= grace_cutoff,
-    )
-
     async with async_session() as db:
-        pending = list(
-            (
-                await db.execute(
-                    select(TaskRun)
-                    .where(
-                        *common_filters,
-                        TaskRun.meta[ADMIN_DISPATCH_META_KEY]["publication_state"]
-                        .astext
-                        == ADMIN_DISPATCH_PENDING,
-                        or_(retry_text.is_(None), retry_at <= current),
-                    )
-                    .order_by(
-                        retry_at.asc().nullsfirst(),
-                        prepared_at.asc(),
-                        TaskRun.id.asc(),
-                    )
-                    .limit(bounded_limit)
-                )
-            ).scalars()
+        due = await select_due_admin_dispatches(
+            db,
+            now=current,
+            grace_seconds=grace_seconds,
+            limit=limit,
+            include_published=include_published,
         )
-        due = [
-            (task.id, int((_admin_dispatch(task) or {}).get("attempt") or 0))
-            for task in pending
-        ]
-
-        remaining = bounded_limit - len(due)
-        if include_published and remaining > 0:
-            probe_text = TaskRun.meta[ADMIN_DISPATCH_META_KEY]["next_probe_at"].astext
-            probe_at = cast(probe_text, DateTime(timezone=True))
-            published = list(
-                (
-                    await db.execute(
-                        select(TaskRun)
-                        .where(
-                            *common_filters,
-                            TaskRun.meta[ADMIN_DISPATCH_META_KEY][
-                                "publication_state"
-                            ].astext
-                            == ADMIN_DISPATCH_PUBLISHED,
-                            or_(probe_text.is_(None), probe_at <= current),
-                        )
-                        .order_by(
-                            probe_at.asc().nullsfirst(),
-                            prepared_at.asc(),
-                            TaskRun.id.asc(),
-                        )
-                        .limit(remaining)
-                    )
-                ).scalars()
-            )
-            due.extend(
-                (
-                    task.id,
-                    int((_admin_dispatch(task) or {}).get("attempt") or 0),
-                )
-                for task in published
-            )
 
     report = {"scanned": len(due), "published": 0, "deferred": 0, "failed": 0}
     for candidate_id, attempt in due:
