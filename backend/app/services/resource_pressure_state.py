@@ -562,9 +562,6 @@ class ResourcePressureStateMachine:
                 reason = "profile_memory_reserve"
             else:
                 would_allow = True
-        governance_mode = (
-            "shadow" if str(settings.resource_governance_mode).lower() == "shadow" else "enforce"
-        )
         # Shadow mode observes only the soft AIMD budget.  Absolute memory,
         # unreadable metrics and critical mode are hard safety gates in both
         # rollout modes.
