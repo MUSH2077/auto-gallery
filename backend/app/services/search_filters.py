@@ -104,7 +104,7 @@ MEILI_FIELD = {
     },
 }
 
-IS_FIELD = {
+IS_FIELD: dict[str, dict[str, tuple[str, bool | str]]] = {
     "works": {
         "favorite": ("is_favorite", True),
         "nsfw": ("is_nsfw", True),

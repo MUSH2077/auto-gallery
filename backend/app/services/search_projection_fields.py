@@ -105,7 +105,7 @@ def _merge_alias_projection_fields(
     projections: Iterable[dict[str, list[Any]]],
 ) -> dict[str, list[Any]]:
     merged = _alias_projection_fields(())
-    seen = {key: set() for key in merged if key != "alias_records"}
+    seen: dict[str, set[str]] = {key: set() for key in merged if key != "alias_records"}
     for projection in projections:
         for key in seen:
             for value in projection.get(key, []):
