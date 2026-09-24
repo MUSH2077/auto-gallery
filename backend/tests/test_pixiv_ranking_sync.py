@@ -292,6 +292,81 @@ def test_pixiv_heat_expiry_does_not_repeat_an_already_completed_check(monkeypatc
     assert outcome["status"] == "finished"
 
 
+@pytest.mark.parametrize("status", ["failed", "canceled", "stopped"])
+def test_pixiv_ranking_sync_requeues_terminal_jobs(monkeypatch, status):
+    from app.services import pixiv_ranking_scheduler
+
+    calls = []
+    redis = object()
+
+    class TerminalJob:
+        deleted = False
+
+        def get_status(self, refresh=True):
+            assert refresh is True
+            return status
+
+        def delete(self):
+            self.deleted = True
+
+    existing = TerminalJob()
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler.Job,
+        "fetch",
+        lambda _job_id, *, connection: existing,
+    )
+    monkeypatch.setattr(pixiv_ranking_scheduler, "Queue", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler,
+        "checked_enqueue",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = pixiv_ranking_scheduler.ensure_pixiv_ranking_sync(
+        now=datetime(2026, 9, 22, 4, tzinfo=UTC),
+        redis_client=redis,
+    )
+
+    assert existing.deleted is True
+    assert result["created"] is True
+    assert len(calls) == 1
+    assert calls[0][1]["job_id"] == result["job_id"]
+
+
+@pytest.mark.parametrize("status", ["queued", "scheduled", "deferred", "started", "busy", "finished"])
+def test_pixiv_ranking_sync_keeps_satisfied_jobs(monkeypatch, status):
+    from app.services import pixiv_ranking_scheduler
+
+    redis = object()
+
+    class ExistingJob:
+        def get_status(self, refresh=True):
+            assert refresh is True
+            return status
+
+        def delete(self):
+            raise AssertionError("satisfied job must not be deleted")
+
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler.Job,
+        "fetch",
+        lambda _job_id, *, connection: ExistingJob(),
+    )
+    monkeypatch.setattr(
+        pixiv_ranking_scheduler,
+        "checked_enqueue",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected enqueue")),
+    )
+
+    result = pixiv_ranking_scheduler.ensure_pixiv_ranking_sync(
+        now=datetime(2026, 9, 22, 4, tzinfo=UTC),
+        redis_client=redis,
+    )
+
+    assert result["created"] is False
+    assert result["status"] == status
+
+
 def test_latest_pixiv_heat_expiry_reconciliation_uses_the_database_snapshot(
     monkeypatch,
 ):

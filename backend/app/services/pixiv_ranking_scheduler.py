@@ -164,12 +164,17 @@ def ensure_pixiv_ranking_sync(
         existing = None
     if existing is not None:
         status = existing.get_status(refresh=True)
-        return {
-            "created": False,
-            "job_id": job_id,
-            "ranking_date": plan.ranking_date.isoformat(),
-            "status": str(getattr(status, "value", status)),
-        }
+        status_text = str(getattr(status, "value", status)).casefold()
+        if status_text in _SATISFIED_JOB_STATUSES:
+            return {
+                "created": False,
+                "job_id": job_id,
+                "ranking_date": plan.ranking_date.isoformat(),
+                "status": status_text,
+            }
+        # A terminal failure does not fulfill the daily sync. Remove its RQ
+        # record so the deterministic job id can be queued again.
+        existing.delete()
 
     from app.jobs.pixiv_ranking_sync import sync_pixiv_rankings
 

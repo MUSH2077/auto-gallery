@@ -397,3 +397,38 @@ test("Gitllery verify is admin-only while system readers retain the settings pag
     } finally { await opened.context.close(); }
   }
 });
+
+test("tasks-only sidebar keeps the failed and stale jobs badge without system access", async ({ browser }) => {
+  const requested: string[] = [];
+  const opened = await openFixture(browser, "/admin/profile", principal(["tasks"]), async (route, path) => {
+    requested.push(path);
+    if (path === "/api/v1/tasks") {
+      await json(route, { total: 3, items: [] });
+      return true;
+    }
+    return false;
+  });
+  try {
+    await expect(opened.page.locator('#admin-sidebar a[href="/admin/jobs"]')).toContainText("3");
+    expect(requested).toContain("/api/v1/tasks");
+    expect(requested).not.toContain("/api/v1/system/workbench");
+    expect(opened.unhandled).toEqual([]);
+  } finally { await opened.context.close(); }
+});
+
+test("scheduler sidebar badge uses the full actionable attention count", async ({ browser }) => {
+  const requested: string[] = [];
+  const opened = await openFixture(browser, "/admin/profile", principal(["system"]), async (route, path) => {
+    requested.push(route.request().url());
+    if (path === "/api/v1/system/scheduler-decisions") {
+      await json(route, { total: 4, items: [], summary: { blocked_count: 4 } });
+      return true;
+    }
+    return false;
+  });
+  try {
+    await expect(opened.page.locator('#admin-sidebar a[href="/admin/scheduler"]')).toContainText("4");
+    expect(requested.some((url) => url.includes("/api/v1/system/scheduler-decisions") && url.includes("view=attention"))).toBe(true);
+    expect(opened.unhandled).toEqual([]);
+  } finally { await opened.context.close(); }
+});

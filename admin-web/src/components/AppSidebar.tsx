@@ -139,13 +139,38 @@ export default function AppSidebar({
     },
     refetchIntervalInBackground: false,
   });
+  // Tasks-only users cannot read the system workbench. Keep their badge on
+  // the tasks endpoint, while system users reuse the already-polled summary.
+  const operationBadge = useQuery({
+    queryKey: [...queryKeys.tasks.all, "attention-badge"],
+    queryFn: () => api.listTasks({
+      q: "status:failed status:stale",
+      visibility: "actionable",
+      offset: 0,
+      limit: 1,
+    }),
+    enabled: canSeeTasks && !canSeeStatus,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
   const attention = workbench.data?.attention;
-  const attentionCount = canSeeTasks
+  const attentionCount = !canSeeTasks ? 0 : canSeeStatus
     ? (attention?.failed_download_count || 0)
       + (attention?.failed_import_count || 0)
       + (attention?.stale_job_count || 0)
-    : 0;
-  const schedulerAttentionCount = attention?.scheduler_disabled_warning ? 1 : 0;
+    : (operationBadge.data?.total || 0);
+  // The workbench warning flag omits actionable scheduler failures and
+  // overdue sources; the attention query supplies the complete count.
+  const schedulerBadge = useQuery({
+    queryKey: [...queryKeys.schedulerDecisions, "attention", "badge"],
+    queryFn: () => api.schedulerDecisionsView("attention", 0, 1),
+    enabled: canSeeStatus,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+  const schedulerAttentionCount = schedulerBadge.data?.total || 0;
 
   const groups = ADMIN_NAV_GROUPS
     .map((group) => ({
