@@ -189,7 +189,7 @@ def test_meili_client_socket_timeout_and_settings_hash(monkeypatch):
     monkeypatch.setattr(search, "cache_get", lambda _key: None)
     monkeypatch.setattr(search, "cache_set", lambda *_args: None)
     monkeypatch.setattr(search, "_wait_for_task", lambda _client, task, **_kwargs: task)
-    search._ensured_settings_hashes.clear()
+    monkeypatch.setattr(search, "_ensured_settings_hashes", set())
     selected = {search.WORKS_INDEX: search.INDEX_SETTINGS[search.WORKS_INDEX]}
     search._ensure_indexes(Client(), selected)
     search._ensure_indexes(Client(), selected)
