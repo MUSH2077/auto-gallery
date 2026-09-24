@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 
 def test_scale_profile_matches_release_acceptance_shape():
@@ -91,17 +92,21 @@ def test_acceptance_performance_phase_runs_stability_hot_path_benchmark():
 
 
 def test_compose_passes_the_verified_gitllery_generation_to_every_app_process():
-    compose = (
-        Path(__file__).resolve().parents[2] / "docker-compose.yaml"
-    ).read_text()
-
-    declarations = [
-        line.strip()
-        for line in compose.splitlines()
-        if line.strip().startswith("GITLLERY_ACTIVE_VERIFIED_GENERATION:")
-    ]
-    assert len(declarations) == 6
-    assert all(
-        declaration.endswith("${GITLLERY_ACTIVE_VERIFIED_GENERATION:-}")
-        for declaration in declarations
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yaml").read_text()
     )
+    expected = "${GITLLERY_ACTIVE_VERIFIED_GENERATION:-}"
+    app_processes = (
+        "backend",
+        "worker-download",
+        "worker-import",
+        "worker-operations",
+        "worker-discovery",
+        "scheduler",
+    )
+
+    for service in app_processes:
+        assert (
+            compose["services"][service]["environment"]["GITLLERY_ACTIVE_VERIFIED_GENERATION"]
+            == expected
+        )

@@ -2434,17 +2434,26 @@ async def run_import_job(import_job_id: str):
                                 for leftover in work_dir.iterdir():
                                     try:
                                         leftover.unlink()
-                                    except Exception:
+                                    except FileNotFoundError:
                                         pass
+                                    except OSError:
+                                        logger.warning(
+                                            "Unable to remove leftover import file job=%s path=%s",
+                                            import_job_id, leftover, exc_info=True,
+                                        )
                                 try:
                                     work_dir.rmdir()
-                                except Exception:
+                                except FileNotFoundError:
                                     pass
+                                except OSError:
+                                    logger.warning(
+                                        "Unable to remove empty import directory job=%s path=%s",
+                                        import_job_id, work_dir, exc_info=True,
+                                    )
                         except Exception:
-                            logger.debug(
-                                "Failed to check image files in %s",
-                                work_dir,
-                                exc_info=True,
+                            logger.warning(
+                                "Unable to inspect import leftovers job=%s path=%s",
+                                import_job_id, work_dir, exc_info=True,
                             )
 
                     # Terminal ledger state and progress share one post-commit

@@ -8,7 +8,7 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  管理端 (Next.js 14)                             │
+│  管理端 (Next.js 16)                             │
 │  TypeScript · Tailwind CSS · TanStack Query      │
 │  端口 13000（主机）← 3000（容器）                 │
 └──────────────────┬──────────────────────────────┘
@@ -18,9 +18,8 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 │  Routes → Services → Repositories → SQLAlchemy   │
 │  Providers: Pixiv · X · Iwara · Danbooru ·      │
 │   Weibo · Bilibili · Pinterest · LOFTER          │
-│   (+ Danbooru reference；local/manual 计划中)    │
 │  端口 8818（主机）← 8000（容器）                  │
-│  JWT 认证（access + refresh token）              │
+│  Redis 浏览器会话 + Bearer JWT                   │
 └──────┬────────────┬──────────────┬──────────────┘
        │            │              │
        │   ┌────────▼────────────┐ │
@@ -40,6 +39,27 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 │  └──────────┘ └──────┘ └─────────────┘          │
 └─────────────────────────────────────────────────┘
 ```
+
+## 当前模块边界
+
+- `SearchService` 仍是后端搜索对外接口。`search_language.py` 解析查询，
+  `search_pagination.py` 管理稳定游标和排序，
+  `search_filters.py` 编译 Meilisearch 过滤条件，
+  `search_projection_fields.py` 生成确定性的索引字段。服务本身继续协调
+  SQL/Meilisearch 执行和索引投递。
+- `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
+  SearchService 的执行路径中分离。
+- `import_runner.py` 处理作品微批；`import_execution.py` 管理任务领取、
+  租约和父任务最终状态。重试必须保持持久任务归属与结果幂等。
+- `operations.py` 协调管理任务发布与补偿；
+  `admin_dispatch_recovery.py` 从 PostgreSQL 有界地选择到期派发意图，
+  不把 Redis 队列状态当作恢复的权威依据。
+- `resource_pressure.py` 协调采样、状态和共享快照，分别委托给
+  `resource_pressure_sampling.py`、`resource_pressure_state.py` 和
+  `resource_pressure_snapshot.py`。
+- Jobs 页用 `jobsRoute.ts`、`useJobsRouteState.ts` 管理 URL 状态，
+  用 `jobTree.ts` 纯函数整理任务树；页面负责桌面与移动端展示，
+  WebSocket 不可用时退回轮询。
 
 ## 领域模型
 
@@ -69,7 +89,7 @@ storage_artifact               # 下载 → 导入账本 —— 见"任务队列
 
 ### 关键关系
 
-- **user**：用户账号（管理员或普通用户）。Phase 6+ 添加。
+- **user**：已有的管理员或普通用户账号，按模块授予权限。
 - **creator**：规范本地身份（如"画师 A"）——跨所有用户共享
 - **source_creator**：平台特定账号（如 Pixiv 用户 123456）
 - **creator_link**：链接创作者到外部个人资料的 URL
@@ -227,14 +247,19 @@ Worker 取走 import_job
 
 ## 认证
 
-管理端和后端 API 使用基于 JWT 的认证：
+管理端使用存于 Redis 的可撤销随机浏览器会话。会话 Cookie 仅当前主机可用，
+设置 HttpOnly、SameSite=Lax 和 / 路径；HTTPS 来源额外设置 Secure。前端只能读取
+与会话绑定的 CSRF 值。浏览器写请求必须携带该值和精确允许的 Origin；WebSocket
+使用一次性会话票据并校验握手来源。登出撤销会话，改密轮换会话；Redis 故障时返回
+服务不可用，不接受失效会话。
 
-- **登录**：POST `/api/v1/auth/login` 使用用户名/密码返回 access token。
-- **Token 格式**：使用服务器密钥签名的 JWT access token。
-- **认证方式**：管理端点要求 `Authorization: Bearer <jwt>`。
-- **Token 过期**：通过 `ACCESS_TOKEN_EXPIRE_MINUTES` 配置（默认 30 分钟）。
-- **首次登录轮换**：引导创建的管理员账户会标记 `must_change_password=true`，完成改密后才能继续访问管理接口。
-- 所有管理 API 路由需要通过 `RequireAdmin` 依赖进行认证。
+脚本/API 客户端继续使用 `POST /api/v1/auth/login` 返回的 Bearer JWT。
+显式 Bearer 优先，Bearer 无效时不回退 Cookie。两种入口沿用停用用户、强制改密和
+模块权限规则。`ACCESS_TOKEN_EXPIRE_MINUTES` 同时决定两种登录的时长：应用默认
+10080 分钟，Compose 默认 1440 分钟。迁移后浏览器用户需要重新登录一次。
+
+局域网 HTTP 入口仍可用，但该连接上的 Cookie 传输没有 HTTPS 保护；需要保护传输
+时应使用 HTTPS 反向代理入口。
 
 ## 备份系统
 
@@ -331,13 +356,14 @@ tmpfs `/run/auto-gallery-secrets`，并在使用前验证该边界。
 | `BACKEND_PORT` | `8818` | 后端 API 主机端口（映射容器 8000） |
 | `MEDIA_PLAYBACK_TTL_SECONDS` | `7200` | 单资产 MP4/WebM 播放票据的有效期（秒） |
 | `ADMIN_WEB_PORT` | `13000` | 管理端主机端口（映射容器 3000） |
-| `CORS_ORIGINS` | `http://localhost:13000` | 允许的 CORS 来源 |
+| `CORS_ORIGINS` | `http://localhost:13000` | 跨来源 API 客户端允许来源 |
+| `BROWSER_SESSION_ORIGINS` | `http://localhost:13000` | 会话、CSRF 和 WebSocket 的精确 HTTP/HTTPS 浏览器允许来源 |
 | `BACKEND_INTERNAL_URL` | `http://backend:8000` | admin-web SSR 访问后端的内部 URL |
 | `NEXT_PUBLIC_WS_URL` | 当前站点 `/api/v1/ws` | 浏览器连接实时任务 WebSocket 的公开地址 |
 | `DATABASE_URL` | （必需） | PostgreSQL 连接字符串 |
 | `REDIS_URL` | （必需） | Redis 连接字符串 |
-| `SECRET_KEY` | （必需） | JWT 签名密钥 |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | JWT token 过期时间 |
+| `SECRET_KEY` | （必需） | Bearer JWT 签名密钥 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Compose：`1440` | Bearer 令牌和浏览器会话有效时长（分钟） |
 | `TIMEZONE` | `UTC` | 调度器和显示的时区 |
 | `DOWNLOAD_ROOT` | `/downloads` | 原始文件存储路径 |
 | `LIBRARY_ROOT` | `/library` | 元数据 + 缩略图存储路径 |

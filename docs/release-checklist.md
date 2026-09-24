@@ -54,6 +54,13 @@ COMPOSE_ENV_FILE=.env.ci bash scripts/verify-runtime.sh
 docker compose --env-file .env.ci down -v
 ```
 
+- [ ] The configured browser origins match the actual HTTP LAN and HTTPS
+      entry points. Exercise login, logout, password change, preferences,
+      upload, documentation and WebSocket on both; verify no browser access
+      token is returned or stored, invalid Origin/CSRF is rejected, Redis
+      outage returns 503, and legacy Bearer clients still work.
+- [ ] Browser users can sign in again after the legacy token migration, and
+      a delayed 401 cannot revoke a newer session or loop on the login page.
 - [ ] All services become healthy.
 - [ ] Admin login, a small authorized sync, import, search, media preview,
       backup creation, and restore validation were exercised.
