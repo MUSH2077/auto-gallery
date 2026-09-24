@@ -365,7 +365,7 @@ test("session store outage keeps the cookie and displays a retryable error", asy
   }));
   await page.goto("/admin");
   await expect(page).toHaveURL(/\/admin$/);
-  await expect(page.getByRole("alert")).toContainText("Sign-in service is temporarily unavailable");
+  await expect(page.getByRole("alert").filter({ hasText: "Sign-in service is temporarily unavailable" })).toBeVisible();
   expect((await context.cookies()).some((cookie) => cookie.name === "ag_session")).toBe(true);
 });
 
