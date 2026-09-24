@@ -47,9 +47,14 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   cursors and sort rules; `search_filters.py` compiles Meilisearch filters;
   `search_projection_fields.py` builds deterministic index fields. The
   service still coordinates SQL/Meilisearch execution and index delivery.
+- `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
+  compilation from the SearchService execution path.
 - `import_runner.py` processes work slices, while `import_execution.py`
   owns the claim, lease and terminal parent projection boundary. A retry
   must retain the same durable task ownership and idempotent result.
+- `operations.py` coordinates admin task publication and compensation;
+  `admin_dispatch_recovery.py` selects bounded due PostgreSQL dispatch
+  intents for recovery without trusting Redis queue state as the authority.
 - `resource_pressure.py` coordinates sampling, state and shared snapshots
   delegated to `resource_pressure_sampling.py`,
   `resource_pressure_state.py` and `resource_pressure_snapshot.py`.

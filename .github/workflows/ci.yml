@@ -205,8 +205,10 @@ jobs:
           modules=(
             app/services/search_pagination.py
             app/services/search_filters.py
+            app/services/search_sql_filters.py
             app/services/search_projection_fields.py
             app/jobs/import_execution.py
+            app/services/admin_dispatch_recovery.py
             app/services/resource_pressure_sampling.py
             app/services/resource_pressure_state.py
             app/services/resource_pressure_snapshot.py
@@ -222,15 +224,19 @@ jobs:
           python -m pytest \
             --cov=app.services.search_pagination \
             --cov=app.services.search_filters \
+            --cov=app.services.search_sql_filters \
             --cov=app.services.search_projection_fields \
             --cov=app.jobs.import_execution \
+            --cov=app.services.admin_dispatch_recovery \
             --cov=app.services.resource_pressure_sampling \
             --cov=app.services.resource_pressure_state \
             --cov=app.services.resource_pressure_snapshot \
             --cov-report=term-missing \
             --cov-report=xml:coverage-extracted.xml \
             tests/test_search_algorithms.py \
+            tests/test_search_sql_filters.py \
             tests/test_import_finalization_recovery.py \
+            tests/test_admin_operation_dispatch.py \
             tests/test_resource_pressure.py
           {
             echo '### Extracted Python module coverage'

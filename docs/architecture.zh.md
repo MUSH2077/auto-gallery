@@ -47,8 +47,13 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   `search_filters.py` 编译 Meilisearch 过滤条件，
   `search_projection_fields.py` 生成确定性的索引字段。服务本身继续协调
   SQL/Meilisearch 执行和索引投递。
+- `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
+  SearchService 的执行路径中分离。
 - `import_runner.py` 处理作品微批；`import_execution.py` 管理任务领取、
   租约和父任务最终状态。重试必须保持持久任务归属与结果幂等。
+- `operations.py` 协调管理任务发布与补偿；
+  `admin_dispatch_recovery.py` 从 PostgreSQL 有界地选择到期派发意图，
+  不把 Redis 队列状态当作恢复的权威依据。
 - `resource_pressure.py` 协调采样、状态和共享快照，分别委托给
   `resource_pressure_sampling.py`、`resource_pressure_state.py` 和
   `resource_pressure_snapshot.py`。
