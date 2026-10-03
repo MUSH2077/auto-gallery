@@ -1,5 +1,4 @@
-import { assertBackupArchiveResponse, request, requestBlob, ApiError, clearAuthOn401 } from "./client";
-import { csrfToken } from "@/lib/authFlow";
+import { assertBackupArchiveResponse, request, requestBlob, uploadWithProgress } from "./client";
 import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
@@ -11,35 +10,7 @@ export * from "./endpoints";
 // handling (session cookie, CSRF value and 401 redirect) instead of
 // duplicating it silently.
 function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/v1/upload");
-    xhr.timeout = 10 * 60 * 1000; // 10 min — large files over LAN
-    const csrf = csrfToken();
-    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
-    if (onProgress) {
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
-      };
-    }
-    xhr.ontimeout = () => reject(new ApiError(0, "Upload timed out"));
-    xhr.onload = () => {
-      let body: any = {};
-      try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
-      if (xhr.status === 401) {
-        clearAuthOn401(csrf);
-        reject(new ApiError(401, "Session expired — redirecting to login"));
-        return;
-      }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(body as T.UploadResponse);
-      } else {
-        reject(new ApiError(xhr.status, body.detail || `${xhr.status} ${xhr.statusText}`));
-      }
-    };
-    xhr.onerror = () => reject(new ApiError(0, "Network error"));
-    xhr.send(form);
-  });
+  return uploadWithProgress<T.UploadResponse>(form, "/api/v1/upload", onProgress);
 }
 
 // ── API ──

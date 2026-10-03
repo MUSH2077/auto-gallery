@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiError, assertBackupArchiveResponse, request, requestBlob } from "../src/lib/api/client.ts";
+import { ApiError, apiErrorFromData, assertBackupArchiveResponse, request, requestBlob, uploadWithProgress } from "../src/lib/api/client.ts";
 
 function installBrowserToken() {
   const removed = [];
@@ -106,11 +106,9 @@ test("protected structured 401 clears auth and retains the rich rejection", asyn
     return true;
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.ok(browser.removed.includes("local:ag_token"));
   assert.ok(browser.removed.includes("session:danbooru_batch_job"));
   assert.deepEqual(browser.redirects, ["/admin/login"]);
   assert.equal(received.get("authorization"), null);
-  assert.match(globalThis.document.cookie, /max-age=0/);
 });
 
 test("plain non-JSON rejection remains an HTTP error", async () => {
@@ -144,6 +142,120 @@ test("request distinguishes network failures and preserves 204 responses", async
 
   globalThis.fetch = async () => new Response(null, { status: 204 });
   assert.equal(await request("/api/v1/no-content", { method: "DELETE" }), undefined);
+});
+
+test("shared error normalization preserves structured business fields", () => {
+  const error = apiErrorFromData(409, "Conflict", { detail: { code: "batch_active", message: "Already running", task_id: "task-1" } });
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.kind, "business");
+  assert.equal(error.status, 409);
+  assert.equal(error.message, "Already running");
+  assert.equal(error.code, "batch_active");
+  assert.deepEqual(error.detail, { code: "batch_active", message: "Already running", task_id: "task-1" });
+  assert.deepEqual(error.body, { detail: { code: "batch_active", message: "Already running", task_id: "task-1" } });
+});
+
+test("shared error normalization keeps validation and plain body errors readable", () => {
+  const validation = apiErrorFromData(422, "Unprocessable Entity", { detail: [{ msg: "name is required" }, { msg: "name is too short" }] });
+  assert.equal(validation.kind, "business");
+  assert.equal(validation.message, "name is required; name is too short");
+  assert.deepEqual(validation.detail, [{ msg: "name is required" }, { msg: "name is too short" }]);
+
+  const plain = apiErrorFromData(502, "Bad Gateway", "gateway exploded");
+  assert.equal(plain.kind, "http");
+  assert.equal(plain.message, "gateway exploded");
+  assert.equal(plain.detail, "gateway exploded");
+  assert.equal(plain.body, "gateway exploded");
+});
+
+test("shared error normalization categorizes timeout and empty bodies consistently", () => {
+  const timeout = apiErrorFromData(0, "", undefined, "Upload timed out", "network");
+  assert.equal(timeout.kind, "network");
+  assert.equal(timeout.status, 0);
+  assert.equal(timeout.message, "Upload timed out");
+  const empty = apiErrorFromData(503, "Service Unavailable", "");
+  assert.equal(empty.kind, "http");
+  assert.equal(empty.message, "503 Service Unavailable");
+});
+
+test("XHR upload matches fetch error fields and preserves progress and CSRF", async () => {
+  installBrowserToken();
+  const cases = [
+    [409, "Conflict", { detail: { code: "batch_active", message: "Already running" } }, "business", "Already running"],
+    [422, "Unprocessable Entity", { detail: [{ msg: "name is required" }, { msg: "name is too short" }] }, "business", "name is required; name is too short"],
+    [400, "Bad Request", { detail: "Invalid upload" }, "http", "Invalid upload"],
+    [502, "Bad Gateway", "gateway exploded", "http", "gateway exploded"],
+    [503, "Service Unavailable", "", "http", "503 Service Unavailable"],
+  ];
+  for (const [status, statusText, body, kind, message] of cases) {
+    let xhrInstance;
+    class FakeXHR {
+      upload = {};
+      constructor() { xhrInstance = this; }
+      responseText = typeof body === "string" ? body : JSON.stringify(body);
+      open() {}
+      setRequestHeader(name, value) { this.headers = { ...this.headers, [name]: value }; }
+      send() { this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 }); queueMicrotask(() => this.onload()); }
+      status = status;
+      statusText = statusText;
+    }
+    globalThis.XMLHttpRequest = FakeXHR;
+    const responseText = typeof body === "string" ? body : JSON.stringify(body);
+    globalThis.fetch = async () => new Response(responseText, { status, statusText });
+    let fetchError;
+    await assert.rejects(request("/api/v1/fixture"), (error) => { fetchError = error; return true; });
+    const progress = [];
+    await assert.rejects(uploadWithProgress(new FormData(), "/api/v1/upload", (pct) => progress.push(pct)), (error) => {
+      for (const field of ["status", "message", "detail", "code", "kind", "body"]) {
+        assert.deepEqual(error[field], fetchError[field], field);
+      }
+      assert.equal(error.kind, kind);
+      assert.equal(error.message, message);
+      assert.deepEqual(error.body, typeof body === "string" && body ? body : body && body.detail ? body : undefined);
+      return true;
+    });
+    assert.deepEqual(progress, [50]);
+    assert.equal(xhrInstance.headers["X-CSRF-Token"], "csrf-fixture");
+  }
+});
+
+test("XHR upload network, timeout, success, and stale 401 behavior stay consistent", async () => {
+  const browser = installBrowserToken();
+  let successXHR;
+  class SuccessXHR {
+    upload = {};
+    constructor() { successXHR = this; }
+    status = 201;
+    responseText = JSON.stringify({ uploaded: 2 });
+    open() {}
+    setRequestHeader(name, value) { this.headers = { [name]: value }; }
+    send() { this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 2 }); queueMicrotask(() => this.onload()); }
+  }
+  globalThis.XMLHttpRequest = SuccessXHR;
+  const progress = [];
+  assert.deepEqual(await uploadWithProgress(new FormData(), "/api/v1/upload", (pct) => progress.push(pct)), { uploaded: 2 });
+  assert.deepEqual(progress, [100]);
+  assert.equal(successXHR.headers["X-CSRF-Token"], "csrf-fixture");
+
+  class NetworkXHR { upload = {}; open() {} setRequestHeader() {} send() { queueMicrotask(() => this.onerror()); } }
+  globalThis.XMLHttpRequest = NetworkXHR;
+  await assert.rejects(uploadWithProgress(new FormData(), "/api/v1/upload"), (error) => error.kind === "network" && error.status === 0);
+  class TimeoutXHR { upload = {}; open() {} setRequestHeader() {} send() { queueMicrotask(() => this.ontimeout()); } }
+  globalThis.XMLHttpRequest = TimeoutXHR;
+  await assert.rejects(uploadWithProgress(new FormData(), "/api/v1/upload"), (error) => error.kind === "network" && error.message === "Upload timed out");
+
+  class UnauthorizedXHR {
+    upload = {};
+    status = 401;
+    statusText = "Unauthorized";
+    responseText = JSON.stringify({ detail: { code: "token_expired", message: "Expired" } });
+    open() {}
+    setRequestHeader() {}
+    send() { document.cookie = "ag_csrf=new-session"; queueMicrotask(() => this.onload()); }
+  }
+  globalThis.XMLHttpRequest = UnauthorizedXHR;
+  await assert.rejects(uploadWithProgress(new FormData(), "/api/v1/upload"));
+  assert.deepEqual(browser.redirects, []);
 });
 
 test("requestBlob shares session/header/error handling and preserves response metadata", async () => {

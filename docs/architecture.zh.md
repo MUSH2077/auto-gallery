@@ -90,6 +90,8 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 - `resource_descriptors.py` 定义子进程准入与 outbox 切片，新投递显式携带描述，
   旧 RQ 函数名仅由兼容适配器解释。管理操作的 profile 不改写 task ID/attempt
   参数。父级准入、子级租约、资源阈值与退出保护继续各自生效。
+- `api/client.ts` 为 fetch 和 XHR 上传共用响应错误规范化，上传进度仍由 XHR 处理，
+  CSRF 和请求会话校验保护 401 处理，网络失败与超时使用传输错误类别。
 - Jobs 页用 `jobsRoute.ts`、`useJobsRouteState.ts` 管理 URL 状态，
   用 `jobTree.ts` 纯函数整理任务树，行、抽屉和批量操作通过 `useTaskCommand.ts`
   共用 `taskCommands.ts` 的动作分派、repeat-sync 意图处理和缓存失效。

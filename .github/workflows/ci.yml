@@ -300,9 +300,9 @@ jobs:
       - name: Typecheck admin web
         working-directory: admin-web
         run: npm run typecheck
-      - name: Check Jobs route and task tree
+      - name: Check frontend regressions
         working-directory: admin-web
-        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs
+        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs tests/api-client-contract.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build

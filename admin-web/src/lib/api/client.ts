@@ -27,6 +27,50 @@ export class ApiError extends Error {
   }
 }
 
+function errorMessage(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (Array.isArray(value)) {
+    const messages = value.map(errorMessage).filter((message): message is string => Boolean(message));
+    return messages.length ? messages.join("; ") : undefined;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) return record.message;
+    if (typeof record.msg === "string" && record.msg.trim()) return record.msg;
+    if (record.detail !== undefined) return errorMessage(record.detail);
+  }
+  return undefined;
+}
+
+/** Normalize fetch and XHR error payloads into the same public ApiError shape. */
+export function apiErrorFromData(
+  status: number,
+  statusText: string,
+  body: unknown,
+  messageOverride?: string,
+  kindOverride?: ApiErrorKind,
+): ApiError {
+  let parsedBody = body;
+  if (typeof body === "string" && body.trim()) {
+    try { parsedBody = JSON.parse(body); } catch { /* Keep the plain response body. */ }
+  }
+  const rawBody = parsedBody === "" || parsedBody == null ? undefined : parsedBody;
+  const detail = rawBody && typeof rawBody === "object" && "detail" in rawBody
+    ? (rawBody as { detail?: unknown }).detail
+    : rawBody;
+  const message = messageOverride || errorMessage(detail) || errorMessage(rawBody) || `${status} ${statusText}`.trim();
+  const structured = detail !== undefined && detail !== null && typeof detail === "object";
+  const kind = kindOverride || (structured ? "business" : "http");
+  const error = new ApiError(status, message, detail, kind, rawBody);
+  const codeSource = detail && typeof detail === "object" && !Array.isArray(detail)
+    ? detail
+    : rawBody && typeof rawBody === "object" && !Array.isArray(rawBody) ? rawBody : undefined;
+  if (codeSource && typeof (codeSource as Record<string, unknown>).code === "string") {
+    error.code = (codeSource as Record<string, unknown>).code as string;
+  }
+  return error;
+}
+
 export function clearAuthOn401(requestSessionMarker: string | null) {
   if (typeof window === "undefined" || csrfToken() !== requestSessionMarker) return;
   try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
@@ -34,29 +78,43 @@ export function clearAuthOn401(requestSessionMarker: string | null) {
   window.location.replace("/admin/login");
 }
 
+export function uploadWithProgress<T>(
+  form: FormData,
+  path: string,
+  onProgress?: (pct: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.timeout = 10 * 60 * 1000;
+    const csrf = csrfToken();
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.ontimeout = () => reject(apiErrorFromData(0, "", undefined, "Upload timed out", "network"));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        let body: unknown = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON success body */ }
+        resolve(body as T);
+        return;
+      }
+      const error = apiErrorFromData(xhr.status, xhr.statusText, xhr.responseText);
+      if (xhr.status === 401) clearAuthOn401(csrf);
+      reject(error);
+    };
+    xhr.onerror = () => reject(apiErrorFromData(0, "", undefined, "Network error", "network"));
+    xhr.send(form);
+  });
+}
+
 
 async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => "");
-  let body: unknown = text;
-  if (text) {
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // A plain response body remains useful error detail.
-    }
-  }
-  const detail = body && typeof body === "object" && "detail" in body
-    ? (body as { detail?: unknown }).detail
-    : body || undefined;
-  const message = typeof detail === "string"
-    ? detail
-    : detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string"
-      ? detail.message
-      : `${res.status} ${res.statusText}`;
-  const kind: ApiErrorKind = detail && typeof detail === "object" && !Array.isArray(detail)
-    ? "business"
-    : "http";
-  return new ApiError(res.status, message, detail, kind, body || undefined);
+  return apiErrorFromData(res.status, res.statusText, text);
 }
 
 async function fetchApiResponse(path: string, options: RequestInit | undefined, jsonContentType: boolean): Promise<Response> {

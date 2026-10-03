@@ -105,6 +105,9 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   names are interpreted only by the compatibility adapter. Registered admin
   profiles never bind task-ID/attempt arguments. Parent admission, child
   leases, pressure thresholds and worker exit behavior remain separate.
+- `api/client.ts` normalizes response errors for both fetch and XHR uploads.
+  Upload progress stays with XHR; CSRF and request-session checks protect 401
+  handling, and network/timeout failures retain a transport-error category.
 - The Jobs page keeps URL state in `jobsRoute.ts` and
   `useJobsRouteState.ts`, and pure task-tree grouping in `jobTree.ts`.
   Rows, drawers and batches use `taskCommands.ts` through `useTaskCommand.ts`
