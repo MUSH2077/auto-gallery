@@ -672,7 +672,7 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     )
     monkeypatch.setattr(danbooru_import.danbooru_svc, "is_downloadable_url", lambda _url: True)
     monkeypatch.setattr(danbooru_import.danbooru_svc, "_classify_url", lambda _url: "pixiv")
-    monkeypatch.setattr(danbooru_import, "find_existing_creator", fake_find_existing_creator)
+    monkeypatch.setattr(danbooru_import, "_match_artist_creator", fake_find_existing_creator)
     monkeypatch.setattr(danbooru_import, "get_subscription_defaults", fake_subscription_defaults)
     monkeypatch.setattr(CreatorService, "_request_creator_projection", fake_creator_projection)
     monkeypatch.setattr(creator_aliases, "backfill_creator_alias_batch", fake_alias_backfill)

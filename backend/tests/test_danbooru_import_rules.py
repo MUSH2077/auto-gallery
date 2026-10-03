@@ -237,3 +237,152 @@ async def test_batch_commit_failure_rolls_back_without_cache_invalidation(db, ar
     assert result["errors"][0]["error"] == "injected commit failure"
     assert not list((await db.execute(select(Creator))).scalars())
     assert events == []
+
+
+@pytest.mark.parametrize("entry", ["single", "pixiv", "url"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_creator_matching_checks_later_identities_regardless_of_url_order(db, artist, monkeypatch, entry, reverse):
+    from app.models import Creator, SourceCreator
+    from app.services import danbooru
+    existing = Creator(name="Existing", display_name="Curated")
+    db.add(existing)
+    await db.flush()
+    db.add(SourceCreator(source="pixiv", source_creator_id="101", creator_id=existing.id))
+    await db.commit()
+    record = {"id": 901, "name": "artist_tag", "urls": [
+        {"url": "https://space.bilibili.com/303"}, {"url": PIXIV_ONE},
+    ]}
+    if reverse:
+        record["urls"].reverse()
+    monkeypatch.setattr(danbooru, "search_and_extract", lambda **_: (record, danbooru.extract_creator_links(record)))
+    result = await run_entry(entry, db)
+    assert result["creator_id"] == str(existing.id)
+    creators = list((await db.execute(select(Creator))).scalars())
+    assert len(creators) == 1
+    identities = list((await db.execute(select(SourceCreator))).scalars())
+    assert {(row.source, row.source_creator_id, row.creator_id) for row in identities} == {
+        ("pixiv", "101", existing.id), ("bilibili", "303", existing.id), ("danbooru", "artist_tag", existing.id),
+    }
+
+
+@pytest.mark.parametrize("entry", ["single", "pixiv", "url"])
+@pytest.mark.parametrize("conflict", ["native", "danbooru", "link", "tag", "duplicate_danbooru"])
+async def test_conflicting_artist_matches_fail_before_mutations(db, artist, monkeypatch, entry, conflict):
+    from fastapi import HTTPException
+    from app.models import Creator, CreatorAlias, CreatorLink, SourceCreator, Subscription, SubscriptionSource, SearchIndexState
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import danbooru
+    from app.jobs.batch_import import _batch_import, _url_batch_import
+    from app.services.danbooru_import import import_all_danbooru_artist
+    first, second = Creator(name="First"), Creator(name="Second")
+    db.add_all([first, second])
+    await db.flush()
+    db.add(SourceCreator(source="pixiv", source_creator_id="101", creator_id=first.id))
+    if conflict == "native":
+        db.add(SourceCreator(source="bilibili", source_creator_id="303", creator_id=second.id))
+    elif conflict in {"danbooru", "duplicate_danbooru"}:
+        second.danbooru_artist_id = 901
+        if conflict == "duplicate_danbooru":
+            first.danbooru_artist_id = 901
+    elif conflict == "link":
+        db.add(CreatorLink(creator_id=second.id, url="https://x.com/artist", link_type="x"))
+    else:
+        db.add(SourceCreator(source="danbooru", source_creator_id="artist_tag", creator_id=second.id))
+    await db.commit()
+    models = (Creator, CreatorAlias, CreatorLink, SourceCreator, Subscription, SubscriptionSource, SearchProjectionOutbox, SearchIndexState)
+    before = [list((await db.execute(select(model.__table__).order_by(model.id))).mappings()) for model in models]
+    record = {"id": 901, "name": "artist_tag", "urls": [
+        {"url": PIXIV_ONE}, {"url": "https://space.bilibili.com/303"}, {"url": "https://x.com/artist"},
+    ]}
+    monkeypatch.setattr(danbooru, "search_and_extract", lambda **_: (record, danbooru.extract_creator_links(record)))
+    if entry == "single":
+        with pytest.raises(HTTPException) as error:
+            await import_all_danbooru_artist({"pixiv_id": "101"}, db)
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "danbooru_creator_conflict"
+        await db.rollback()
+    else:
+        await db.rollback()
+        result = await (_batch_import(["101"], "") if entry == "pixiv" else _url_batch_import([PIXIV_ONE], ""))
+        assert (result["imported_count"], result["error_count"]) == (0, 1)
+        assert "danbooru_creator_conflict" in result["errors"][0]["error"]
+    await db.refresh(first)
+    assert first.danbooru_artist_id == (901 if conflict == "duplicate_danbooru" else None)
+    assert len(list((await db.execute(select(Creator))).scalars())) == 2
+    assert not list((await db.execute(select(Subscription))).scalars())
+    original = (await db.execute(select(SourceCreator).where(SourceCreator.source == "pixiv"))).scalar_one()
+    assert original.creator_id == first.id
+    after = [list((await db.execute(select(model.__table__).order_by(model.id))).mappings()) for model in models]
+    assert after == before
+
+
+@pytest.mark.parametrize("entry", ["pixiv", "url"])
+async def test_batch_identity_conflict_preserves_other_successful_items(db, artist, monkeypatch, entry):
+    from app.models import Creator, SourceCreator, Subscription
+    from app.services import danbooru
+    from app.jobs.batch_import import _batch_import, _url_batch_import
+    first, second = Creator(name="First"), Creator(name="Second")
+    db.add_all([first, second])
+    await db.flush()
+    db.add_all([
+        SourceCreator(source="pixiv", source_creator_id="101", creator_id=first.id),
+        SourceCreator(source="bilibili", source_creator_id="303", creator_id=second.id),
+    ])
+    await db.commit()
+    def resolved(**kwargs):
+        value = kwargs.get("pixiv_id") or kwargs["source_url"].split("/")[-1]
+        record = {"id": int(value), "name": f"artist_{value}", "urls": [{"url": f"https://www.pixiv.net/users/{value}"}]}
+        if value == "101":
+            record["urls"].append({"url": "https://space.bilibili.com/303"})
+        return record, danbooru.extract_creator_links(record)
+    monkeypatch.setattr(danbooru, "search_and_extract", resolved)
+    result = await (_batch_import(["404", "101"], "") if entry == "pixiv" else _url_batch_import(
+        ["https://www.pixiv.net/users/404", PIXIV_ONE], ""))
+    assert (result["imported_count"], result["error_count"]) == (1, 1)
+    assert "danbooru_creator_conflict" in result["errors"][0]["error"]
+    assert len(list((await db.execute(select(Creator))).scalars())) == 3
+    assert len(list((await db.execute(select(Subscription))).scalars())) == 1
+
+
+@pytest.mark.parametrize("entry", ["single", "pixiv", "url"])
+async def test_consistent_native_danbooru_and_link_matches_reuse_one_creator(db, artist, entry):
+    from app.models import Creator, CreatorLink, SourceCreator
+    existing = Creator(name="Existing", danbooru_artist_id=artist["id"])
+    db.add(existing)
+    await db.flush()
+    db.add_all([
+        SourceCreator(source="pixiv", source_creator_id="101", creator_id=existing.id),
+        SourceCreator(source="bilibili", source_creator_id="303", creator_id=existing.id),
+        CreatorLink(creator_id=existing.id, url="https://x.com/artist", link_type="x"),
+    ])
+    await db.commit()
+    assert (await run_entry(entry, db))["creator_id"] == str(existing.id)
+    assert len(list((await db.execute(select(Creator))).scalars())) == 1
+
+
+@pytest.mark.parametrize("entry", ["single", "pixiv", "url"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_new_creator_name_and_native_url_have_stable_priority(db, artist, monkeypatch, entry, reverse):
+    from app.models import Creator, SourceCreator
+    from app.services import danbooru
+    db.add_all([
+        SourceCreator(source="bilibili", source_creator_id="303", display_name="Bilibili name"),
+        SourceCreator(source="pixiv", source_creator_id="101", display_name="Pixiv name"),
+    ])
+    await db.commit()
+    alternate = "https://www.pixiv.net/en/users/101"
+    record = {"id": 901, "name": "artist_tag", "urls": [
+        {"url": "https://space.bilibili.com/303"}, {"url": alternate}, {"url": PIXIV_ONE},
+    ]}
+    if reverse:
+        record["urls"].reverse()
+    monkeypatch.setattr(danbooru, "search_and_extract", lambda **_: (record, danbooru.extract_creator_links(record)))
+    result = await run_entry(entry, db)
+    assert (await db.get(Creator, UUID(result["creator_id"]))).display_name == "Pixiv name"
+    native = (await db.execute(select(SourceCreator).where(SourceCreator.source == "pixiv"))).scalar_one()
+    assert native.source_url is None  # Existing metadata is preserved, not rewritten.
+    await db.delete(native)
+    await db.commit()
+    await run_entry(entry, db)
+    created = (await db.execute(select(SourceCreator).where(SourceCreator.source == "pixiv"))).scalar_one()
+    assert created.source_url == min(PIXIV_ONE, alternate)

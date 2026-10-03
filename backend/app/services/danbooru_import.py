@@ -11,7 +11,7 @@ import urllib.parse
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.creator import Creator
@@ -21,7 +21,6 @@ from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource
 from app.services import danbooru as danbooru_svc
 from app.services.cache import invalidate_creator_subscription_caches
-from app.services.creator_dedup import find_existing_creator
 from app.services.subscription import get_subscription_defaults
 
 
@@ -67,14 +66,35 @@ class AppliedArtistImport:
     source_creators_created: int
 
 
+async def _match_artist_creator(db, *, artist_id, identities, urls):
+    """Resolve all valid markers together; conflicting owners are not merged."""
+    matches = [Creator.id.in_(select(SourceCreator.creator_id).where(
+        tuple_(SourceCreator.source, SourceCreator.source_creator_id).in_(list(identities)),
+    ))]
+    if artist_id is not None:
+        matches.append(Creator.danbooru_artist_id == artist_id)
+        urls = {*urls, f"https://danbooru.donmai.us/artists/{artist_id}"}
+    if urls:
+        matches.append(Creator.id.in_(select(CreatorLink.creator_id).where(CreatorLink.url.in_(urls))))
+    creators = list((await db.execute(select(Creator).where(or_(*matches)).order_by(Creator.id))).scalars())
+    if len(creators) > 1:
+        raise HTTPException(status_code=409, detail={
+            "code": "danbooru_creator_conflict",
+            "message": "Danbooru artist matches multiple local creators; choose an explicit target",
+            "creator_ids": [str(creator.id) for creator in creators],
+        })
+    return creators[0] if creators else None
+
+
 async def persist_danbooru_artist(
     artist: dict, links: list[dict], db: AsyncSession, *,
     creator_id: UUID | None = None, creator_name: str = "",
 ) -> AppliedArtistImport:
     """Apply resolved identity, sources and projections without committing.
 
-    New display names prefer explicit input, an existing native identity name,
-    then the Danbooru tag. Existing display names only change on explicit input.
+    New display names prefer explicit input, then known Pixiv, Bilibili and
+    Danbooru identity names (stable native-ID order), then the Danbooru tag.
+    Existing display names only change on explicit input.
     Existing enablement and nonempty identity ownership are preserved.
     """
     canonical_name = artist.get("name", "Unknown")
@@ -84,30 +104,28 @@ async def persist_danbooru_artist(
         if entry.get("is_active", True)
         and (url := entry.get("normalized_url") or entry.get("url", ""))
     }
-    identities = {
-        (source, native_id): url
-        for url, source in active_urls.items()
-        if (native_id := _extract_source_creator_id(source, url)) is not None
-    }
-    native_key = next(iter(identities), None)
-    native_url = identities[native_key] if native_key else next(iter(active_urls), None)
+    identities = {}
+    for url in sorted(active_urls):
+        source = active_urls[url]
+        if (native_id := _extract_source_creator_id(source, url)) is not None:
+            identities.setdefault((source, native_id), url)
+    posts_url = f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(canonical_name)}"
+    identities[("danbooru", canonical_name)] = posts_url
     if creator_id is not None:
         creator = await db.get(Creator, creator_id)
         if creator is None:
             raise HTTPException(status_code=404, detail="Creator not found")
     else:
-        creator = await find_existing_creator(
-            db, danbooru_artist_id=artist.get("id"),
-            source=native_key[0] if native_key else None,
-            source_creator_id=native_key[1] if native_key else None,
-            source_url=native_url,
-        )
+        creator = await _match_artist_creator(db, artist_id=artist.get("id"), identities=identities, urls=set(active_urls))
     created_new = creator is None
     if created_new:
         native = (await db.execute(select(SourceCreator).where(
-            SourceCreator.source == native_key[0],
-            SourceCreator.source_creator_id == native_key[1],
-        ))).scalar_one_or_none() if native_key else None
+            tuple_(SourceCreator.source, SourceCreator.source_creator_id).in_(list(identities)),
+            SourceCreator.display_name.is_not(None), SourceCreator.display_name != "",
+        ).order_by(
+            case((SourceCreator.source == "pixiv", 0), (SourceCreator.source == "bilibili", 1), else_=2),
+            SourceCreator.source, SourceCreator.source_creator_id,
+        ).limit(1))).scalar_one_or_none()
         creator = Creator(name=canonical_name,
                           display_name=creator_name or (native.display_name if native else None) or canonical_name)
         db.add(creator)
@@ -143,7 +161,6 @@ async def persist_danbooru_artist(
         db.add(subscription)
         await db.flush()
 
-    posts_url = f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(canonical_name)}"
     sources = {url: source for url, source in active_urls.items() if danbooru_svc.is_downloadable_url(url)}
     sources[posts_url] = "danbooru"
     enabled_sources = _get_auto_enable_sources()
@@ -160,7 +177,6 @@ async def persist_danbooru_artist(
         elif existing.source_creator_id is None and native_id is not None:
             existing.source_creator_id = native_id
 
-    identities[("danbooru", canonical_name)] = posts_url
     source_creators_created = 0
     for (source, native_id), url in identities.items():
         existing = (await db.execute(select(SourceCreator).where(
