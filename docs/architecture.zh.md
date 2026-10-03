@@ -84,6 +84,8 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   旧 ORM 快照被删除。
   HTTP 与 CLI 的 trash/restore 在排序锁和状态重读后共用资格、修改与审计构造，
   入口策略保留 CLI noop 审计及 HTTP 重复/缺失 ID 的处理差异；purge 保留专用文件流程。
+- `gitllery/payload.py` 为 outbox 和直接投影／重建共用 segment 提交格式映射，全局
+  父提交与仓库父提交分别保留，调用方仍在投影锁内读取仓库父链。
 - `resource_pressure.py` 协调采样、状态和共享快照，分别委托给
   `resource_pressure_sampling.py`、`resource_pressure_state.py` 和
   `resource_pressure_snapshot.py`。

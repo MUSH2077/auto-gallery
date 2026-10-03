@@ -97,6 +97,9 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   HTTP and CLI trash/restore share eligibility, mutation and audit construction
   after the ordering lock and state reread. Entry policies preserve CLI noop
   auditing and HTTP duplicate/missing-ID handling; purge keeps its own file flow.
+- `gitllery/payload.py` shares segment commit format mapping across outbox and
+  direct projection/rebuild. Global and repository parents remain distinct;
+  callers still read the repository parent under the projection lock.
 - `resource_pressure.py` coordinates sampling, state and shared snapshots
   delegated to `resource_pressure_sampling.py`,
   `resource_pressure_state.py` and `resource_pressure_snapshot.py`.
