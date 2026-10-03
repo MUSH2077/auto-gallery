@@ -2,7 +2,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useId, type ReactNode } from "react";
 import { Bell, Check, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useT, type TFunction } from "@/lib/i18n";
 import { api, queryKeys } from "@/lib/api";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
@@ -11,6 +11,9 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { usePermissions } from "@/lib/usePermissions";
 import { useAuth } from "@/lib/auth";
 import { taskRunDestination } from "@/lib/taskRoutes";
+import { OperationMonitorContext, useOperationMonitor, type OperationJobState } from "@/lib/operationMonitor";
+import { normalizeOperationStatus } from "@/lib/operationStatus";
+import { refreshOperationResources } from "@/lib/operationRefresh";
 import { pollInterval } from "@/lib/polling";
 
 type ActivityStatus = "running" | "completed" | "error" | "pending";
@@ -26,31 +29,9 @@ export interface ActivityItem {
   link?: string;
 }
 
-// Batch import job state managed at layout level (survives navigation)
-export interface BatchJobState {
-  jobId: string;
-  importType: "pixiv" | "url";
-  total: number;
-  startedAt: number;
-  progress: { current: number; total: number; imported: number; errors: number } | null;
-  result: any | null;
-  status: "pending" | "running" | "completed" | "error";
-}
+import { useBatchImportMonitor, type BatchJobState } from "@/lib/batchImportMonitor";
+export type { BatchJobState } from "@/lib/batchImportMonitor";
 
-export interface OperationJobState {
-  jobId: string;
-  taskId?: string;
-  kind: "admin-clear" | "admin-rebuild" | "admin-disk-import" | "danbooru-import-all" | string;
-  title: string;
-  startedAt: number;
-  status: "running" | "completed" | "error";
-  progress: { phase?: string; label?: string; current?: number; total?: number } | null;
-  result: any | null;
-  error?: string;
-  meta?: Record<string, any>;
-}
-
-const STORAGE_KEY = "danbooru_batch_job";
 const OPERATION_STORAGE_KEY = "admin_operation_job";
 
 interface NotificationCtx {
@@ -93,28 +74,31 @@ const MAX_ITEMS = 50;
 const COMPLETED_TTL = 30_000;
 
 function operationResultMessage(operation: OperationJobState, t: TFunction): string {
+  const result = operation.result;
+  const message = typeof result?.message === "string" ? result.message : null;
+  const count = (key: string) => typeof result?.[key] === "number" ? result[key] : 0;
   if (operation.kind === "danbooru-import-all" && operation.status === "completed") {
-    if (operation.result?.found === false) return operation.result.message || t("notification.no_danbooru_match");
+    if (result?.found === false) return message || t("notification.no_danbooru_match");
     return t("notification.creators_refreshed");
   }
   if (operation.kind === "danbooru-mapping-refresh" && operation.status === "completed") {
     return t("danbooru.refresh_result", {
-      found: operation.result?.found || 0,
-      scanned: operation.result?.scanned || 0,
-      total: operation.result?.total || 0,
-      notFound: operation.result?.not_found || 0,
-      skipped: operation.result?.skipped || 0,
-      errors: operation.result?.errors || 0,
+      found: count("found"),
+      scanned: count("scanned"),
+      total: count("total"),
+      notFound: count("not_found"),
+      skipped: count("skipped"),
+      errors: count("errors"),
     });
   }
   if (operation.kind === "hierarchy-delete" && operation.status === "completed") {
     return t("deletion.result", {
-      targets: operation.result?.entity_ids?.length || 0,
-      processed: operation.result?.trashed_or_purged_works || 0,
-      shared: operation.result?.shared_works_preserved || 0,
+      targets: Array.isArray(result?.entity_ids) ? result.entity_ids.length : 0,
+      processed: count("trashed_or_purged_works"),
+      shared: count("shared_works_preserved"),
     });
   }
-  return operation.result?.message || t("status.completed");
+  return message || t("status.completed");
 }
 
 const TASK_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,121 +109,6 @@ function operationDestination(operation: OperationJobState): string | null {
   }
   if (operation.kind === "danbooru-import-all") return adminRoutes.danbooru;
   return null;
-}
-
-function refetchCreatorSubscriptionQueries(qc: QueryClient) {
-  qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-  qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-  qc.invalidateQueries({ queryKey: queryKeys.creators.count });
-  qc.invalidateQueries({ queryKey: queryKeys.subscriptions.count });
-  void Promise.all([
-    qc.refetchQueries({ queryKey: queryKeys.creators.all, type: "all" }),
-    qc.refetchQueries({ queryKey: queryKeys.subscriptions.all, type: "all" }),
-  ]);
-}
-
-function refreshOperationQueries(
-  qc: QueryClient,
-  kind: OperationJobState["kind"],
-  meta?: Record<string, any>,
-  result?: any,
-) {
-  if (kind === "danbooru-import-all") {
-    refetchCreatorSubscriptionQueries(qc);
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
-    const refetches = [
-      qc.refetchQueries({ queryKey: queryKeys.workbench, type: "all" }),
-      qc.refetchQueries({ queryKey: ["creator-subscription-overview"], type: "all" }),
-    ];
-    const creatorId = result?.creator_id;
-    if (creatorId) {
-      refetches.push(qc.refetchQueries({ queryKey: queryKeys.creators.detail(creatorId), type: "all" }));
-      refetches.push(qc.refetchQueries({ queryKey: queryKeys.creators.links(creatorId), type: "all" }));
-      refetches.push(qc.refetchQueries({ queryKey: ["creator-subscription-overview", creatorId], type: "all" }));
-    }
-    const subscriptionId = result?.subscription_id;
-    if (subscriptionId) {
-      refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.detail(subscriptionId), type: "all" }));
-      refetches.push(qc.refetchQueries({ queryKey: queryKeys.subscriptions.sources(subscriptionId), type: "all" }));
-    }
-    void Promise.all(refetches);
-    return;
-  }
-
-  if (kind === "danbooru-mapping-refresh") {
-    refetchCreatorSubscriptionQueries(qc);
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: ["repositories"] });
-    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
-    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    return;
-  }
-
-  if (kind === "hierarchy-delete") {
-    refetchCreatorSubscriptionQueries(qc);
-    qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: ["repositories"] });
-    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
-    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
-    return;
-  }
-
-  qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-
-  if (kind === "admin-rebuild" || kind === "admin-disk-import") {
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
-    qc.invalidateQueries({ queryKey: ["system-info"] });
-    return;
-  }
-
-  const entity = meta?.entity as string | undefined;
-  if (entity === "creators" || entity === "all") {
-    qc.setQueryData(queryKeys.creators.count, { count: 0 });
-    qc.setQueryData(queryKeys.subscriptions.count, { count: 0 });
-    qc.setQueriesData({ queryKey: ["creators", "list"] }, { items: [], total: 0 });
-    qc.setQueriesData({ queryKey: ["subscriptions", "list"] }, []);
-    qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: ["repositories"] });
-    qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
-  }
-  if (entity === "works" || entity === "all" || entity === "downloads") {
-    qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
-    qc.invalidateQueries({ queryKey: ["system-info"] });
-    qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-  }
-  if (entity === "tags" || entity === "all") {
-    qc.invalidateQueries({ queryKey: queryKeys.tags.all });
-    qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-  }
-  if (entity === "jobs" || entity === "downloads" || entity === "all") {
-    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-    qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    qc.invalidateQueries({ queryKey: ["queue-stats"] });
-    qc.invalidateQueries({ queryKey: queryKeys.workbench });
-  }
-  if (entity === "settings") {
-    qc.invalidateQueries({ queryKey: queryKeys.admin.settings });
-    qc.invalidateQueries({ queryKey: queryKeys.schedulerDecisions });
-    qc.invalidateQueries({ queryKey: ["gallerydl-config"] });
-  }
 }
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
@@ -256,8 +125,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     && permissionsUser?.id === authUser?.id
     && has("subscriptions");
   const [items, setItems] = useState<ActivityItem[]>([]);
-  const [batchJob, setBatchJob] = useState<BatchJobState | null>(null);
-  const [operationJob, setOperationJob] = useState<OperationJobState | null>(null);
+  const batchMonitor = useBatchImportMonitor(canAccessBatchImports);
+  const { batchJob } = batchMonitor;
+  const fetchOperationStatus = useCallback((operation: OperationJobState) => operation.kind === "danbooru-mapping-refresh"
+    ? api.getDanbooruMappingRefreshStatus(operation.jobId)
+    : api.getAdminOperationStatus(operation.taskId ?? operation.jobId), []);
+  const refreshOperation = useCallback((operation: OperationJobState, result: OperationJobState["result"]) => {
+    refreshOperationResources(qc, operation.kind, operation.meta, result);
+  }, [qc]);
+  const monitor = useOperationMonitor({
+    storageKey: OPERATION_STORAGE_KEY,
+    fetchStatus: fetchOperationStatus,
+    refreshResources: refreshOperation,
+  });
+  const operationJob = monitor.operation;
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // ─── Activity log ───
@@ -267,8 +148,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) setBatchJob(null);
-  }, [authLoading, isAuthenticated]);
+    if (!authLoading && !isAuthenticated) batchMonitor.clear();
+  }, [authLoading, isAuthenticated, batchMonitor.clear]);
 
   const scheduleRemoval = useCallback((id: string) => {
     const existing = timersRef.current.get(id);
@@ -312,22 +193,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setItems((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
-  // ─── Batch job (global, survives navigation) ───
-  const startBatchJob = useCallback((jobId: string, importType: "pixiv" | "url", total: number) => {
-    const state: BatchJobState = {
-      jobId, importType, total,
-      startedAt: Date.now(),
-      progress: null, result: null,
-      status: "running",
-    };
-    setBatchJob(state);
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ jobId, importType, total, startedAt: Date.now() })); } catch {}
-  }, [t]);
-
-  const clearBatchJob = useCallback(() => {
-    setBatchJob(null);
-    try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
-  }, []);
+  const startBatchJob = batchMonitor.start;
+  const clearBatchJob = batchMonitor.clear;
 
   const startOperationJob = useCallback((
     jobId: string,
@@ -336,25 +203,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     meta?: Record<string, any>,
     taskId?: string,
   ) => {
-    const state: OperationJobState = {
-      jobId, taskId, kind, title,
-      startedAt: Date.now(),
-      progress: null, result: null,
-      status: "running",
-      meta,
-    };
-    setOperationJob(state);
-    try {
-      sessionStorage.setItem(OPERATION_STORAGE_KEY, JSON.stringify({
-        jobId, taskId, kind, title, meta, startedAt: state.startedAt,
-      }));
-    } catch {}
-  }, []);
+    monitor.start(jobId, kind, title, meta, taskId);
+  }, [monitor.start]);
 
   const clearOperationJob = useCallback(() => {
-    setOperationJob(null);
-    try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
-  }, []);
+    monitor.clear();
+  }, [monitor.clear]);
 
   const clearRecent = useCallback(() => {
     timersRef.current.forEach((t) => clearTimeout(t));
@@ -369,151 +223,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, [batchJob, clearBatchJob, operationJob, clearOperationJob]);
 
-  // Mount recovery: restore batch job from sessionStorage (only if recent)
-  useEffect(() => {
-    if (!canAccessBatchImports) return;
-    try {
-      const stored = sessionStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        const age = Date.now() - parsed.startedAt;
-        if (age < 5 * 60 * 1000) {
-          setBatchJob({
-            jobId: parsed.jobId, importType: parsed.importType, total: parsed.total,
-            startedAt: parsed.startedAt, progress: null, result: null, status: "running",
-          });
-          // Fetch current status immediately so completed jobs show results,
-          // and expired/stale jobs are cleaned up instead of leaving UI stuck.
-          api.getBatchImportStatus(parsed.jobId).then((d: any) => {
-            if (d?.result) {
-              setBatchJob((prev) => {
-                if (!prev || prev.jobId !== parsed.jobId) return prev;
-                return { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: d.result, status: "completed" as const, progress: null };
-              });
-            } else if (!d?.progress) {
-              setBatchJob(null);
-              try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
-            }
-          }).catch(() => {
-            setBatchJob(null);
-            try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
-          });
-        } else {
-          try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
-        }
-      }
-    } catch {}
-  }, [canAccessBatchImports]);
-
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem(OPERATION_STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      const age = Date.now() - parsed.startedAt;
-      if (age >= 2 * 60 * 60 * 1000) {
-        sessionStorage.removeItem(OPERATION_STORAGE_KEY);
-        return;
-      }
-      setOperationJob({
-        jobId: parsed.jobId,
-        taskId: parsed.taskId,
-        kind: parsed.kind,
-        title: parsed.title,
-        meta: parsed.meta,
-        startedAt: parsed.startedAt,
-        progress: null,
-        result: null,
-        status: "running",
-      });
-    } catch {}
-  }, []);
-
-  // ─── Global polling (layout level — never unmounts on page navigation) ───
-  const batchStatusQuery = useQuery({
-    queryKey: ["batch-import-status-global", batchJob?.jobId],
-    queryFn: () => api.getBatchImportStatus(batchJob?.jobId || undefined),
-    enabled: canAccessBatchImports && !!batchJob?.jobId,
-    staleTime: 0, // Always refetch on mount to restore result after navigation
-    refetchInterval: (query) => {
-      if (!batchJob) return false;
-      return query.state.data?.status === "completed" ? false : pollInterval(true);
-    },
-    refetchIntervalInBackground: false,
-  });
-
-  const operationStatusQuery = useQuery({
-    queryKey: ["admin-operation-status-global", operationJob?.jobId],
-    queryFn: () => operationJob?.kind === "danbooru-mapping-refresh"
-      ? api.getDanbooruMappingRefreshStatus(operationJob.jobId)
-      : api.getAdminOperationStatus(operationJob?.jobId || ""),
-    enabled: !!operationJob?.jobId && operationJob.status === "running",
-    staleTime: 0,
-    refetchInterval: (query) => {
-      if (!operationJob) return false;
-      const status = query.state.data?.status;
-      return status === "complete" || status === "failed" ? false : pollInterval(true);
-    },
-    refetchIntervalInBackground: false,
-    retry: 2,
-  });
-
-  // Sync polling results to batch job state
-  useEffect(() => {
-    if (!batchJob || !batchStatusQuery.data) return;
-    const data = batchStatusQuery.data;
-
-    if (data.progress) {
-      setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, progress: data.progress, result: null, status: "running" as const } : prev);
-    }
-
-    if (data.result) {
-      setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: data.result, status: "completed" as const, progress: null } : prev);
-      refetchCreatorSubscriptionQueries(qc);
-      qc.invalidateQueries({ queryKey: queryKeys.workbench });
-      qc.invalidateQueries({ queryKey: ["creator-subscription-overview"] });
-    }
-
-    // Handle expired/stuck jobs: no progress AND no result means Redis keys are gone
-    if (!data.progress && !data.result) {
-      const elapsed = Date.now() - batchJob.startedAt;
-      if (elapsed > 10 * 60 * 1000) {
-        setBatchJob((prev) => prev ? { jobId: prev.jobId, importType: prev.importType, total: prev.total, startedAt: prev.startedAt, result: null, status: "error" as const, progress: null } : prev);
-        try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
-      }
-    }
-  }, [batchStatusQuery.data, batchJob?.jobId]); // eslint-disable-line
-
-  useEffect(() => {
-    if (!operationJob || !operationStatusQuery.data) return;
-    const data = operationStatusQuery.data;
-    const taskId = typeof data.task_id === "string" && TASK_RUN_ID.test(data.task_id)
-      ? data.task_id
-      : operationJob.taskId;
-
-    if (data.status === "queued" || data.status === "enqueued" || data.status === "running") {
-      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, taskId, progress: data.progress || prev.progress, status: "running" }
-        : prev);
-      return;
-    }
-
-    if (data.status === "complete") {
-      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, taskId, progress: data.progress || prev.progress, result: data.result || null, status: "completed" }
-        : prev);
-      refreshOperationQueries(qc, operationJob.kind, operationJob.meta, data.result);
-      try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
-      return;
-    }
-
-    if (data.status === "failed") {
-      setOperationJob((prev) => prev && prev.jobId === operationJob.jobId
-        ? { ...prev, taskId, progress: data.progress || prev.progress, error: data.error || "Operation failed", status: "error" }
-        : prev);
-      try { sessionStorage.removeItem(OPERATION_STORAGE_KEY); } catch {}
-    }
-  }, [operationStatusQuery.data, operationJob?.jobId]); // eslint-disable-line
+  const acceptOperation = (task: Parameters<typeof monitor.accept>[0], accepted: Parameters<typeof monitor.accept>[1]) => {
+    if (task.operation_type === "admin-danbooru-batch-import" || task.operation_type === "admin-danbooru-url-batch-import") batchMonitor.accept(task, accepted);
+    else monitor.accept(task, accepted);
+  };
 
   return (
     <NotificationContext.Provider value={{
@@ -521,7 +234,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       batchJob, startBatchJob, clearBatchJob,
       operationJob, startOperationJob, clearOperationJob,
     }}>
-      {children}
+      <OperationMonitorContext.Provider value={{ ...monitor, accept: acceptOperation }}>{children}</OperationMonitorContext.Provider>
     </NotificationContext.Provider>
   );
 }

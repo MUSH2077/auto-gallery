@@ -18,6 +18,7 @@ import { parseSyncOutcome } from "@/lib/syncOutcome";
 import { actionErrorReason, clearRepeatSyncIntent, createRepeatSyncIntent, hasTaskAction, metadataCleanupPresentation, readRepeatSyncIntent, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance } from "@/lib/task-actions";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
 import { secureRandomUuid } from "@/lib/random";
+import { useTaskCommand } from "@/lib/useTaskCommand";
 import { usePermissions } from "@/lib/usePermissions";
 
 export function shortId(id?: string | null) {
@@ -54,7 +55,6 @@ function resourceReasonLabel(t: TFunction, reason?: string | null) {
 export function TaskDetailDrawer({
   id,
   onClose,
-  onRetryTask,
   onOpenDownload,
   onOpenImport,
   actionPending = false,
@@ -63,7 +63,6 @@ export function TaskDetailDrawer({
 }: {
   id: string | null;
   onClose: () => void;
-  onRetryTask: (id: string) => void;
   onOpenDownload: (id: string) => void;
   onOpenImport: (id: string) => void;
   actionPending?: boolean;
@@ -97,36 +96,14 @@ export function TaskDetailDrawer({
     },
     refetchIntervalInBackground: false,
   });
-  const taskAction = useMutation({
-    mutationFn: async (action: "pause" | "resume" | "cancel" | "delete" | "acknowledge" | "repeat_sync") => {
-      if (!heldId) throw new Error("Missing task");
-      if (action === "pause") return api.pauseTask(heldId);
-      if (action === "resume") return api.resumeTask(heldId);
-      if (action === "cancel") return api.cancelTask(heldId);
-      if (action === "delete") return api.deleteTask(heldId);
-      if (action === "acknowledge") return api.acknowledgeTask(heldId);
-      const originalJobId = task.data?.subject_type === "download_job" ? task.data.subject_id : null;
-      if (!user?.id || !originalJobId) throw new Error(t("jobs.repeat_original_unavailable"));
-      const intent = readRepeatSyncIntent(user.id, originalJobId) || createRepeatSyncIntent(user.id, originalJobId, task.data?.title || originalJobId, secureRandomUuid);
-      storeRepeatSyncIntent(intent);
-      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatTask(heldId, intent.requestId));
-      clearRepeatSyncIntent(intent);
-      return accepted;
-    },
-    onSuccess: (result, action) => {
+  const taskAction = useTaskCommand(task.data, user?.id, onRepeatAccepted, {
+    onSuccess: (_result, action) => {
       setConfirmAction(null);
       setRepeatConflictState(null);
-      if (action === "repeat_sync" && "job_id" in result) onRepeatAccepted?.(String(result.job_id));
-      else void task.refetch();
+      if (action !== "repeat_sync") void task.refetch();
     },
     onError: (error, action) => {
       if (action === "repeat_sync") setRepeatConflictState(repeatSyncConflict(error));
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.workbench });
     },
   });
   if (!mounted || !heldId) return null;
@@ -155,7 +132,7 @@ export function TaskDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               {hasConflictWorkflow && <button onClick={() => setShowConflict(true)} className="btn-primary text-xs">{existingResolution ? t("jobs.conflict.view_resolution") : t("jobs.conflict.compare")}</button>}
-              {canRetry && <button disabled={actionPending || taskAction.isPending} onClick={() => onRetryTask(item.id)} className="btn-primary text-xs">{t("jobs.retry")}</button>}
+              {canRetry && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("retry")} className="btn-primary text-xs">{t("jobs.retry")}</button>}
               {hasTaskAction(item, "pause") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("pause")} className="btn-ghost text-xs">{t("jobs.pause")}</button>}
               {hasTaskAction(item, "resume") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("resume")} className="btn-ghost text-xs">{t("jobs.resume")}</button>}
               {hasTaskAction(item, "cancel") && <button disabled={actionPending || taskAction.isPending} onClick={() => taskAction.mutate("cancel")} className="btn-ghost text-xs">{t("common.cancel")}</button>}

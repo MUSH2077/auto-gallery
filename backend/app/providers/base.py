@@ -82,6 +82,20 @@ class BaseProvider(ABC):
     @abstractmethod
     def parse_source_tags(self, raw_metadata: dict) -> list[dict]: ...
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        """Return normalized work flags while preserving missing-as-false history."""
+        values = " ".join(str(value) for value in raw_metadata.values() if isinstance(value, str)).casefold()
+        return {
+            "is_ai_generated": any(marker in values for marker in (
+                "ai_generated", "ai-generated", "ai generated", "created by ai", "ai art",
+            )),
+            "is_nsfw": False,
+        }
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        """Build a provider-native creator URL without database or service state."""
+        return f"recovery://{self.source_name}/{source_creator_id}"
+
     def get_creator_directory_name(self, raw_metadata: dict) -> str:
         """Return the directory name for a creator from raw metadata.
 

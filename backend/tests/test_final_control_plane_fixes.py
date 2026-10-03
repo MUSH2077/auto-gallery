@@ -266,7 +266,7 @@ async def test_outer_runner_preserves_semantic_terminal_failure(
     task_id: UUID | None = None
 
     async def semantic_result(*_args, **_kwargs):
-        return result
+        return operations.ADMIN_OPERATION_REGISTRY[operation_type].normalize_result(result)
 
     monkeypatch.setattr(
         admin_operations,

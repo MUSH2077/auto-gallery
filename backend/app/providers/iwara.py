@@ -79,6 +79,15 @@ class IwaraProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        rating = str(raw_metadata.get("rating", "")).casefold()
+        flags["is_nsfw"] = bool(rating and rating not in {"general", "allages", "all-ages", "safe"})
+        return flags
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://www.iwara.tv/profile/{source_creator_id}"
+
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         return [{
             "source": self.source_name,

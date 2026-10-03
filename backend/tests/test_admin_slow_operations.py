@@ -83,9 +83,12 @@ async def test_slow_admin_actions_are_authorized_bounded_202_task_starts(monkeyp
     async def forbidden_async(*_args, **_kwargs):
         raise AssertionError("slow work ran in the request handler")
 
-    monkeypatch.setattr(backup, "_estimate_component_sizes", forbidden_sync)
-    monkeypatch.setattr(backup, "_create_backup_sync", forbidden_sync)
-    monkeypatch.setattr(settings_api, "_run_integrity_check", forbidden_async)
+    from app.services import backup as backup_service, integrity, connectivity
+    monkeypatch.setattr(backup_service, "_estimate_component_sizes", forbidden_sync)
+    monkeypatch.setattr(backup_service, "_create_backup_sync", forbidden_sync)
+    monkeypatch.setattr(integrity, "scan_integrity", forbidden_async)
+    monkeypatch.setattr(connectivity, "probe_proxy_connectivity", forbidden_async)
+    monkeypatch.setattr(connectivity, "probe_source_connection", forbidden_async)
     monkeypatch.setattr(settings_api, "_get_setting", forbidden_async)
     monkeypatch.setattr(gallerydl.subprocess, "run", forbidden_sync)
 
@@ -252,7 +255,7 @@ async def test_latest_snapshot_ignores_failed_runs_and_is_scoped(monkeypatch):
 @pytest.mark.asyncio
 async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(monkeypatch):
     """A worker exception is structured on TaskRun and retry advances its attempt."""
-    from app.api.admin import backup
+    from app.services import backup
     from app.database import async_session, engine
     from app.jobs.admin_operations import _run_registered_admin_operation
     from app.main import app
@@ -378,10 +381,11 @@ async def test_proxy_worker_redacts_credentials_before_logging_and_persisting(
         def open(self, *_args, **_kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr(settings_api, "_get_setting", credentialed_proxy)
+    from app.services import connectivity
+    monkeypatch.setattr(connectivity, "get_system_setting", credentialed_proxy)
     monkeypatch.setattr("socket.create_connection", lambda *_args, **_kwargs: FakeSocket())
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args, **_kwargs: FakeOpener())
-    caplog.set_level(logging.INFO, logger=settings_api.__name__)
+    caplog.set_level(logging.INFO, logger="app.services.connectivity")
 
     transport = ASGITransport(app=app)
     task_id: UUID | None = None
@@ -674,7 +678,8 @@ async def test_integrity_aborted_transaction_fails_task_and_remains_retryable(mo
     async def abort_transaction(db):
         await db.execute(sql_text("SELECT * FROM task2_missing_integrity_table"))
 
-    monkeypatch.setattr(settings_api, "_run_integrity_check", abort_transaction)
+    from app.services import integrity
+    monkeypatch.setattr(integrity, "scan_integrity", abort_transaction)
     task_id: UUID | None = None
     transport = ASGITransport(app=app)
     try:

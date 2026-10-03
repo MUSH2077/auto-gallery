@@ -678,7 +678,7 @@ def _upload_all(root: Path, created: dict, archive: bytes, *, chunk_size: int = 
 
 def test_created_backup_manifest_carries_every_file_hash(tmp_path, monkeypatch):
     """A backup without entry hashes cannot cross the restore trust boundary."""
-    from app.api.admin import backup
+    from app.services import backup
 
     source = tmp_path / "config-source"
     source.mkdir()
@@ -707,7 +707,7 @@ def test_database_backup_excludes_pgpass_and_passes_restore_validation(
     monkeypatch,
 ):
     """Generated database backups contain only portable restore payloads."""
-    from app.api.admin import backup
+    from app.services import backup
     from app.services.offline_restore import validate_upload
 
     secret = "backup-passfile-canary"
@@ -786,7 +786,7 @@ def test_database_backup_failure_removes_credentials_payload_and_candidate(
     monkeypatch,
 ):
     """A failed pg_dump leaves no credential, payload, or candidate file."""
-    from app.api.admin import backup
+    from app.services import backup
 
     backup_dir = tmp_path / "backups"
     temporary_directories: list[Path] = []
@@ -823,7 +823,7 @@ def test_database_backup_failure_removes_credentials_payload_and_candidate(
 
 def test_registered_backup_stage_neither_publishes_nor_prunes(tmp_path, monkeypatch):
     """A cancelled backup thread may leave a candidate, never a visible backup."""
-    from app.api.admin import backup
+    from app.services import backup
 
     source = tmp_path / "config-source"
     source.mkdir()
@@ -862,7 +862,7 @@ def test_registered_backup_stage_neither_publishes_nor_prunes(tmp_path, monkeypa
 
 def test_registered_backup_rejects_symlinked_pending_directory(tmp_path, monkeypatch):
     """Candidate cleanup must never follow .pending outside the backup root."""
-    from app.api.admin import backup
+    from app.services import backup
 
     source = tmp_path / "config-source"
     source.mkdir()
@@ -892,7 +892,7 @@ def test_registered_backup_publish_rejects_replaced_pending_directory(
     monkeypatch,
 ):
     """Atomic publication must reopen .pending without following replacement."""
-    from app.api.admin import backup
+    from app.services import backup
 
     source = tmp_path / "config-source"
     source.mkdir()
@@ -927,7 +927,7 @@ def test_registered_backup_exception_cleanup_uses_original_pending_directory(
     monkeypatch,
 ):
     """Failure cleanup must retain its no-follow directory authority."""
-    from app.api.admin import backup
+    from app.services import backup
 
     source = tmp_path / "config-source"
     source.mkdir()
@@ -1390,7 +1390,7 @@ def test_component_only_archive_is_downloadable_but_never_restore_ready(
     monkeypatch,
 ):
     """Host restore always switches PostgreSQL, so readiness requires a DB dump."""
-    from app.api.admin import backup
+    from app.services import backup
     from app.services.offline_restore import RestoreValidationError, validate_upload
 
     archive = _archive_bytes(

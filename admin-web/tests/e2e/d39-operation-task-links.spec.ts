@@ -116,14 +116,148 @@ for (const action of dataActions) {
     });
     try {
       await opened.page.getByRole("button", { name: action.button, exact: true }).click();
-      await expect.poll(() => new Set(operationPollIds).size).toBe(2);
+      await expect.poll(() => operationPollIds.length).toBe(1);
+      // A page-level confirmation timer used to add another request after 1s.
+      await opened.page.waitForTimeout(1500);
+      expect(operationPollIds).toEqual([TASK_ID]);
       await opened.page.getByRole("button", { name: "Task detail", exact: true }).click();
       await expectCanonicalTask(opened.page, opened.taskDetailIds);
-      expect(new Set(operationPollIds)).toEqual(new Set([TASK_ID, RQ_JOB_ID]));
+      expect(new Set(operationPollIds)).toEqual(new Set([TASK_ID]));
       expect(opened.unhandled).toEqual([]);
     } finally {
       await opened.context.close();
     }
+  });
+}
+
+for (const terminal of ["complete", "404", "410"] as const) {
+  test(`data-management shared monitor handles ${terminal} once`, async ({ browser }) => {
+    let polls = 0;
+    let infoReads = 0;
+    const ids: string[] = [];
+    const opened = await openFixture(browser, "/admin/data-mgmt", async (route, url, method) => {
+      if (url.pathname === "/api/v1/admin/system-info") {
+        infoReads++;
+        return json(route, { version: "fixture", downloads_size_mb: 0, library_size_mb: 0, downloads_free_gb: 1, archives_kb: {}, db_stats: {} }).then(() => true);
+      }
+      if (url.pathname === "/api/v1/admin/storage-breakdown") return json(route, { sources: {}, creator_tree: [], unlinked_repositories: [], db_stats: {} }).then(() => true);
+      if (url.pathname === "/api/v1/admin/backup/list") return json(route, { backups: [] }).then(() => true);
+      if (url.pathname.endsWith("/latest")) return json(route, { current: null, snapshot: null }).then(() => true);
+      if (url.pathname === "/api/v1/admin/library/import-from-disk" && method === "POST") {
+        return json(route, { task_id: TASK_ID, job_id: RQ_JOB_ID, status: "enqueued", operation_type: "admin-disk-import" }, 202).then(() => true);
+      }
+      if (url.pathname.startsWith("/api/v1/admin/operations/")) {
+        ids.push(url.pathname.split("/").at(-1)!);
+        polls++;
+        if (polls === 1) return json(route, { task_id: TASK_ID, status: "running", operation_type: "admin-disk-import" }).then(() => true);
+        return (terminal === "complete"
+          ? json(route, { task_id: TASK_ID, status: "complete", operation_type: "admin-disk-import", result: { message: "Fixture finished" } })
+          : json(route, { detail: "Operation missing" }, Number(terminal))).then(() => true);
+      }
+      return false;
+    });
+    const errors: string[] = [];
+    opened.page.on("pageerror", error => errors.push(error.message));
+    try {
+      await opened.page.getByRole("button", { name: "Import", exact: true }).click();
+      await expect.poll(() => polls, { timeout: 20_000 }).toBe(2);
+      await expect.poll(() => opened.page.evaluate(() => sessionStorage.getItem("admin_operation_job"))).toBeNull();
+      await expect(opened.page.getByRole("button", { name: "Import", exact: true })).toBeEnabled();
+      await opened.page.waitForTimeout(11_000);
+      expect(polls).toBe(2);
+      expect(ids).toEqual([TASK_ID, TASK_ID]);
+      expect(infoReads).toBe(terminal === "complete" ? 2 : 1);
+      expect(errors).toEqual([]);
+      expect(opened.unhandled).toEqual([]);
+    } finally { await opened.context.close(); }
+  });
+}
+
+for (const entry of ["row", "drawer", "batch", "late-response"] as const) {
+  test(`management failure retried from Jobs ${entry} restarts its monitor`, async ({ browser }) => {
+    let started = false;
+    let attempt = 1;
+    let done = false;
+    let retries = 0;
+    let secondPolls = 0;
+    let infoReads = 0;
+    let firstPolls = 0;
+    let oldResponse: Route | null = null;
+    const task = () => ({ id: TASK_ID, kind: "admin", operation_type: "admin-disk-import", title: "Cross-entry retry",
+      status: attempt === 1 ? "failed" : done ? "complete" : "running", available_actions: attempt === 1 ? ["retry"] : [],
+      created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-03T00:00:00Z" });
+    const opened = await openFixture(browser, "/admin/data-mgmt", async (route, url, method) => {
+      if (url.pathname === "/api/v1/admin/system-info") {
+        infoReads++;
+        return json(route, { version: "fixture", downloads_size_mb: 0, library_size_mb: 0, downloads_free_gb: 1, archives_kb: {}, db_stats: {} }).then(() => true);
+      }
+      if (url.pathname === "/api/v1/admin/storage-breakdown") return json(route, { sources: {}, creator_tree: [], unlinked_repositories: [], db_stats: {} }).then(() => true);
+      if (url.pathname === "/api/v1/admin/backup/list") return json(route, { backups: [] }).then(() => true);
+      if (url.pathname.endsWith("/latest")) return json(route, { current: null, snapshot: null }).then(() => true);
+      if (url.pathname === "/api/v1/admin/library/import-from-disk" && method === "POST") {
+        started = true;
+        return json(route, { task_id: TASK_ID, job_id: RQ_JOB_ID, status: "enqueued", operation_type: "admin-disk-import" }, 202).then(() => true);
+      }
+      if (url.pathname === `/api/v1/tasks/${TASK_ID}/retry`) {
+        retries++; attempt = 2;
+        // Intentionally omit job_id/operation_type: generic retry promises neither.
+        return json(route, { task_id: TASK_ID, status: "enqueued" }).then(() => true);
+      }
+      if (url.pathname === `/api/v1/tasks/${TASK_ID}`) return json(route, task()).then(() => true);
+      if (url.pathname === "/api/v1/tasks") return json(route, { total: started ? 1 : 0, items: started ? [task()] : [] }).then(() => true);
+      if (url.pathname.startsWith("/api/v1/admin/operations/")) {
+        if (attempt === 1 && entry === "late-response" && ++firstPolls > 1) {
+          oldResponse = route;
+          return true;
+        }
+        if (attempt === 2) secondPolls++;
+        return json(route, { task_id: TASK_ID, operation_type: "admin-disk-import", status: attempt === 1 && entry === "late-response" ? "running" : task().status,
+          error: attempt === 1 ? "Attempt 1 failed" : null,
+          progress: { phase: "running", label: `Attempt ${attempt} running` },
+          result: done ? { message: "Second attempt result" } : null }).then(() => true);
+      }
+      return false;
+    });
+    opened.page.on("dialog", dialog => void dialog.accept());
+    try {
+      await opened.page.getByRole("button", { name: "Import", exact: true }).click();
+      await expect(opened.page.locator('[data-admin-operation="admin-disk-import"]')).toContainText(entry === "late-response" ? "Attempt 1 running" : "Attempt 1 failed");
+      await opened.page.getByRole("button", { name: "Task detail", exact: true }).click();
+      const drawer = opened.page.locator('aside[aria-label="Task detail"]');
+      await expect(drawer).toContainText("Cross-entry retry");
+      if (entry === "drawer") await drawer.getByRole("button", { name: "Retry", exact: true }).click();
+      await drawer.getByRole("button", { name: "Close", exact: true }).click();
+      await expect(drawer).not.toBeVisible();
+      if (entry === "late-response") await expect.poll(() => !!oldResponse, { timeout: 15_000 }).toBe(true);
+      if (entry === "row" || entry === "late-response") await opened.page.locator("#main-content").getByRole("button", { name: "Retry", exact: true }).click();
+      if (entry === "batch") {
+        await opened.page.getByRole("button", { name: "Batch actions", exact: true }).click();
+        await opened.page.getByRole("checkbox", { name: /11111111/ }).check();
+        await opened.page.getByRole("combobox", { name: "Batch action" }).selectOption("retry");
+        await opened.page.getByRole("button", { name: "Apply", exact: true }).click();
+      }
+      await expect.poll(() => retries).toBe(1);
+      await opened.page.locator('a[href="/admin/data-mgmt"]').first().click();
+      const status = opened.page.locator('[data-admin-operation="admin-disk-import"]');
+      await expect(status).toContainText("Attempt 2 running");
+      if (oldResponse) await (oldResponse as Route).fulfill({ json: { task_id: TASK_ID, status: "failed", error: "Late attempt 1" } }).catch(() => {});
+      await opened.page.waitForTimeout(1200);
+      await expect(status).toContainText("Attempt 2 running");
+      expect(secondPolls).toBe(1);
+      const before = infoReads;
+      done = true;
+      await expect(status).toContainText(/complete/i, { timeout: 15_000 });
+      await expect.poll(() => infoReads).toBe(before + 1);
+      await expect.poll(() => opened.page.evaluate(() => sessionStorage.getItem("admin_operation_job"))).toBeNull();
+      const completedReads = infoReads;
+      await opened.page.locator('a[href="/admin/jobs"]').first().click();
+      await opened.page.locator('a[href="/admin/data-mgmt"]').first().click();
+      await expect(status).toContainText(/complete/i);
+      await opened.page.waitForTimeout(500);
+      expect(infoReads).toBeLessThanOrEqual(completedReads + 1);
+      expect(secondPolls).toBe(2);
+      expect(opened.unhandled).toEqual([]);
+    } finally { await opened.context.close(); }
   });
 }
 
@@ -173,8 +307,8 @@ test("Danbooru import-all preserves its canonical task action", async ({ browser
       await json(route, { task_id: TASK_ID, job_id: RQ_JOB_ID, status: "enqueued" }, 202);
       return true;
     }
-    if (url.pathname === `/api/v1/admin/operations/${RQ_JOB_ID}` && method === "GET") {
-      operationPollIds.push(RQ_JOB_ID);
+    if (url.pathname === `/api/v1/admin/operations/${TASK_ID}` && method === "GET") {
+      operationPollIds.push(TASK_ID);
       await json(route, { task_id: TASK_ID, job_id: TASK_ID, rq_job_id: RQ_JOB_ID, status: "running", operation_type: "danbooru-import-all" });
       return true;
     }
@@ -188,7 +322,7 @@ test("Danbooru import-all preserves its canonical task action", async ({ browser
     await opened.page.getByRole("button", { name: "View task", exact: true }).click();
     await expectCanonicalTask(opened.page, opened.taskDetailIds);
     await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);
-    expect(new Set(operationPollIds)).toEqual(new Set([RQ_JOB_ID]));
+    expect(new Set(operationPollIds)).toEqual(new Set([TASK_ID]));
     expect(opened.unhandled).toEqual([]);
   } finally {
     await opened.context.close();

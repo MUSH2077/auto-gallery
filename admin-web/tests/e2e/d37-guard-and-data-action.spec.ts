@@ -185,17 +185,49 @@ test("a subscriptions user still resumes a saved Danbooru batch", async ({ brows
     return true;
   }, async (context) => {
     await context.addInitScript(() => {
-      sessionStorage.setItem("danbooru_batch_job", JSON.stringify({ jobId: "allowed-fixture", importType: "pixiv", total: 1, startedAt: Date.now() }));
+      sessionStorage.setItem("danbooru_batch_job", JSON.stringify({ jobId: "allowed-fixture", importType: "pixiv", total: 1, startedAt: Date.now() - 10 * 60 * 1000 }));
     });
   });
   try {
     await expect(opened.page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
-    await expect.poll(() => statusRequests).toBeGreaterThan(0);
+    await expect.poll(() => statusRequests).toBe(1);
+    await opened.page.waitForTimeout(1200);
+    expect(statusRequests).toBe(1);
     expect(opened.unhandled).toEqual([]);
   } finally {
     await opened.context.close();
   }
 });
+
+for (const record of ["damaged", "expired", "missing", "delayed-result"] as const) {
+  test(`batch recovery has one owner for ${record} records`, async ({ browser }) => {
+    let requests = 0;
+    const opened = await openFixture(browser, "/admin/upload/danbooru", ["subscriptions"], async (route, url) => {
+      if (url.pathname !== "/api/v1/reference/danbooru/artist/batch-import/status") return false;
+      requests++;
+      if (record === "missing") await json(route, { status: "unknown", progress: null, result: null, job_status: "not_found" });
+      else await json(route, { status: "completed", progress: null, result: requests === 1 ? null : {
+        total: 0, imported_count: 0, low_confidence_count: 0, not_found_count: 0, error_count: 0,
+        imported: [], low_confidence: [], not_found: [], errors: [],
+      }, job_status: "complete" });
+      return true;
+    }, async context => {
+      await context.addInitScript(({ record }) => {
+        sessionStorage.setItem("danbooru_batch_job", record === "damaged" ? "not-json" : JSON.stringify({
+          jobId: "legacy-batch", importType: "pixiv", total: 1,
+          startedAt: Date.now() - (record === "expired" ? 2 * 60 * 60 * 1000 + 1000 : 20 * 60 * 1000),
+        }));
+      }, { record });
+    });
+    try {
+      await expect(opened.page.getByRole("heading", { level: 1, name: "Danbooru Reference Mapping" })).toBeVisible();
+      await expect.poll(() => opened.page.evaluate(() => sessionStorage.getItem("danbooru_batch_job")), { timeout: 10_000 }).toBeNull();
+      await opened.page.waitForTimeout(record === "missing" || record === "delayed-result" ? 11_000 : 500);
+      expect(requests).toBe(record === "missing" ? 1 : record === "delayed-result" ? 2 : 0);
+      expect(opened.unhandled).toEqual([]);
+    } finally { await opened.context.close(); }
+  });
+}
 
 test("logout and account change stop saved Danbooru polling despite cached prior permissions", async ({ browser }) => {
   let statusRequests = 0;

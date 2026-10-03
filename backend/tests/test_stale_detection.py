@@ -172,8 +172,6 @@ async def test_import_stale_transition_updates_parent_tasks_and_outbox(monkeypat
         ((import_job.id, parent.id, old),),
         (parent,),
         (import_job,),
-        (parent,),
-        (),
         (import_task,),
         (parent_task,),
     ))

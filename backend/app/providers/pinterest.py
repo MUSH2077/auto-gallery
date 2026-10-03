@@ -78,6 +78,9 @@ class PinterestProvider(BaseProvider):
             "raw_metadata": {"user": user, "board_name": board.get("name", "") if isinstance(board, dict) else ""},
         }
 
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://www.pinterest.com/{source_creator_id}/"
+
     def parse_work_source(self, raw_metadata: dict) -> dict:
         pin_id = str(raw_metadata.get("id", ""))
         user = raw_metadata.get("user", "")

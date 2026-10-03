@@ -1340,3 +1340,33 @@ def test_subscription_conflict_uses_savepoint_not_outer_rollback():
     source = inspect.getsource(enqueue_subscription_source_sync)
     assert "db.begin_nested()" in source
     assert "await db.rollback()" not in source
+
+
+@pytest.fixture(autouse=True)
+def _application_boundary_for_transport_doubles(monkeypatch):
+    """Transport-only DB doubles delegate facts to a fake application seam.
+
+    Real AsyncSession cases below still execute the actual lifecycle command.
+    Its domain/TaskRun/receipt transaction is exercised in test_download_lifecycle.
+    """
+    from app.services import download_lifecycle, download_dispatch
+    from app.models.task_state import transition_download_job
+    from app.services.job_progress import apply_download_progress
+    original = download_lifecycle.apply_download_state
+
+    async def apply(db, job, status, *, error, task, result=None, reason_code=None, progress=None, **kwargs):
+        if not isinstance(db, _DispatchDB):
+            return await original(db, job, status, error=error, task=task, result=result,
+                                  reason_code=reason_code, progress=progress, **kwargs)
+        transition_download_job(job, status, error)
+        if progress:
+            apply_download_progress(job, **progress, publish=False)
+        values = dict(status=status, progress=job.progress_data, error=error, meta=task.meta, rq_job_id=task.rq_job_id)
+        if result is not None:
+            values["result"] = result
+        if reason_code is not None:
+            values["reason_code"] = reason_code
+        await download_dispatch.TaskService(db).update_task(task, **values)
+        return job
+
+    monkeypatch.setattr(download_lifecycle, "apply_download_state", apply)

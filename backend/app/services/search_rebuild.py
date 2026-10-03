@@ -14,6 +14,8 @@ from app.models.search_rebuild import SearchRebuild as Build, SearchRebuildRepla
 from app.models.search_delivery_receipt import SearchDeliveryReceipt as Receipt
 from app.models.search_projection_outbox import SearchProjectionOutbox as Outbox
 
+from app.services.search_projection import PROJECTION_SPECS
+
 ACTIVE_BUILD = Build.state.not_in(("complete", "failed"))
 
 
@@ -31,7 +33,7 @@ def membership_bootstrap_due_condition():
 
 async def _bootstrap_memberships(db, limit):
     """Called under the existing writer lock; each later slice advances a cursor."""
-    from app.services.search import MEMBERSHIPS_INDEX
+    from app.services.search_index_definitions import MEMBERSHIPS_INDEX
     from app.services.search_delivery import now
     from app.services.search_projection_outbox import _mark_index_changed
 
@@ -46,15 +48,6 @@ async def _bootstrap_memberships(db, limit):
     await _mark_index_changed(db, MEMBERSHIPS_INDEX)
     await db.commit()
     return build
-
-
-def _specs():
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    return {WORKS_INDEX: (Work, "_build_work_documents"), CREATORS_INDEX: (Creator, "_build_creator_documents"),
-            TAGS_INDEX: (Tag, "_build_tag_documents"), REPOSITORIES_INDEX: (SubscriptionSource, "_build_repository_documents"),
-            SUBSCRIPTIONS_INDEX: (Subscription, "_build_subscription_documents"),
-            MEMBERSHIPS_INDEX: (UserSubscription, "_build_membership_documents")}
 
 
 async def start_rebuild(indexes, *, batch_size=500, owner=None):
@@ -74,7 +67,7 @@ async def start_rebuild(indexes, *, batch_size=500, owner=None):
                 existing = (await db.execute(select(Build).where(Build.owner == str(owner)).order_by(Build.created_at.desc()).limit(1))).scalar_one_or_none()
                 if existing:
                     return _status(existing)
-            if not indexes or any(index not in _specs() for index in indexes):
+            if not indexes or any(index not in PROJECTION_SPECS for index in indexes):
                 raise ValueError("Unsupported rebuild indexes")
             build = Build(id=uuid4(), owner=str(owner) if owner else None, phase="settings", progress={
                 "indexes": list(dict.fromkeys(indexes)), "position": 0, "cursor": None,
@@ -145,7 +138,8 @@ def _begin_failure(build, error):
 async def prepare_next(limit, deadline, client):
     """Return None without a rebuild, a receipt, or a local phase-progress result."""
     from app.services.search_delivery import session, result, request, now, set_sql_budget
-    from app.services.search import SearchService, INDEX_SETTINGS, _document_batches
+    from app.services.search_index_definitions import INDEX_SETTINGS
+    from app.services.search_projection import SearchProjection, _document_batches
     async with session(deadline) as db:
         build = (await db.execute(select(Build).where(ACTIVE_BUILD).with_for_update())).scalar_one_or_none()
         if build is None:
@@ -177,7 +171,7 @@ async def prepare_next(limit, deadline, client):
             build.phase = "settings"
             build.progress = progress
         elif build.phase == "build":
-            model, builder = _specs()[live]
+            model = PROJECTION_SPECS[live].model
             query = select(model.id).order_by(model.id).limit(min(limit, progress["batch_size"]))
             if progress["cursor"]:
                 query = query.where(model.id > UUID(progress["cursor"]))
@@ -185,7 +179,7 @@ async def prepare_next(limit, deadline, client):
             if not identities:
                 _advance_index(build, "replay")
             else:
-                docs = await getattr(SearchService(db), builder)(identities)
+                docs = await SearchProjection(db).build(live, identities)
                 by_id = {str(doc["id"]): doc for doc in docs}
                 ordered = [by_id[str(identity)] for identity in identities if str(identity) in by_id]
                 payload = next(iter(_document_batches(ordered)), [])
@@ -213,8 +207,7 @@ async def prepare_next(limit, deadline, client):
             if not events:
                 _advance_index(build, "ensure_live")
             else:
-                _, builder = _specs()[live]
-                docs = await getattr(SearchService(db), builder)([UUID(event.entity_id) for event in events if event.action == "upsert"])
+                docs = await SearchProjection(db).build(live, [UUID(event.entity_id) for event in events if event.action == "upsert"])
                 by_id = {str(doc["id"]): doc for doc in docs}
                 action = "upsert" if events[0].action == "upsert" and events[0].entity_id in by_id else "delete"
                 payload, versions = [], []

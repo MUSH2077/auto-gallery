@@ -688,13 +688,13 @@ async def test_task_identity_survives_crash_before_sql_response_commit(delivery,
 
 @pytest.mark.asyncio
 async def test_one_index_action_and_bounded_hydration_before_wire_cap(delivery, monkeypatch):
-    from app.services.search import SearchService
+    from app.services.search_projection import SearchProjection
     ids = [uuid4() for _ in range(501)]
     hydrated = []
-    async def documents(self, identities):
+    async def documents(self, index_uid, identities):
         hydrated.append(len(identities))
         return [{"id": str(identity), "title": "x" * 900_000} for identity in identities]
-    monkeypatch.setattr(SearchService, "_build_work_documents", documents)
+    monkeypatch.setattr(SearchProjection, "build", documents)
     async with async_session() as db:
         await request_search_projection(db, work_ids=ids, deleted_tag_ids=[uuid4()])
         await db.commit()

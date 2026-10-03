@@ -33,7 +33,7 @@ async def _clear_recovery_tables(db):
 @pytest.mark.asyncio
 async def test_recover_import_pipeline_enqueues_downloaded_job_with_pending_artifacts(monkeypatch):
     from app.database import async_session, engine
-    from app.jobs import download as download_module
+    from app.services import import_intent
     from app.models.creator import Creator
     from app.models.download_job import DownloadJob
     from app.models.storage_artifact import StorageArtifact
@@ -48,7 +48,7 @@ async def test_recover_import_pipeline_enqueues_downloaded_job_with_pending_arti
         captured["new_json_paths"] = sorted(new_json_paths or [])
         return str(uuid4())
 
-    monkeypatch.setattr(download_module, "_enqueue_import", fake_enqueue_import)
+    monkeypatch.setattr(import_intent, "enqueue_import", fake_enqueue_import)
     old = datetime.now(timezone.utc) - timedelta(hours=2)
 
     try:

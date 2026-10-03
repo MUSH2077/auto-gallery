@@ -107,6 +107,15 @@ class DanbooruProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        flags["is_ai_generated"] = flags["is_ai_generated"] or "ai_generated" in str(raw_metadata.get("tag_string_meta", "")).casefold()
+        flags["is_nsfw"] = str(raw_metadata.get("rating", "")).casefold() in {"q", "e"}
+        return flags
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(source_creator_id)}"
+
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         post_id = str(raw_metadata.get("id", ""))
         width = raw_metadata.get("image_width") or raw_metadata.get("width")

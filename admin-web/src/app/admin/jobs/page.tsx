@@ -33,6 +33,7 @@ import { BatchByFilter } from "@/components/BatchByFilter";
 import { usePermissions } from "@/lib/usePermissions";
 import { aggregateTaskGroup, buildTaskTree, flattenTaskNode, isAttentionStatus, taskRunProgress, type TaskNode } from "@/lib/jobTree";
 import { useJobsRouteState } from "@/lib/useJobsRouteState";
+import { useTaskCommand, useTaskCommands } from "@/lib/useTaskCommand";
 import type { JobsTab } from "@/lib/jobsRoute";
 
 const TaskDetailDrawer = dynamic(
@@ -546,36 +547,9 @@ function TaskRunRow({
   const { user } = usePermissions();
   const [confirmAction, setConfirmAction] = useState<"repeat_sync" | "delete" | null>(null);
   const [repeatConflictState, setRepeatConflictState] = useState<ReturnType<typeof repeatSyncConflict> | null>(null);
-  const taskAction = useMutation({
-    mutationFn: async (action: TaskAction) => {
-      if (action === "retry") return api.retryTask(task.id);
-      if (action === "pause") return api.pauseTask(task.id);
-      if (action === "resume") return api.resumeTask(task.id);
-      if (action === "cancel") return api.cancelTask(task.id);
-      if (action === "acknowledge") return api.acknowledgeTask(task.id);
-      if (action === "delete") return api.deleteTask(task.id);
-      if (!user?.id || task.subject_type !== "download_job" || !task.subject_id) throw new Error(t("jobs.repeat_original_unavailable"));
-      const intent = readRepeatSyncIntent(user.id, task.subject_id) || createRepeatSyncIntent(user.id, task.subject_id, task.title || task.subject_id, secureRandomUuid);
-      storeRepeatSyncIntent(intent);
-      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatTask(task.id, intent.requestId));
-      clearRepeatSyncIntent(intent);
-      return accepted;
-    },
-    onSuccess: (result, action) => {
-      setConfirmAction(null);
-      setRepeatConflictState(null);
-      if (action === "repeat_sync" && "job_id" in result) router.push(`/admin/jobs?tab=downloads&job=${result.job_id}`);
-    },
-    onError: (error: Error, action) => {
-      if (action === "repeat_sync") setRepeatConflictState(repeatSyncConflict(error));
-      else toast.error(actionErrorReason(error));
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.workbench });
-    },
+  const taskAction = useTaskCommand(task, user?.id == null ? null : String(user.id), (jobId) => router.push(`/admin/jobs?tab=downloads&job=${jobId}`), {
+    onSuccess: (_result, action) => { setConfirmAction(null); setRepeatConflictState(null); },
+    onError: (error, action) => { if (action === "repeat_sync") setRepeatConflictState(repeatSyncConflict(error)); else toast.error(actionErrorReason(error)); },
   });
   const fmt = useI18nFormat();
   const progress = taskRunProgress(task);
@@ -1159,45 +1133,30 @@ function JobsContent() {
     page: null,
   });
 
+  const commands = useTaskCommands(user?.id);
+
   // --- Mutations ---
   const retryDL = useMutation({
-    mutationFn: (id: string) => api.retryDownloadJob(id),
-    onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    mutationFn: (id: string) => commands.execute({ id }, "retry", "download"),
+    onSuccess: () => setRetryId(null),
+    onSettled: commands.invalidate,
     onError: (error) => toast.error(actionErrorReason(error)),
   });
   const retryIM = useMutation({
-    mutationFn: (id: string) => api.retryImportJob(id),
-    onSuccess: () => { setRetryId(null); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
+    mutationFn: (id: string) => commands.execute({ id }, "retry", "import"),
+    onSuccess: () => setRetryId(null),
+    onSettled: commands.invalidate,
     onError: (error) => toast.error(actionErrorReason(error)),
   });
-  const retryTask = useMutation({
-    mutationFn: (id: string) => api.retryTask(id),
-    onSuccess: (_data, id) => {
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.detail(id) });
-      qc.invalidateQueries({ queryKey: queryKeys.workbench });
-      toast.info(t("jobs.retry_queued"));
-    },
-    onError: (err) => toast.error((err as Error).message),
-  });
   const repeatDL = useMutation({
-    mutationFn: async (id: string) => {
-      if (!user?.id) throw new Error(t("jobs.repeat_original_unavailable"));
-      const label = downloads.data?.find((job) => job.id === id)?.creator_name || id;
-      const intent = readRepeatSyncIntent(user.id, id) || createRepeatSyncIntent(user.id, id, label, secureRandomUuid);
-      storeRepeatSyncIntent(intent);
-      const accepted = validateRepeatSyncAcceptance(intent, await api.repeatDownloadJob(id, intent.requestId));
-      clearRepeatSyncIntent(intent);
-      return accepted;
-    },
+    mutationFn: (id: string) => commands.repeat({ id, title: downloads.data?.find(job => job.id === id)?.creator_name || id }, "download"),
     onSuccess: (accepted) => {
       setRepeatConflict(null);
       setRepeatId(null);
       setRecoverableRepeats(user?.id ? listRepeatSyncIntents(user.id) : []);
-      void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
       updateParams({ tab: "downloads", job: accepted.job_id, task: null });
     },
+    onSettled: commands.invalidate,
     onError: (error) => {
       const conflict = repeatSyncConflict(error);
       setRepeatConflict(conflict.kind === "existing" ? { existingJobId: conflict.existingJobId } : conflict.kind === "identity" ? { identityMismatch: true } : null);
@@ -1205,22 +1164,24 @@ function JobsContent() {
     },
   });
   const pauseDL = useMutation({
-    mutationFn: (id: string) => api.pauseDownloadJob(id),
-    onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    mutationFn: (id: string) => commands.execute({ id }, "pause", "download"),
+    onSettled: commands.invalidate,
     onError: (error) => toast.error(actionErrorReason(error)),
   });
   const resumeDL = useMutation({
-    mutationFn: (id: string) => api.resumeDownloadJob(id),
-    onSettled: () => { qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.detail(selectedDownloadJobId || "") }); },
+    mutationFn: (id: string) => commands.execute({ id }, "resume", "download"),
+    onSettled: commands.invalidate,
     onError: (error) => toast.error(actionErrorReason(error)),
   });
   const deleteDL = useMutation({
-    mutationFn: (id: string) => api.deleteDownloadJob(id),
-    onSuccess: () => { setDeleteId(null); closeDetail(); qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }); },
+    mutationFn: (id: string) => commands.execute({ id }, "delete", "download"),
+    onSuccess: () => { setDeleteId(null); closeDetail(); },
+    onSettled: commands.invalidate,
   });
   const deleteIM = useMutation({
-    mutationFn: (id: string) => api.deleteImportJob(id),
-    onSuccess: () => { setDeleteId(null); closeDetail(); qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }); },
+    mutationFn: (id: string) => commands.execute({ id }, "delete", "import"),
+    onSuccess: () => { setDeleteId(null); closeDetail(); },
+    onSettled: commands.invalidate,
   });
 
   const clearDL = useMutation({
@@ -1262,24 +1223,6 @@ function JobsContent() {
     onError: (error) => toast.error((error as Error).message),
   });
 
-  const runSelectedTaskBatch = async (ids: string[], action: BatchAction) => {
-    const actionMap = {
-      retry: api.retryTask,
-      pause: api.pauseTask,
-      resume: api.resumeTask,
-      cancel: api.cancelTask,
-      delete: api.deleteTask,
-    } satisfies Record<BatchAction, ((id: string) => Promise<unknown>) | null>;
-    const runner = actionMap[action];
-    if (!runner) return { succeeded: 0, failed: ids.length };
-    const settled = await Promise.allSettled(ids.map((id) => runner(id)));
-    return {
-      succeeded: settled.filter((item) => item.status === "fulfilled").length,
-      failed: settled.filter((item) => item.status === "rejected").length,
-      errors: settled.flatMap((item, index) => item.status === "rejected" ? [{ id: ids[index], error: item.reason }] : []),
-    };
-  };
-
   const batchJobs = useMutation({
     mutationFn: async ({ action }: { action: BatchAction }) => {
       const selectedIds = [...selected];
@@ -1294,11 +1237,8 @@ function JobsContent() {
       if (!submission.eligibleIds.length) return { kind: "neutral" as const, submission };
       if (!confirm(t("jobs.batch_confirm", { eligible: submission.eligibleIds.length, ineligible: submission.localRefusals.length }))) return { kind: "cancelled" as const };
       try {
-        const response = activeTab === "downloads"
-          ? await api.batchDownloadJobs([...submission.eligibleIds], action)
-          : activeTab === "imports"
-            ? await api.batchImportJobsByFilter({ ids: [...submission.eligibleIds] }, action)
-            : await runSelectedTaskBatch([...submission.eligibleIds], action);
+        const tasks = submission.eligibleIds.map(id => currentRows.find(row => row.id === id) || { id });
+        const response = await commands.batch(tasks, action, activeTab === "downloads" ? "download" : activeTab === "imports" ? "import" : "task");
         return { kind: "received" as const, submission, response };
       } catch (error) {
         return { kind: "uncertain" as const, submission, error };
@@ -1317,11 +1257,7 @@ function JobsContent() {
       if (data.kind === "received") toast.info(t("jobs.batch_result", { succeeded: data.response.succeeded ?? 0, failed: reconciliation.retained.length }));
       else if (data.kind === "neutral") toast.warning({ message: t("jobs.batch_no_eligible") });
       else toast.error({ message: actionErrorReason(data.error) });
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-      qc.invalidateQueries({ queryKey: queryKeys.workbench });
-      qc.invalidateQueries({ queryKey: ["tasks", "operations"] });
+      commands.invalidate();
     },
   });
 
@@ -1662,11 +1598,7 @@ function JobsContent() {
             {canManageTasks && Object.keys(currentBatchFilters).length > 0 && (
               <div>
                 <p className="mb-2 text-xs font-medium text-muted">{t("jobs.current_filter_scope")}</p>
-                <BatchByFilter filters={currentBatchFilters} onSuccess={() => {
-                  void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-                  void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-                  void qc.invalidateQueries({ queryKey: queryKeys.workbench });
-                }} />
+                <BatchByFilter filters={currentBatchFilters} />
               </div>
             )}
             {canManageTasks && <div className="flex flex-wrap gap-2">
@@ -1723,11 +1655,8 @@ function JobsContent() {
       {taskDrawerVisited.current && <TaskDetailDrawer
         id={selectedTaskId}
         onClose={closeDetail}
-        onRetryTask={(id) => retryTask.mutate(id)}
         onOpenDownload={openDownloadDetail}
         onOpenImport={openImportDetail}
-        actionPending={retryTask.isPending}
-        actionError={retryTask.error}
         onRepeatAccepted={openDownloadDetail}
       />}
 
@@ -1772,7 +1701,7 @@ function JobsContent() {
 function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
   const t = useT();
   const imports = useQuery({
-    queryKey: ["import-jobs", downloadJobId],
+    queryKey: queryKeys.downloadJobs.imports(downloadJobId),
     queryFn: () => api.getDownloadJobImports(downloadJobId),
   });
   const entrance = useStaggeredEntrance((imports.data ?? []).map((item) => item.id));
@@ -1780,7 +1709,7 @@ function ImportJobsList({ downloadJobId }: { downloadJobId: string }) {
   if (!imports.data?.length) return <div className="ml-8 mt-1 text-xs text-muted">{t("jobs.no_imports_yet")}</div>;
   return (
     <div className="ml-8 mt-1 space-y-0.5">
-      {imports.data?.map((imp: any, index: number) => (
+      {imports.data?.map((imp, index) => (
         <div
           key={imp.id}
           className={`${entrance(imp.id, index).className ?? ""} flex items-center gap-2 rounded bg-subtle px-2 py-1 text-xs`}

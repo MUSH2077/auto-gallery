@@ -257,27 +257,6 @@ async def _job_status_counts(db: AsyncSession) -> dict[str, int]:
     return {key: int(value or 0) for key, value in zip(keys, row, strict=True)}
 
 
-def _provider_state(source: str, source_url: str | None) -> dict:
-    try:
-        provider = registry.get(source)
-    except KeyError:
-        return {
-            "provider_display_name": source,
-            "can_download": False,
-            "url_valid": False,
-            "skip_reason": "unknown_provider",
-        }
-    normalized_url = provider.normalize_url(source_url) if source_url else None
-    candidate_url = normalized_url or source_url
-    url_valid = bool(candidate_url and provider.validate_url(candidate_url))
-    return {
-        "provider_display_name": provider.display_name,
-        "can_download": bool(provider.capabilities.can_download),
-        "url_valid": url_valid,
-        "skip_reason": None,
-    }
-
-
 @router.get("/system/storage")
 async def storage_stats():
     global _storage_cache, _storage_cache_ts

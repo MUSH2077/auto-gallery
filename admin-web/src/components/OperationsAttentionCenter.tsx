@@ -29,7 +29,8 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { POLL_ACTIVE_MS, POLL_IDLE_MS } from "@/lib/polling";
-import { actionErrorReason, hasTaskAction, partitionTaskAction } from "@/lib/task-actions";
+import { actionErrorReason, hasTaskAction, partitionTaskAction, reconcileTaskBulkResult } from "@/lib/task-actions";
+import { useTaskCommands } from "@/lib/useTaskCommand";
 import { writeClipboardText } from "@/lib/clipboard";
 
 const TaskDetailDrawer = dynamic(
@@ -78,6 +79,7 @@ export default function OperationsAttentionCenter() {
   const router = useRouter();
   const params = useSearchParams();
   const qc = useQueryClient();
+  const commands = useTaskCommands();
   const visible = usePageVisibility();
   const rawView = params.get("view") as OperationsView | null;
   const view = rawView && VIEWS.includes(rawView) ? rawView : "attention";
@@ -120,25 +122,14 @@ export default function OperationsAttentionCenter() {
     refetchIntervalInBackground: false,
   });
 
-  const invalidate = async () => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: queryKeys.tasks.all }),
-      qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all }),
-      qc.invalidateQueries({ queryKey: queryKeys.importJobs.all }),
-      qc.invalidateQueries({ queryKey: queryKeys.workbench }),
-    ]);
-  };
+  const invalidate = async () => { commands.invalidate(); };
   const action = useMutation({
     mutationFn: async ({ item, name }: { item: OperationAttentionItem; name: "retry" | "pause" | "resume" | "acknowledge" }) => {
       if (item.type !== "task" || !item.task_id) throw new Error(t("operations.no_task_action"));
-      if (name === "retry") return api.retryTask(item.task_id);
-      if (name === "pause") return api.pauseTask(item.task_id);
-      if (name === "resume") return api.resumeTask(item.task_id);
-      return api.acknowledgeTask(item.task_id);
+      return commands.execute({ ...item.task, id: item.task_id }, name);
     },
     onSuccess: async () => {
       toast.success(t("operations.action_complete"));
-      await invalidate();
     },
     onError: (error) => toast.error(actionErrorReason(error)),
     onSettled: () => { void invalidate(); },
@@ -148,11 +139,11 @@ export default function OperationsAttentionCenter() {
       const selected = (overview.data?.items || []).flatMap((item) => item.type === "task" && item.task_id ? [{ ...item, id: item.task_id }] : []);
       const preview = partitionTaskAction(selected, selectedTaskIds, name);
       if (!preview.eligible.length) return { succeeded: [] as string[], failed: preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })) };
-      const settled = await Promise.allSettled(preview.eligible.map((item) => name === "retry" ? api.retryTask(item.id) : api.acknowledgeTask(item.id)));
-      return {
-        succeeded: settled.flatMap((result, index) => result.status === "fulfilled" ? [preview.eligible[index].id] : []),
-        failed: [...preview.ineligible.map((entry) => ({ id: entry.row.id, reason: entry.reason })), ...settled.flatMap((result, index) => result.status === "rejected" ? [{ id: preview.eligible[index].id, reason: actionErrorReason(result.reason) }] : [])],
-      };
+      const response = await commands.batch(preview.eligible.map(item => ({ ...item.task, id: item.task_id })), name);
+      const outcome = reconcileTaskBulkResult({ selectedIds: [...selectedTaskIds], eligibleIds: preview.eligible.map(item => item.id),
+        localRefusals: preview.ineligible.map(entry => ({ id: entry.row.id, reason: entry.reason })) }, response);
+      return { succeeded: outcome.confirmedSuccessIds, failed: outcome.retained };
+
     },
     onSuccess: async (result) => {
       setSelectedTaskIds((current) => {
@@ -418,10 +409,6 @@ export default function OperationsAttentionCenter() {
       <TaskDetailDrawer
         id={selectedTaskId}
         onClose={closeTask}
-        onRetryTask={(id) => {
-          const item = overview.data?.items.find((candidate) => candidate.task_id === id);
-          if (item) action.mutate({ item, name: "retry" });
-        }}
         onOpenDownload={openSelectedRepository}
         onOpenImport={openSelectedRepository}
         actionPending={action.isPending}

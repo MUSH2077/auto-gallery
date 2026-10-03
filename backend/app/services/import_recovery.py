@@ -99,27 +99,8 @@ async def _publisher_task_is_active(
 
 
 async def _finalize_bounded_recovery_completion(db, completion) -> None:
-    from app.services.download_finalization import finalize_download_job
-    from app.services.sync_outcome import build_sync_outcome
-
-    outcome = (
-        build_sync_outcome(
-            "new_content" if completion.stats["works"] > 0 else "no_changes",
-            metadata_count=completion.total_groups,
-            media_count=completion.stats["assets"],
-        )
-        if completion.status == "complete"
-        else None
-    )
-    await finalize_download_job(
-        db,
-        completion.parent,
-        status=completion.status,
-        outcome=outcome,
-        error=completion.message if completion.status == "failed" else None,
-        message=completion.message,
-        assets=completion.stats["assets"],
-    )
+    from app.services.download_finalization import finalize_import_parent
+    await finalize_import_parent(db, completion)
 
 
 async def recover_import_pipeline(
@@ -218,12 +199,12 @@ async def recover_import_pipeline(
     )).scalars())
 
     if candidates:
-        from app.jobs.download import _enqueue_import
+        from app.services.import_intent import enqueue_import
         for job in candidates:
             metadata_count, _image_count, paths = await ArtifactLedger(db).counts(job.id)
             if metadata_count <= 0:
                 continue
-            import_job_id = await _enqueue_import(
+            import_job_id = await enqueue_import(
                 str(job.id),
                 import_error=f"auto recovery after downloaded state gap ({metadata_count} metadata files)",
                 new_json_paths=set(paths),
@@ -254,7 +235,7 @@ async def recover_import_pipeline(
     )).scalars())
 
     if bounded_parent_ids:
-        from app.jobs.download import _enqueue_import_from_locked_page
+        from app.services.import_intent import enqueue_import_from_locked_page
         from app.services.import_lifecycle import close_bounded_import_publication
 
         for parent_id in bounded_parent_ids:
@@ -334,7 +315,7 @@ async def recover_import_pipeline(
             import_job_id = None
             if page_rows:
                 try:
-                    import_job_id = await _enqueue_import_from_locked_page(
+                    import_job_id = await enqueue_import_from_locked_page(
                         db,
                         parent_id,
                         artifact_ids=set(page_ids),

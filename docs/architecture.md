@@ -45,23 +45,80 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 - `SearchService` remains the backend search interface.
   `search_language.py` parses queries; `search_pagination.py` owns stable
   cursors and sort rules; `search_filters.py` compiles Meilisearch filters;
-  `search_projection_fields.py` builds deterministic index fields. The
-  service still coordinates SQL/Meilisearch execution and index delivery.
+  `search_projection_fields.py` builds deterministic index fields.
+  `search_index_definitions.py` owns index identities/settings and
+  `search_projection.py` owns document hydration and the shared projection
+  registry consumed by incremental delivery and rebuild. `SearchService`
+  retains compatibility methods while query execution uses the existing SQL
+  and Meilisearch adapters. `subscription_schedule.py` owns pure calendar and
+  interval policy; scheduler search and the dashboard use `scheduler_decisions.py`
+  for the same source eligibility and credential-blocking interpretation.
 - `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
   compilation from the SearchService execution path.
 - `import_runner.py` processes work slices, while `import_execution.py`
-  owns the claim, lease and terminal parent projection boundary. A retry
-  must retain the same durable task ownership and idempotent result.
+  owns the claim, lease and completion workflow. `import_lifecycle.py` locks
+  and rereads parent, child and TaskRun before token arbitration, control
+  commands and parent aggregation. Artifact locks, when required, come first.
+  `import_intent.py` owns artifact assignment and durable publication intent:
+  prepare never commits; publication follows the caller's commit. Download,
+  upload, disk import and recovery share this implementation; old worker
+  function names remain forwarding adapters for persisted RQ records.
+- `download_lifecycle.py` owns download state application and explicit TaskRun,
+  receipt and search projections. Control, worker failure/retry, stale and invalid
+  dispatch paths reuse it after their existing eligibility checks and locks.
+  Workers fence writes with the RQ ID and TaskRun attempt captured at claim;
+  repositories no longer create or update TaskRun implicitly. Callers commit
+  before publishing durable status notifications. `download_finalization.py`
+  shares parent outcome mapping across import completion, publication close
+  and recovery, using the existing bounded-child aggregation.
+  Cancellation application (`TaskEngine.apply_cancel_download/import`) does not
+  commit or notify, including download-to-import delegation. Standalone control
+  endpoints commit and then notify; scheduler cleanup stages both cancellation
+  and its batch item, fences the cleanup attempt, commits once and then notifies.
 - `operations.py` coordinates admin task publication and compensation;
   `admin_dispatch_recovery.py` selects bounded due PostgreSQL dispatch
   intents for recovery without trusting Redis queue state as the authority.
+- Each admin operation definition links its handler, normalized result policy
+  and resource admission profile. `admin_operation_handlers.py` implements
+  business execution, while the RQ worker owns attempt fencing and heartbeat.
+  `backup.py`, `integrity.py` and `connectivity.py` under services provide the
+  capabilities independently of HTTP routers. File publication still requires
+  the durable attempt fence before exposing a backup or restore candidate.
+- HTTP and CLI favorite/tag changes use the same curation command transaction
+  for domain rows, audit history and search outbox. Tag input uses the existing
+  CLI casefold rule; historical tag rows are not rewritten. Purge takes the
+  curation ordering lock before row locks and rereads eligibility before file
+  deletion, so a committed restore cannot be purged from a stale ORM snapshot.
+  HTTP and CLI trash/restore share eligibility, mutation and audit construction
+  after the ordering lock and state reread. Entry policies preserve CLI noop
+  auditing and HTTP duplicate/missing-ID handling; purge keeps its own file flow.
 - `resource_pressure.py` coordinates sampling, state and shared snapshots
   delegated to `resource_pressure_sampling.py`,
   `resource_pressure_state.py` and `resource_pressure_snapshot.py`.
+- `resource_descriptors.py` describes child-owned admission and bounded outbox
+  slices. New enqueue producers attach an explicit descriptor; legacy RQ
+  names are interpreted only by the compatibility adapter. Registered admin
+  profiles never bind task-ID/attempt arguments. Parent admission, child
+  leases, pressure thresholds and worker exit behavior remain separate.
 - The Jobs page keeps URL state in `jobsRoute.ts` and
   `useJobsRouteState.ts`, and pure task-tree grouping in `jobTree.ts`.
-  The page consumes these contracts to render accessible desktop and mobile
-  views with polling fallback when WebSocket is unavailable.
+  Rows, drawers and batches use `taskCommands.ts` through `useTaskCommand.ts`
+  for action dispatch, repeat-sync intent handling and cache invalidation.
+  Generated OpenAPI task types are
+  refined only for dictionary fields used by views. `operationMonitor.ts`
+  owns ordinary admin-operation recovery and polling, `operationRefresh.ts`
+  owns resource invalidation, and NotificationCenter consumes the resulting
+  state for display. When a page and the global monitor show the same operation,
+  both observe `admin-operation-task` keyed by TaskRun identity; the page disables
+  its polling and completion callback while the global monitor owns them.
+  Untracked page operations retain their page owner. Missing operations stop on
+  404/410. Retry acceptance reactivates this monitor using known task context
+  and the existing minimal response, fences late queries and resets completion
+  handling for the new attempt without changing the TaskRun identity.
+  `batchImportMonitor.ts` adapts batch responses to the same monitor and owns
+  recovery; the Danbooru page only consumes normalized state. Legacy records
+  retain their storage key and two-hour recovery window. A missing final result
+  is confirmed by bounded query retries and then ends with an error.
 
 ## Domain Model
 
@@ -149,7 +206,7 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
   carry opaque task/account IDs and never credential material.
 - **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
-- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
+- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `task_state.py` defines legal transitions; `TaskEngine` coordinates controls and import commands use locked arbitration and aggregation in `import_lifecycle.py`.
 - **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
 - **Proxy pre-flight**: Before launching gallery-dl, the worker runs DNS resolution + proxy connectivity checks (non-blocking diagnostics).
 
@@ -160,7 +217,7 @@ Downloads, imports, and admin operations (backup, reindex, disk import) are all 
 - **`task_run`** (`models/task_run.py`): one row per trackable unit of work. `kind` (`download` / `import` / `admin`) and `subject_type` + `subject_id` loosely reference the authoritative domain row (`download_job`, `import_job`, …) — there is no FK, so a task can outlive or precede its domain record. Carries display fields (`title`, `source`, `source_url`), a progress snapshot (`progress_current`/`progress_total`/`progress_data`), `priority`, `attempts`, and `last_heartbeat_at` for stale detection. `parent_task_id` groups batch/child runs.
 - **`task_event`**: append-only audit trail of status transitions for a run; cascade-deleted with its parent (`ON DELETE CASCADE`).
 - **`TaskService`** (`services/tasks.py`): the write path — creates runs, records events, normalizes statuses, and merges download/import domain rows into the unified list.
-- **`TaskEngine`** (`services/task_engine.py`): the single authority for valid state transitions (pause / resume / cancel / retry / priority / batch-by-filter), publishing changes over Redis pub/sub for live WebSocket updates.
+- **`TaskEngine`** (`services/task_engine.py`): the control-request entrypoint (pause / resume / cancel / retry / priority / batch-by-filter), delegating import commands to the lifecycle module, publishing changes over Redis pub/sub for live WebSocket updates.
 - **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
 
 ## Data Flow

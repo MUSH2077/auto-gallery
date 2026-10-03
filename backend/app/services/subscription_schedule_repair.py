@@ -11,7 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.jobs.subscription_sync import next_future_subscription_check_at
+from app.services.subscription_schedule import next_future_subscription_check_at
 from app.models.repository_sync_receipt import MaintenanceAuditEvent
 from app.models.subscription import Subscription
 from app.models.subscription_source import SubscriptionSource

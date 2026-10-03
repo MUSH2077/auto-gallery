@@ -101,12 +101,6 @@ class DownloadJobRepository:
         # failure from the same retryable job record.
         job.error_log = error_log
         append_manifest_event(job, "status_changed", from_status=old_status, to_status=status, error_log=error_log)
-        try:
-            from app.services.tasks import TaskService
-            task_svc = TaskService(self.session)
-            await task_svc.ensure_download_task(job)
-        except Exception:
-            pass
         await self.session.flush()
         if job.subscription_id:
             await request_search_projection(
@@ -141,11 +135,6 @@ class DownloadJobRepository:
         job = ImportJob(**data)
         self.session.add(job)
         await self.session.flush()
-        try:
-            from app.services.tasks import TaskService
-            await TaskService(self.session).ensure_import_task(job)
-        except Exception:
-            pass
         return job
 
     async def get_import(self, job_id: UUID) -> ImportJob | None:

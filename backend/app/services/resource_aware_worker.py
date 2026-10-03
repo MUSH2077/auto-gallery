@@ -36,6 +36,7 @@ from app.services.resource_pressure import (
     touch_cgroup_oom_kill_ack,
     workload_profile_name,
 )
+from app.services.resource_descriptors import descriptor_for_job
 
 REDIS_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 REDIS_CONNECTION_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
@@ -454,31 +455,14 @@ class ResourceAwareWorker(Worker):
                 # handlers never acquire child slices, so the parent must own
                 # the maintenance lease and POSIX lock for the whole workhorse.
                 return None
-        registered_profile = metadata.get("registered_admin_internal_profile")
+        registered_profile = (
+            metadata.get("registered_admin_resource_profile")
+            or metadata.get("registered_admin_internal_profile")
+        )
         if registered_profile:
             return str(registered_profile)
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        profiles = (
-            ("run_clear_operation", "maintenance"),
-            ("run_library_rebuild_operation", "maintenance"),
-            ("run_disk_import_operation", "maintenance"),
-            ("run_gitllery_rebuild_operation", "maintenance"),
-            ("run_creator_reenrich_operation", "maintenance"),
-            ("run_gitllery_sync_operation", "git_projection"),
-            ("run_curation_backfill_operation", "import_db"),
-            ("run_search_reindex_operation", "search_index"),
-            ("import_runner.run_import_job", "import_db"),
-            ("run_asset_dedup_scan", "image_derive"),
-            ("run_asset_dedup_outbox", "image_derive"),
-            ("run_media_derivative_outbox", "image_derive"),
-            ("run_gitllery_projection_outbox", "git_projection"),
-            ("run_import_projection_outbox", "import_db"),
-            ("run_search_projection_outbox", "search_index"),
-        )
-        for name, profile in profiles:
-            if name in func_name:
-                return profile
-        return None
+        descriptor = descriptor_for_job(job)
+        return descriptor.child_profile if descriptor else None
 
     @classmethod
     def _job_workload(cls, job, queue) -> str:
@@ -489,6 +473,9 @@ class ResourceAwareWorker(Worker):
             # Admission still uses the real profile, while execute_job avoids
             # taking a parent lease for internally sliced coordinators.
             return internal_profile
+        descriptor = descriptor_for_job(job)
+        if descriptor is not None:
+            return descriptor.profile
         explicit = metadata.get("resource_profile") or metadata.get("workload_profile")
         if explicit:
             return str(explicit)
@@ -506,48 +493,18 @@ class ResourceAwareWorker(Worker):
         metadata = getattr(job, "meta", None) or {}
         if metadata.get("registered_admin_operation") == "asset-dedup-scan":
             return True
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        return any(
-            name in func_name
-            for name in (
-                "run_asset_dedup_scan",
-                "run_asset_dedup_outbox",
-                "run_media_derivative_outbox",
-                "run_gitllery_projection_outbox",
-                "run_import_projection_outbox",
-                "run_search_projection_outbox",
-            )
-        )
+        descriptor = descriptor_for_job(job)
+        return bool(descriptor and descriptor.nonblocking_child)
 
     @staticmethod
     def _bound_job_slice(job, workload: str) -> None:
         """Clamp outbox work in-memory before the workhorse fork."""
-
-        del workload
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        args = list(getattr(job, "args", ()) or ())
-        if "media_derivatives" in func_name:
-            args = [
-                min(int(args[0]), 1) if args else 1,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "run_asset_dedup_outbox" in func_name:
-            args = [1]
-        elif "import_projection" in func_name:
-            args = [
-                min(int(args[0]), 25) if args else 25,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "gitllery_projection" in func_name:
-            args = [
-                min(int(args[0]), 1) if args else 1,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "search_projection" in func_name:
-            args = [min(int(args[0]), 500) if args else 500]
-        else:
+        descriptor = descriptor_for_job(job)
+        if descriptor is None or descriptor.bind_slice is None:
             return
-        job.args = tuple(args)
+        job.args = descriptor.bind_slice(
+            tuple(getattr(job, "args", ()) or ()), descriptor.default_units, 20.0
+        )
 
     def _apply_profile_slice(self, job, workload: str, snapshot: dict) -> None:
         """Apply enforce-mode AIMD and worker-local soft feedback to one slice."""
@@ -558,7 +515,9 @@ class ResourceAwareWorker(Worker):
         if not isinstance(profile, dict) or "work_units" not in profile:
             return
 
-        func_name = str(getattr(job, "func_name", "") or "").lower()
+        descriptor = descriptor_for_job(job)
+        if descriptor is None or descriptor.bind_slice is None:
+            return
         args = list(getattr(job, "args", ()) or ())
         try:
             units = max(1, int(profile.get("work_units") or 1))
@@ -579,26 +538,7 @@ class ResourceAwareWorker(Worker):
             if slice_seconds is not None:
                 slice_seconds = max(1.0, slice_seconds * 0.5)
 
-        if "media_derivatives" in func_name:
-            current_seconds = float(args[1]) if len(args) > 1 else 20.0
-            args = [
-                1,
-                min(current_seconds, slice_seconds) if slice_seconds else current_seconds,
-            ]
-        elif "import_projection" in func_name or "gitllery_projection" in func_name:
-            default_units = 1 if "gitllery_projection" in func_name else 25
-            current_units = int(args[0]) if args else default_units
-            current_seconds = float(args[1]) if len(args) > 1 else 20.0
-            args = [
-                min(current_units, units),
-                min(current_seconds, slice_seconds) if slice_seconds else current_seconds,
-            ]
-        elif "search_projection" in func_name:
-            current_units = int(args[0]) if args else 500
-            args = [min(current_units, units)]
-        else:
-            return
-        job.args = tuple(args)
+        job.args = descriptor.bind_slice(tuple(args), units, slice_seconds)
 
     def _close_control_pubsub(self) -> None:
         pubsub = getattr(self, "_resource_control_pubsub", None)

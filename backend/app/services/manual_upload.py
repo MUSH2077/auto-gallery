@@ -249,8 +249,8 @@ class ManualUploadService:
             shutil.rmtree(work_dir, ignore_errors=True)
             raise
 
-        from app.jobs.download import _enqueue_import
-        import_job_id = await _enqueue_import(str(job.id), new_json_paths={str(json_path)})
+        from app.services.import_intent import enqueue_import
+        import_job_id = await enqueue_import(str(job.id), new_json_paths={str(json_path)})
 
         return UploadResult(
             work_id=work_uuid,

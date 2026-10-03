@@ -663,29 +663,23 @@ async def drain_search_projection_outbox_batches(
 ) -> dict[str, int | str]:
     """Drain bounded batches; this is the async seam for an RQ operation."""
 
-    # Delayed import avoids a module cycle: search owns document projection,
-    # while this module owns the database queue.
-    from app.services.search import SearchService
+    from app.services.search_delivery import run_delivery_slice
 
     totals = {"claimed": 0, "upserted": 0, "deleted": 0, "batches": 0}
     terminal_status = "idle"
-    async with async_session() as db:
-        service = SearchService(db)
-        for _ in range(max(1, min(int(max_batches), 100))):
-            result = await service.drain_search_projection_outbox(
-                limit=max(1, min(int(batch_size), OUTBOX_SQL_BATCH_SIZE))
-            )
-            terminal_status = str(result["status"])
-            if terminal_status not in {"ok", "partial"}:
-                break
-            totals["batches"] += 1
-            for key in ("claimed", "upserted", "deleted"):
-                totals[key] += int(result[key])
-            if terminal_status == "partial":
-                # The remainder was released without penalty.  Yield the
-                # worker resource permit; the coordinator will wake a fresh
-                # <=4 MiB slice instead of monopolizing it in this RQ job.
-                break
+    for _ in range(max(1, min(int(max_batches), 100))):
+        result = await run_delivery_slice(
+            limit=max(1, min(int(batch_size), OUTBOX_SQL_BATCH_SIZE))
+        )
+        terminal_status = str(result["status"])
+        if terminal_status not in {"ok", "partial"}:
+            break
+        totals["batches"] += 1
+        for key in ("claimed", "upserted", "deleted"):
+            totals[key] += int(result[key])
+        if terminal_status == "partial":
+            # Yield the permit before coordinating another bounded slice.
+            break
     return {"status": terminal_status, **totals}
 
 

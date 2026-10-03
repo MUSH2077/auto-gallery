@@ -22,6 +22,7 @@ from app.services.download_finalization import finalize_download_job
 from app.services.import_dispatch import IMPORT_DISPATCH_META_KEY
 from app.services.import_lifecycle import (
     coordinate_import_parent_completion,
+    lock_import_lifecycle,
     project_import_pipeline_state,
 )
 from app.services.job_manifest import append_manifest_event, update_manifest
@@ -31,9 +32,12 @@ from app.services.sync_outcome import build_sync_outcome
 
 logger = logging.getLogger(__name__)
 
-async def _commit_import(db: AsyncSession) -> None:
+async def _commit_import(db: AsyncSession, *, notify_job=None) -> None:
     with measure_import_phase("db_commit"):
         await db.commit()
+    if notify_job is not None:
+        from app.services.import_lifecycle import publish_committed_import_progress
+        publish_committed_import_progress(notify_job.id, notify_job.progress_data or {})
 
 
 def _import_queue_wait_seconds(job: ImportJob, dispatch: dict, now: datetime) -> float | None:
@@ -171,107 +175,11 @@ async def _owned_import_job(
 
 
 async def _complete_import_execution(job_uuid, execution_token, *, status, message, stats, total_groups, parse_ms=0, process_ms=0):
-    import_job_id = str(job_uuid)
+    from app.services.import_lifecycle import complete_import_command, publish_committed_import_progress
+    from app.services.download_finalization import finalize_import_parent
     async with async_session() as db:
-        ij = await _owned_import_job(db, job_uuid, execution_token)
-        if ij is None:
-            raise RuntimeError("import execution ownership lost before completion")
-        transition_import_job(ij, status, message if status == "failed" else None)
-        if status == "complete":
-            ij.error_log = None
-        apply_import_progress(
-            ij, status, message,
-            current=stats["works"], total=total_groups, assets=stats["assets"],
-        )
-        if status == "failed":
-            logger.warning("Import %s classified failed: %s", import_job_id, message)
-
-        completion = await coordinate_import_parent_completion(
-            db,
-            ij,
-            status=status,
-            stats=stats,
-            total_groups=total_groups,
-            message=message,
-        )
-        # Parent and child rows are now locked in the stable order; the
-        # child TaskRun projection follows before any parent finalization.
-        from app.services.tasks import TaskService
-
-        task_service = TaskService(db)
-        await task_service.update_subject(
-            "import_job",
-            ij.id,
-            status=status,
-            progress=ij.progress_data,
-            result={"stats": stats, "message": message}
-            if status == "complete"
-            else None,
-            error=message if status == "failed" else None,
-        )
-        dj = completion.parent
-        if dj:
-            parent_task = await task_service.get_by_subject(
-                "download_job",
-                dj.id,
-            )
-            if parent_task is None:
-                await task_service.ensure_download_task(dj)
-            else:
-                await task_service.update_task(
-                    parent_task,
-                    status=dj.status,
-                    progress=dj.progress_data,
-                    error=(
-                        dj.error_log
-                        if dj.status in {"failed", "stale"}
-                        else None
-                    ),
-                )
-            status = completion.status
-            message = completion.message
-            stats = completion.stats
-            total_groups = completion.total_groups
-            update_manifest(dj, import_stats=stats)
-            append_manifest_event(dj, "import_complete", status=status, **stats)
-            append_manifest_event(dj, "stage_timing", stage="parse", ms=parse_ms)
-            append_manifest_event(dj, "stage_timing", stage="process", ms=process_ms)
-            if not completion.should_finalize:
-                await _commit_import(db)
-                logger.info(
-                    "Import batch %s finished; shared parent %s still has active batches",
-                    import_job_id,
-                    dj.id,
-                )
-                return
-            manifest = dj.manifest or {}
-            recovery_detail = manifest.get("repository_artifact_reconciliation")
-            outcome = (
-                build_sync_outcome(
-                    "new_content" if stats["works"] > 0 else "no_changes",
-                    metadata_count=(
-                        int(manifest["metadata_json_count"])
-                        if manifest.get("metadata_json_count") is not None
-                        else total_groups
-                    ),
-                    media_count=int(manifest.get("image_count") or stats["assets"]),
-                    recovery_detail=(
-                        recovery_detail
-                        if isinstance(recovery_detail, dict)
-                        else None
-                    ),
-                )
-                if status == "complete"
-                else None
-            )
-            await finalize_download_job(
-                db,
-                dj,
-                status=status,
-                outcome=outcome,
-                error=message if status == "failed" else None,
-                message=message,
-                assets=stats["assets"],
-            )
-
-
+        completion, progress = await complete_import_command(db, job_uuid, execution_token, status=status,
+                                                              message=message, stats=stats, total_groups=total_groups)
+        if not await finalize_import_parent(db, completion, timings={"parse": parse_ms, "process": process_ms}):
+            await _commit_import(db)
+        publish_committed_import_progress(job_uuid, progress)

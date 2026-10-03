@@ -279,7 +279,7 @@ class CurationService:
         works = list(
             (
                 await self.db.execute(
-                    select(Work).where(Work.id.in_(work_ids)).order_by(Work.id)
+                    select(Work).where(Work.id.in_(work_ids)).order_by(Work.id).execution_options(populate_existing=True)
                 )
             ).scalars()
         )
@@ -296,7 +296,7 @@ class CurationService:
                 await self.db.execute(
                     select(WorkCurationState).where(
                         WorkCurationState.work_id.in_(work_ids)
-                    )
+                    ).with_for_update().execution_options(populate_existing=True)
                 )
             ).scalars()
         }
@@ -325,18 +325,12 @@ class CurationService:
             before["tags"] = sorted(tags_by_work[work.id])
             after = dict(before)
             action = operation.action
-            if action == "trash":
-                if (state.visibility if state else VISIBLE) in {TRASHED, PURGED}:
+            if action in {"trash", "restore"}:
+                after, changed = self._plan_visibility(before, action, operation.reason or command.reason)
+                if not changed:
                     skipped += 1
                     plans.append((operation, work, state, before, before, False))
                     continue
-                after.update(visibility=TRASHED, reason=operation.reason or command.reason)
-            elif action == "restore":
-                if (state.visibility if state else VISIBLE) != TRASHED:
-                    skipped += 1
-                    plans.append((operation, work, state, before, before, False))
-                    continue
-                after.update(visibility=VISIBLE, reason=operation.reason or command.reason)
             elif action == "favorite":
                 if work.is_favorite == bool(operation.value):
                     skipped += 1
@@ -395,19 +389,14 @@ class CurationService:
             will_change,
         ) in enumerate(plans):
             action = operation.action
-            if will_change and action in {"trash", "restore"}:
-                if state is None:
-                    state = WorkCurationState(work_id=work.id, visibility=VISIBLE)
-                    self.db.add(state)
-                    states[work.id] = state
-                state.visibility = after["visibility"]
-                state.reason = after.get("reason")
-                if action == "trash":
-                    state.trashed_at = _now()
-                    state.trashed_by_commit_id = commit.id
-                else:
-                    state.restored_by_commit_id = commit.id
-            elif will_change and action == "favorite":
+            if action in {"trash", "restore"}:
+                await self._apply_visibility(
+                    commit, work, state, action, before, after, will_change,
+                    record_noop=True, sequence=sequence,
+                    impact={"source": "gitllery-cli", "requested_action": action, "changed": will_change},
+                )
+                continue
+            if will_change and action == "favorite":
                 work.is_favorite = bool(operation.value)
             elif will_change and action == "tag-add":
                 normalized = (operation.tag or "").strip().casefold()
@@ -445,8 +434,6 @@ class CurationService:
                 subject_id=str(work.id),
                 action=(
                     {
-                        "trash": "work_trashed",
-                        "restore": "work_restored",
                         "favorite": "work_favorited",
                         "tag-add": "work_tag_added",
                         "tag-remove": "work_tag_removed",
@@ -605,92 +592,74 @@ class CurationService:
             "reason": state.reason if state else None,
         }
 
-    async def trash_works(self, work_ids: list[UUID], *, reason: str | None = None, message: str | None = None, trigger: str = "work_trash") -> CurationCommit:
+    @staticmethod
+    def _plan_visibility(before: dict, action: str, reason: str | None) -> tuple[dict, bool]:
+        current = before["visibility"]
+        changed = current not in {TRASHED, PURGED} if action == "trash" else current == TRASHED
+        if not changed:
+            return before, False
+        return {**before, "visibility": TRASHED if action == "trash" else VISIBLE, "reason": reason}, True
+
+    async def _apply_visibility(self, commit, work, state, action, before, after, changed,
+                                *, record_noop=False, sequence=None, impact=None):
+        """Apply a locked visibility plan and its audit; never commit here."""
+        if changed:
+            if state is None:
+                state = WorkCurationState(work_id=work.id, visibility=VISIBLE)
+                self.db.add(state)
+            state.visibility = after["visibility"]
+            state.reason = after.get("reason")
+            if action == "trash":
+                state.trashed_at = _now()
+                state.trashed_by_commit_id = commit.id
+            else:
+                state.restored_by_commit_id = commit.id
+        if changed or record_noop:
+            await self._add_change(
+                commit, subject_type="work", subject_id=str(work.id),
+                action=("work_trashed" if action == "trash" else "work_restored") if changed else "command_noop",
+                before_state=before, after_state=after, sequence=sequence, impact=impact,
+            )
+
+    async def _change_visibility(self, work_ids, action, *, reason, message, trigger):
         if not work_ids:
             raise HTTPException(status_code=400, detail="ids list is required")
         if len(work_ids) > self.COMMIT_WORK_LIMIT:
-            raise HTTPException(
-                status_code=400,
-                detail=f"at most {self.COMMIT_WORK_LIMIT} works per curation commit",
-            )
-        rows = await self.db.execute(select(Work).where(Work.id.in_(work_ids)))
-        works = list(rows.scalars().all())
+            raise HTTPException(status_code=400, detail=f"at most {self.COMMIT_WORK_LIMIT} works per curation commit")
+        await self.db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:name, 0))"),
+                              {"name": "auto-gallery:curation-commit-order"})
+        works = list((await self.db.execute(select(Work).where(Work.id.in_(work_ids)).execution_options(populate_existing=True))).scalars())
         if not works:
             raise HTTPException(status_code=404, detail="No works found")
-
+        states = {state.work_id: state for state in (await self.db.execute(
+            select(WorkCurationState).where(WorkCurationState.work_id.in_(work_ids))
+            .with_for_update().execution_options(populate_existing=True)
+        )).scalars()}
+        noun = f"{len(works)} work{'s' if len(works) != 1 else ''}"
         commit = await self._create_commit(
-            message=message or (f"Move {len(works)} work{'s' if len(works) != 1 else ''} to trash"),
-            trigger=trigger,
-            metadata={"reason": reason},
+            message=message or (f"Move {noun} to trash" if action == "trash" else f"Restore {noun}"),
+            trigger=trigger, metadata={"reason": reason},
         )
-        changed = 0
+        changed_count = 0
         for work in works:
-            state = await self._ensure_work_state(work.id)
-            if state.visibility in {TRASHED, PURGED}:
-                continue
+            # HTTP historically materializes a visible state even for a noop.
+            state = states.get(work.id) or await self._ensure_work_state(work.id)
             before = self._work_snapshot(work, state)
-            state.visibility = TRASHED
-            state.trashed_at = _now()
-            state.trashed_by_commit_id = commit.id
-            state.reason = reason
-            after = self._work_snapshot(work, state)
-            await self._add_change(
-                commit,
-                subject_type="work",
-                subject_id=str(work.id),
-                action="work_trashed",
-                before_state=before,
-                after_state=after,
-                impact={"storage_reclaimable": False},
-            )
-            changed += 1
-        commit.stats = {"work_count": changed}
+            after, changed = self._plan_visibility(before, action, reason)
+            await self._apply_visibility(commit, work, state, action, before, after, changed,
+                                         impact={"storage_reclaimable": False} if action == "trash" else None)
+            changed_count += int(changed)
+        commit.stats = {"work_count": changed_count}
         await request_search_projection(self.db, [work.id for work in works])
         await self.db.commit()
         await self.db.refresh(commit)
         return commit
+
+    async def trash_works(self, work_ids: list[UUID], *, reason: str | None = None, message: str | None = None, trigger: str = "work_trash") -> CurationCommit:
+        return await self._change_visibility(work_ids, "trash", reason=reason, message=message, trigger=trigger)
 
     async def restore_works(self, work_ids: list[UUID], *, reason: str | None = None, message: str | None = None, trigger: str = "work_restore") -> CurationCommit:
-        if not work_ids:
-            raise HTTPException(status_code=400, detail="ids list is required")
-        if len(work_ids) > self.COMMIT_WORK_LIMIT:
-            raise HTTPException(
-                status_code=400,
-                detail=f"at most {self.COMMIT_WORK_LIMIT} works per curation commit",
-            )
-        rows = await self.db.execute(select(Work).where(Work.id.in_(work_ids)))
-        works = list(rows.scalars().all())
-        if not works:
-            raise HTTPException(status_code=404, detail="No works found")
-        commit = await self._create_commit(
-            message=message or (f"Restore {len(works)} work{'s' if len(works) != 1 else ''}"),
-            trigger=trigger,
-            metadata={"reason": reason},
-        )
-        changed = 0
-        for work in works:
-            state = await self._ensure_work_state(work.id)
-            if state.visibility != TRASHED:
-                continue
-            before = self._work_snapshot(work, state)
-            state.visibility = VISIBLE
-            state.restored_by_commit_id = commit.id
-            state.reason = reason
-            after = self._work_snapshot(work, state)
-            await self._add_change(
-                commit,
-                subject_type="work",
-                subject_id=str(work.id),
-                action="work_restored",
-                before_state=before,
-                after_state=after,
-            )
-            changed += 1
-        commit.stats = {"work_count": changed}
-        await request_search_projection(self.db, [work.id for work in works])
-        await self.db.commit()
-        await self.db.refresh(commit)
-        return commit
+        return await self._change_visibility(work_ids, "restore", reason=reason, message=message, trigger=trigger)
 
     async def record_work_favorite(self, work: Work, before_favorite: bool, after_favorite: bool) -> CurationCommit:
         state = await self._ensure_work_state(work.id)
@@ -1607,7 +1576,22 @@ class CurationService:
                 status_code=400,
                 detail=f"at most {self.COMMIT_WORK_LIMIT} works per purge commit",
             )
-        works = await self._purge_candidate_works(work_ids)
+        # Eligibility and the subsequent irreversible filesystem operation
+        # share the row lock. A restore that races this command must either
+        # commit before this query (and therefore be excluded) or wait until
+        # purge commits (and then observe PURGED), never restore behind a
+        # delete planned from stale state.
+        # Acquire the curation ordering lock before the row lock. Restore also
+        # takes this lock before updating its state; keeping one order avoids
+        # an advisory-lock/row-lock inversion while the two commands race.
+        await self.db.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_name, 0))"
+            ),
+            {"lock_name": "auto-gallery:curation-commit-order"},
+        )
+        works = await self._purge_candidate_works(work_ids, lock=True)
         if not works:
             raise HTTPException(status_code=400, detail="No trashed works are eligible for purge")
         assets = await self._purge_candidate_assets(
@@ -1625,6 +1609,24 @@ class CurationService:
             message=message or f"Purge {len(works)} trashed work{'s' if len(works) != 1 else ''}",
             trigger="work_purge",
         )
+        # Re-read eligibility while the candidate rows remain locked, before
+        # changing state or performing any irreversible filesystem operation.
+        locked_states = {
+            state.work_id: state
+            for state in (
+                await self.db.execute(
+                    select(WorkCurationState)
+                    .where(WorkCurationState.work_id.in_([work.id for work in works]))
+                    .with_for_update()
+                )
+            ).scalars()
+        }
+        if any(locked_states.get(work.id) is None or locked_states[work.id].visibility != TRASHED for work in works):
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "purge_eligibility_changed"},
+            )
         bytes_reclaimed = 0
         for work in works:
             state = await self._ensure_work_state(work.id)
@@ -1829,7 +1831,12 @@ class CurationService:
             )
         return sum(amounts_by_user.values())
 
-    async def _purge_candidate_works(self, work_ids: list[UUID] | None) -> list[Work]:
+    async def _purge_candidate_works(
+        self,
+        work_ids: list[UUID] | None,
+        *,
+        lock: bool = False,
+    ) -> list[Work]:
         stmt = select(Work).join(WorkCurationState, WorkCurationState.work_id == Work.id).where(WorkCurationState.visibility == TRASHED)
         if work_ids:
             stmt = stmt.where(Work.id.in_(work_ids))
@@ -1838,7 +1845,10 @@ class CurationService:
             # subsequent purge on the same bounded 25-work unit instead of
             # scanning every trashed work every 30 seconds.
             stmt = stmt.limit(self.COMMIT_WORK_LIMIT)
-        rows = await self.db.execute(stmt.order_by(Work.updated_at.desc()))
+        stmt = stmt.order_by(Work.updated_at.desc())
+        if lock:
+            stmt = stmt.with_for_update()
+        rows = await self.db.execute(stmt)
         return list(rows.scalars().all())
 
     async def _purge_candidate_assets(

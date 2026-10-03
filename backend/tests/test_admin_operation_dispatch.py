@@ -1274,7 +1274,7 @@ async def test_cleaning_danbooru_and_job_diagnostic_starts_are_durable_without_r
     from app.api.admin import data as data_api
     from app.api.admin import settings as settings_api
     from app.database import async_session, engine
-    from app.jobs import import_runner
+    from app.services import metadata_cleanup
     from app.models import TaskRun
     from app.services import operations
 
@@ -1289,7 +1289,7 @@ async def test_cleaning_danbooru_and_job_diagnostic_starts_are_durable_without_r
     async def forbidden_cleanup(_root):
         raise AssertionError("HTTP admission must not perform metadata cleanup")
 
-    monkeypatch.setattr(import_runner, "cleanup_metadata_jsons", forbidden_cleanup)
+    monkeypatch.setattr(metadata_cleanup, "cleanup_metadata_jsons", forbidden_cleanup)
     monkeypatch.setattr(
         reference_api,
         "_precheck_pixiv_ids",
@@ -1365,7 +1365,8 @@ async def test_registered_worker_loads_options_and_fences_terminal_write(monkeyp
             attempt=attempt,
             options=options,
         )
-        return {"indexed": 5}
+        from app.services.admin_operation_results import success
+        return success({"indexed": 5})
 
     monkeypatch.setattr(
         admin_operations,

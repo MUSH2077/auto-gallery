@@ -120,9 +120,16 @@ def test_manual_download_retry_and_resume_use_downloads_queue(monkeypatch):
 
     engine = TaskEngine(DB())
     engine.repo = Repo()
+    transitions = []
+    async def apply_transition(_engine, target, status, **options):
+        transitions.append((status, options.get("reset_retry", False)))
+        target.status = status
+        return target
+    monkeypatch.setattr(TaskEngine, "_apply_transition", apply_transition)
     asyncio.run(engine.retry_download(job.id))
     job.status = "paused"
     asyncio.run(engine.resume_download(job.id))
+    assert transitions == [("enqueued", True), ("enqueued", False)]
 
     assert calls == [
         ("prepare", "downloads", "retry"),
@@ -186,6 +193,10 @@ def test_import_retry_and_resume_use_import_dispatch(monkeypatch):
 
     monkeypatch.setattr(task_engine, "prepare_import_dispatch", prepare)
     monkeypatch.setattr(task_engine, "publish_prepared_import", publish)
+    async def command(_db, _job_id, target, **_kwargs):
+        job.status = target
+        return None, job, None
+    monkeypatch.setattr(TaskEngine, "_apply_import_control", command)
     monkeypatch.setattr(
         task_engine.TaskEventPublisher,
         "publish_status_change",

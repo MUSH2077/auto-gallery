@@ -190,7 +190,7 @@ async def test_repository_reconciliation_clears_actual_proof(db, tmp_path, monke
 @pytest.mark.parametrize('mutation', ['existing', 'missing', 'importable', 'reset'])
 async def test_disk_import_mutations_clear_actual_proof(db, tmp_path, monkeypatch, mutation):
     from app.models import StorageArtifact, WorkSource
-    from app.jobs import download
+    from app.services import import_intent
     from app.services.disk_import import reconcile_downloads_to_db
     metadata, row, repository = await proved_sidecar(db, tmp_path, monkeypatch)
     artifact_id = row.id
@@ -217,7 +217,7 @@ async def test_disk_import_mutations_clear_actual_proof(db, tmp_path, monkeypatc
             observations.append(actual.file_path)
         return None
 
-    monkeypatch.setattr(download, '_enqueue_import', observe_before_publication)
+    monkeypatch.setattr(import_intent, 'enqueue_import', observe_before_publication)
     monkeypatch.setattr('app.services.disk_identity.danbooru_svc.search_and_extract', lambda **_: (None, []))
     result = await reconcile_downloads_to_db(db, {'source': 'pixiv',
         'repository_id': str(repository.id), 'reset_ledger': mutation == 'reset'})

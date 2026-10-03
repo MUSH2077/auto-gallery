@@ -91,6 +91,36 @@ def test_batch_curate_restore_uses_curation_service(monkeypatch):
     assert result == {"id": str(commit_id), "changes": []}
 
 
+def test_batch_tag_uses_shared_curation_command(monkeypatch):
+    from app.api import works
+
+    work_id = uuid4()
+    captured = {}
+
+    class FakeCurationService:
+        def __init__(self, _db):
+            pass
+
+        async def execute_gitllery_command(self, command, *, actor_id):
+            captured["command"] = command
+            captured["actor_id"] = actor_id
+            return {"changed": 1}
+
+    monkeypatch.setattr(works, "CurationService", FakeCurationService)
+    result = asyncio.run(works.batch_tag_works(
+        {"ids": [str(work_id)], "action": "add", "tag": "  Mixed Case  "},
+        user=SimpleNamespace(id=42),
+        db=object(),
+    ))
+
+    operation = captured["command"].operations[0]
+    assert result == {"status": "ok", "updated": 1}
+    assert captured["actor_id"] == "42"
+    assert operation.work_id == work_id
+    assert operation.action == "tag-add"
+    assert operation.tag == "Mixed Case"
+
+
 def test_creator_curation_endpoint_uses_curation_service(monkeypatch):
     from app.api import creators
     from app.schemas.curation import CreatorCurationRequest

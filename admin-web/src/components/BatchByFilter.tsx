@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { useTaskCommands } from "@/lib/useTaskCommand";
 import { useT } from "@/lib/i18n";
 import { actionErrorReason } from "@/lib/task-actions";
 
@@ -11,6 +11,7 @@ const ACTIONS = [
 
 export function BatchByFilter({ filters, onSuccess }: { filters: Record<string, string>; onSuccess?: () => void }) {
   const t = useT();
+  const commands = useTaskCommands();
   const [action, setAction] = useState("");
   const [note, setNote] = useState("");
   const [running, setRunning] = useState(false);
@@ -22,7 +23,7 @@ export function BatchByFilter({ filters, onSuccess }: { filters: Record<string, 
     setRunning(true);
     setResult(null);
     try {
-      const res = await api.batchDownloadJobsByFilter(filters, action, note || undefined);
+      const res = await commands.byFilter(filters, action, note || undefined);
       const summary = t("jobs.batch_filter_result", {
         succeeded: res.succeeded,
         failed: res.failed,

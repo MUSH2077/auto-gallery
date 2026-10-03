@@ -622,6 +622,100 @@ async def _shared_parent(db, *, manifest=None):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_cancelled_import_rejects_late_completion_with_old_token():
+    """A committed cancel remains terminal when an old worker finishes later."""
+    from app.database import async_session, engine
+    from app.jobs.import_execution import _complete_import_execution
+    from app.models.import_job import ImportJob
+    from app.services.tasks import TaskService
+
+    token = uuid4()
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db, manifest={})
+            child = ImportJob(download_job_id=parent.id, status="running", execution_token=token)
+            db.add(child)
+            await db.flush()
+            tasks = TaskService(db)
+            parent_task = await tasks.ensure_download_task(parent)
+            await tasks.ensure_import_task(child, parent_task_id=parent_task.id)
+            await db.commit()
+            child_id = child.id
+
+        async with async_session() as db:
+            child = await db.get(ImportJob, child_id)
+            child.status = "cancelled"
+            task = await tasks_for_subject(db, child_id)
+            task.status = "cancelled"
+            await db.commit()
+
+        with pytest.raises(RuntimeError, match="after cancellation"):
+            await _complete_import_execution(
+                child_id, token, status="complete", message="late completion",
+                stats={"works": 1, "assets": 1, "multi_page": 0, "skipped": 0, "existing": 0},
+                total_groups=1,
+            )
+
+        async with async_session() as db:
+            child = await db.get(ImportJob, child_id)
+            assert child.status == "cancelled"
+            task = await tasks_for_subject(db, child_id)
+            assert task.status == "cancelled"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lifecycle_rereads_cancel_after_worker_loaded_old_snapshot():
+    """The lifecycle command rereads after a competing cancel commits."""
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.services.import_lifecycle import lock_import_lifecycle
+
+    token = uuid4()
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db, manifest={})
+            child = ImportJob(download_job_id=parent.id, status="running", execution_token=token)
+            db.add(child)
+            await db.flush()
+            child_id = child.id
+            await db.commit()
+
+        # Simulate a worker that read the row before the control-plane commit.
+        async with async_session() as worker_db:
+            old = await worker_db.get(ImportJob, child_id)
+            assert old.status == "running"
+            old_status = old.status
+            async with async_session() as control_db:
+                current = await control_db.get(ImportJob, child_id)
+                current.status = "cancelled"
+                await control_db.commit()
+            locked = await lock_import_lifecycle(worker_db, child_id, execution_token=token)
+            assert locked is not None
+            assert locked[1].status == "cancelled"
+            assert old_status == "running"
+            await worker_db.rollback()
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+async def tasks_for_subject(db, subject_id):
+    from app.models.task_run import TaskRun
+    return (await db.execute(select(TaskRun).where(
+        TaskRun.subject_type == "import_job", TaskRun.subject_id == subject_id,
+    ))).scalar_one()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_bounded_import_children_finalize_shared_parent_only_after_last_batch():
     """A completed 25-work child must not terminalize a parent with siblings."""
     from app.database import async_session, engine
@@ -809,9 +903,9 @@ async def test_stale_open_publisher_recovery_resumes_one_page_and_closes_idempot
     async def fake_publish(*_args, **_kwargs):
         return "replayed"
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: FakeRedis())
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: FakeRedis())
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
 
     try:
         async with async_session() as db:
@@ -1157,7 +1251,7 @@ async def test_enqueue_waits_for_parent_lock_and_preserves_child_batch_manifest(
     from app.jobs.download import _enqueue_import
     from app.models.download_job import DownloadJob
     from app.models.import_job import ImportJob
-    from app.repositories.download_job import DownloadJobRepository
+    from app.services import download_lifecycle
     from app.services.import_lifecycle import project_import_pipeline_state
     from app.services.tasks import TaskService
 
@@ -1167,23 +1261,23 @@ async def test_enqueue_waits_for_parent_lock_and_preserves_child_batch_manifest(
     async def fake_publish(*_args, **_kwargs):
         return "replayed"
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: FakeRedis())
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: FakeRedis())
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
 
     parent_loaded = asyncio.Event()
     continue_enqueue = asyncio.Event()
-    original_update_status = DownloadJobRepository.update_status
+    original_update_status = download_lifecycle.apply_download_state
 
-    async def pause_after_unlocked_parent_read(self, job, status, error_log=None):
+    async def pause_after_locked_parent_read(db, job, status, **kwargs):
         parent_loaded.set()
         await continue_enqueue.wait()
-        return await original_update_status(self, job, status, error_log)
+        return await original_update_status(db, job, status, **kwargs)
 
     monkeypatch.setattr(
-        DownloadJobRepository,
-        "update_status",
-        pause_after_unlocked_parent_read,
+        download_lifecycle,
+        "apply_download_state",
+        pause_after_locked_parent_read,
     )
 
     try:
@@ -1450,9 +1544,9 @@ async def test_registered_disk_publishers_use_taskrun_not_redis_heartbeats(
     async def no_projection(*_args, **_kwargs):
         return 0
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: redis)
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
     monkeypatch.setattr(task_engine, "request_search_projection", no_projection)
     monkeypatch.setattr(
         task_engine.TaskEventPublisher,
@@ -1577,9 +1671,9 @@ async def test_recovery_assigns_failed_and_expired_page_without_touching_live_le
     async def fake_publish(*_args, **_kwargs):
         return "replayed"
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: redis)
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
 
     now = datetime.now(timezone.utc)
     paths = {
@@ -1714,9 +1808,9 @@ async def test_live_unassigned_lease_keeps_publication_open_until_expiry(
     async def fake_publish(*_args, **_kwargs):
         return "replayed"
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: redis)
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
 
     now = datetime.now(timezone.utc)
     try:
@@ -1909,7 +2003,7 @@ async def test_durable_terminal_task_stops_registered_publisher_before_reconcile
         mutation_probe,
     )
     monkeypatch.setattr(
-        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        "app.services.storage_breakdown_cache.invalidate_storage_breakdown_cache",
         lambda: None,
     )
 
@@ -2551,9 +2645,9 @@ async def test_concurrent_recovery_and_retry_serialize_attempt_rotation(
         return "replayed"
 
     monkeypatch.setattr(import_recovery, "_publisher_task_is_active", paused_active_check)
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: redis)
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: redis)
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_a, **_k: None)
 
     recovery_task = None
     retry_task = None

@@ -13,7 +13,7 @@ import pytest
 def test_backup_estimate_and_archive_exclude_auth_runtime_files(tmp_path, monkeypatch):
     """A concurrent auth overlay must be absent from both backup surfaces."""
 
-    from app.api.admin import backup
+    from app.services import backup
 
     gallerydl_root = tmp_path / "gallerydl"
     jobs_root = gallerydl_root / "jobs"

@@ -17,6 +17,7 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation } from "@/lib/useAdminOperation";
 import { pollInterval } from "@/lib/polling";
+import { refreshOperationResources } from "@/lib/operationRefresh";
 
 type Severity = "error" | "warning" | "info";
 type IntegrityResult = {
@@ -87,38 +88,27 @@ function DataManagementContent() {
 
   // ── Data queries ──
   const systemInfo = useQuery({
-    queryKey: ["system-info"],
+    queryKey: queryKeys.system.systemInfo,
     queryFn: () => api.getSystemInfo(),
     refetchInterval: () => pollInterval(false),
     refetchIntervalInBackground: false,
     placeholderData: (previousData) => previousData,
   });
   const storageBreakdown = useQuery({
-    queryKey: ["storage-breakdown"],
+    queryKey: queryKeys.system.storageBreakdown,
     queryFn: () => api.getStorageBreakdown(),
     placeholderData: (previousData) => previousData,
   });
-  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
+  const backups = useQuery({ queryKey: queryKeys.backups.all, queryFn: () => api.listBackups() });
   const refreshBackups = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["backups"] });
+    refreshOperationResources(qc, "admin-backup-create");
   }, [qc]);
   const refreshDataViews = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    void qc.invalidateQueries({ queryKey: ["system-info"] });
-    void qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+    refreshOperationResources(qc, "admin-cleanup-metadata-jsons");
   }, [qc]);
   const refreshClearedDataViews = useCallback(() => {
-    refreshDataViews();
-    void qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.sources });
-    void qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.tags.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    void qc.invalidateQueries({ queryKey: ["search"] });
-    void qc.invalidateQueries({ queryKey: ["reference-name-anchors"] });
-  }, [qc, refreshDataViews]);
+    refreshOperationResources(qc, "admin-clear", { entity: "all" });
+  }, [qc]);
   const announceAccepted = useCallback((
     accepted: AdminOperationAccepted,
     title: string,

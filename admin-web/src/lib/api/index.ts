@@ -44,6 +44,14 @@ function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promis
 
 // ── API ──
 
+function getAdminOperation<TResult = Record<string, unknown>>(id: string) {
+  return request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${id}`);
+}
+
+function getDownloadJobImports(jobId: string) {
+  return request<T.ImportJob[]>(`/api/v1/download-jobs/${jobId}/imports`);
+}
+
 export const api = {
   ...remoteDiscoveryApi,
   // System
@@ -357,8 +365,7 @@ export const api = {
   repeatTask: (id: string, requestId: string) =>
     request<T.RepeatSyncAccepted>(`/api/v1/tasks/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
 
-  getDownloadJobImports: (jobId: string) =>
-    request<any[]>(`/api/v1/download-jobs/${jobId}/imports`),
+  getDownloadJobImports,
 
   clearDownloadJobs: (statuses: string[]) =>
     request<T.TaskBulkClearResult>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
@@ -378,8 +385,7 @@ export const api = {
   batchDownloadJobs: (ids: string[], action: string) =>
     request<T.TaskBulkResult>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
 
-  listDownloadJobImports: (jobId: string) =>
-    request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
+  listDownloadJobImports: getDownloadJobImports,
 
   // Repositories
   getRepository: (id: string) =>
@@ -728,22 +734,8 @@ export const api = {
       `/api/v1/admin/operations/clear/latest?entity=${encodeURIComponent(entity)}`,
     ),
 
-  getAdminOperationStatus: (jobId: string) =>
-    request<{
-      task_id?: string | null;
-      job_id: string;
-      rq_job_id?: string | null;
-      status: "queued" | "enqueued" | "running" | "complete" | "failed";
-      operation_type: "admin-clear" | "danbooru-import-all" | string;
-      progress?: { phase?: string; label?: string; current?: number; total?: number };
-      result?: any;
-      error?: string;
-      meta?: Record<string, any>;
-      updated_at?: number;
-    }>(`/api/v1/admin/operations/${jobId}`),
-
-  getAdminOperationTask: <TResult = Record<string, unknown>>(taskId: string) =>
-    request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${taskId}`),
+  getAdminOperationStatus: getAdminOperation,
+  getAdminOperationTask: getAdminOperation,
 
   retryAdminOperation: (taskId: string) =>
     request<T.AdminOperationAccepted>(`/api/v1/admin/operations/${taskId}/retry`, { method: "POST" }),
@@ -816,21 +808,10 @@ export const api = {
     }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
 
   getDanbooruMappingRefreshStatus: (jobId: string) =>
-    request<{
-      task_id?: string | null;
-      job_id: string;
-      rq_job_id?: string | null;
-      status: "queued" | "enqueued" | "running" | "complete" | "failed";
-      operation_type: "danbooru-mapping-refresh";
-      progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };
-      result?: {
-        scanned: number; total: number; found: number; not_found: number;
-        errors: number; skipped: number; aborted: boolean;
-      };
-      error?: string;
-      meta?: Record<string, any>;
-      updated_at?: number;
-    }>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
+    request<T.AdminOperationPollResponse<{
+      scanned: number; total: number; found: number; not_found: number;
+      errors: number; skipped: number; aborted: boolean;
+    }>>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
 
   getDanbooruArtist: (artistId: number) =>
     request<{
@@ -1122,9 +1103,11 @@ export const queryKeys = {
     storage: ["system", "storage"] as const,
     queueStats: ["system", "queue-stats"] as const,
     systemInfo: ["system", "info"] as const,
+    storageBreakdown: ["system", "storage-breakdown"] as const,
     integrityCheck: ["system", "integrity-check"] as const,
   },
   backups: {
+    all: ["backups"] as const,
     list: ["backups", "list"] as const,
     estimate: ["backups", "estimate"] as const,
   },

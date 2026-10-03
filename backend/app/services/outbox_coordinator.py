@@ -81,6 +81,13 @@ _SPECS = {
     "search": ("app.jobs.search_projection.run_search_projection_outbox", (500,)),
     "dedup": ("app.jobs.asset_dedup.run_asset_dedup_outbox", (25,)),
 }
+_RESOURCE_DESCRIPTORS = {
+    "import_projection": "import-projection",
+    "media": "media-derivatives",
+    "gitllery": "gitllery-projection",
+    "search": "search-projection",
+    "dedup": "asset-dedup-outbox",
+}
 
 
 def _projection_mode() -> str:
@@ -949,6 +956,9 @@ def wake_pending_outboxes(
                 "job_timeout": 3600,
                 "result_ttl": 300,
                 "failure_ttl": 300,
+                "meta": {
+                    "resource_descriptor": _RESOURCE_DESCRIPTORS[kind],
+                },
             }
             if delay_seconds > 0.0:
                 checked_enqueue_in(

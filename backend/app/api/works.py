@@ -1,11 +1,10 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from app.auth import RequirePermission
 from app.models.user import User
-from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +13,7 @@ from app.database import get_db
 from app.schemas.work import RemoteWorkStateRead, WorkRead, WorkList, WorkListResponse
 from app.schemas.asset import MediaDerivativeProgressRead, PlaybackTicketRead, WorkAssetRead
 from app.schemas.curation import BatchCurateRequest, CurationCommitRead
+from app.schemas.gitllery import GitlleryCommandRequest, GitlleryCommandOperation
 from app.repositories.work import WorkRepository
 from app.models.asset import Asset
 from app.models.asset_source import AssetSource
@@ -283,13 +283,21 @@ async def toggle_work_favorite(work_id: UUID, user: User = _require_curation, db
     work = await repo.get(work_id, force_sfw=not user.nsfw_visible)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
-    before = bool(work.is_favorite)
-    work.is_favorite = not work.is_favorite
     svc = CurationService(db)
-    commit = await svc.record_work_favorite(work, before, bool(work.is_favorite))
-    commit.stats = {"work_count": 1}
-    await request_search_projection(db, [work.id])
-    await db.commit()
+    await svc.execute_gitllery_command(
+        GitlleryCommandRequest(
+            message=("Favorite work" if not work.is_favorite else "Unfavorite work"),
+            idempotency_key=uuid4(),
+            operations=[
+                GitlleryCommandOperation(
+                    work_id=work.id,
+                    action="favorite",
+                    value=not bool(work.is_favorite),
+                )
+            ],
+        ),
+        actor_id=str(user.id),
+    )
     await db.refresh(work)
     work.curation_state = svc.work_state_payload(await svc.work_state(work_id))
     return work
@@ -487,7 +495,7 @@ async def batch_curate_works(data: BatchCurateRequest, db: AsyncSession = Depend
 
 
 @curation_router.post("/batch-tag")
-async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
+async def batch_tag_works(data: dict, user: User = _require_curation, db: AsyncSession = Depends(get_db)):
     """Add or remove tags on multiple works."""
     ids = data.get("ids", [])
     action = data.get("action", "add")  # add | remove
@@ -495,44 +503,22 @@ async def batch_tag_works(data: dict, db: AsyncSession = Depends(get_db)):
     if not ids or not tag_name:
         raise HTTPException(status_code=400, detail="ids and tag are required")
 
-    from app.models.tag import Tag
-    from app.models.work_tag import WorkTag
-
-    # Find or create tag
-    normalized = tag_name.strip().lower()
-    result = await db.execute(select(Tag).where(Tag.normalized_name == normalized))
-    tag = result.scalar_one_or_none()
-    if not tag and action == "add":
-        tag = Tag(normalized_name=normalized)
-        db.add(tag)
-        await db.flush()
-
-    updated = 0
-    updated_work_ids: list[UUID] = []
-    for wid in ids:
-        try:
-            if action == "add" and tag:
-                exists = await db.execute(
-                    select(WorkTag).where(WorkTag.work_id == UUID(wid), WorkTag.tag_id == tag.id)
-                )
-                if not exists.scalar_one_or_none():
-                    db.add(WorkTag(work_id=UUID(wid), tag_id=tag.id))
-                    updated += 1
-                    updated_work_ids.append(UUID(wid))
-            elif action == "remove" and tag:
-                await db.execute(
-                    sql_delete(WorkTag).where(WorkTag.work_id == UUID(wid), WorkTag.tag_id == tag.id)
-                )
-                updated += 1
-                updated_work_ids.append(UUID(wid))
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("batch_tag_works failed for %s", wid, exc_info=True)
-    if updated_work_ids:
-        await request_search_projection(
-            db,
-            updated_work_ids,
-            tag_ids=[tag.id] if tag else (),
-        )
-    await db.commit()
-    return {"status": "ok", "updated": updated}
+    if action not in {"add", "remove"}:
+        raise HTTPException(status_code=400, detail="action must be add or remove")
+    command = GitlleryCommandRequest(
+        message=f"{action.title()} tag {tag_name.strip()}",
+        idempotency_key=uuid4(),
+        operations=[
+            GitlleryCommandOperation(
+                work_id=UUID(wid),
+                action="tag-add" if action == "add" else "tag-remove",
+                tag=tag_name.strip(),
+            )
+            for wid in ids
+        ],
+    )
+    result = await CurationService(db).execute_gitllery_command(
+        command,
+        actor_id=str(user.id),
+    )
+    return {"status": "ok", "updated": result["changed"]}

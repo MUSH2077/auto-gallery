@@ -101,6 +101,20 @@ class PixivProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        ai_type = raw_metadata.get("illust_ai_type")
+        flags["is_ai_generated"] = flags["is_ai_generated"] or ai_type == 2
+        rating = raw_metadata.get("rating")
+        flags["is_nsfw"] = rating in ("R-18", "R-18G") or any(
+            isinstance(raw_metadata.get(key), (int, float)) and raw_metadata[key] >= 1
+            for key in ("x_restrict", "restrict")
+        )
+        return flags
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://www.pixiv.net/users/{source_creator_id}"
+
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         pages = raw_metadata.get("pages", [])
         if not pages and raw_metadata.get("url"):

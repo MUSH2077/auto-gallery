@@ -259,7 +259,7 @@ async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
 @pytest.mark.asyncio
 async def test_oversized_rebuild_document_fails_durably_without_remote_write(delivery, monkeypatch):
     from app.services import search_rebuild
-    from app.services.search import SearchService
+    from app.services.search_projection import SearchProjection
     from app.models.search_rebuild import SearchRebuild
     identity = uuid4()
     async with async_session() as db:
@@ -270,9 +270,9 @@ async def test_oversized_rebuild_document_fails_durably_without_remote_write(del
         build = await db.get(SearchRebuild, UUID(started["build_id"]))
         build.phase = "build"
         await db.commit()
-    async def oversized(self, ids):
+    async def oversized(self, index_uid, ids):
         return [{"id": str(ids[0]), "normalized_name": "x" * (4 * 1024 * 1024)}]
-    monkeypatch.setattr(SearchService, "_build_tag_documents", oversized)
+    monkeypatch.setattr(SearchProjection, "build", oversized)
     remote = Meili()
     try:
         async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
@@ -317,7 +317,8 @@ async def test_cancelled_owner_prevents_next_rebuild_write(delivery):
 @pytest.mark.asyncio
 async def test_all_six_indexes_share_one_ordered_swap(delivery):
     from app.services import search_rebuild
-    indexes = tuple(search_rebuild._specs())
+    from app.services.search_projection import PROJECTION_SPECS
+    indexes = tuple(PROJECTION_SPECS)
     remote = Meili()
     started = await search_rebuild.start_rebuild(indexes)
     async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:

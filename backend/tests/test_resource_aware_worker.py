@@ -952,6 +952,61 @@ def test_asset_dedup_coordinator_uses_child_owned_image_slices():
     assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
 
 
+@pytest.mark.parametrize("metadata", [{}, {"resource_descriptor": "dedup-scan"}, {"registered_admin_operation": "asset-dedup-scan"}])
+def test_old_and_new_dedup_scans_keep_nonblocking_child_admission(metadata):
+    job = type("Job", (), {"func_name": "app.jobs.asset_dedup.run_asset_dedup_scan", "meta": metadata})()
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job)
+
+
+async def test_dedup_decision_publishes_explicit_descriptor_after_commit(monkeypatch):
+    from unittest.mock import AsyncMock
+    import rq
+    from app.api.admin import dedup
+    from app.schemas.asset_dedup import AssetDedupDecisionRequest
+
+    result = {"status": "pending"}
+    service = SimpleNamespace(decide=AsyncMock(return_value=result))
+    db = SimpleNamespace(commit=AsyncMock())
+    captured = []
+    monkeypatch.setattr(dedup, "AssetReconciliation", lambda actual_db: service)
+    monkeypatch.setattr(dedup, "get_redis", lambda: object())
+    monkeypatch.setattr(rq, "Queue", lambda **kw: object())
+    def enqueue(*args, **kwargs):
+        db.commit.assert_awaited_once()
+        captured.append(kwargs["meta"])
+    monkeypatch.setattr(dedup, "checked_enqueue", enqueue)
+    response = await dedup.decide_asset_dedup_case(
+        uuid4(), AssetDedupDecisionRequest(expected_revision=1, action="defer", idempotency_key="review-fixture"),
+        user=SimpleNamespace(id=1), db=db,
+    )
+    assert response is result
+    assert captured == [{"resource_descriptor": "asset-dedup-outbox"}]
+
+
+@pytest.mark.parametrize("critical,cgroup", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("metadata", [{}, {"resource_descriptor": "dedup-scan"}])
+def test_dedup_reservation_waits_in_child_but_parent_keeps_hard_gates(monkeypatch, critical, cgroup, metadata):
+    from app.services import resource_aware_worker as module
+    worker = _bare_worker()
+    worker.heartbeat = lambda: None
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._publish_pressure_state = lambda snapshot: {"hard_gate_active": cgroup}
+    job = SimpleNamespace(func_name="app.jobs.asset_dedup.run_asset_dedup_scan", meta=metadata)
+    monkeypatch.setattr(module, "get_resource_pressure_snapshot_sync", lambda **k: {"status": "paused" if critical else "normal", "controller_mode": "critical" if critical else "normal"})
+    monkeypatch.setattr(module, "resource_profile_permit", lambda *a: (False, {"reason": "memory_reservation"}))
+    monkeypatch.setattr(ResourceAwareWorker, "should_run_maintenance_tasks", False)
+    class Waiting(Exception):
+        pass
+    worker._wait_for_control_event = lambda *a: (_ for _ in ()).throw(Waiting())
+    def admit():
+        return worker._wait_until_pressure_allows_dequeue(1, workload="image_derive", hard_only=worker._job_uses_nonblocking_child_admission(job))
+    if critical or cgroup:
+        with pytest.raises(Waiting):
+            admit()
+    else:
+        assert admit()["active_profile"]["allowed"] is True
+
+
 def test_registered_admin_transport_preserves_child_owned_resource_profile():
     job = type(
         "Job",
@@ -1048,6 +1103,7 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
     assert published[-1][3]["meta"] == {
         "registered_admin_operation": "admin-rebuild",
         "registered_admin_internal_profile": "maintenance",
+        "registered_admin_resource_profile": "maintenance",
     }
 
 
@@ -1130,6 +1186,60 @@ def test_outbox_slice_bounds_are_applied_before_fork():
     assert media.args == (1, 20.0)
     assert search.args == (500,)
     assert git.args == (1, 20.0)
+
+
+def test_explicit_descriptor_survives_function_rename_and_preserves_kwargs():
+    job = type("Job", (), {
+        "func_name": "app.jobs.renamed.run_slice",
+        "meta": {"resource_descriptor": "import-projection"},
+        "args": (500, 90.0),
+        "kwargs": {"attempt_token": "keep-me", "extra": True},
+    })()
+    queue = type("Queue", (), {"name": "operations"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "import_db"
+    assert ResourceAwareWorker._internal_slice_workload(job) == "import_db"
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
+    ResourceAwareWorker._bound_job_slice(job, "import_db")
+    assert job.args == (25, 20.0)
+    assert job.kwargs == {"attempt_token": "keep-me", "extra": True}
+
+
+def test_legacy_descriptor_adapter_and_parent_mode_remain_compatible():
+    legacy = type("Job", (), {
+        "func_name": "old.module.run_search_projection_outbox",
+        "meta": {},
+    })()
+    parent = type("Job", (), {
+        "func_name": "app.jobs.renamed.run",
+        "meta": {"resource_descriptor": "maintenance"},
+    })()
+    queue = type("Queue", (), {"name": "operations"})()
+
+    assert ResourceAwareWorker._job_workload(legacy, queue) == "search_index"
+    assert ResourceAwareWorker._internal_slice_workload(legacy) == "search_index"
+    assert ResourceAwareWorker._internal_slice_workload(parent) is None
+    assert ResourceAwareWorker._job_workload(parent, queue) == "maintenance"
+    import_queue = type("Queue", (), {"name": "imports"})()
+    assert ResourceAwareWorker._job_workload(parent, import_queue) == "maintenance"
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        ("run_clear_operation", "maintenance"),
+        ("run_library_rebuild_operation", "maintenance"),
+        ("run_disk_import_operation", "maintenance"),
+        ("run_creator_reenrich_operation", "maintenance"),
+        ("run_gitllery_rebuild_operation", "maintenance"),
+        ("run_asset_dedup_scan", "image_derive"),
+    ],
+)
+def test_all_legacy_child_function_names_keep_profile_semantics(marker, expected):
+    job = type("Job", (), {"func_name": f"old.module.{marker}", "meta": {}})()
+    queue = type("Queue", (), {"name": "operations"})()
+    assert ResourceAwareWorker._internal_slice_workload(job) == expected
+    assert ResourceAwareWorker._job_workload(job, queue) == expected
 
 
 def test_pressure_pauses_before_flock_or_dequeue(monkeypatch):

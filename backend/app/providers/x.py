@@ -106,6 +106,18 @@ class XProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        flags["is_nsfw"] = bool(
+            raw_metadata.get("possibly_sensitive")
+            or raw_metadata.get("sensitive")
+            or raw_metadata.get("sensitive_flags")
+        )
+        return flags
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://x.com/{source_creator_id}"
+
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         # Twitter metadata has entities.media array for images/videos
         entities = raw_metadata.get("entities", {})

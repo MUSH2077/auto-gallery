@@ -49,6 +49,8 @@ from app.services.job_manifest import append_manifest_event, update_manifest
 from app.services.download_finalization import finalize_download_job
 from app.services.import_completion_checkpoint import ImportCompletionUnresolved
 from app.services.import_lifecycle import (
+    apply_import_command,
+    lock_import_lifecycle,
     coordinate_import_parent_completion,
     project_import_pipeline_state,
 )
@@ -178,69 +180,20 @@ def _posted_at_json(value: datetime | None) -> str | None:
 
 
 def _detect_ai_generated(raw: dict, source: str) -> bool:
-    """Detect if a work is AI-generated from its raw metadata."""
-    # Pixiv: illust_ai_type field (1=AI, 2=AI)
-    if source == "pixiv":
-        ai_type = raw.get("illust_ai_type")
-        if ai_type is not None and ai_type == 2:
-            return True
-    # Danbooru: check meta tags for ai_generated
-    if source == "danbooru":
-        meta_tags = raw.get("tag_string_meta", "")
-        if "ai_generated" in meta_tags.lower():
-            return True
-    # Generic tag-based detection for other sources
-    tags_str = " ".join(str(v) for v in raw.values() if isinstance(v, str)).lower()
-    ai_indicators = ["ai_generated", "ai-generated", "ai generated", "created by ai", "ai art"]
-    for indicator in ai_indicators:
-        if indicator in tags_str:
-            return True
-    return False
+    """Backward-compatible adapter for provider-owned work flag parsing."""
+    try:
+        return bool(registry.get(source).parse_work_flags(raw).get("is_ai_generated", False))
+    except KeyError:
+        values = " ".join(str(value) for value in raw.values() if isinstance(value, str)).casefold()
+        return any(marker in values for marker in ("ai_generated", "ai-generated", "ai generated", "created by ai", "ai art"))
 
 
 def _detect_nsfw(raw: dict, source: str) -> bool:
-    """Detect if a work is NSFW/R-18 from its raw metadata.
-
-    Pixiv field reference (from gallery-dl source, pixiv.py):
-      x_restrict: 0=General, 1=R-18, 2=R-18G
-      rating: gallery-dl computed from x_restrict ("General"/"R-18"/"R-18G")
-      sanity_level: 0-11, 6+ restricted, 7+ explicit (NOT reliable alone)
-    """
-    if source == "pixiv":
-        # Primary: gallery-dl's computed rating (most reliable)
-        rating = raw.get("rating", "")
-        if rating in ("R-18", "R-18G"):
-            return True
-        # Fallback: raw Pixiv API x_restrict field
-        xr = raw.get("x_restrict")
-        if xr is not None and isinstance(xr, (int, float)) and xr >= 1:
-            return True
-        # Backward compat: some JSON formats may have 'restrict' as x_restrict
-        restrict = raw.get("restrict")
-        if restrict is not None and isinstance(restrict, (int, float)) and restrict >= 1:
-            return True
-    elif source == "danbooru":
-        # rating: s=safe, q=questionable, e=explicit
-        rating = raw.get("rating", "").lower()
-        if rating in ("q", "e"):
-            return True
-    elif source == "iwara":
-        rating = raw.get("rating", "").lower()
-        if rating and rating not in ("general", "allages", "all-ages", "safe"):
-            return True
-    elif source == "x":
-        if (
-            raw.get("possibly_sensitive")
-            or raw.get("sensitive")
-            or bool(raw.get("sensitive_flags"))
-        ):
-            return True
-    elif source == "manual":
-        # ManualUploadService (app/services/manual_upload.py) writes the
-        # uploader-supplied flag straight onto the metadata.json top level --
-        # there is no upstream platform signal to derive it from.
-        return bool(raw.get("is_nsfw", False))
-    return False
+    """Backward-compatible adapter for provider-owned work flag parsing."""
+    try:
+        return bool(registry.get(source).parse_work_flags(raw).get("is_nsfw", False))
+    except KeyError:
+        return False
 
 
 def _consume_import_file_list(redis_client, import_job_id: str) -> list[str] | None:
@@ -1306,14 +1259,15 @@ def _build_import_work(
         observed_at,
     )
     work_id = uuid4()
+    work_flags = provider.parse_work_flags(first_raw)
 
     work = Work(
         id=work_id,
         title=ws_data.get("title"),
         description=ws_data.get("description"),
         posted_at=posted_at,
-        is_ai_generated=_detect_ai_generated(first_raw, provider.source_name),
-        is_nsfw=_detect_nsfw(first_raw, provider.source_name),
+        is_ai_generated=bool(work_flags.get("is_ai_generated", False)),
+        is_nsfw=bool(work_flags.get("is_nsfw", False)),
         is_favorite=False,
     )
     work_source = WorkSource(
@@ -1886,17 +1840,23 @@ async def run_import_job(import_job_id: str):
         if not groups:
             _empty_msg = "Could not extract work IDs from any JSON"
             async with async_session() as db:
-                ij = await _owned_import_job(db, job_uuid, execution_token)
-                if ij:
-                    apply_import_progress(ij, "failed", _empty_msg)
-                    transition_import_job(ij, "failed", _empty_msg)
-                    await project_import_pipeline_state(
-                        db,
-                        ij,
-                        status="failed",
-                        error=_empty_msg,
+                locked = await lock_import_lifecycle(
+                    db, job_uuid, execution_token=execution_token,
+                )
+                if locked:
+                    _parent, ij, _task = locked
+                else:
+                    ij = None
+                if ij and ij.status == "running":
+                    commanded = await apply_import_command(
+                        db, job_uuid, "failed", execution_token=execution_token,
+                        message=_empty_msg,
+                        progress={"stage": "failed", "message": _empty_msg},
                     )
-                    await _commit_import(db)
+                    if commanded is None:
+                        return
+                    _parent, ij, _task = commanded
+                    await _commit_import(db, notify_job=ij)
             return
 
         async with async_session() as db:
@@ -2557,17 +2517,21 @@ async def run_import_job(import_job_id: str):
             # Use the existing lifecycle/attention projection, with its normal
             # parent -> child lock order and current execution fence. Unknown
             # evidence must not generate another content attempt or fake stats.
-            await db.execute(select(DownloadJob.id).where(
-                DownloadJob.id == import_job.download_job_id).with_for_update(of=DownloadJob))
-            ij = await _owned_import_job(db, job_uuid, execution_token, lock=True)
+            locked = await lock_import_lifecycle(
+                db, job_uuid, execution_token=execution_token,
+            )
+            ij = locked[1] if locked else None
             if ij is not None and ij.status == "running":
-                transition_import_job(ij, "failed", str(exc))
-                apply_import_progress(ij, "failed", str(exc), reason_code=exc.reason_code)
-                await project_import_pipeline_state(
-                    db, ij, status="failed", error=str(exc), reason_code=exc.reason_code,
+                commanded = await apply_import_command(
+                    db, job_uuid, "failed", execution_token=execution_token,
+                    message=str(exc), reason_code=exc.reason_code,
+                    progress={"stage": "failed", "message": str(exc), "reason_code": exc.reason_code},
                     result={"status": "unresolved", "reason_code": exc.reason_code},
                 )
-                await _commit_import(db)
+                if commanded is None:
+                    return
+                _parent, ij, _task = commanded
+                await _commit_import(db, notify_job=ij)
 
     except _ImportControlRequested as control:
         status = "paused" if control.command == "pause" else "cancelled"
@@ -2575,52 +2539,57 @@ async def run_import_job(import_job_id: str):
             # Match execution claim / parent projection lock order. Holding
             # these short locks prevents a replacement execution between the
             # ownership check and the durable control transition.
-            await db.execute(
-                select(DownloadJob.id)
-                .where(DownloadJob.id == import_job.download_job_id)
-                .with_for_update(of=DownloadJob)
+            locked = await lock_import_lifecycle(
+                db, job_uuid, execution_token=execution_token,
             )
-            ij = await _owned_import_job(db, job_uuid, execution_token, lock=True)
+            ij = locked[1] if locked else None
             if ij is not None:
-                ij.status = status
+                commanded = await apply_import_command(
+                    db, job_uuid, status, execution_token=execution_token,
+                    progress={"stage": status, "message": f"{status.capitalize()} after {stats['works']} works",
+                              "current": stats["works"], "total": total_groups, "assets": stats["assets"]},
+                )
+                if commanded is None:
+                    return
+                _parent, ij, _task = commanded
                 if control.reason:
                     ij.user_note = control.reason
-                apply_import_progress(
-                    ij, status, f"{status.capitalize()} after {stats['works']} works",
-                    current=stats["works"], total=total_groups, assets=stats["assets"],
-                )
-                await project_import_pipeline_state(db, ij, status=status)
-                await _commit_import(db)
+                await _commit_import(db, notify_job=ij)
         logger.info("Import %s %s at a safe checkpoint", import_job_id, status)
 
     except Exception as e:
         import traceback
         error_text = f"{str(e)[:1000]}\n{traceback.format_exc()[-500:]}"
         async with async_session() as db:
-            ij = await _owned_import_job(db, job_uuid, execution_token)
+            locked = await lock_import_lifecycle(
+                db, job_uuid, execution_token=execution_token,
+            )
+            ij = locked[1] if locked else None
             if ij:
                 # Retry up to max_import_retries times (default 3)
                 retry_count = (ij.import_retry_count or 0) + 1
                 max_retries = ij.max_import_retries or 3
                 if retry_count <= max_retries:
-                    ij.import_retry_count = retry_count
                     # Two-step transition: running → failed → enqueued
                     # (state machine does not allow running → enqueued directly)
-                    transition_import_job(ij, "failed",
-                        f"RETRY {retry_count}/{max_retries}\n{error_text}")
-                    transition_import_job(ij, "enqueued",
-                        f"RETRY {retry_count}/{max_retries}\n{error_text}")
-                    apply_import_progress(
-                        ij,
-                        "enqueued",
-                        f"Retry {retry_count}/{max_retries} queued after import error",
+                    retry_message = f"RETRY {retry_count}/{max_retries}\n{error_text}"
+                    commanded = await apply_import_command(
+                        db, job_uuid, "failed", execution_token=execution_token,
+                        message=retry_message,
+                        project_parent=False,
                     )
-                    await project_import_pipeline_state(
-                        db,
-                        ij,
-                        status="enqueued",
-                        error=f"RETRY {retry_count}/{max_retries}\n{error_text}",
+                    if commanded is None:
+                        return
+                    _parent, ij, _task = commanded
+                    commanded = await apply_import_command(
+                        db, job_uuid, "enqueued", execution_token=execution_token,
+                        message=retry_message,
+                        retry_count=retry_count,
+                        progress={"stage": "enqueued", "message": f"Retry {retry_count}/{max_retries} queued after import error"},
                     )
+                    if commanded is None:
+                        return
+                    _parent, ij, _task = commanded
                     backoff_seconds = 60 * retry_count
                     prepared = await prepare_import_dispatch(
                         db,
@@ -2632,7 +2601,7 @@ async def run_import_job(import_job_id: str):
                     # The retry intent and deterministic RQ id are committed
                     # before Redis publication.  Capacity/disconnect failures
                     # therefore remain visible to import recovery as enqueued.
-                    await _commit_import(db)
+                    await _commit_import(db, notify_job=ij)
                     publication = await publish_prepared_import(
                         db,
                         ij.id,
@@ -2650,20 +2619,17 @@ async def run_import_job(import_job_id: str):
                         message = "Import retry publication is invalid; operator action required"
                         raise RuntimeError(message)
                 else:
-                    transition_import_job(ij, "failed",
-                        f"Exhausted {max_retries} retries\n{error_text}")
-                    apply_import_progress(
-                        ij,
-                        "failed",
-                        "Import failed after all retries",
+                    terminal_message = f"Exhausted {max_retries} retries\n{error_text}"
+                    commanded = await apply_import_command(
+                        db, job_uuid, "failed", execution_token=execution_token,
+                        message=terminal_message,
+                        retry_count=retry_count,
+                        progress={"stage": "failed", "message": "Import failed after all retries"},
                     )
-                    await project_import_pipeline_state(
-                        db,
-                        ij,
-                        status="failed",
-                        error=f"Exhausted {max_retries} retries\n{error_text}",
-                    )
-                    await _commit_import(db)
+                    if commanded is None:
+                        return
+                    _parent, ij, _task = commanded
+                    await _commit_import(db, notify_job=ij)
             else:
                 logger.warning(
                     "Import execution %s lost ownership; suppressing stale retry",

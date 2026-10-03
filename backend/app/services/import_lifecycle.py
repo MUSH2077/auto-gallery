@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.download_job import DownloadJob
 from app.models.import_job import ImportJob
-from app.models.task_state import transition_download_job
+from app.models.task_run import TaskRun
+from app.models.task_state import transition_download_job, transition_import_job
 from app.services.job_manifest import append_manifest_event, get_manifest, update_manifest
 from app.services.tasks import TaskService
 from app.services.download_failure_evidence import unresolved_provider_failure
@@ -40,6 +41,154 @@ BOUNDED_SETTLED_STATUSES = frozenset({
     "failed",
     "stale",
 })
+
+
+async def lock_import_lifecycle(
+    db: AsyncSession,
+    import_job_id: UUID,
+    *,
+    execution_token: UUID | None = None,
+) -> tuple[DownloadJob, ImportJob, Any | None] | None:
+    """Lock and reread the lifecycle aggregate in its only lock order.
+
+    The returned rows are the database values observed after all locks are
+    held.  Completion, cancellation, recovery, and projection code can use
+    this small seam instead of validating an object loaded before a competing
+    transaction committed.
+    """
+
+    with db.no_autoflush:
+        child_parent = (
+            await db.execute(
+                select(ImportJob.download_job_id)
+                .where(ImportJob.id == import_job_id)
+            )
+        ).scalar_one_or_none()
+        if child_parent is None:
+            return None
+        parent = (
+            await db.execute(
+                select(DownloadJob)
+                .where(DownloadJob.id == child_parent)
+                .with_for_update(of=DownloadJob)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if parent is None:
+            return None
+        child_query = (
+            select(ImportJob)
+            .where(ImportJob.id == import_job_id)
+            .with_for_update(of=ImportJob)
+            .execution_options(populate_existing=True)
+        )
+        child = (await db.execute(child_query)).scalar_one_or_none()
+        if child is None:
+            return None
+        if execution_token is not None and child.execution_token != execution_token:
+            return None
+        task = (
+            await db.execute(
+                select(TaskRun)
+                .where(
+                    TaskRun.subject_type == "import_job",
+                    TaskRun.subject_id == import_job_id,
+                )
+                .with_for_update(of=TaskRun)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+    return parent, child, task
+
+
+async def apply_import_command(
+    db: AsyncSession,
+    import_job_id: UUID,
+    target_status: str,
+    *,
+    execution_token: UUID | None = None,
+    message: str | None = None,
+    reason_code: str | None = None,
+    project_parent: bool = True,
+    progress: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    retry_count: int | None = None,
+) -> tuple[DownloadJob, ImportJob, Any | None] | None:
+    """Apply one import lifecycle command under the aggregate lock.
+
+    The command owns the durable child transition and its TaskRun/parent
+    projection. Progress, result and retry count are applied after the locked
+    reread and before projection; rejected executions cannot update them.
+    Callers may publish controls or queue work after their
+    transaction commits, but do not assemble lifecycle rows themselves.
+    """
+    locked = await lock_import_lifecycle(db, import_job_id, execution_token=execution_token)
+    if locked is None:
+        return None
+    parent, child, task = locked
+    return await apply_import_state(db, parent, child, task, target_status, message=message, reason_code=reason_code,
+                                    project_parent=project_parent, progress=progress, result=result, retry_count=retry_count)
+
+
+async def apply_import_state(db, parent, child, task, target_status, *, message=None, reason_code=None,
+                             project_parent=True, progress=None, result=None, retry_count=None):
+    """Apply facts with parent/child locks already held and identity verified."""
+    if child.status == "cancelled" and target_status != "cancelled":
+        return None
+    transition_import_job(child, target_status, message if target_status in {"failed", "stale"} else None)
+    if target_status == "complete":
+        child.error_log = None
+    if retry_count is not None:
+        child.import_retry_count = retry_count
+    if progress is not None:
+        from app.services.job_progress import apply_import_progress
+        apply_import_progress(child, **progress, publish=False)
+    if project_parent:
+        await project_import_pipeline_state(
+            db,
+            child,
+            status=target_status,
+            error=message if target_status in {"failed", "stale"} else None,
+            reason_code=reason_code,
+            result=result, locked_parent=parent, locked_task=task, child_locked=True,
+        )
+    else:
+        from app.services.tasks import TaskService
+        reason = {"reason_code": reason_code} if reason_code is not None else {}
+        await TaskService(db).update_subject(
+            "import_job",
+            child.id,
+            status=target_status,
+            progress=child.progress_data if isinstance(child.progress_data, dict) else None,
+            error=message if target_status in {"failed", "stale"} else None,
+            result=result,
+            **reason,
+        )
+    return parent, child, task
+
+
+async def complete_import_command(db, job_id, execution_token, *, status, message, stats, total_groups):
+    """Own completion arbitration, child facts and the parent aggregate."""
+    locked = await lock_import_lifecycle(db, job_id, execution_token=execution_token)
+    if locked is None:
+        raise RuntimeError("import execution ownership lost before completion")
+    parent, child, task = locked
+    if child.status == "cancelled":
+        raise RuntimeError("import execution completed after cancellation")
+    await apply_import_state(db, parent, child, task, status, message=message, project_parent=False,
+                             progress={"stage": status, "message": message, "current": stats["works"], "total": total_groups, "assets": stats["assets"]},
+                             result={"stats": stats, "message": message} if status == "complete" else None)
+    completion = await coordinate_import_parent_completion(db, child, status=status, stats=stats, total_groups=total_groups, message=message)
+    return completion, dict(child.progress_data or {})
+
+
+def publish_committed_import_progress(job_id, progress):
+    from app.services.job_progress import publish_progress
+    try:
+        publish_progress(str(job_id), "import", progress)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Committed import progress publication failed: %s", job_id, exc_info=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +483,9 @@ async def project_import_pipeline_state(
     error: str | None = None,
     result: dict[str, Any] | None = None,
     reason_code: str | None = None,
+    locked_parent=None,
+    locked_task=None,
+    child_locked=False,
 ) -> DownloadJob | None:
     """Update child/parent domain and TaskRun projections in one transaction.
 
@@ -343,20 +495,17 @@ async def project_import_pipeline_state(
     """
 
     child_status = status or import_job.status
-    parent = await _lock_parent(db, import_job.download_job_id)
+    parent = locked_parent if locked_parent is not None else await _lock_parent(db, import_job.download_job_id)
     if parent is None:
         return None
 
-    with db.no_autoflush:
-        await db.execute(
-            select(ImportJob.id)
-            .where(ImportJob.id == import_job.id)
-            .with_for_update(of=ImportJob)
-        )
+    if not child_locked:
+        with db.no_autoflush:
+            await db.execute(select(ImportJob.id).where(ImportJob.id == import_job.id).with_for_update(of=ImportJob))
     await db.flush([import_job])
 
     task_service = TaskService(db)
-    child_task = await task_service.get_by_subject("import_job", import_job.id)
+    child_task = locked_task if locked_task is not None else await task_service.get_by_subject("import_job", import_job.id)
     if child_task is None:
         child_task = await task_service.ensure_import_task(import_job)
     child_kwargs: dict[str, Any] = {}

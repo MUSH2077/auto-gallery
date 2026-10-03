@@ -1,10 +1,9 @@
 """
 Task Engine — centralized task lifecycle manager.
 
-The TaskEngine is the single authority on valid state transitions for both
-download and import jobs. It replaces the scattered logic that previously
-lived in ``DownloadService``, ``download.py``, ``import_runner.py``, and API
-route handlers.
+TaskEngine coordinates control requests and stale candidate selection.
+Download and import lifecycle services apply the locked domain transitions
+and TaskRun projections shared with workers and dispatch recovery.
 
 Key responsibilities:
   - Validate and execute state transitions
@@ -18,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -45,22 +45,17 @@ from app.models.task_state import (
     IMPORT_CANCELLABLE_STATUSES,
     IMPORT_FAILED,
     IMPORT_STALE,
-    transition_download_job,
-    transition_import_job,
 )
 from app.repositories.download_job import DownloadJobRepository
-from app.services.job_manifest import append_manifest_event
 from app.services.job_manifest import update_manifest
-from app.services.job_progress import apply_download_progress
 from app.services.download_dispatch import prepare_download_dispatch, publish_prepared_download
 from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
 from app.services.redis_pubsub import TaskChannel, TaskEventPublisher
 from app.services.redis_client import get_redis
-from app.services.sync_outcome import clear_download_job_outcome
 from app.services.search_projection_outbox import request_search_projection
 from app.services.task_actions import require_job_action
 from app.services.tasks import TaskService
-from app.services.import_lifecycle import project_import_pipeline_state
+from app.services.import_lifecycle import apply_import_command, lock_import_lifecycle, project_import_pipeline_state
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +114,30 @@ class TaskEngineError(ValueError):
     pass
 
 
-class TaskEngine:
-    """Centralized task lifecycle manager.
+@dataclass(frozen=True)
+class AppliedCancellation:
+    """Applied domain changes; the transaction owner notifies after commit."""
 
-    All state-changing methods:
-    1. Validate the transition against the state machine
-    2. Update the database
-    3. Append a manifest event
-    4. Publish the change via Redis pub/sub
-    5. Send control signals to workers when needed (pause / cancel)
+    result: dict[str, Any]
+    job_id: UUID
+    task_type: str
+    old_status: str
+    operator: str | None
+    note: str | None
+
+    def notify(self) -> None:
+        TaskEventPublisher.send_control(str(self.job_id), "cancel", reason=self.note)
+        TaskEventPublisher.publish_status_change(
+            str(self.job_id), self.task_type, self.old_status, "cancelled",
+            operator=self.operator, note=self.note,
+        )
+
+
+class TaskEngine:
+    """Coordinate controls using shared lifecycle state and audit rules.
+
+    Independent cancel entrypoints commit before notifying. Composite callers
+    use apply_cancel_* and own their final validation, commit and notification.
     """
 
     def __init__(self, db: AsyncSession):
@@ -169,22 +179,13 @@ class TaskEngine:
             statement = statement.where(ImportJob.status.in_(statuses))
         return (await self.db.execute(statement)).scalar_one_or_none()
 
-    async def _project_import_state(
-        self,
-        job: ImportJob,
-        *,
-        status: str,
-        error: str | None = None,
-    ) -> None:
-        if not hasattr(self.db, "execute"):
-            await self.db.flush()
-            return
-        await project_import_pipeline_state(
-            self.db,
-            job,
-            status=status,
-            error=error,
-        )
+    async def _apply_import_control(self, job, status, **options):
+        from app.services.import_lifecycle import apply_import_state
+        parent = await self.db.get(DownloadJob, job.download_job_id)
+        if parent is None:
+            raise TaskEngineError("Import parent disappeared")
+        # require_job_action already locked parent and children (and retry artifacts).
+        return await apply_import_state(self.db, parent, job, None, status, **options)
 
     # ── Pause ─────────────────────────────────
 
@@ -221,6 +222,7 @@ class TaskEngine:
         old_status = job.status
         job = await self._apply_transition(job, DOWNLOAD_PAUSED, operator=operator, note=note)
 
+        await self.db.commit()
         TaskEventPublisher.send_control(str(job_id), "pause", reason=note)
         TaskEventPublisher.publish_status_change(
             str(job_id), "download", old_status, DOWNLOAD_PAUSED,
@@ -244,18 +246,17 @@ class TaskEngine:
             )
 
         old_status = job.status
-        job.status = IMPORT_PAUSED
+        commanded = await self._apply_import_control(job, IMPORT_PAUSED)
+        if commanded is None:
+            raise TaskEngineError(f"ImportJob {job_id} disappeared or is no longer pausable")
+        _parent, job, _task = commanded
         if note:
             job.user_note = note
         if operator:
             job.operator_name = operator
             job.operator_action = "pause"
-        await self._project_import_state(
-            job,
-            status=IMPORT_PAUSED,
-            error=None,
-        )
 
+        await self.db.commit()
         TaskEventPublisher.send_control(str(job_id), "pause", reason=note)
         TaskEventPublisher.publish_status_change(
             str(job_id), "import", old_status, IMPORT_PAUSED,
@@ -293,12 +294,6 @@ class TaskEngine:
 
         old_status = job.status
         job = await self._apply_transition(job, DOWNLOAD_ENQUEUED, operator=operator)
-        apply_download_progress(
-            job,
-            "enqueued",
-            "Queued; waiting for download worker",
-            publish=False,
-        )
         prepared = await prepare_download_dispatch(
             self.db,
             job,
@@ -333,15 +328,13 @@ class TaskEngine:
             )
 
         old_status = job.status
-        job.status = IMPORT_ENQUEUED
+        commanded = await self._apply_import_control(job, IMPORT_ENQUEUED)
+        if commanded is None:
+            raise TaskEngineError(f"ImportJob {job_id} disappeared or is no longer resumable")
+        _parent, job, _task = commanded
         if operator:
             job.operator_name = operator
             job.operator_action = "resume"
-        await self._project_import_state(
-            job,
-            status=IMPORT_ENQUEUED,
-            error=None,
-        )
 
         prepared = await prepare_import_dispatch(
             self.db,
@@ -369,6 +362,16 @@ class TaskEngine:
         self, job_id: UUID, *, note: str | None = None, operator: str | None = None,
     ) -> dict[str, Any]:
         """Cancel a download job. Terminal — cannot be retried."""
+        applied = await self.apply_cancel_download(job_id, note=note, operator=operator)
+        await self.db.commit()
+        applied.notify()
+        logger.info("Download job %s cancelled by %s", job_id, operator)
+        return applied.result
+
+    async def apply_cancel_download(
+        self, job_id: UUID, *, note: str | None = None, operator: str | None = None,
+    ) -> AppliedCancellation:
+        """Apply cancellation in the caller's transaction, without notifying."""
         job = await self._get_download(job_id)
         await require_job_action(self.db, job, "download", "cancel")
 
@@ -378,16 +381,16 @@ class TaskEngine:
                 statuses={IMPORT_ENQUEUED, IMPORT_RUNNING, IMPORT_PAUSED, IMPORT_FAILED, IMPORT_STALE},
             )
             if child is not None:
-                delegated = await self.cancel_import(
+                delegated = await self.apply_cancel_import(
                     child.id,
                     note=note,
                     operator=operator,
                 )
-                return {
+                return replace(delegated, result={
                     "job_id": str(job.id),
                     "status": DOWNLOAD_CANCELLED,
-                    "delegated_to": delegated["job_id"],
-                }
+                    "delegated_to": delegated.result["job_id"],
+                })
 
         if job.status not in DOWNLOAD_CANCELLABLE_STATUSES:
             raise TaskEngineError(
@@ -398,19 +401,25 @@ class TaskEngine:
         old_status = job.status
         job = await self._apply_transition(job, DOWNLOAD_CANCELLED, operator=operator, note=note)
 
-        TaskEventPublisher.send_control(str(job_id), "cancel", reason=note)
-        TaskEventPublisher.publish_status_change(
-            str(job_id), "download", old_status, DOWNLOAD_CANCELLED,
+        return AppliedCancellation(
+            result={"job_id": str(job_id), "status": job.status},
+            job_id=job_id, task_type="download", old_status=old_status,
             operator=operator, note=note,
         )
-
-        logger.info("Download job %s cancelled by %s", job_id, operator)
-        return {"job_id": str(job_id), "status": job.status}
 
     async def cancel_import(
         self, job_id: UUID, *, note: str | None = None, operator: str | None = None,
     ) -> dict[str, Any]:
         """Cancel an import job. Terminal — cannot be retried."""
+        applied = await self.apply_cancel_import(job_id, note=note, operator=operator)
+        await self.db.commit()
+        applied.notify()
+        return applied.result
+
+    async def apply_cancel_import(
+        self, job_id: UUID, *, note: str | None = None, operator: str | None = None,
+    ) -> AppliedCancellation:
+        """Apply child and parent cancellation in the caller's transaction."""
         job = await self._get_import(job_id)
         await require_job_action(self.db, job, "import", "cancel")
 
@@ -421,25 +430,21 @@ class TaskEngine:
             )
 
         old_status = job.status
-        job.status = IMPORT_CANCELLED
+        commanded = await self._apply_import_control(job, IMPORT_CANCELLED, message=note)
+        if commanded is None:
+            raise TaskEngineError(f"ImportJob {job_id} disappeared")
+        _parent, job, _task = commanded
         if note:
             job.user_note = note
         if operator:
             job.operator_name = operator
             job.operator_action = "cancel"
-        await self._project_import_state(
-            job,
-            status=IMPORT_CANCELLED,
-            error=None,
-        )
 
-        TaskEventPublisher.send_control(str(job_id), "cancel", reason=note)
-        TaskEventPublisher.publish_status_change(
-            str(job_id), "import", old_status, IMPORT_CANCELLED,
+        return AppliedCancellation(
+            result={"job_id": str(job_id), "status": job.status},
+            job_id=job_id, task_type="import", old_status=old_status,
             operator=operator, note=note,
         )
-
-        return {"job_id": str(job_id), "status": job.status}
 
     # ── Retry ─────────────────────────────────
 
@@ -495,19 +500,10 @@ class TaskEngine:
             )
 
         old_status = job.status
-        job = await self._apply_transition(job, DOWNLOAD_ENQUEUED, operator=operator)
-        job.retry_count = 0
-        job.error_log = None
-        clear_download_job_outcome(job)
+        job = await self._apply_transition(job, DOWNLOAD_ENQUEUED, operator=operator, reset_retry=True)
         subscription_source_id = getattr(job, "subscription_source_id", None)
         source = await self.db.get(SubscriptionSource, subscription_source_id) if subscription_source_id else None
         update_manifest(job, had_sync_baseline=bool(source and source.last_synced_at))
-        apply_download_progress(
-            job,
-            "enqueued",
-            "Queued; waiting for download worker",
-            publish=False,
-        )
         prepared = await prepare_download_dispatch(
             self.db,
             job,
@@ -552,17 +548,15 @@ class TaskEngine:
                 job.id,
             )
         old_status = job.status
-        job.status = IMPORT_ENQUEUED
+        commanded = await self._apply_import_control(job, IMPORT_ENQUEUED)
+        if commanded is None:
+            raise TaskEngineError(f"ImportJob {job_id} disappeared or is no longer retryable")
+        _parent, job, _task = commanded
         job.import_retry_count = (job.import_retry_count or 0) + 1
         job.error_log = None
         if operator:
             job.operator_name = operator
             job.operator_action = "retry"
-        await self._project_import_state(
-            job,
-            status=IMPORT_ENQUEUED,
-            error=None,
-        )
 
         prepared = await prepare_import_dispatch(
             self.db,
@@ -798,44 +792,11 @@ class TaskEngine:
         subscription_ids: set[UUID] = set()
         stale_count = 0
 
-        async def update_task_projection(
-            task: TaskRun | None,
-            job: DownloadJob | ImportJob,
-            *,
-            subject_type: str,
-            error: str,
-        ) -> None:
-            if task is None:
-                if subject_type == "download_job":
-                    await task_service.ensure_download_task(job)
-                else:
-                    await task_service.ensure_import_task(job)
-                return
-            await task_service.update_task(
-                task,
-                status="stale",
-                error=error,
-                resource_state="yielded",
-                resource_reason=None,
-            )
-
         for job, task in locked_download_rows:
             old_status = job.status
             error = "Redis heartbeat TTL expired while download was running"
-            transition_download_job(job, "stale", error)
-            append_manifest_event(
-                job,
-                "status_changed",
-                from_status=old_status,
-                to_status="stale",
-                reason="heartbeat_ttl_expired",
-            )
-            await update_task_projection(
-                task,
-                job,
-                subject_type="download_job",
-                error=error,
-            )
+            from app.services.download_lifecycle import apply_download_state
+            await apply_download_state(self.db, job, "stale", error=error, task=task, reason_code="lost_heartbeat")
             if job.subscription_id:
                 subscription_ids.add(job.subscription_id)
             notifications.append((str(job.id), "download", old_status, "stale"))
@@ -846,14 +807,9 @@ class TaskEngine:
             old_import_status = import_job.status
             old_parent_status = parent.status
             import_error = "Redis heartbeat TTL expired while import was running"
-            transition_import_job(import_job, IMPORT_STALE, import_error)
-            await project_import_pipeline_state(
-                self.db,
-                import_job,
-                status=IMPORT_STALE,
-                error=import_error,
-                reason_code="lost_heartbeat",
-            )
+            from app.services.import_lifecycle import apply_import_state
+            await apply_import_state(self.db, parent, import_job, None, IMPORT_STALE,
+                                     message=import_error, reason_code="lost_heartbeat")
             notifications.append((
                 str(import_job.id),
                 "import",
@@ -1010,44 +966,14 @@ class TaskEngine:
 
     # ── Internal helpers ──────────────────────
 
-    async def _apply_transition(
-        self,
-        job: DownloadJob,
-        target_status: str,
-        *,
-        operator: str | None = None,
-        note: str | None = None,
-    ) -> DownloadJob:
-        """Validate and apply a download state transition with audit fields."""
-        transition_download_job(job, target_status)
-        if note:
-            job.user_note = note
-        if operator:
-            job.operator_name = operator
-            job.operator_action = target_status
-        await request_search_projection(
-            self.db,
-            subscription_ids=[job.subscription_id] if job.subscription_id else (),
+    async def _apply_transition(self, job: DownloadJob, target_status: str, *, operator: str | None = None,
+                                note: str | None = None, reset_retry: bool = False) -> DownloadJob:
+        from app.services.download_lifecycle import apply_download_state
+        # require_job_action already reread eligibility while locking artifacts
+        # (for retry), parent and children. Apply without reacquiring those locks.
+        return await apply_download_state(
+            self.db, job, target_status, operator=operator, note=note,
+            error=None if reset_retry else job.error_log,
+            retry_count=0 if reset_retry else None, reset_outcome=reset_retry,
+            progress={"stage": "enqueued", "message": "Queued; waiting for download worker"} if target_status == DOWNLOAD_ENQUEUED else None,
         )
-        if hasattr(self.db, "execute"):
-            task_service = TaskService(self.db)
-            task = await task_service.get_by_subject("download_job", job.id)
-            if task is None:
-                await task_service.ensure_download_task(job)
-            else:
-                await task_service.update_task(
-                    task,
-                    status=target_status,
-                    progress=(job.progress_data if isinstance(job.progress_data, dict) else None),
-                    error=job.error_log,
-                )
-            if target_status in {"failed", "stale", "cancelled"}:
-                from app.services.operation_attention import upsert_repository_sync_receipt
-
-                await upsert_repository_sync_receipt(
-                    self.db,
-                    job,
-                    status=target_status,
-                )
-        await self.db.flush()
-        return job

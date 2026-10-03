@@ -12,7 +12,6 @@ from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from inspect import isawaitable
 from pathlib import Path
 from uuid import UUID
 
@@ -31,11 +30,11 @@ from app.models.download_job import DownloadJob
 from app.models.remote_discovery import RemoteAccount, UserSubscriptionSource
 from app.models.subscription_source import SubscriptionSource
 from app.repositories.download_job import DownloadJobRepository
-from app.models.task_state import transition_download_job
 from app.jobs.stage_timing import stage_timer
 from app.services.job_manifest import append_manifest_event, redacted_manifest_config, update_manifest
-from app.services.job_progress import apply_download_progress, apply_import_progress, publish_progress
+from app.services.job_progress import apply_download_progress, publish_progress
 from app.services.download_finalization import finalize_download_job
+from app.services.download_lifecycle import claim_download, lock_download, apply_download_state, fail_or_retry_download, commit_download_state
 from app.services.download_failure_evidence import (
     clear_unresolved_provider_failure,
     record_unresolved_provider_failure,
@@ -44,7 +43,6 @@ from app.services.download_dispatch import (
     prepare_download_dispatch,
     recover_download_dispatch_candidate,
 )
-from app.services.import_dispatch import prepare_import_dispatch, publish_prepared_import
 from app.services.redis_client import get_redis
 from app.services.settings import (
     build_effective_gallerydl_config,
@@ -451,42 +449,9 @@ def _stop_gallerydl_process(
     return int(proc.returncode)
 
 
-async def _enqueue_download_retry(
-    download_job_id: UUID,
-    *,
-    delay_seconds: int,
-    action: str = "auto_retry",
-) -> str:
-    """Durably prepare one delayed retry and attempt bounded publication."""
-
-    async with async_session() as retry_db:
-        retry_job = await DownloadJobRepository(retry_db).get(download_job_id)
-        if not retry_job or retry_job.status != "enqueued":
-            return "skipped"
-        prepared = await prepare_download_dispatch(
-            retry_db,
-            retry_job,
-            queue_name="downloads",
-            job_timeout=RQ_JOB_TIMEOUT,
-            delay_seconds=delay_seconds,
-            action=action,
-        )
-        # Worker-created retries have no waiting HTTP caller to repeat a
-        # temporary admission failure. Commit the fixed-id intent first, then
-        # use the outbox recovery contract that leaves capacity/Redis failures
-        # pending for a later bounded recovery cycle.
-        await retry_db.commit()
-        outcome = await recover_download_dispatch_candidate(
-            retry_db,
-            prepared.task,
-            retry_job,
-        )
-        if outcome in {"error", "invalid"}:
-            raise RuntimeError(
-                "download retry dispatch recovery "
-                f"returned {outcome} for {download_job_id}"
-            )
-        return outcome
+async def _enqueue_download_retry(download_job_id: UUID, *, delay_seconds: int, action: str = "auto_retry", execution=None) -> str:
+    from app.services.download_dispatch import enqueue_download_retry
+    return await enqueue_download_retry(download_job_id, delay_seconds=delay_seconds, action=action, execution=execution, job_timeout=RQ_JOB_TIMEOUT)
 
 
 def _log_retry_dispatch_outcome(
@@ -568,259 +533,6 @@ AUTH_WARNING_PATTERNS = [
 ]
 
 
-def _relative_import_paths(new_json_paths: set[str] | None) -> set[str] | None:
-    if new_json_paths is None:
-        return None
-    download_root = Path(settings.download_root)
-    relative_paths: set[str] = set()
-    for raw_path in new_json_paths:
-        path = Path(raw_path)
-        try:
-            relative = (
-                path.relative_to(download_root)
-                if path.is_absolute()
-                else path
-            )
-        except ValueError:
-            continue
-        relative_paths.add(str(relative))
-    return relative_paths
-
-
-async def _prepare_import_intent(
-    db,
-    download_job_id: UUID,
-    *,
-    import_error: str | None,
-    new_json_paths: set[str] | None,
-    locked_artifact_ids: set[UUID] | None = None,
-    recoverable_page: bool = False,
-    require_assignment: bool = False,
-    publisher_checkpoint=None,
-):
-    """Prepare one child in artifact -> parent -> child -> task lock order."""
-
-    from app.models.storage_artifact import StorageArtifact
-    from app.services.artifact_ledger import downloads_artifact_predicate
-
-    relative_paths = _relative_import_paths(new_json_paths)
-    now = datetime.now(timezone.utc)
-    artifact_conditions = [
-        downloads_artifact_predicate(),
-        StorageArtifact.download_job_id == download_job_id,
-        StorageArtifact.artifact_type == "metadata_json",
-        StorageArtifact.import_job_id.is_(None),
-    ]
-    if recoverable_page:
-        artifact_conditions.append(
-            (StorageArtifact.state.in_(("new", "failed")))
-            | (
-                (StorageArtifact.state == "importing")
-                & (
-                    StorageArtifact.lease_expires_at.is_(None)
-                    | (StorageArtifact.lease_expires_at <= now)
-                )
-            ),
-        )
-    else:
-        artifact_conditions.append(StorageArtifact.state == "new")
-    if locked_artifact_ids is not None:
-        artifact_conditions.append(StorageArtifact.id.in_(locked_artifact_ids))
-    elif relative_paths is not None:
-        artifact_conditions.append(StorageArtifact.file_path.in_(relative_paths))
-
-    artifact_rows = []
-    if relative_paths is None or relative_paths or locked_artifact_ids:
-        artifact_rows = list((await db.execute(
-            select(StorageArtifact)
-            .where(*artifact_conditions)
-            .order_by(
-                StorageArtifact.source_work_id,
-                StorageArtifact.created_at,
-                StorageArtifact.id,
-            )
-            .with_for_update(of=StorageArtifact)
-        )).scalars())
-    if require_assignment and not artifact_rows:
-        return None
-
-    # All participating artifact rows are locked before the shared owner.
-    download_job = (
-        await db.execute(
-            select(DownloadJob)
-            .where(DownloadJob.id == download_job_id)
-            .with_for_update(of=DownloadJob)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
-    if download_job is None:
-        return None
-    if publisher_checkpoint is not None:
-        checkpoint = publisher_checkpoint(db, lock_task=True)
-        if isawaitable(checkpoint):
-            await checkpoint
-
-    repo = DownloadJobRepository(db)
-    extra = {"error_log": import_error} if import_error else {}
-    import_job = await repo.create_import({
-        "download_job_id": download_job_id,
-        "status": "enqueued",
-        **extra,
-    })
-    for artifact in artifact_rows:
-        artifact.metadata_completion_proof = None
-        artifact.state = "new"
-        artifact.import_job_id = import_job.id
-        artifact.lease_token = None
-        artifact.lease_expires_at = None
-        artifact.last_error = None
-    await db.flush()
-
-    apply_import_progress(
-        import_job,
-        "enqueued",
-        "Queued; waiting for import worker",
-        publish=False,
-    )
-    await repo.update_status(download_job, "importing", import_error)
-    apply_download_progress(
-        download_job,
-        "importing",
-        "Import job queued; waiting for import worker",
-        publish=False,
-        import_job_id=str(import_job.id),
-    )
-    append_manifest_event(
-        download_job,
-        "import_job_created",
-        import_job_id=str(import_job.id),
-        reason=import_error,
-    )
-    from app.services.tasks import TaskService
-
-    task_svc = TaskService(db)
-    parent_task = await task_svc.ensure_download_task(download_job)
-    await task_svc.update_task(
-        parent_task,
-        status="running",
-        progress=download_job.progress_data,
-    )
-    prepared = await prepare_import_dispatch(
-        db,
-        import_job,
-        parent_task_id=parent_task.id,
-        job_timeout=RQ_JOB_TIMEOUT,
-    )
-    return str(import_job.id), prepared.rq_job_id
-
-
-async def _publish_import_intent(
-    download_job_id: str,
-    import_job_id: str,
-    rq_job_id: str,
-    new_json_paths: set[str] | None,
-) -> str:
-    """Publish a committed child intent and its compatibility handoff."""
-
-    # Store new JSON file paths in Redis for the import runner.  The disk copy
-    # remains authoritative when Redis is unavailable or publication is delayed.
-    try:
-        redis_client = get_redis()
-    except Exception:
-        redis_client = None
-        logger.warning(
-            "Redis client unavailable while publishing import %s; durable recovery will retry",
-            import_job_id,
-            exc_info=True,
-        )
-    if new_json_paths:
-        if redis_client is not None:
-            try:
-                redis_client.setex(
-                    f"import:{import_job_id}:files",
-                    86400,  # 24h TTL
-                    json.dumps(list(new_json_paths)),
-                )
-            except Exception:
-                logger.warning("Failed to store import file list for %s", import_job_id, exc_info=True)
-        try:
-            fallback_dir = Path(settings.download_root) / ".import-lists"
-            fallback_dir.mkdir(parents=True, exist_ok=True)
-            fallback_path = fallback_dir / f"{import_job_id}.json"
-            with open(fallback_path, "w") as _ff:
-                json.dump(list(new_json_paths), _ff)
-        except Exception:
-            logger.warning("Failed to write import file list fallback for %s", import_job_id, exc_info=True)
-
-    try:
-        async with async_session() as publication_db:
-            publication = await publish_prepared_import(
-                publication_db,
-                import_job_id,
-                rq_job_id,
-                redis_client=redis_client,
-            )
-    except Exception:
-        # The durable pending intent is sufficient for periodic recovery.  This
-        # catch also covers an ambiguous failure after RQ accepted the job.
-        publication = "deferred"
-        logger.warning(
-            "Import publication will be recovered job=%s download=%s",
-            import_job_id,
-            download_job_id,
-            exc_info=True,
-        )
-
-    waiting_for_redis = publication == "deferred"
-    if publication == "invalid":
-        download_stage = "failed"
-        import_stage = "failed"
-        download_message = "Import queue publication failed; operator action required"
-        import_message = download_message
-    elif waiting_for_redis:
-        download_stage = "importing"
-        import_stage = "enqueued"
-        download_message = "Import job saved; waiting for queue capacity"
-        import_message = "Waiting for queue capacity; publication will retry"
-    else:
-        download_stage = "importing"
-        import_stage = "enqueued"
-        download_message = "Import job queued; waiting for import worker"
-        import_message = "Queued; waiting for import worker"
-    try:
-        publish_progress(
-            download_job_id,
-            "download",
-            {
-                "stage": download_stage,
-                "message": download_message,
-                "import_job_id": import_job_id,
-            },
-        )
-        publish_progress(
-            import_job_id,
-            "import",
-            {
-                "stage": import_stage,
-                "message": import_message,
-            },
-        )
-    except Exception:
-        logger.warning(
-            "Import %s durable publication=%s but progress notification failed",
-            import_job_id,
-            publication,
-            exc_info=True,
-        )
-    logger.info(
-        "Import publication=%s job=%s download=%s",
-        publication,
-        import_job_id,
-        download_job_id,
-    )
-    return import_job_id
-
-
 async def _enqueue_import(
     download_job_id: str,
     import_error: str | None = None,
@@ -828,35 +540,14 @@ async def _enqueue_import(
     *,
     publisher_checkpoint=None,
 ):
-    """Create and publish one durable, exactly assigned import intent."""
+    """Legacy RQ adapter; new callers use services.import_intent."""
+    from app.services.import_intent import enqueue_import
 
-    try:
-        async with async_session() as db:
-            prepared = await _prepare_import_intent(
-                db,
-                UUID(download_job_id),
-                import_error=import_error,
-                new_json_paths=new_json_paths,
-                publisher_checkpoint=publisher_checkpoint,
-            )
-            if prepared is None:
-                await db.rollback()
-                return None
-            await db.commit()
-    except Exception as exc:
-        logger.error(
-            "Failed to create import publication for download %s: %s",
-            download_job_id,
-            exc,
-            exc_info=True,
-        )
-        raise RuntimeError(
-            f"Could not create import job for download {download_job_id}"
-        ) from exc
-    return await _publish_import_intent(
+    return await enqueue_import(
         download_job_id,
-        *prepared,
-        new_json_paths,
+        import_error=import_error,
+        new_json_paths=new_json_paths,
+        publisher_checkpoint=publisher_checkpoint,
     )
 
 
@@ -866,34 +557,24 @@ async def _enqueue_import_from_locked_page(
     *,
     artifact_ids: set[UUID],
     import_error: str,
-) -> str | None:
-    """Atomically assign a recovery page before exposing its child intent."""
+):
+    """Legacy recovery adapter; implementation lives in the application seam."""
+    from app.services.import_intent import enqueue_import_from_locked_page
 
-    from app.models.storage_artifact import StorageArtifact
-
-    prepared = await _prepare_import_intent(
+    return await enqueue_import_from_locked_page(
         db,
         download_job_id,
+        artifact_ids=artifact_ids,
         import_error=import_error,
-        new_json_paths=None,
-        locked_artifact_ids=artifact_ids,
-        recoverable_page=True,
-        require_assignment=True,
     )
-    if prepared is None:
-        await db.rollback()
-        return None
-    assigned_paths = set((await db.execute(
-        select(StorageArtifact.file_path).where(
-            StorageArtifact.import_job_id == UUID(prepared[0]),
-        )
-    )).scalars())
-    await db.commit()
-    return await _publish_import_intent(
-        str(download_job_id),
-        *prepared,
-        assigned_paths,
-    )
+
+
+# Compatibility names for persisted/legacy imports.  Import intent behavior is
+# owned by ``services.import_intent``; these aliases retain the old import paths.
+from app.services.import_intent import (
+    prepare_import_intent as _prepare_import_intent,
+    publish_import_intent as _publish_import_intent,
+)
 
 
 @heavy_io_async_job("download", source_identity_resolver=_download_source_identity)
@@ -902,33 +583,17 @@ async def run_download_job(job_id: str):
     job_uuid = UUID(job_id)
 
     async with async_session() as db:
-        repo = DownloadJobRepository(db)
-        job = await repo.get(job_uuid)
-        if not job:
+        from rq import get_current_job
+        delivery = get_current_job()
+        claimed = await claim_download(db, job_uuid, delivery.id if delivery else None)
+        if claimed is None:
             return
-
-        # The job can remain queued while its heavy worker waits for the global
-        # flock.  Re-read durable state at the actual execution boundary so a
-        # pause/cancel/duplicate signal written during that wait wins the race.
-        if job.status not in ("enqueued", "pending"):
-            logger.info(
-                "Download job %s is no longer runnable (status=%s); skipping",
-                job_id,
-                job.status,
-            )
-            return
-
-        await repo.update_status(job, "downloading")
-        apply_download_progress(
-            job,
-            "configuring",
-            "Download worker started; preparing gallery-dl config",
-        )
+        job, execution = claimed
         if job.subscription_source_id:
             ss = await db.get(SubscriptionSource, job.subscription_source_id)
             if ss:
                 ss.last_attempted_at = datetime.now(timezone.utc)
-        await db.commit()
+        await commit_download_state(db, job)
 
     dl_defaults = await _read_download_defaults()
     dl_timeout = int(dl_defaults.get("timeout_seconds", FALLBACK_TIMEOUT))
@@ -971,7 +636,7 @@ async def run_download_job(job_id: str):
                 json.dump(_cfg, f)
             async with async_session() as _cfg_db:
                 from app.repositories.download_job import DownloadJobRepository as _DJRepo
-                _cfg_j = await _DJRepo(_cfg_db).get(job_uuid)
+                _cfg_j = await lock_download(_cfg_db, job_uuid, execution=execution, statuses={"downloading"})
                 if _cfg_j:
                     _cfg_j.gallerydl_config_path = job_config_path
                     update_manifest(_cfg_j, gallerydl_config_path=job_config_path, effective_gallerydl_config=_cfg)
@@ -1024,7 +689,7 @@ async def run_download_job(job_id: str):
                 source_url = url_parse.urlunparse(parsed._replace(query=new_query))
 
     async with async_session() as _progress_db:
-        _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+        _progress_job = await lock_download(_progress_db, job_uuid, execution=execution, statuses={"downloading", "downloaded"})
         if _progress_job:
             apply_download_progress(
                 _progress_job,
@@ -1188,7 +853,7 @@ async def run_download_job(job_id: str):
                 logger.warning("Failed to record proxy health for %s", job.source, exc_info=True)
 
         async with async_session() as _progress_db:
-            _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+            _progress_job = await lock_download(_progress_db, job_uuid, execution=execution, statuses={"downloading", "downloaded"})
             if _progress_job:
                 apply_download_progress(
                     _progress_job,
@@ -1199,7 +864,7 @@ async def run_download_job(job_id: str):
 
         async with async_session() as _manifest_db:
             _manifest_repo = DownloadJobRepository(_manifest_db)
-            _manifest_job = await _manifest_repo.get(job_uuid)
+            _manifest_job = await lock_download(_manifest_db, job_uuid, execution=execution, statuses={"downloading"})
             if _manifest_job:
                 update_manifest(
                     _manifest_job,
@@ -1440,7 +1105,7 @@ async def run_download_job(job_id: str):
 
         # ── Record gallery-dl result in one short transaction ──
         async with async_session() as _manifest_db:
-            _manifest_job = await DownloadJobRepository(_manifest_db).get(job_uuid)
+            _manifest_job = await lock_download(_manifest_db, job_uuid, execution=execution, statuses={"downloading"})
             if _manifest_job:
                 apply_download_progress(
                     _manifest_job,
@@ -1684,20 +1349,14 @@ async def run_download_job(job_id: str):
         unexpected_retry_count: int | None = None
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)
-            j = await repo2.get(job_uuid)
+            j = await lock_download(db2, job_uuid, execution=execution, statuses={"downloading", "downloaded"})
+            if j is None:
+                return
             if j:
                 if personal_credential_failure:
-                    j.retry_count = max_retries
-                    await repo2.update_status(
-                        j,
-                        "failed",
-                        "Download authentication failed: Credential materialization failed",
-                    )
-                    apply_download_progress(
-                        j,
-                        "failed",
-                        "Download authentication requires attention",
-                    )
+                    await apply_download_state(db2, j, "failed", retry_count=max_retries,
+                        error="Download authentication failed: Credential materialization failed",
+                        progress={"stage": "failed", "message": "Download authentication requires attention"})
                     from app.services.subscription_enqueue import mark_source_auth_failure
 
                     await mark_source_auth_failure(db2, j, "Authentication failed")
@@ -1705,7 +1364,6 @@ async def run_download_job(job_id: str):
                     # Retrying cannot resolve a different canonical file and
                     # cannot safely guess through a corrupt recovery manifest.
                     # Keep the stage quarantined for operator resolution.
-                    await repo2.update_status(j, "failed", error_text)
                     if stage_conflict:
                         append_manifest_event(
                             j,
@@ -1724,11 +1382,8 @@ async def run_download_job(job_id: str):
                     else:
                         append_manifest_event(j, "staging_manifest_error", error=error_text)
                         stage_message = "Download staging recovery manifest needs operator attention"
-                    apply_download_progress(
-                        j,
-                        "failed",
-                        f"{stage_message}: {error_text[:140]}",
-                    )
+                    await apply_download_state(db2, j, "failed", error=error_text,
+                        progress={"stage": "failed", "message": f"{stage_message}: {error_text[:140]}"})
                     from app.services.tasks import TaskService
 
                     task_service = TaskService(db2)
@@ -1751,37 +1406,15 @@ async def run_download_job(job_id: str):
                             ),
                         )
                 else:
-                    j.retry_count += 1
-                    if j.retry_count < max_retries:
-                        unexpected_retry_count = j.retry_count
-                        j.last_heartbeat_at = None  # reset heartbeat for fresh retry
-                        transition_download_job(j, "failed", f"unexpected error: {error_text}")
-                        transition_download_job(j, "enqueued")
-                        append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
-                        apply_download_progress(
-                            j,
-                            "enqueued",
-                            f"Retry queued after unexpected error: {error_text[:180]}",
-                        )
-                    else:
-                        failure_reason = f"unexpected error: {error_text}"
-                        await repo2.update_status(j, "failed", failure_reason)
-                        record_unresolved_provider_failure(
-                            j,
-                            kind="unexpected",
-                            reason=failure_reason,
-                            max_retries=max_retries,
-                        )
-                        apply_download_progress(
-                            j,
-                            "failed",
-                            f"Download failed: {error_text[:180]}",
-                        )
+                    unexpected_retry_count = await fail_or_retry_download(db2, j,
+                        error=f"unexpected error: {error_text}", max_retries=max_retries, kind="unexpected",
+                        retry_message=f"Retry queued after unexpected error: {error_text[:180]}",
+                        failure_message=f"Download failed: {error_text[:180]}")
                 await request_search_projection(
                     db2,
                     subscription_ids=[j.subscription_id] if j.subscription_id else (),
                 )
-                await db2.commit()
+                await commit_download_state(db2, j)
 
         if stage_conflict and bool(
             dl_defaults.get("auto_resolve_upstream_conflicts", True)
@@ -1806,7 +1439,7 @@ async def run_download_job(job_id: str):
             retry_delay = backoff_base * (2 ** (unexpected_retry_count - 1))
             try:
                 retry_outcome = await _enqueue_download_retry(
-                    job_uuid,
+                    job_uuid, execution=execution,
                     delay_seconds=retry_delay,
                     action="unexpected_error_retry",
                 )
@@ -1891,7 +1524,7 @@ async def run_download_job(job_id: str):
 
         async with async_session() as db2:
             repo2 = DownloadJobRepository(db2)
-            j = await repo2.get(job_uuid)
+            j = await lock_download(db2, job_uuid, execution=execution, statuses={"downloading", "downloaded"})
             if not j:
                 return
 
@@ -1909,63 +1542,18 @@ async def run_download_job(job_id: str):
             elif result is not None:
                 # Normal completion (success or non-zero exit)
                 if detected_auth_issue:
-                    j.retry_count = max_retries
                     failure_reason = f"Download authentication failed: {detected_auth_issue}"
-                    await repo2.update_status(
-                        j,
-                        "failed",
-                        failure_reason,
-                    )
-                    record_unresolved_provider_failure(
-                        j,
-                        kind="authentication",
-                        reason=failure_reason,
-                        max_retries=max_retries,
-                    )
-                    apply_download_progress(
-                        j,
-                        "failed",
-                        "Download authentication requires attention",
-                    )
+                    record_unresolved_provider_failure(j, kind="authentication", reason=failure_reason, max_retries=max_retries)
+                    await apply_download_state(db2, j, "failed", error=failure_reason, retry_count=max_retries,
+                        progress={"stage": "failed", "message": "Download authentication requires attention"})
                 elif result.returncode == 0:
                     clear_unresolved_provider_failure(j)
-                    await repo2.update_status(j, "downloaded")
-                    apply_download_progress(
-                        j,
-                        "downloaded",
-                        "Download complete; waiting for metadata scan",
-                    )
+                    await apply_download_state(db2, j, "downloaded", error=None,
+                        progress={"stage": "downloaded", "message": "Download complete; waiting for metadata scan"})
                 else:
-                    j.retry_count += 1
-                    if j.retry_count < max_retries:
-                        j.last_heartbeat_at = None  # reset heartbeat for fresh retry
-                        err_msg = result.stderr[:5000] if result.stderr else None
-                        transition_download_job(j, "failed", err_msg)
-                        transition_download_job(j, "enqueued")
-                        append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
-                        apply_download_progress(
-                            j,
-                            "enqueued",
-                            "Retry queued after gallery-dl returned an error",
-                        )
-                    else:
-                        failure_reason = (
-                            result.stderr[:5000]
-                            if result.stderr
-                            else f"gallery-dl exited with code {result.returncode}"
-                        )
-                        await repo2.update_status(j, "failed", failure_reason)
-                        record_unresolved_provider_failure(
-                            j,
-                            kind="nonzero",
-                            reason=failure_reason,
-                            max_retries=max_retries,
-                        )
-                        apply_download_progress(
-                            j,
-                            "failed",
-                            "Download failed after gallery-dl error",
-                        )
+                    failure_reason = result.stderr[:5000] if result.stderr else f"gallery-dl exited with code {result.returncode}"
+                    await fail_or_retry_download(db2, j, error=failure_reason, max_retries=max_retries, kind="nonzero",
+                        retry_message="Retry queued after gallery-dl returned an error", failure_message="Download failed after gallery-dl error")
 
                 if detected_auth_issue and j.subscription_source_id:
                     from app.services.subscription_enqueue import mark_source_auth_failure
@@ -1979,41 +1567,16 @@ async def run_download_job(job_id: str):
 
             else:
                 # Timeout or stall — use distinguished error message
-                j.retry_count += 1
-                if stalled:
-                    timeout_msg = f"stalled: no progress for {effective_stall_timeout}s (elapsed {stall_elapsed}s)"
-                else:
-                    timeout_msg = f"timeout after {effective_dl_timeout}s"
-                if j.retry_count < max_retries:
-                    j.last_heartbeat_at = None  # reset heartbeat for fresh retry
-                    transition_download_job(j, "failed", timeout_msg)
-                    transition_download_job(j, "enqueued")
-                    append_manifest_event(j, "status_changed", from_status="failed", to_status="enqueued", action="retry")
-                    apply_download_progress(
-                        j,
-                        "enqueued",
-                        f"Retry queued after timeout ({dl_timeout}s)",
-                    )
-                else:
-                    await repo2.update_status(j, "failed", timeout_msg)
-                    record_unresolved_provider_failure(
-                        j,
-                        kind="timeout",
-                        reason=timeout_msg,
-                        max_retries=max_retries,
-                    )
-                    apply_download_progress(
-                        j,
-                        "failed",
-                        f"Download failed after timeout ({dl_timeout}s)",
-                    )
+                timeout_msg = f"stalled: no progress for {effective_stall_timeout}s (elapsed {stall_elapsed}s)" if stalled else f"timeout after {effective_dl_timeout}s"
+                await fail_or_retry_download(db2, j, error=timeout_msg, max_retries=max_retries, kind="timeout",
+                    retry_message=f"Retry queued after timeout ({dl_timeout}s)", failure_message=f"Download failed after timeout ({dl_timeout}s)")
 
             await request_search_projection(
                 db2,
                 repository_ids=[j.subscription_source_id] if j.subscription_source_id else (),
                 subscription_ids=[j.subscription_id] if j.subscription_id else (),
             )
-            await db2.commit()
+            await commit_download_state(db2, j)
 
         # A live retry owns the parent lifecycle.  Establish that durable
         # attempt before considering partial salvage so the two pipelines can
@@ -2025,7 +1588,7 @@ async def run_download_job(job_id: str):
             if needs_retry:
                 retry_delay = backoff_base * (2 ** (j.retry_count - 1))
                 retry_outcome = await _enqueue_download_retry(
-                    job_uuid,
+                    job_uuid, execution=execution,
                     delay_seconds=retry_delay,
                     action="auto_retry",
                 )
@@ -2051,16 +1614,21 @@ async def run_download_job(job_id: str):
                 if _manifest_job:
                     with stage_timer(_manifest_job, "scan"):
                         metadata_count, image_count, new_json_paths = await _artifact_counts(job_uuid)
-                    (
-                        pending_work_count,
-                        new_json_paths,
-                        reconciliation,
-                    ) = await _successful_repository_import_plan(
-                        _manifest_db,
-                        _manifest_job,
-                        metadata_count=metadata_count,
-                        metadata_paths=new_json_paths,
-                    )
+                    with _manifest_db.no_autoflush:
+                        (
+                            pending_work_count,
+                            new_json_paths,
+                            reconciliation,
+                        ) = await _successful_repository_import_plan(
+                            _manifest_db,
+                            _manifest_job,
+                            metadata_count=metadata_count,
+                            metadata_paths=new_json_paths,
+                        )
+                    _manifest_job = await lock_download(_manifest_db, job_uuid, execution=execution, statuses={"downloaded"}, refresh=False)
+                    if _manifest_job is None:
+                        await _manifest_db.rollback()
+                        return
                     if reconciliation is not None:
                         update_manifest(
                             _manifest_job,
@@ -2098,7 +1666,7 @@ async def run_download_job(job_id: str):
                 return
             if pending_work_count > 0:
                 async with async_session() as _progress_db:
-                    _progress_job = await DownloadJobRepository(_progress_db).get(job_uuid)
+                    _progress_job = await lock_download(_progress_db, job_uuid, execution=execution, statuses={"downloading", "downloaded"})
                     if _progress_job:
                         apply_download_progress(
                             _progress_job,
@@ -2146,7 +1714,7 @@ async def run_download_job(job_id: str):
 
                 async with async_session() as db3:
                     repo3 = DownloadJobRepository(db3)
-                    j3 = await repo3.get(job_uuid)
+                    j3 = await lock_download(db3, job_uuid, execution=execution, statuses={"downloaded"})
                     if j3:
                         outcome = (
                             build_sync_outcome(
@@ -2170,6 +1738,7 @@ async def run_download_job(job_id: str):
                             error=error,
                             message=error,
                             assets=image_count,
+                            locked=True,
                         )
 
         elif result is not None and result.returncode != 0:

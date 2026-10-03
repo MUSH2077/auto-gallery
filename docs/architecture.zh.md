@@ -45,21 +45,60 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 - `SearchService` 仍是后端搜索对外接口。`search_language.py` 解析查询，
   `search_pagination.py` 管理稳定游标和排序，
   `search_filters.py` 编译 Meilisearch 过滤条件，
-  `search_projection_fields.py` 生成确定性的索引字段。服务本身继续协调
-  SQL/Meilisearch 执行和索引投递。
+  `search_projection_fields.py` 生成确定性的索引字段。
+  `search_index_definitions.py` 持有索引名称与配置，`search_projection.py`
+  持有文档构建和增量投递、全量重建共用的投影定义；SearchService 保留旧调用兼容入口。
+  `subscription_schedule.py` 提供纯日程计算，调度页面和搜索共用
+  `scheduler_decisions.py` 的来源资格与凭据阻塞解释。
 - `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
   SearchService 的执行路径中分离。
-- `import_runner.py` 处理作品微批；`import_execution.py` 管理任务领取、
-  租约和父任务最终状态。重试必须保持持久任务归属与结果幂等。
+- `import_runner.py` 处理作品微批，`import_execution.py` 管理领取、租约与完成流程。
+  `import_lifecycle.py` 按父任务、ImportJob、TaskRun 顺序锁后重读，负责 token
+  仲裁、导入控制命令和父子聚合；涉及 artifact 时先获取 artifact 锁。
+  `import_intent.py` 持有 artifact 分配和持久化投递准备，prepare 不提交事务，
+  publish 在调用方提交之后执行；下载、上传、磁盘导入和恢复共用该实现，
+  旧 worker 函数保留为持久化 RQ 记录的转发入口。
+- `download_lifecycle.py` 负责下载状态应用及显式的 TaskRun、receipt 和搜索投影，
+  控制面、worker 失败/重试、stale 与无效派发在各自完成资格检查和取锁后共用该能力。
+  worker 用领取时的 RQ ID 与 TaskRun attempt 拒绝旧执行回写，仓储不再隐式创建或
+  更新 TaskRun。调用方提交后才发布持久化状态通知。`download_finalization.py`
+  复用既有 bounded 子任务聚合，为导入完成、publication 关闭与恢复提供共同父级
+  outcome 映射和最终化。
+  `TaskEngine.apply_cancel_download/import` 只应用取消，不提交或通知，下载委派
+  导入也沿用这一事务。独立控制入口提交后通知；批量清理将取消和批次项一起应用，
+  最后验证 cleanup attempt，通过后一次提交再通知，失效执行的修改全部回滚。
 - `operations.py` 协调管理任务发布与补偿；
   `admin_dispatch_recovery.py` 从 PostgreSQL 有界地选择到期派发意图，
   不把 Redis 队列状态当作恢复的权威依据。
+- 管理操作定义关联 handler、规范化结果策略和资源 profile；
+  `admin_operation_handlers.py` 执行业务，RQ worker 管理 attempt 与心跳。
+  services 下的 `backup.py`、`integrity.py`、`connectivity.py` 提供独立于
+  HTTP 路由的业务能力。备份和恢复候选文件公开前仍须通过持久 attempt 校验。
+- HTTP 与 CLI 的收藏、标签修改共用整理命令事务，领域变更、审计和搜索 outbox
+  一起提交。标签沿用 CLI 的 casefold 规则，不批量重写历史标签。永久清理先获取
+  整理顺序锁再锁定作品状态，并在删除文件前重读资格；已提交恢复的作品不会因
+  旧 ORM 快照被删除。
+  HTTP 与 CLI 的 trash/restore 在排序锁和状态重读后共用资格、修改与审计构造，
+  入口策略保留 CLI noop 审计及 HTTP 重复/缺失 ID 的处理差异；purge 保留专用文件流程。
 - `resource_pressure.py` 协调采样、状态和共享快照，分别委托给
   `resource_pressure_sampling.py`、`resource_pressure_state.py` 和
   `resource_pressure_snapshot.py`。
+- `resource_descriptors.py` 定义子进程准入与 outbox 切片，新投递显式携带描述，
+  旧 RQ 函数名仅由兼容适配器解释。管理操作的 profile 不改写 task ID/attempt
+  参数。父级准入、子级租约、资源阈值与退出保护继续各自生效。
 - Jobs 页用 `jobsRoute.ts`、`useJobsRouteState.ts` 管理 URL 状态，
-  用 `jobTree.ts` 纯函数整理任务树；页面负责桌面与移动端展示，
-  WebSocket 不可用时退回轮询。
+  用 `jobTree.ts` 纯函数整理任务树，行、抽屉和批量操作通过 `useTaskCommand.ts`
+  共用 `taskCommands.ts` 的动作分派、repeat-sync 意图处理和缓存失效。
+  任务类型源于生成的 OpenAPI schema，只细化视图所需的字典字段。
+  `operationMonitor.ts` 管理普通管理操作的恢复和轮询，`operationRefresh.ts`
+  管理资源刷新，NotificationCenter 消费监控状态展示通知。页面与全局层展示同一
+  操作时，共用按 TaskRun 身份建立的 `admin-operation-task` 查询；页面关闭自身
+  轮询和完成回调，由全局监控负责。未交给全局的操作继续由页面监控，404/410
+  会终止监控并清除活动记录。重试接受后，利用已知任务上下文和现有最小响应重新
+  激活监控、隔离迟到查询并重置本次完成处理，TaskRun 身份保持不变。
+  `batchImportMonitor.ts` 将批量响应适配到同一 monitor 并独占恢复，Danbooru 页面
+  只消费规范化状态。历史记录保留原 storage key 和两小时恢复窗口；完成结果缺失时
+  通过查询的有限重试确认，随后明确结束并提示错误。
 
 ## 领域模型
 
@@ -143,7 +182,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。
 - **任务超时**：所有入队调用使用 `job_timeout=7200`（2 小时），防止 RQ 杀掉长时间运行的下载任务（默认 180s）。
 - **代理预检**：启动 gallery-dl 前，worker 先做 DNS 解析 + 代理连通性检查（非阻塞诊断）。
-- **状态机**（权威来源：`backend/app/models/task_state.py`）：`enqueued → downloading → downloaded → importing → complete`，非终态可转入 `paused`、`cancelled`、`failed`、`stale`。旧状态串（`pending` → `enqueued`）通过向后兼容映射接受。存在 `downloaded → complete` 短路：当下载未产生新元数据（内容已在归档中）时直接完成，避免卡在等待导入。暂停任务跳过执行；`cancelled` 为终态但保留数据库记录以便审计。僵死检测使用 Redis 心跳键（`task:{job_id}:heartbeat_ts`，90s TTL）。超时/失败时支持部分导入恢复。`TaskEngine`（`services/task_engine.py`）是校验所有状态转换的唯一权威。
+- **状态机**（权威来源：`backend/app/models/task_state.py`）：`enqueued → downloading → downloaded → importing → complete`，非终态可转入 `paused`、`cancelled`、`failed`、`stale`。旧状态串（`pending` → `enqueued`）通过向后兼容映射接受。存在 `downloaded → complete` 短路：当下载未产生新元数据（内容已在归档中）时直接完成，避免卡在等待导入。暂停任务跳过执行；`cancelled` 为终态但保留数据库记录以便审计。僵死检测使用 Redis 心跳键（`task:{job_id}:heartbeat_ts`，90s TTL）。超时/失败时支持部分导入恢复。`task_state.py` 定义合法转换，`TaskEngine` 协调控制请求，导入状态通过 `import_lifecycle.py` 的锁后仲裁与聚合入口更新。
 
 ## 统一任务系统 (`task_runs`)
 
@@ -152,7 +191,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **`task_run`**（`models/task_run.py`）：每个可追踪工作单元一行。`kind`（`download` / `import` / `admin`）加 `subject_type` + `subject_id` 以松耦合方式引用权威领域行（`download_job`、`import_job` 等）——无外键，因此任务可以先于或晚于其领域记录存在。携带展示字段（`title`、`source`、`source_url`）、进度快照（`progress_current`/`progress_total`/`progress_data`）、`priority`、`attempts`，以及用于僵死检测的 `last_heartbeat_at`。`parent_task_id` 用于归组批量/子任务。
 - **`task_event`**：某次运行状态转换的追加式审计轨迹；随父记录级联删除（`ON DELETE CASCADE`）。
 - **`TaskService`**（`services/tasks.py`）：写入路径——创建运行、记录事件、规范化状态，并把下载/导入领域行合并进统一列表。
-- **`TaskEngine`**（`services/task_engine.py`）：状态转换的唯一权威（暂停 / 恢复 / 取消 / 重试 / 优先级 / 按筛选批处理），并通过 Redis pub/sub 发布变更以驱动 WebSocket 实时更新。
+- **`TaskEngine`**（`services/task_engine.py`）：控制请求入口（暂停 / 恢复 / 取消 / 重试 / 优先级 / 按筛选批处理），导入命令委托给生命周期模块，并通过 Redis pub/sub 发布变更以驱动 WebSocket 实时更新。
 - **权威载荷仍在领域表**：`task_run` 是信封；`download_jobs` / `import_jobs` 仍是各自字段的真实数据源。清空任务（数据管理）会同时删除 `task_runs` **和**领域任务表。
 
 ## 数据流

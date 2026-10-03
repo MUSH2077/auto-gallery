@@ -156,9 +156,7 @@ async def _save(receipt, token, deadline, **values):
 
 async def _prepare(limit, deadline):
     """Global transaction lock chooses one index/action before bounded hydration."""
-    from app.services.search import SearchService, WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    builders = {WORKS_INDEX: "_build_work_documents", CREATORS_INDEX: "_build_creator_documents", TAGS_INDEX: "_build_tag_documents",
-                REPOSITORIES_INDEX: "_build_repository_documents", SUBSCRIPTIONS_INDEX: "_build_subscription_documents", MEMBERSHIPS_INDEX: "_build_membership_documents"}
+    from app.services.search_projection import SearchProjection, PROJECTION_SPECS
     async with session(deadline) as db:
         if not (await db.execute(text("SELECT pg_try_advisory_xact_lock(73194218)"))).scalar_one():
             return None
@@ -171,9 +169,9 @@ async def _prepare(limit, deadline):
         rows = list((await db.execute(select(Outbox).where(ready, Outbox.index_uid == head.index_uid, Outbox.action == head.action)
                     .order_by(Outbox.available_at, Outbox.updated_at, Outbox.id).limit(max(1, min(500, limit))))).scalars())
         try:
-            if head.index_uid not in builders:
+            if head.index_uid not in PROJECTION_SPECS:
                 raise ValueError(f"Unsupported search outbox index {head.index_uid}")
-            docs = [] if head.action == "delete" else await getattr(SearchService(db), builders[head.index_uid])([UUID(row.entity_id) for row in rows])
+            docs = [] if head.action == "delete" else await SearchProjection(db).build(head.index_uid, [UUID(row.entity_id) for row in rows])
             by_id = {str(doc["id"]): doc for doc in docs}
             # Missing rows become deletions. Each remote receipt still contains
             # exactly one action, even when hydration exposes mixed outcomes.
@@ -251,7 +249,7 @@ async def _advance(receipt, token, client, deadline):
             return await _defer_prepared_for_budget(receipt, token, deadline)
         settings_payload = None
         if receipt.phase == "settings":
-            from app.services.search import INDEX_SETTINGS
+            from app.services.search_index_definitions import INDEX_SETTINGS
             desired = INDEX_SETTINGS[receipt.index_uid]
             try:
                 actual = await request(client, "GET", f"/indexes/{receipt.index_uid}/settings", deadline)
@@ -416,9 +414,8 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
 
 async def _checkpoint(client, deadline):
     from app.models.repository_sync_receipt import SearchIndexState
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    models = {WORKS_INDEX: Work, CREATORS_INDEX: Creator, TAGS_INDEX: Tag, REPOSITORIES_INDEX: SubscriptionSource, SUBSCRIPTIONS_INDEX: Subscription, MEMBERSHIPS_INDEX: UserSubscription}
+    from app.services.search_projection import PROJECTION_SPECS
+    models = {index: spec.model for index, spec in PROJECTION_SPECS.items()}
     async with session(deadline) as db:
         state = (await db.execute(select(SearchIndexState).where(
             checkpoint_due_condition(SearchIndexState),

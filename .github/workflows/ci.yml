@@ -116,10 +116,10 @@ jobs:
         run: |
           shopt -s nullglob
           case "${{ matrix.shard }}" in
-            a-f) test_files=(tests/test_{a,b,c,d,e,f}*.py) ;;
+            a-f) test_files=(tests/test_{a,b,c,d,e,f}*.py tests/test_hierarchical_deletion.py) ;;
             gitllery) test_files=(tests/test_g*.py) ;;
             imports-c-l) test_files=(tests/test_import_{c,d,e,f,g,h,i,j,k,l}*.py) ;;
-            imports-m-r) test_files=(tests/test_import_{m,n,o,p,q,r}*.py) ;;
+            imports-m-r) test_files=(tests/test_import_{m,n,o,p,q,r}*.py tests/test_import_wait_boundaries.py) ;;
             jobs) test_files=(tests/test_j*.py) ;;
             large-library) test_files=(tests/test_l*.py) ;;
             manual-upload-validation)
@@ -152,7 +152,7 @@ jobs:
             n-z)
               export MEILI_URL=http://127.0.0.1:7700
               export MEILI_MASTER_KEY=ci-meilisearch-master-key-32chars
-              test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py)
+              test_files=(tests/test_{n,o,p,q,r,s,t,u,v,w,x,y,z}*.py tests/test_membership_search.py tests/test_metadata_cleanup.py tests/test_metadata_cleanup_invalidation.py)
               ;;
           esac
           python -m pytest "${test_files[@]}"
@@ -302,7 +302,7 @@ jobs:
         run: npm run typecheck
       - name: Check Jobs route and task tree
         working-directory: admin-web
-        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs
+        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
@@ -320,6 +320,9 @@ jobs:
           tests/e2e/dashboard.spec.ts
           tests/e2e/search.spec.ts
           tests/e2e/task-action-capabilities.spec.ts
+          tests/e2e/operation-monitor.spec.ts
+          tests/e2e/d39-operation-task-links.spec.ts
+          tests/e2e/d37-guard-and-data-action.spec.ts
           tests/e2e/task5-r3-regressions.spec.ts
           --project=chromium --workers=1
 
