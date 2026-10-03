@@ -12,13 +12,11 @@ import { usePermissions } from "@/lib/usePermissions";
 import DomainDangerZone from "@/components/DomainDangerZone";
 import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
 import {
-  createReferenceListSession,
   legacyPageInitialIndex,
-  readReferenceListSession,
   referenceNameAnchorsAvailable,
-  referenceSessionStorageKey,
   referenceSortFromTokens,
 } from "@/lib/reference-list-state";
+import { useReferenceListLegacyNavigation, useReferenceListNavigation, useReferenceListSession, useReferenceListState } from "@/lib/useReferenceListNavigation";
 import { pollInterval } from "@/lib/polling";
 
 type FilterMode = "all" | "active" | "inactive" | "sync_on" | "sync_off" | "never_synced";
@@ -93,124 +91,33 @@ function SubscriptionsContent() {
   const legacyPage = sp.get("p");
   const legacyInitialIndex = legacyPageInitialIndex(legacyPage);
   const queryFingerprint = `subscriptions:${search}`;
-  const sessionKey = referenceSessionStorageKey(user?.id ?? "current", pathname, queryFingerprint);
   const listRef = useRef<VirtualReferenceListHandle>(null);
   const initialVirtualIndexRef = useRef(legacyInitialIndex);
-  const pendingLegacyScrollRef = useRef<number | null>(legacyPage === null ? null : legacyInitialIndex);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [syncingSubId, setSyncingSubId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
-  const [listState, setListState] = useState<VirtualReferenceListState<SubscriptionSearchHit>>({
+  const { listState, setListState, selected, setSelected, onStateChange } = useReferenceListState<SubscriptionSearchHit>({
     total: 0,
     loadedItems: [],
     loadedOffsets: [],
     loadedPages: [],
     visibleOffsets: [],
   });
-  const [storedSession, setStoredSession] = useState<{
-    key: string;
-    value: ReturnType<typeof readReferenceListSession>;
-  } | null>(null);
-  const restoredSession = storedSession?.key === sessionKey ? storedSession.value : null;
-  const sessionReady = storedSession?.key === sessionKey;
-  const previousQueryFingerprintRef = useRef(queryFingerprint);
-
-  useEffect(() => {
-    const queryChanged = previousQueryFingerprintRef.current !== queryFingerprint;
-    previousQueryFingerprintRef.current = queryFingerprint;
-    const saved = queryChanged
-      ? null
-      : readReferenceListSession(window.sessionStorage.getItem(sessionKey), queryFingerprint);
-    setStoredSession({
-      key: sessionKey,
-      value: saved,
-    });
-    setSelected(new Set(saved?.selectedIds || []));
-    if (queryChanged) {
+  const paramsString = sp.toString();
+  const { sessionKey, restoredSession, sessionReady, persistListSession } = useReferenceListSession({
+    userId: user?.id ?? "current", pathname, queryFingerprint, legacyPage,
+    total: listState.total, loadedOffsets: listState.loadedOffsets, selected, setSelected,
+    onQueryChange: () => {
       setSearchMeta(null);
       setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });
-      window.scrollTo({ top: 0 });
-    }
-  }, [queryFingerprint, sessionKey]);
-
-  const persistListSession = useCallback(() => {
-    if (!sessionReady) return;
-    window.sessionStorage.setItem(sessionKey, JSON.stringify(createReferenceListSession({
-      queryFingerprint,
-      scrollY: window.scrollY,
-      loadedOffsets: listState.loadedOffsets,
-      selectedIds: [...selected],
-    })));
-  }, [listState.loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady]);
-
-  useEffect(() => {
-    window.addEventListener("pagehide", persistListSession);
-    return () => window.removeEventListener("pagehide", persistListSession);
-  }, [persistListSession]);
-
-  const restoredScrollKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!sessionReady || !listState.total || legacyPage !== null || restoredScrollKeyRef.current === sessionKey) return;
-    restoredScrollKeyRef.current = sessionKey;
-    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: restoredSession?.scrollY || 0 }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [legacyPage, listState.total, restoredSession?.scrollY, sessionKey, sessionReady]);
-
-  // Local input for search field — debounced 300ms before writing to URL
-  const [inputVal, setInputVal] = useState(search);
-  const paramsString = sp.toString();
-  const navigationParamsRef = useRef(paramsString);
-  const committedParamsRef = useRef(paramsString);
-  const pendingParamsRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (committedParamsRef.current === paramsString) return;
-    committedParamsRef.current = paramsString;
-    if (pendingParamsRef.current.delete(paramsString)) {
-      // An earlier replace can finish after the user has typed a new query.
-      // Acknowledging our navigation must not replace that newer input.
-      return;
-    }
-    pendingParamsRef.current.clear();
-    navigationParamsRef.current = paramsString;
-    setInputVal(search);
-  }, [paramsString, search]);
-
-  useEffect(() => {
-    const restoreHistoryQuery = () => {
-      const params = new URLSearchParams(window.location.search);
-      pendingParamsRef.current.clear();
-      navigationParamsRef.current = params.toString();
-      setInputVal(params.get("q") ?? "");
-    };
-    window.addEventListener("popstate", restoreHistoryQuery);
-    return () => window.removeEventListener("popstate", restoreHistoryQuery);
-  }, []);
-
-  const updateParams = useCallback((updates: Record<string, string | null>, resetPage = true) => {
-    const p = new URLSearchParams(navigationParamsRef.current);
-    for (const [k, v] of Object.entries(updates)) {
-      if (v === null || v === "") p.delete(k); else p.set(k, v);
-    }
-    if (resetPage) p.delete("p");
-    const next = p.toString();
-    navigationParamsRef.current = next;
-    pendingParamsRef.current.add(next);
-    router.replace(`${pathname}?${next}`, { scroll: false });
-  }, [pathname, router]);
-
-  useEffect(() => {
-    if (inputVal === search && (new URLSearchParams(navigationParamsRef.current).get("q") ?? "") === search) return;
-    const timer = setTimeout(() => {
-      setSelected(new Set());
-      window.scrollTo({ top: 0 });
-      updateParams({ q: inputVal || null });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [inputVal, search, updateParams]);
+    },
+  });
+  const { inputVal, setInputVal, updateParams } = useReferenceListNavigation({
+    router, pathname, paramsString, search, setSelected,
+  });
+  useReferenceListLegacyNavigation({ legacyPage, legacyInitialIndex, total: listState.total, listRef, initialVirtualIndexRef, pathname, paramsString, router });
 
   const FILTERS: { key: FilterMode; label: string }[] = [
     { key: "all", label: t("subscriptions.filter_all") },
@@ -432,41 +339,6 @@ function SubscriptionsContent() {
     && subscriptionItems.every((subscription) => selected.has(subscription.id));
   const someLoadedSelected = subscriptionItems.some((subscription) => selected.has(subscription.id));
 
-  useEffect(() => {
-    if (legacyPage === null || !listState.total) return;
-    let cleanupFrame = 0;
-    const scrollFrame = window.requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex(legacyInitialIndex);
-      cleanupFrame = window.requestAnimationFrame(() => {
-        initialVirtualIndexRef.current = 0;
-        const params = new URLSearchParams(sp.toString());
-        params.delete("p");
-        const suffix = params.toString();
-        router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(scrollFrame);
-      if (cleanupFrame) window.cancelAnimationFrame(cleanupFrame);
-    };
-  }, [legacyInitialIndex, legacyPage, listState.total, pathname, router, sp]);
-
-  useEffect(() => {
-    if (legacyPage !== null || !listState.total || pendingLegacyScrollRef.current === null) return;
-    const index = pendingLegacyScrollRef.current;
-    let settleFrame = 0;
-    const scrollFrame = window.requestAnimationFrame(() => {
-      settleFrame = window.requestAnimationFrame(() => {
-        listRef.current?.scrollToIndex(index);
-        pendingLegacyScrollRef.current = null;
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(scrollFrame);
-      if (settleFrame) window.cancelAnimationFrame(settleFrame);
-    };
-  }, [legacyPage, listState.total]);
-
   return (
     <PageShell>
       <PageHeader
@@ -569,7 +441,7 @@ function SubscriptionsContent() {
             initialIndex={initialVirtualIndexRef.current}
             initialOffsets={restoredSession?.loadedOffsets}
             estimateSize={132}
-            onStateChange={setListState}
+            onStateChange={onStateChange}
             onMetaChange={setSearchMeta}
             renderInitialLoading={() => (
               <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-24 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>

@@ -127,6 +127,9 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   recovery; the Danbooru page only consumes normalized state. Legacy records
   retain their storage key and two-hour recovery window. A missing final result
   is confirmed by bounded query retries and then ends with an error.
+  Creators and subscriptions share `useReferenceListNavigation.ts` hooks for
+  navigation, sessions, loaded-row selection and legacy pagination recovery;
+  each page retains its filters, data requests and business commands.
 
 ## Domain Model
 

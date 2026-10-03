@@ -444,6 +444,38 @@ test("subscription typing supersedes a pending filter composition", async ({ con
   await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
 });
 
+test("creator input survives an earlier filter navigation", async ({ context, page }) => {
+  const observations = { searches: [], summaryBatches: [] } as {
+    searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+    summaryBatches: string[][];
+  };
+  await installRoutes(context, observations);
+  await page.goto("/admin/creators");
+  const input = page.getByRole("combobox");
+  await expect(input).toBeVisible();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  await page.route((url) => url.pathname === "/admin/creators"
+    && url.searchParams.has("_rsc") && url.searchParams.get("q") === "is:active", async (route) => {
+    const response = await route.fetch();
+    held = true;
+    await pending;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await expect.poll(() => held).toBe(true);
+    await input.fill("newer creator search");
+  } finally {
+    release();
+  }
+  await page.waitForTimeout(650);
+  await expect(input).toHaveValue("newer creator search");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer creator search");
+  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+});
+
 for (const query of ["new search", ""]) {
   test(`subscription input survives an earlier filter navigation: ${query || "clear search"}`, async ({ context, page }) => {
     const observations = { searches: [], summaryBatches: [] } as {

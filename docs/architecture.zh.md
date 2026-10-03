@@ -105,6 +105,8 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   `batchImportMonitor.ts` 将批量响应适配到同一 monitor 并独占恢复，Danbooru 页面
   只消费规范化状态。历史记录保留原 storage key 和两小时恢复窗口；完成结果缺失时
   通过查询的有限重试确认，随后明确结束并提示错误。
+  创作者与订阅列表通过 `useReferenceListNavigation.ts` 共用导航、会话、已加载行
+  选择清理和旧分页恢复，各页继续保留筛选、数据请求和业务命令。
 
 ## 领域模型
 

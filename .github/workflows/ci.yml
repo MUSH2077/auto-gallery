@@ -302,7 +302,7 @@ jobs:
         run: npm run typecheck
       - name: Check frontend regressions
         working-directory: admin-web
-        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs tests/api-client-contract.mjs
+        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs tests/api-client-contract.mjs tests/reference-list-state.test.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
@@ -320,6 +320,7 @@ jobs:
           tests/e2e/dashboard.spec.ts
           tests/e2e/search.spec.ts
           tests/e2e/task-action-capabilities.spec.ts
+          tests/e2e/reference-lists.spec.ts
           tests/e2e/operation-monitor.spec.ts
           tests/e2e/d39-operation-task-links.spec.ts
           tests/e2e/d37-guard-and-data-action.spec.ts
