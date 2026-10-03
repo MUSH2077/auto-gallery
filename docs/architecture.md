@@ -63,6 +63,11 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   prepare never commits; publication follows the caller's commit. Download,
   upload, disk import and recovery share this implementation; old worker
   function names remain forwarding adapters for persisted RQ records.
+- `danbooru_import.persist_danbooru_artist` owns resolved artist persistence for
+  single, Pixiv-ID batch and URL batch imports. Sources are unique by URL;
+  resolvable identities, aliases and search intents are applied in the caller's
+  transaction. Entrypoints fence the attempt before commit and invalidate caches
+  afterward; batch confidence and per-item result policies stay at the edges.
 - `download_lifecycle.py` owns download state application and explicit TaskRun,
   receipt and search projections. Control, worker failure/retry, stale and invalid
   dispatch paths reuse it after their existing eligibility checks and locks.

@@ -58,6 +58,10 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   `import_intent.py` 持有 artifact 分配和持久化投递准备，prepare 不提交事务，
   publish 在调用方提交之后执行；下载、上传、磁盘导入和恢复共用该实现，
   旧 worker 函数保留为持久化 RQ 记录的转发入口。
+- `danbooru_import.persist_danbooru_artist` 为单项、Pixiv ID 批量和 URL 批量导入
+  共用已解析作者的落库规则，按 URL 去重来源，并在调用方事务内应用可解析身份、
+  别名和搜索投影意图。入口在提交前验证 attempt、提交后失效缓存，置信度分流和
+  逐项结果继续由各入口负责。
 - `download_lifecycle.py` 负责下载状态应用及显式的 TaskRun、receipt 和搜索投影，
   控制面、worker 失败/重试、stale 与无效派发在各自完成资格检查和取锁后共用该能力。
   worker 用领取时的 RQ ID 与 TaskRun attempt 拒绝旧执行回写，仓储不再隐式创建或
