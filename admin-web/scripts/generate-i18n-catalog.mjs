@@ -24,11 +24,11 @@ function stringRecord(node) {
 
 export function extractCatalogs(source) {
   const sourceFile = ts.createSourceFile(
-    "i18n.tsx",
+    "i18n-catalogs.ts",
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX,
+    ts.ScriptKind.TS,
   );
   let zhNode;
   let enNode;
@@ -38,16 +38,9 @@ export function extractCatalogs(source) {
       zhNode = node.initializer;
     }
     if (
-      ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression)
-      && node.expression.expression.text === "Object"
-      && node.expression.name.text === "assign"
-      && node.arguments.length >= 2
-      && ts.isIdentifier(node.arguments[0])
-      && node.arguments[0].text === "result"
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "en"
     ) {
-      enNode = node.arguments[1];
+      enNode = node.initializer;
     }
     ts.forEachChild(node, visit);
   }
@@ -63,7 +56,7 @@ function serialized(catalog) {
 
 async function main() {
   const projectDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-  const source = await readFile(path.join(projectDir, "src", "lib", "i18n.tsx"), "utf8");
+  const source = await readFile(path.join(projectDir, "src", "lib", "i18n-catalogs.ts"), "utf8");
   const catalogs = extractCatalogs(source);
   const outputDir = path.join(projectDir, "src", "lib", "locales");
   const checking = process.argv.includes("--check");

@@ -4,46 +4,18 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import ts from "typescript";
+import { extractCatalogs } from "./generate-i18n-catalog.mjs";
 
 const projectRoot = process.cwd();
 const sourceRoot = path.join(projectRoot, "src");
-const dictionaryPath = path.join(sourceRoot, "lib", "i18n.tsx");
+const dictionaryPath = path.join(sourceRoot, "lib", "i18n-catalogs.ts");
 const dictionarySource = fs.readFileSync(dictionaryPath, "utf8");
-const dictionaryAst = ts.createSourceFile(dictionaryPath, dictionarySource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-
-function propertyKey(node) {
-  const name = node.name;
-  if (!name) return null;
-  if (ts.isStringLiteral(name) || ts.isIdentifier(name)) return name.text;
-  return null;
-}
 
 function collectDictionaryKeys() {
-  let zhObject;
-  let enObject;
-  const visit = (node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText() === "zh" && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
-      zhObject = node.initializer;
-    }
-    if (
-      ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && node.expression.expression.getText() === "Object"
-      && node.expression.name.text === "assign"
-      && node.arguments[1]
-      && ts.isObjectLiteralExpression(node.arguments[1])
-    ) {
-      enObject = node.arguments[1];
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(dictionaryAst);
-  if (!zhObject || !enObject) {
-    throw new Error("Unable to locate the zh/en dictionaries in src/lib/i18n.tsx");
-  }
+  const catalogs = extractCatalogs(dictionarySource);
   return {
-    zh: new Set(zhObject.properties.map(propertyKey).filter(Boolean)),
-    en: new Set(enObject.properties.map(propertyKey).filter(Boolean)),
+    zh: new Set(Object.keys(catalogs.zh)),
+    en: new Set(Object.keys(catalogs.en)),
   };
 }
 
