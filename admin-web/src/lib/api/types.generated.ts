@@ -4958,7 +4958,7 @@ export interface paths {
         };
         /**
          * Thumb
-         * @description Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
+         * @description Serve a private thumbnail via browser/Bearer auth or a scoped ticket.
          *
          *     Thumbnails are content-addressed by asset id and never change. Keep them in
          *     the signed-in browser cache, but out of shared intermediary caches.
@@ -23383,7 +23383,10 @@ export interface operations {
     };
     get_media_thumb_asset_id: {
         parameters: {
-            query?: never;
+            query?: {
+                expires?: string | null;
+                token?: string | null;
+            };
             header?: never;
             path: {
                 asset_id: string;

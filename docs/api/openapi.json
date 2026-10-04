@@ -37198,7 +37198,7 @@
     },
     "/media/thumb/{asset_id}": {
       "get": {
-        "description": "Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).\n\nThumbnails are content-addressed by asset id and never change. Keep them in\nthe signed-in browser cache, but out of shared intermediary caches.",
+        "description": "Serve a private thumbnail via browser/Bearer auth or a scoped ticket.\n\nThumbnails are content-addressed by asset id and never change. Keep them in\nthe signed-in browser cache, but out of shared intermediary caches.",
         "operationId": "get_media_thumb_asset_id",
         "parameters": [
           {
@@ -37208,6 +37208,38 @@
             "schema": {
               "title": "Asset Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
             }
           }
         ],
@@ -37251,6 +37283,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Thumb",
         "tags": [
           "works"

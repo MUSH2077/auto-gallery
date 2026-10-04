@@ -155,12 +155,20 @@ async def _serve(asset_id: str, size: str):
         304: {"description": "Thumbnail has not changed."},
     },
 )
-async def thumb(asset_id: str, request: Request):
-    """Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
+async def thumb(
+    asset_id: str, request: Request, expires: str | None = None, token: str | None = None,
+    credentials=Depends(bearer_scheme),
+):
+    """Serve a private thumbnail via browser/Bearer auth or a scoped ticket.
 
     Thumbnails are content-addressed by asset id and never change. Keep them in
     the signed-in browser cache, but out of shared intermediary caches.
     """
+    if not verify_media_token(asset_id, "thumb", expires, token):
+        username = await get_admin_key(request, credentials)
+        if not getattr(request.state, "auth_user", None):
+            from app.auth import _load_active_user
+            await _load_active_user(username)
     resp = await _serve(asset_id, "thumb")
     etag = _thumbnail_etag(asset_id, resp)
     if _etag_matches(request.headers.get("if-none-match"), etag):

@@ -1,5 +1,53 @@
 import pytest
 
+from app.services.media_signing import sign_media_token
+
+
+@pytest.mark.parametrize("credential", ["anonymous", "expired_session", "invalid", "expired", "wrong_asset", "wrong_purpose", "signed", "session"])
+def test_thumb_authenticates_before_reading_or_requesting_derivatives(tmp_path, monkeypatch, credential):
+    from fastapi import FastAPI
+    from fastapi.responses import FileResponse
+    from fastapi.testclient import TestClient
+    from app.api import media
+    from app import auth
+    from app.services import browser_sessions
+    from types import SimpleNamespace
+    import time
+    user = SimpleNamespace(id=1, username="fixture", password_hash="fixture", is_active=True, must_change_password=False)
+    async def load_user(_id):
+        return user
+    async def session(token):
+        if credential == "session" and token == "fixture":
+            return SimpleNamespace(user_id=1, password_fingerprint=browser_sessions.password_fingerprint(user.password_hash))
+        return None
+    monkeypatch.setattr(auth, "load_browser_session", session)
+    monkeypatch.setattr(auth, "_load_active_user_by_id", load_user)
+    calls = []
+    image = tmp_path / "fixture.webp"
+    image.write_bytes(b"fixture image")
+    async def serve(asset, size):
+        calls.append((asset, size))
+        return FileResponse(image, media_type="image/webp")
+    monkeypatch.setattr(media, "_serve", serve)
+    app = FastAPI()
+    app.include_router(media.router)
+    expires = int(time.time()) + 60 if credential != "expired" else int(time.time()) - 1
+    params = {}
+    if credential not in {"anonymous", "session", "expired_session"}:
+        params = {"expires": expires, "token": "invalid" if credential == "invalid" else sign_media_token(
+            "other" if credential == "wrong_asset" else "fixture", "preview" if credential == "wrong_purpose" else "thumb", expires)}
+    client = TestClient(app)
+    if credential in {"session", "expired_session"}:
+        client.cookies.set("ag_session", "fixture")
+    result = client.get("/media/thumb/fixture", params=params)
+    if credential in {"signed", "session"}:
+        assert result.status_code == 200
+        assert result.content == b"fixture image"
+        assert calls == [("fixture", "thumb")]
+    else:
+        assert result.status_code == 401
+        assert calls == []
+
 
 @pytest.mark.asyncio
 async def test_thumb_sets_cache_control(tmp_path, monkeypatch):
@@ -17,7 +65,7 @@ async def test_thumb_sets_cache_control(tmp_path, monkeypatch):
     monkeypatch.setattr(media, "_serve", fake_serve)
 
     request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
-    resp = await media.thumb("any-asset-id", request)
+    resp = await media.thumb("any-asset-id", request, "4102444800", sign_media_token("any-asset-id", "thumb", 4102444800), None)
     assert resp.headers["cache-control"] == "private, max-age=86400"
     assert resp.headers["etag"].startswith('"any-asset-id-thumb-')
 
@@ -38,6 +86,7 @@ async def test_thumb_returns_not_modified_for_matching_etag(tmp_path, monkeypatc
     first = await media.thumb(
         "any-asset-id",
         Request({"type": "http", "method": "GET", "path": "/", "headers": []}),
+        "4102444800", sign_media_token("any-asset-id", "thumb", 4102444800), None,
     )
     request = Request({
         "type": "http",
@@ -46,7 +95,7 @@ async def test_thumb_returns_not_modified_for_matching_etag(tmp_path, monkeypatc
         "headers": [(b"if-none-match", first.headers["etag"].encode())],
     })
 
-    resp = await media.thumb("any-asset-id", request)
+    resp = await media.thumb("any-asset-id", request, "4102444800", sign_media_token("any-asset-id", "thumb", 4102444800), None)
 
     assert resp.status_code == 304
     assert resp.headers["cache-control"] == "private, max-age=86400"
@@ -70,7 +119,7 @@ async def test_thumb_conditional_request_still_verifies_resource(monkeypatch):
     })
 
     with pytest.raises(HTTPException) as error:
-        await media.thumb("missing", request)
+        await media.thumb("missing", request, "4102444800", sign_media_token("missing", "thumb", 4102444800), None)
     assert error.value.status_code == 404
 
 
@@ -90,7 +139,6 @@ def test_stream_supports_http_ranges(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.api import media
-    from app.services.media_signing import sign_media_token
 
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"0123456789" * 100)
@@ -121,7 +169,6 @@ def test_stream_rejects_expired_and_tampered_tickets():
     from fastapi.testclient import TestClient
 
     from app.api import media
-    from app.services.media_signing import sign_media_token
 
     app = FastAPI()
     app.include_router(media.router)
