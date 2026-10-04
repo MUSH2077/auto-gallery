@@ -27,6 +27,7 @@ export default function CommandPalette({
 }) {
   const t = useT();
   const pathname = usePathname();
+  const previousPath = useRef(pathname);
   const router = useRouter();
   const { has, isAdmin } = usePermissions();
   const { mounted, closing } = usePresence(open);
@@ -100,6 +101,8 @@ export default function CommandPalette({
   }, [query]);
 
   useEffect(() => {
+    if (previousPath.current === pathname) return;
+    previousPath.current = pathname;
     if (open) onClose();
   }, [pathname]); // A completed Next route change owns closing the palette.
 

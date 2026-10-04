@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { Activity, CircleCheck, Menu, Search, Upload } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -12,9 +13,10 @@ import { usePresence } from "@/lib/motion";
 import { findAdminNavEntry } from "@/lib/adminNavigation";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { NotificationBell } from "@/components/NotificationCenter";
-import CommandPalette from "@/components/CommandPalette";
 import { api, queryKeys } from "@/lib/api";
 import { pollInterval } from "@/lib/polling";
+
+const CommandPalette = dynamic(() => import("@/components/CommandPalette"));
 
 function UserMenu() {
   const t = useT();
@@ -138,6 +140,11 @@ export default function AppTopBar({
     refetchIntervalInBackground: false,
   });
   const [commandOpen, setCommandOpen] = useState(false);
+  const [commandRequested, setCommandRequested] = useState(false);
+  const openCommand = useCallback(() => {
+    setCommandRequested(true);
+    setCommandOpen(true);
+  }, []);
   const closeCommand = useCallback(() => setCommandOpen(false), []);
 
   // ⌘K / Ctrl+K opens the shared route + content command palette.
@@ -146,6 +153,7 @@ export default function AppTopBar({
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        setCommandRequested(true);
         setCommandOpen((current) => !current);
       }
     };
@@ -201,7 +209,7 @@ export default function AppTopBar({
             <>
               <button
                 type="button"
-                onClick={() => setCommandOpen(true)}
+                onClick={openCommand}
                 className="hidden h-8 w-48 items-center gap-2 rounded-lg border border-border bg-canvas px-2.5 text-[13px] text-placeholder transition-colors hover:border-muted xl:flex"
               >
                 <Search className="h-4 w-4 shrink-0" strokeWidth={1.8} aria-hidden />
@@ -210,7 +218,7 @@ export default function AppTopBar({
               </button>
               <button
                 type="button"
-                onClick={() => setCommandOpen(true)}
+                onClick={openCommand}
                 className="btn-icon xl:hidden"
                 aria-label={t("search.title")}
                 title={t("search.title")}
@@ -230,7 +238,7 @@ export default function AppTopBar({
           <UserMenu />
         </div>
       </header>
-      <CommandPalette open={commandOpen} onClose={closeCommand} />
+      {commandRequested && <CommandPalette open={commandOpen} onClose={closeCommand} />}
     </>
   );
 }
