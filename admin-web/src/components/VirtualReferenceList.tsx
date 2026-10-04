@@ -35,6 +35,7 @@ export interface VirtualReferenceListState<TItem> {
   total: number;
   loadedItems: TItem[];
   loadedOffsets: number[];
+  requestedOffsets: number[];
   loadedPages: Array<{ offset: number; items: TItem[] }>;
   visibleOffsets: number[];
 }
@@ -245,12 +246,13 @@ function VirtualReferenceListInner<
     [virtualItems],
   );
   const callbackState = useMemo(
-    () => ({ total, loadedItems, loadedOffsets, loadedPages, visibleOffsets }),
-    [loadedItems, loadedOffsets, loadedPages, total, visibleOffsets],
+    () => ({ total, loadedItems, loadedOffsets, requestedOffsets, loadedPages, visibleOffsets }),
+    [loadedItems, loadedOffsets, requestedOffsets, loadedPages, total, visibleOffsets],
   );
   const stateSignature = [
     total,
     loadedOffsets.join(","),
+    requestedOffsets.join(","),
     loadedItems.map((item) => item.id).join(","),
     visibleOffsets.join(","),
   ].join("|");

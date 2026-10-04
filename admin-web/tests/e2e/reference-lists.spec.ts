@@ -118,7 +118,10 @@ async function installRoutes(
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
     summaryBatches: string[][];
     failSearchOnce?: Set<string>;
+    failSearch?: Set<string>;
     holdCompose?: () => Promise<void>;
+    holdSearch?: (scope: string, offset: number) => Promise<void>;
+    deletedIds?: Set<string>;
   },
   theme: "dark" | "light" = "dark",
 ) {
@@ -196,8 +199,9 @@ async function installRoutes(
       const limit = Number(url.searchParams.get("limit") || 20);
       const q = url.searchParams.get("q") || "";
       observations.searches.push({ scope, offset, limit, q });
+      await observations.holdSearch?.(scope, offset);
       const failKey = `${scope}:${offset}`;
-      if (observations.failSearchOnce?.delete(failKey)) {
+      if (observations.failSearch?.has(failKey) || observations.failSearchOnce?.delete(failKey)) {
         await route.fulfill({ status: 503, json: { detail: "Temporary batch failure" } });
         return;
       }
@@ -207,7 +211,7 @@ async function installRoutes(
         (_, index) => scope === "subscriptions"
           ? subscriptionAt(offset + index)
           : creatorAt(offset + index),
-      );
+      ).filter((item) => !observations.deletedIds?.has(item.id));
       await route.fulfill({ json: {
         query: q,
         canonical_query: q,
@@ -787,3 +791,85 @@ test("legacy pages become virtual offsets and list state survives a detail round
   await expect(page.getByRole("checkbox", { name: "Select all" })).not.toBeChecked();
   await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
 });
+
+for (const scope of ["creators", "subscriptions"] as const) {
+  for (const firstOffset of [0, 50]) {
+    const outcomes = firstOffset === 0
+      ? ["success", "retry", "deleted", "select-loaded-row"] as const
+      : ["success", "retry", "deleted"] as const;
+    for (const outcome of outcomes) {
+      test(`${scope} cold session selection survives ${firstOffset} first and ${outcome}`, async ({ context, page }) => {
+        const prefix = scope === "creators" ? "creator" : "subscription";
+        const secondOffset = firstOffset === 0 ? 50 : 0;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const observations = {
+          searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>,
+          summaryBatches: [] as string[][],
+          failSearch: new Set(outcome === "retry" ? [`${scope}:${secondOffset}`] : []),
+          deletedIds: new Set(outcome === "deleted" ? [`${prefix}-0050`] : []),
+          holdSearch: async (requestedScope: string, offset: number) => {
+            if (requestedScope === scope && offset === secondOffset) await held;
+          },
+        };
+        await installRoutes(context, observations);
+        await context.addInitScript(({ scope, prefix }) => {
+          const fingerprint = `${scope}:`;
+          const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(fingerprint)}`;
+          sessionStorage.setItem(key, JSON.stringify({ version: 1, queryFingerprint: fingerprint,
+            scrollY: 0, loadedOffsets: [0, 50], selectedIds: [`${prefix}-0000`, `${prefix}-0050`] }));
+        }, { scope, prefix });
+        await page.setViewportSize({ width: 1440, height: 900 });
+        try {
+          await page.goto(`/admin/${scope}`);
+          await expect(page.getByText(/\d+ selected \/ (49|50) loaded/)).toBeVisible();
+          // Pending IDs are saved, but cannot enter the loaded-row actions.
+          const partialSelection = outcome === "deleted" && firstOffset === 50 ? 0 : 1;
+          await expect(page.getByText(new RegExp(`${partialSelection} selected / (49|50) loaded`))).toBeVisible();
+          if (outcome === "select-loaded-row") {
+            const otherRow = page.getByRole("listitem").nth(1).getByRole("checkbox");
+            await otherRow.check();
+            await expect(page.getByText("2 selected / 50 loaded", { exact: true })).toBeVisible();
+            await otherRow.uncheck();
+            await expect(page.getByText("1 selected / 50 loaded", { exact: true })).toBeVisible();
+            await otherRow.check();
+            await expect(page.getByText("2 selected / 50 loaded", { exact: true })).toBeVisible();
+          }
+          const expectedSelection = outcome === "select-loaded-row"
+            ? [`${prefix}-0000`, `${prefix}-0001`, `${prefix}-0050`]
+            : [`${prefix}-0000`, `${prefix}-0050`];
+          const pending = await page.evaluate((scope) => {
+            window.dispatchEvent(new Event("pagehide"));
+            const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+            return JSON.parse(sessionStorage.getItem(key)!);
+          }, scope);
+          expect(pending.selectedIds).toEqual(expectedSelection);
+          expect(pending.loadedOffsets).toEqual([0, 50]);
+          release();
+          if (outcome === "retry") {
+            // The failed page may be outside the viewport; scrolling makes its
+            // existing retry control visible without changing the selection.
+            if (secondOffset === 50) await page.evaluate(() => window.scrollTo(0, 6000));
+            await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+            await expect(page.getByText(/1 selected \/ 50 loaded/)).toBeVisible();
+            observations.failSearch.clear();
+            await page.getByRole("button", { name: "Retry", exact: true }).click();
+          }
+          const completedSelection = outcome === "deleted" ? "1 selected / 99 loaded"
+            : outcome === "select-loaded-row" ? "3 selected / 100 loaded" : "2 selected / 100 loaded";
+          await expect(page.getByText(completedSelection, { exact: true })).toBeVisible();
+          const savedSelection = await page.evaluate((scope) => {
+            window.dispatchEvent(new Event("pagehide"));
+            const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+            return JSON.parse(sessionStorage.getItem(key)!).selectedIds;
+          }, scope);
+          expect(savedSelection).toEqual(outcome === "deleted" ? [`${prefix}-0000`] : expectedSelection);
+          if (outcome === "success") {
+            await page.getByRole("button", { name: "Updated", exact: true }).click();
+            await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
+          }
+        } finally { release(); }
+      });
+    }
+  }
+}

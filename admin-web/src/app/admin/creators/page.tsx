@@ -138,7 +138,7 @@ function CreatorsContent() {
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
-  const { listState, setListState, selected, setSelected, onStateChange } = useReferenceListState<CreatorSearchHit>({
+  const { listState, setListState, selected, selection, setSelected, onStateChange } = useReferenceListState<CreatorSearchHit>({
     total: 0,
     loadedItems: [],
     loadedOffsets: [],
@@ -148,7 +148,7 @@ function CreatorsContent() {
   const paramsString = sp.toString();
   const { sessionKey, restoredSession, sessionReady, persistListSession } = useReferenceListSession({
     userId: user?.id ?? "current", pathname, queryFingerprint, legacyPage,
-    total: listState.total, loadedOffsets: listState.loadedOffsets, selected, setSelected,
+    total: listState.total, loadedOffsets: listState.requestedOffsets ?? listState.loadedOffsets, selected: selection, setSelected,
     onQueryChange: () => {
       setSearchMeta(null);
       setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });
@@ -287,9 +287,11 @@ function CreatorsContent() {
   });
 
   const toggleSelect = (id: string) => {
-    const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelected(next);
+    setSelected((current) => {
+      const next = new Set(current);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   };
   const selectAll = () => {
     const loadedIds = creatorItems.map((creator) => creator.id);

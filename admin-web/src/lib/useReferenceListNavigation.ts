@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createReferenceListSession,
   readReferenceListSession,
@@ -16,23 +16,29 @@ type ReferenceListState<T> = {
   total: number;
   loadedItems: T[];
   loadedOffsets: number[];
+  requestedOffsets?: number[];
   loadedPages: Array<{ offset: number; items: T[] }>;
   visibleOffsets: number[];
 };
 
 export function useReferenceListState<T extends { id: string }>(initialState: ReferenceListState<T>) {
   const [listState, setListState] = useState<ReferenceListState<T>>(initialState);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selection, setSelected] = useState<Set<string>>(new Set());
+  const selected = useMemo(() => new Set(
+    listState.loadedItems.filter((item) => selection.has(item.id)).map((item) => item.id),
+  ), [listState.loadedItems, selection]);
   const onStateChange = useCallback((next: ReferenceListState<T>) => {
     setListState(next);
-    if (!next.loadedItems.length) return;
+    // Partial or failed restoration is not evidence that a saved ID vanished.
+    // Only confirmed batches can discard the remaining pending selection.
+    if (!next.loadedOffsets.length || !next.requestedOffsets?.every((offset) => next.loadedOffsets.includes(offset))) return;
     const loadedIds = new Set(next.loadedItems.map((item) => item.id));
     setSelected((current) => {
       const pruned = new Set([...current].filter((id) => loadedIds.has(id)));
       return pruned.size === current.size ? current : pruned;
     });
   }, []);
-  return { listState, setListState, selected, setSelected, onStateChange };
+  return { listState, setListState, selected, selection, setSelected, onStateChange };
 }
 
 type LegacyNavigationOptions = {
