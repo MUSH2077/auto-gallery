@@ -897,7 +897,7 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     async def fake_defaults():
         return {"max_posts": 1, "timeout_seconds": 1, "stall_timeout_seconds": 1}
 
-    async def fake_enqueue(_job_id, import_error=None, new_json_paths=None):
+    async def fake_enqueue(_job_id, import_error=None, new_json_paths=None, *, publisher_checkpoint=None):
         paths = set(new_json_paths or [])
         if import_error is None:
             assert initial_publications == []
@@ -921,7 +921,7 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     while hasattr(raw_runner, "__wrapped__"):
         raw_runner = raw_runner.__wrapped__
     monkeypatch.setattr(download_module, "_read_download_defaults", fake_defaults)
-    monkeypatch.setattr(download_module, "_enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
     monkeypatch.setattr(download_module, "build_effective_gallerydl_config", lambda *_args: {})
     monkeypatch.setattr(download_module, "staging_enabled", lambda: False)
     monkeypatch.setattr(download_module, "ControlListener", FakeControlListener)
