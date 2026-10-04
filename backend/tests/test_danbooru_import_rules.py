@@ -52,6 +52,19 @@ async def run_entry(entry, db, job_id=""):
     return result["imported"][0]
 
 
+@pytest.mark.parametrize("entry", ["pixiv", "url"])
+async def test_batch_producers_return_the_complete_monitor_result_contract(db, artist, entry):
+    from app.jobs.batch_import import _batch_import, _url_batch_import
+    await db.rollback()
+    result = await (_batch_import(["101"], "") if entry == "pixiv" else _url_batch_import([PIXIV_ONE], ""))
+    assert result["total"] == result["imported_count"] == 1
+    assert result["error_count"] == 0
+    for name in ("imported", "low_confidence", "not_found", "errors"):
+        assert isinstance(result[name], list)
+    assert result["low_confidence"] == []
+    assert result["low_confidence_count"] == 0
+
+
 @pytest.mark.parametrize("entry", ["single", "pixiv", "url"])
 async def test_all_entrypoints_preserve_urls_and_resolvable_source_identities(db, artist, entry):
     from app.models import Creator, CreatorLink, SourceCreator, Subscription, SubscriptionSource

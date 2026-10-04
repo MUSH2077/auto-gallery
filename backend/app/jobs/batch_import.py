@@ -262,6 +262,10 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
         "not_found_count": len(not_found),
         "error_count": len(errors),
         "imported": imported,
+        # URL imports do not run Pixiv confidence splitting, but share the
+        # complete batch-result contract consumed by monitoring and display.
+        "low_confidence_count": 0,
+        "low_confidence": [],
         "not_found": not_found,
         "errors": errors,
     }

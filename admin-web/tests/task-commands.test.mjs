@@ -73,7 +73,14 @@ test("repeat sync retains one intent after failure and clears only validated acc
 test("batch adaptation keeps active empty results distinct from completed results", () => {
   assert.equal(adaptBatchStatus({ status: "running", result: {} }).result, null);
   assert.throws(() => adaptBatchStatus({ status: "complete", result: null }), /no longer available/);
+  assert.throws(() => adaptBatchStatus({ status: "completed", result: {} }), /no longer available/);
   const result = { imported: [], low_confidence: [], not_found: [], errors: [] };
+  for (const field of Object.keys(result)) {
+    const damaged = { ...result };
+    delete damaged[field];
+    assert.throws(() => adaptBatchStatus({ status: "completed", result: damaged }), /no longer available/);
+  }
+  assert.equal(adaptBatchStatus({ status: "failed", result: {} }).status, "failed");
   assert.equal(adaptBatchStatus({ status: "completed", result }).result, result);
   const old = restoreBatchRecord({ jobId: "old", importType: "url", total: 2, startedAt: 1 });
   assert.equal(old.kind, "admin-danbooru-url-batch-import");
