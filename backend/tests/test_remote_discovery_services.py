@@ -2061,11 +2061,11 @@ async def test_concurrent_conflict_resolutions_reject_incompatible_identity_mapp
         await engine.dispose()
 
 
-def _headers(username: str) -> dict[str, str]:
-    from app.auth import create_access_token
+async def _headers(username: str) -> dict[str, str]:
+    from tests.conftest import access_token_for_user
 
     return {
-        "Authorization": f"Bearer {create_access_token(username, must_change_password=False)}"
+        "Authorization": f"Bearer {await access_token_for_user(username)}"
     }
 
 
@@ -2213,7 +2213,7 @@ async def test_candidate_local_match_filter_applies_before_count_and_pagination(
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            headers = _headers(username)
+            headers = await _headers(username)
             matched_response = await client.get(
                 "/api/v1/discovery/candidates",
                 params={"local_match": "true", "offset": 0, "limit": 25},
@@ -2303,8 +2303,8 @@ async def test_discovery_apis_isolate_scans_candidates_and_manual_import_default
             second_candidate_id = second_candidate.id
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            first_headers = _headers(first_name)
-            second_headers = _headers(second_name)
+            first_headers = await _headers(first_name)
+            second_headers = await _headers(second_name)
             candidates = await client.get(
                 "/api/v1/discovery/candidates", headers=first_headers
             )

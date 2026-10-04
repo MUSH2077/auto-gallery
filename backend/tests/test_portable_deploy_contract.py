@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -317,6 +318,7 @@ def test_candidate_schema_rollback_retains_schema_and_skips_old_migrate(tmp_path
     assert "backend admin-web" in log
     assert receipt == {
         "ROLLBACK_STATUS": "complete",
+        "ROLLBACK_WRITER_STOP_CONFIRMED": "true",
         "ROLLBACK_SCHEMA_POLICY": "schema-forward",
         "ROLLBACK_CURRENT_ALEMBIC_REVISION": candidate,
         "ROLLBACK_SCHEMA_RETAINED": "true",
@@ -411,3 +413,85 @@ def test_showcase_preferences_have_an_atomic_slideshow_migration():
     assert "preferences -> 'slideshow'" in migration
     for key in ("slideDwellMs", "slideTransition", "slideLoop", "slideShowMeta"):
         assert key in migration
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accounts", ["ready", "first-login", "mixed", "inactive"])
+async def test_runtime_docs_verification_uses_current_identity_and_password_state(
+    accounts, monkeypatch, capsys,
+):
+    """Execute the deployed Python block against real auth and account records."""
+    import httpx
+    from sqlalchemy import delete, select, update
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models.user import User
+
+    source = (ROOT / "scripts/verify-runtime.sh").read_text(encoding="utf-8")
+    block = next(block for block in re.findall(r"<<'PY'\n(.*?)\nPY", source, re.S)
+                 if "async def verify_docs()" in block)
+    namespace = {}
+    exec(compile(block.rsplit("asyncio.run(verify_docs())", 1)[0], "verify-runtime.sh", "exec"), namespace)
+    suspended = []
+    responses = []
+    original_client = httpx.AsyncClient
+    backend_transport = httpx.ASGITransport(app=app)
+
+    class DocsGateway(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            # These public static bundles live in Next, not in the backend.
+            # All identity, docs and business checks use the real ASGI routes.
+            if request.url.path.startswith("/api-docs/"):
+                response = httpx.Response(200, content=b"static documentation bundle")
+            else:
+                response = await backend_transport.handle_async_request(request)
+            responses.append((request.url.path, response.status_code))
+            return response
+
+    def gateway_client(**kwargs):
+        return original_client(**kwargs, transport=DocsGateway())
+
+    monkeypatch.setattr(httpx, "AsyncClient", gateway_client)
+    prefix = "runtime_docs_test_"
+    try:
+        async with async_session() as db:
+            suspended = list((await db.execute(select(User.id).where(
+                User.is_admin.is_(True), User.is_active.is_(True),
+            ))).scalars())
+            await db.execute(update(User).where(User.id.in_(suspended)).values(is_active=False))
+            await db.execute(delete(User).where(User.username.startswith(prefix)))
+            first = User(username=prefix + "first", password_hash="unused-test-hash",
+                         is_admin=True, is_active=accounts != "inactive",
+                         must_change_password=accounts in {"first-login", "mixed"}, credential_version=7)
+            db.add(first)
+            await db.flush()
+            if accounts == "mixed":
+                db.add(User(username=prefix + "ready", password_hash="unused-test-hash",
+                            is_admin=True, is_active=True, must_change_password=False, credential_version=9))
+            await db.commit()
+
+        if accounts == "inactive":
+            with pytest.raises(RuntimeError, match="active administrator"):
+                await namespace["verify_docs"]()
+            assert responses == []
+        else:
+            await namespace["verify_docs"]()
+            docs = [status for path, status in responses if path == "/api/docs"]
+            storage = [status for path, status in responses if path == "/api/v1/system/storage"]
+            expected = 403 if accounts == "first-login" else 200
+            assert docs == [401, expected]
+            assert storage == [401, expected]
+            assert ("/api/v1/auth/me", 200) in responses
+            if accounts == "first-login":
+                assert "pending" in capsys.readouterr().out.lower()
+            async with async_session() as db:
+                users = list((await db.execute(select(User).where(User.username.startswith(prefix)))).scalars())
+                assert all(user.credential_version in {7, 9} for user in users)
+                assert next(user for user in users if user.username.endswith("first")).must_change_password == (accounts in {"first-login", "mixed"})
+    finally:
+        async with async_session() as db:
+            await db.execute(delete(User).where(User.username.startswith(prefix)))
+            await db.execute(update(User).where(User.id.in_(suspended)).values(is_active=True))
+            await db.commit()
+        await engine.dispose()

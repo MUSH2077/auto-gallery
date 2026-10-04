@@ -30,7 +30,7 @@ async def db():
 @pytest.fixture
 async def client(db):
     from app.models import User
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.main import app
 
     user = User(username=f"contracts-{uuid4()}", password_hash="test", is_admin=True, is_active=True, must_change_password=False)
@@ -39,7 +39,7 @@ async def client(db):
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {create_access_token(user.username, must_change_password=False)}"},
+        headers={"Authorization": f"Bearer {await access_token_for_user(user.username)}"},
     ) as http:
         http.actor_id = user.id
         yield http
@@ -328,7 +328,7 @@ async def test_all_filtered_over_limit_refuses_before_any_mutation(db, client, m
 
 async def test_workbench_recent_and_registered_capabilities_respect_actor(db, client):
     from app.models import User, TaskRun
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
 
     job_id, task_id = await owned_download(db, client.actor_id, "failed")
     response = await client.get("/api/v1/system/workbench", params={"refresh": "true"})
@@ -345,7 +345,7 @@ async def test_workbench_recent_and_registered_capabilities_respect_actor(db, cl
     response = await client.get(f"/api/v1/tasks/{legacy_id}")
     assert "retry" not in response.json()["available_actions"]
     assert (await client.post(f"/api/v1/tasks/{legacy_id}/retry")).json()["detail"]["reason"] == "legacy_operation_read_only"
-    headers = {"Authorization": f"Bearer {create_access_token(limited.username, must_change_password=False)}"}
+    headers = {"Authorization": f"Bearer {await access_token_for_user(limited.username)}"}
     assert (await client.get(f"/api/v1/tasks/{task_id}", headers=headers)).status_code == 404
     limited_response = await client.get("/api/v1/system/workbench", headers=headers)
     assert limited_response.json()["recent"]["download_jobs"] == [], "Cached global admin jobs must not cross actor visibility"
@@ -442,7 +442,7 @@ async def test_action_authorization_holds_domain_lock_until_control_commits(db, 
 async def test_repeat_concurrent_intents_and_transport_failure_keep_durable_identity(db, client, monkeypatch):
     import asyncio
     from app.models import DownloadRepeatIntent, DownloadJob, TaskRun, User
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.services import download_dispatch
 
     job_id, task_id = await owned_download(db, client.actor_id)
@@ -465,7 +465,7 @@ async def test_repeat_concurrent_intents_and_transport_failure_keep_durable_iden
     other = User(username=f"outsider-{uuid4()}", password_hash="test", permissions=["tasks"], is_active=True, must_change_password=False)
     db.add(other)
     await db.commit()
-    headers = {"Authorization": f"Bearer {create_access_token(other.username, must_change_password=False)}"}
+    headers = {"Authorization": f"Bearer {await access_token_for_user(other.username)}"}
     assert (await client.post(f"/api/v1/download-jobs/{job_id}/repeat-sync", headers=headers, json={"request_id": request_id})).status_code == 404
     assert len(list((await db.execute(select(DownloadJob))).scalars())) == 2
 
@@ -507,7 +507,7 @@ async def test_fast_retry_worker_terminal_truth_survives_unified_response(db, cl
 async def test_registered_admin_policy_matches_real_retry_and_module_permissions(db, client):
     from app.services.operations import prepare_admin_operation
     from app.models import User
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
 
     prepared = await prepare_admin_operation(
         db, operation_type="admin-search-reindex", scope_key="library:search-reindex:active", title="Search rebuild", entity="search", options={}
@@ -520,7 +520,7 @@ async def test_registered_admin_policy_matches_real_retry_and_module_permissions
     limited = User(username=f"tasks-only-{uuid4()}", password_hash="test", permissions=["tasks"], is_active=True, must_change_password=False)
     db.add(limited)
     await db.commit()
-    headers = {"Authorization": f"Bearer {create_access_token(limited.username, must_change_password=False)}"}
+    headers = {"Authorization": f"Bearer {await access_token_for_user(limited.username)}"}
     for method, path in [("GET", f"/api/v1/tasks/{task_id}"), ("POST", f"/api/v1/tasks/{task_id}/retry")]:
         assert (await client.request(method, path, headers=headers)).status_code == 403
     response = await client.post(f"/api/v1/tasks/{task_id}/retry")
@@ -648,7 +648,7 @@ async def test_download_capabilities_keep_live_progress_reads_side_effect_free(d
 async def test_direct_admin_surface_keeps_own_module_permissions_without_private_leak(db, client):
     from app.services.operations import prepare_admin_operation
     from app.models import User
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
 
     prepared = await prepare_admin_operation(
         db, operation_type="admin-search-reindex", scope_key="library:search-reindex:active", title="Search rebuild", entity="search", options={}
@@ -658,7 +658,7 @@ async def test_direct_admin_surface_keeps_own_module_permissions_without_private
     system_user = User(username=f"system-{uuid4()}", password_hash="test", permissions=["system"], is_active=True, must_change_password=False)
     db.add(system_user)
     await db.commit()
-    headers = {"Authorization": f"Bearer {create_access_token(system_user.username, must_change_password=False)}"}
+    headers = {"Authorization": f"Bearer {await access_token_for_user(system_user.username)}"}
     response = await client.get(f"/api/v1/admin/operations/{task_id}", headers=headers)
     assert response.status_code == 200 and "retry" in response.json()["available_actions"], response.text
     response = await client.post(f"/api/v1/admin/operations/{task_id}/retry", headers=headers)
@@ -851,7 +851,7 @@ async def test_registered_batch_import_status_reuses_authenticated_subscription_
 
 @pytest.mark.parametrize("attention", ["open", "resolved"])
 async def test_private_member_batch_owner_actions_preserve_global_boundary(db, client, attention):
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.models import DownloadJob, User
     from app.services.operations import prepare_admin_operation
     from app.services.tasks import TaskService, is_global_subscription_batch
@@ -894,7 +894,7 @@ async def test_private_member_batch_owner_actions_preserve_global_boundary(db, c
         response = await client.post(f"/api/v1/tasks/{task_id}/{action}")
         assert response.status_code == 409, response.text
         assert response.json()["detail"]["reason"] == "batch_results_preserved"
-    headers = {"Authorization": f"Bearer {create_access_token(outsider.username, must_change_password=False)}"}
+    headers = {"Authorization": f"Bearer {await access_token_for_user(outsider.username)}"}
     for suffix, method in (("", "GET"), ("/cancel", "POST"), ("/acknowledge", "POST")):
         assert (await client.request(method, f"/api/v1/tasks/{task_id}{suffix}", headers=headers)).status_code == 404
         assert (await client.request(method, f"/api/v1/tasks/{global_id}{suffix}")).status_code == 403

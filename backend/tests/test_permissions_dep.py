@@ -36,7 +36,7 @@ def _make_probe_app():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_require_permission_matrix_for_library_module():
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.database import async_session, engine
     from app.models.user import User
 
@@ -64,7 +64,7 @@ async def test_require_permission_matrix_for_library_module():
                 (f"{PREFIX}nomodule", 403),
             ]
             for username, expected_status in cases:
-                token = create_access_token(username, must_change_password=False)
+                token = await access_token_for_user(username)
                 r = await client.get(
                     "/probe/library", headers={"Authorization": f"Bearer {token}"}
                 )
@@ -82,7 +82,7 @@ async def test_require_permission_matrix_for_library_module():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_require_admin_user_rejects_non_admin_and_accepts_admin():
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.database import async_session, engine
     from app.models.user import User
 
@@ -99,13 +99,13 @@ async def test_require_admin_user_rejects_non_admin_and_accepts_admin():
             await db.commit()
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            admin_token = create_access_token(f"{PREFIX}admin2", must_change_password=False)
+            admin_token = await access_token_for_user(f"{PREFIX}admin2")
             r = await client.get(
                 "/probe/admin-only", headers={"Authorization": f"Bearer {admin_token}"}
             )
             assert r.status_code == 200
 
-            module_token = create_access_token(f"{PREFIX}module2", must_change_password=False)
+            module_token = await access_token_for_user(f"{PREFIX}module2")
             r = await client.get(
                 "/probe/admin-only", headers={"Authorization": f"Bearer {module_token}"}
             )

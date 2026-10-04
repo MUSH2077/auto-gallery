@@ -133,6 +133,18 @@ def _provision_main_test_database() -> None:
 _provision_main_test_database()
 
 
+async def access_token_for_user(username: str) -> str:
+    """Issue test credentials from the persisted account, including its version."""
+    from sqlalchemy import select
+    from app.auth import create_access_token
+    from app.database import async_session
+    from app.models.user import User
+
+    async with async_session() as db:
+        user = (await db.execute(select(User).where(User.username == username))).scalar_one()
+        return create_access_token(user)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_meilisearch_indexes():
     """Keep every test search projection outside the production index names."""

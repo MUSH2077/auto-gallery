@@ -46,31 +46,33 @@ class ConnectionManager:
 
     def __init__(self):
         self._connections: dict[str, WebSocket] = {}
-        self._connection_usernames: dict[str, str] = {}
+        self._connection_accounts: dict[str, tuple[int, int]] = {}
         self._lock = threading.Lock()
         self._running = False
 
-    async def connect(self, client_id: str, websocket: WebSocket, *, username: str = "unknown") -> None:
+    async def connect(self, client_id: str, websocket: WebSocket, *, account: tuple[int, int], username: str) -> None:
         await websocket.accept()
         with self._lock:
             self._connections[client_id] = websocket
-            self._connection_usernames[client_id] = username
+            self._connection_accounts[client_id] = account
         logger.info("WS client %s (user=%s) connected (%d total)", client_id, username, len(self._connections))
         await websocket.send_json({"type": "connected", "client_id": client_id})
 
     async def disconnect(self, client_id: str) -> None:
         with self._lock:
             self._connections.pop(client_id, None)
-            self._connection_usernames.pop(client_id, None)
+            self._connection_accounts.pop(client_id, None)
         logger.info("WS client %s disconnected (%d remaining)", client_id, len(self._connections))
 
     @staticmethod
-    async def _current_tasks_user(db, username: str) -> User | None:
+    async def _current_tasks_user(db, account: tuple[int, int]) -> User | None:
         user = (
             await db.execute(
                 select(User).where(
-                    User.username == username,
+                    User.id == account[0],
+                    User.credential_version == account[1],
                     User.is_active.is_(True),
+                    User.must_change_password.is_(False),
                 )
             )
         ).scalar_one_or_none()
@@ -118,18 +120,18 @@ class ConnectionManager:
             return can_access_admin_operation(user, task.operation_type)
         return await service.is_visible_to_user(task, user.id)
 
-    async def is_current_tasks_user(self, username: str) -> bool:
+    async def is_current_tasks_user(self, account: tuple[int, int]) -> bool:
         """Revalidate active-user and tasks-module access before accepting."""
 
         async with async_session() as db:
-            return await self._current_tasks_user(db, username) is not None
+            return await self._current_tasks_user(db, account) is not None
 
-    async def can_subscribe(self, username: str, task_id: Any) -> bool:
+    async def can_subscribe(self, account: tuple[int, int], task_id: Any) -> bool:
         """Authorize a TaskRun reference without disclosing its existence."""
 
         try:
             async with async_session() as db:
-                user = await self._current_tasks_user(db, username)
+                user = await self._current_tasks_user(db, account)
                 task = await self._resolve_task_reference(db, task_id)
                 return bool(
                     user is not None
@@ -157,11 +159,11 @@ class ConnectionManager:
         disconnected: list[str] = []
         with self._lock:
             clients = [
-                (client_id, websocket, self._connection_usernames.get(client_id))
+                (client_id, websocket, self._connection_accounts.get(client_id))
                 for client_id, websocket in self._connections.items()
             ]
 
-        authorized: set[str] = set()
+        authorized: set[tuple[int, int]] = set()
         try:
             async with async_session() as db:
                 task = await self._resolve_task_reference(
@@ -171,18 +173,18 @@ class ConnectionManager:
                 )
                 if task is None:
                     return
-                for _client_id, _websocket, username in clients:
-                    if not username or username in authorized:
+                for _client_id, _websocket, account in clients:
+                    if not account or account in authorized:
                         continue
-                    user = await self._current_tasks_user(db, username)
+                    user = await self._current_tasks_user(db, account)
                     if user is not None and await self._task_visible_to_user(db, task, user):
-                        authorized.add(username)
+                        authorized.add(account)
         except Exception:
             logger.warning("WebSocket task event visibility check failed")
             return
 
-        for client_id, ws, username in clients:
-            if username not in authorized:
+        for client_id, ws, account in clients:
+            if account not in authorized:
                 continue
             try:
                 await ws.send_json(message)

@@ -1551,11 +1551,11 @@ async def test_x_download_cookie_is_identity_bound_redacted_and_removable():
         await engine.dispose()
 
 
-def _headers(username: str) -> dict[str, str]:
-    from app.auth import create_access_token
+async def _headers(username: str) -> dict[str, str]:
+    from tests.conftest import access_token_for_user
 
     return {
-        "Authorization": f"Bearer {create_access_token(username, must_change_password=False)}"
+        "Authorization": f"Bearer {await access_token_for_user(username)}"
     }
 
 
@@ -1609,7 +1609,7 @@ async def test_remote_account_api_is_owner_scoped_redacted_and_admin_audit_is_me
                     "auth_method": "refresh_token",
                     "credentials": {"refresh_token": "top-secret-refresh"},
                 },
-                headers=_headers(first_name),
+                headers=await _headers(first_name),
             )
             assert response.status_code == 201, response.text
             body = response.json()
@@ -1620,15 +1620,15 @@ async def test_remote_account_api_is_owner_scoped_redacted_and_admin_audit_is_me
             assert "ciphertext" not in response.text
 
             assert (
-                await client.get(f"/api/v1/remote-accounts/{account_id}", headers=_headers(second_name))
+                await client.get(f"/api/v1/remote-accounts/{account_id}", headers=await _headers(second_name))
             ).status_code == 404
             tested = await client.post(
-                f"/api/v1/remote-accounts/{account_id}/test", headers=_headers(first_name)
+                f"/api/v1/remote-accounts/{account_id}/test", headers=await _headers(first_name)
             )
             assert tested.status_code == 200, tested.text
             assert tested.json()["auth_status"] == "healthy"
             collections = await client.get(
-                f"/api/v1/remote-accounts/{account_id}/collections", headers=_headers(first_name)
+                f"/api/v1/remote-accounts/{account_id}/collections", headers=await _headers(first_name)
             )
             assert collections.status_code == 200
             assert collections.json() == [
@@ -1636,11 +1636,11 @@ async def test_remote_account_api_is_owner_scoped_redacted_and_admin_audit_is_me
             ]
 
             forbidden = await client.get(
-                "/api/v1/admin/audit/remote-accounts", headers=_headers(second_name)
+                "/api/v1/admin/audit/remote-accounts", headers=await _headers(second_name)
             )
             assert forbidden.status_code == 403
             audit = await client.get(
-                "/api/v1/admin/audit/remote-accounts", headers=_headers(admin_name)
+                "/api/v1/admin/audit/remote-accounts", headers=await _headers(admin_name)
             )
             assert audit.status_code == 200, audit.text
             assert audit.json()["total"] == 1
@@ -1732,11 +1732,11 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay(caplog):
             missing_account = await client.get(
                 "/api/v1/remote-accounts/x/oauth/authorize",
                 params={"account_id": str(uuid4())},
-                headers=_headers(username),
+                headers=await _headers(username),
             )
             assert missing_account.status_code == 404
             authorize = await client.get(
-                "/api/v1/remote-accounts/x/oauth/authorize", headers=_headers(username)
+                "/api/v1/remote-accounts/x/oauth/authorize", headers=await _headers(username)
             )
             assert authorize.status_code == 200, authorize.text
             state = authorize.json()["state"]
@@ -1746,7 +1746,7 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay(caplog):
             callback = await client.post(
                 "/api/v1/remote-accounts/x/oauth/callback",
                 json={"state": state, "code": code_canary},
-                headers=_headers(username),
+                headers=await _headers(username),
             )
             assert callback.status_code == 200, callback.text
             assert callback.json()["source"] == "x"
@@ -1756,12 +1756,12 @@ async def test_x_oauth_api_uses_injected_exchange_and_rejects_replay(caplog):
             replay = await client.post(
                 "/api/v1/remote-accounts/x/oauth/callback",
                 json={"state": state, "code": code_canary},
-                headers=_headers(username),
+                headers=await _headers(username),
             )
             assert replay.status_code == 400
             deprecated_get = await client.get(
                 "/api/v1/remote-accounts/x/oauth/callback",
-                headers=_headers(username),
+                headers=await _headers(username),
             )
             assert deprecated_get.status_code == 405
             assert exchange.calls == [
@@ -1848,7 +1848,7 @@ async def test_x_oauth_callback_validation_redacts_nested_state_and_code(caplog)
                         "code": nested_code_canary,
                     },
                 },
-                headers=_headers(marker),
+                headers=await _headers(marker),
             )
             overlong = await client.post(
                 "/api/v1/remote-accounts/x/oauth/callback",
@@ -1856,7 +1856,7 @@ async def test_x_oauth_callback_validation_redacts_nested_state_and_code(caplog)
                     "state": long_state_canary + ("s" * 200),
                     "code": long_code_canary + ("c" * 2000),
                 },
-                headers=_headers(marker),
+                headers=await _headers(marker),
             )
 
         assert malformed.status_code == 422
@@ -1931,12 +1931,12 @@ async def test_x_oauth_callback_validation_redacts_every_root_input_shape(caplog
                 await client.post(
                     callback_path,
                     json=root_string_canary,
-                    headers=_headers(marker),
+                    headers=await _headers(marker),
                 ),
                 await client.post(
                     callback_path,
                     json=[root_array_canary, {"state": "nested-is-redacted"}],
-                    headers=_headers(marker),
+                    headers=await _headers(marker),
                 ),
                 await client.post(
                     callback_path,
@@ -1944,7 +1944,7 @@ async def test_x_oauth_callback_validation_redacts_every_root_input_shape(caplog
                         f"state={form_state_canary}&code={form_code_canary}"
                     ),
                     headers={
-                        **_headers(marker),
+                        **await _headers(marker),
                         "Content-Type": "application/x-www-form-urlencoded",
                     },
                 ),
@@ -1952,7 +1952,7 @@ async def test_x_oauth_callback_validation_redacts_every_root_input_shape(caplog
                     callback_path,
                     content=f'{{"state":"{invalid_json_canary}",',
                     headers={
-                        **_headers(marker),
+                        **await _headers(marker),
                         "Content-Type": "application/json",
                     },
                 ),
@@ -1960,7 +1960,7 @@ async def test_x_oauth_callback_validation_redacts_every_root_input_shape(caplog
             other_api = await client.post(
                 "/api/v1/remote-accounts",
                 json=other_api_canary,
-                headers=_headers(marker),
+                headers=await _headers(marker),
             )
 
         assert all(response.status_code == 422 for response in responses)

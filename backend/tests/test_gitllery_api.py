@@ -2,11 +2,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-# These endpoints live in app.api.curation, whose router dependency is
-# RequirePermission("curation") (Task 6). RequirePermission calls
-# app.auth.get_admin_key as a plain function inside its own closure rather
-# than via FastAPI's Depends() resolution, so app.dependency_overrides can no
-# longer intercept it — these tests authenticate with a real admin JWT instead.
+# The curation permission dependency resolves current account state directly.
+# Authenticate these endpoints with credentials from a persisted administrator.
 ADMIN_USERNAME = "gitllery_test_admin"
 
 
@@ -42,9 +39,9 @@ async def _clear_admin(db):
     await db.commit()
 
 
-def _admin_headers():
-    from app.auth import create_access_token
-    token = create_access_token(ADMIN_USERNAME, must_change_password=False)
+async def _admin_headers():
+    from tests.conftest import access_token_for_user
+    token = await access_token_for_user(ADMIN_USERNAME)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -68,11 +65,11 @@ async def test_status_and_reconcile_endpoints_are_shadow_safe(tmp_path, monkeypa
 
     monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
     monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path / "gallerydl-config"))
-    headers = _admin_headers()
     try:
         async with async_session() as db:
             await _clear(db)
             await _seed_admin(db)
+            headers = await _admin_headers()
             creator = Creator(name="七诗"); db.add(creator); await db.flush()
             db.add(SourceCreator(creator_id=creator.id, source="pixiv",
                                  source_creator_id="123", display_name="七诗"))
@@ -125,11 +122,11 @@ async def test_rebuild_endpoint_dry_run(tmp_path, monkeypatch):
     monkeypatch.setattr(gsvc.settings, "library_root", str(tmp_path))
     monkeypatch.setattr(rb.settings, "library_root", str(tmp_path))
     monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path / "gallerydl-config"))
-    headers = _admin_headers()
     try:
         async with async_session() as db:
             await _clear(db)
             await _seed_admin(db)
+            headers = await _admin_headers()
             creator = Creator(name="七诗"); db.add(creator); await db.flush()
             db.add(SourceCreator(creator_id=creator.id, source="pixiv",
                                  source_creator_id="123", display_name="七诗"))
@@ -198,11 +195,11 @@ async def test_build_routes_are_shadow_safe_async_operations(tmp_path, monkeypat
         }
 
     monkeypatch.setattr(operations, "enqueue_admin_operation", fake_enqueue)
-    headers = _admin_headers()
     try:
         async with async_session() as db:
             await _clear(db)
             await _seed_admin(db)
+            headers = await _admin_headers()
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -268,11 +265,11 @@ async def test_library_verify_is_registered_async_work(monkeypatch):
         }
 
     monkeypatch.setattr(operations, "enqueue_admin_operation", fake_enqueue)
-    headers = _admin_headers()
     try:
         async with async_session() as db:
             await _clear(db)
             await _seed_admin(db)
+            headers = await _admin_headers()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(

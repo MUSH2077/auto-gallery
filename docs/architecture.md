@@ -344,6 +344,17 @@ Disabled users, forced password change, and module permissions apply to both.
 default is 10080 minutes, while the Compose default is 1440 minutes. Browser
 users sign in again when migrating from legacy `ag_token` storage.
 
+Bearer credentials carry the immutable user ID (`uid`) and credential version
+(`cv`); the username is an actor label, never the authorization lookup key.
+Password reset and both password-change endpoints increment the version in the
+same transaction as the password hash. Authentication checks the current active
+and forced-password-change state. Deploy the additive `0159bc20de46` migration
+before the application; previous username-only Bearer tokens require a new
+login. WebSocket tickets and event forwarding retain the account ID/version,
+so an existing connection cannot inherit a replacement account's access.
+Admin demotion, disabling and deletion serialize the last-active-admin check
+and mutation with one transaction-scoped advisory lock.
+
 LAN HTTP remains supported for local access. Its cookies are exposed to anyone
 who can observe that connection; use the HTTPS reverse-proxy entry for
 transport protection.

@@ -190,6 +190,18 @@ per file, 1 GiB per batch and 2 MiB multipart overhead; final atomic charging
 still decides acceptance after preflight checks. Inject read, cancellation,
 move and commit failures and verify temporary files and usage are compensated.
 
+Account regressions use formal HTTP login and real PostgreSQL transactions.
+Cover old Bearer credentials after reset, both password-change entries,
+disablement and username reuse, including WebSocket tickets and event delivery.
+Force overlapping administrator removals and retain one active administrator.
+
+`scripts/verify-runtime.sh` issues current ID/version credentials from an active
+administrator, preferring one who has completed password change. On first
+deployment with only a forced-change administrator, it verifies that docs and
+business access return 403 and reports the authenticated docs check as pending.
+Complete password change through login and rerun the script. No active admin is
+a failure; verification does not modify account security state.
+
 Thumbnail GET and conditional GET require session/Bearer authentication or an
 asset-and-purpose-scoped ticket before file access or derivative requests.
 Same-origin browser images send the session cookie; retain private cache and

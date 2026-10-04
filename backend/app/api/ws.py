@@ -12,7 +12,7 @@ from redis.exceptions import RedisError
 from app.config import settings
 from app.services.browser_sessions import SessionStoreUnavailable, load_browser_session, password_fingerprint
 from app.auth import _load_active_user_by_id
-from app.services.ws_tickets import BrowserTicket, consume_ws_ticket
+from app.services.ws_tickets import BearerTicket, BrowserTicket, consume_ws_ticket
 from app.services.ws_manager import manager
 
 logger = logging.getLogger(__name__)
@@ -55,19 +55,31 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=4001, reason="Browser session unavailable")
             return
         username = identity.username
+    elif isinstance(identity, BearerTicket):
+        try:
+            user = await _load_active_user_by_id(identity.user_id)
+            if user.credential_version != identity.credential_version or user.must_change_password:
+                raise ValueError("Credentials revoked")
+        except (HTTPException, ValueError):
+            await websocket.close(code=4001, reason="Credentials unavailable")
+            return
+        username = user.username
     else:
-        username = identity
+        await websocket.close(code=4001, reason="Invalid ticket")
+        return
+
+    account = (user.id, user.credential_version)
 
     if (
         not isinstance(username, str)
         or not username
-        or not await manager.is_current_tasks_user(username)
+        or not await manager.is_current_tasks_user(account)
     ):
         await websocket.close(code=4003, reason="Missing task permission")
         return
 
     client_id = str(uuid4())
-    await manager.connect(client_id, websocket, username=username)
+    await manager.connect(client_id, websocket, username=username, account=account)
 
     try:
         while True:
@@ -86,13 +98,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         user.username == username
                         and password_fingerprint(user.password_hash) == current.password_fingerprint
                         and not user.must_change_password
-                        and await manager.is_current_tasks_user(username)
+                        and await manager.is_current_tasks_user(account)
                     )
                 except HTTPException:
                     valid = False
                 if not valid:
                     await websocket.close(code=4001, reason="Browser session invalid")
                     break
+            elif not await manager.is_current_tasks_user(account):
+                await websocket.close(code=4001, reason="Credentials invalid")
+                break
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
             except asyncio.TimeoutError:
@@ -102,7 +117,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
             elif action == "subscribe":
                 task_id = data.get("task_id")
-                if task_id and await manager.can_subscribe(username, task_id):
+                if task_id and await manager.can_subscribe(account, task_id):
                     await websocket.send_json({"type": "subscribed", "task_id": task_id})
                 else:
                     # Identical for malformed, unknown, and unauthorized

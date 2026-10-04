@@ -49,10 +49,10 @@ async def _seed_user(
     await db.commit()
 
 
-def _headers(username: str) -> dict[str, str]:
-    from app.auth import create_access_token
+async def _headers(username: str) -> dict[str, str]:
+    from tests.conftest import access_token_for_user
 
-    token = create_access_token(username, must_change_password=False)
+    token = await access_token_for_user(username)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -119,7 +119,7 @@ async def test_slow_admin_actions_are_authorized_bounded_202_task_starts(monkeyp
                 response = await asyncio.wait_for(
                     client.post(
                         path,
-                        headers=_headers(f"{PREFIX}system"),
+                        headers=await _headers(f"{PREFIX}system"),
                         **({"json": body} if body is not None else {}),
                     ),
                     timeout=2.0,
@@ -133,7 +133,7 @@ async def test_slow_admin_actions_are_authorized_bounded_202_task_starts(monkeyp
 
                 denied = await client.post(
                     path,
-                    headers=_headers(f"{PREFIX}tasks"),
+                    headers=await _headers(f"{PREFIX}tasks"),
                     **({"json": body} if body is not None else {}),
                 )
                 assert denied.status_code == 403
@@ -223,7 +223,7 @@ async def test_latest_snapshot_ignores_failed_runs_and_is_scoped(monkeypatch):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             pixiv = await client.get(
                 "/api/v1/admin/gallerydl-config/test-connection/latest?source=pixiv",
-                headers=_headers(f"{PREFIX}snapshot"),
+                headers=await _headers(f"{PREFIX}snapshot"),
             )
             assert pixiv.status_code == 200
             snapshot = pixiv.json()["snapshot"]
@@ -241,7 +241,7 @@ async def test_latest_snapshot_ignores_failed_runs_and_is_scoped(monkeypatch):
 
             twitter = await client.get(
                 "/api/v1/admin/gallerydl-config/test-connection/latest?source=twitter",
-                headers=_headers(f"{PREFIX}snapshot"),
+                headers=await _headers(f"{PREFIX}snapshot"),
             )
             assert twitter.status_code == 200
             assert twitter.json() == {"snapshot": None, "current": None}
@@ -272,7 +272,7 @@ async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(m
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             started = await client.post(
                 "/api/v1/admin/backup/estimate",
-                headers=_headers(f"{PREFIX}retry"),
+                headers=await _headers(f"{PREFIX}retry"),
             )
             assert started.status_code == 202
             task_id = UUID(started.json()["task_id"])
@@ -297,7 +297,7 @@ async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(m
 
             failure_status = await client.get(
                 f"/api/v1/admin/operations/{task_id}",
-                headers=_headers(f"{PREFIX}retry"),
+                headers=await _headers(f"{PREFIX}retry"),
             )
             assert failure_status.status_code == 200
             assert failure_status.json()["error"] == "estimate unavailable"
@@ -305,7 +305,7 @@ async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(m
 
             retried = await client.post(
                 f"/api/v1/admin/operations/{task_id}/retry",
-                headers=_headers(f"{PREFIX}retry"),
+                headers=await _headers(f"{PREFIX}retry"),
             )
             assert retried.status_code == 202
             assert retried.json() == {
@@ -328,7 +328,7 @@ async def test_failed_backup_estimate_retries_same_task_and_publishes_snapshot(m
 
             latest = await client.get(
                 "/api/v1/admin/backup/estimate/latest",
-                headers=_headers(f"{PREFIX}retry"),
+                headers=await _headers(f"{PREFIX}retry"),
             )
             assert latest.status_code == 200
             assert latest.json()["snapshot"]["task_id"] == str(task_id)
@@ -397,7 +397,7 @@ async def test_proxy_worker_redacts_credentials_before_logging_and_persisting(
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             started = await client.post(
                 "/api/v1/admin/proxy/test",
-                headers=_headers(f"{PREFIX}proxy_redaction"),
+                headers=await _headers(f"{PREFIX}proxy_redaction"),
             )
             assert started.status_code == 202
             task_id = UUID(started.json()["task_id"])
@@ -497,7 +497,7 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
             await db.commit()
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            tasks_headers = _headers(f"{PREFIX}tasks_only")
+            tasks_headers = await _headers(f"{PREFIX}tasks_only")
             detail = await client.get(f"/api/v1/tasks/{task_id}", headers=tasks_headers)
             assert detail.status_code == 403
             assert secret not in detail.text
@@ -529,7 +529,7 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
 
             global_search = await client.get(
                 "/api/v1/search?scope=global&q=Proxy",
-                headers=_headers(f"{PREFIX}mixed_tasks"),
+                headers=await _headers(f"{PREFIX}mixed_tasks"),
             )
             assert global_search.status_code == 200
             assert "tasks" not in global_search.json()["groups"]
@@ -553,7 +553,7 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
 
             privileged_detail = await client.get(
                 f"/api/v1/tasks/{task_id}",
-                headers=_headers(f"{PREFIX}system_tasks"),
+                headers=await _headers(f"{PREFIX}system_tasks"),
             )
             assert privileged_detail.status_code == 200
             assert privileged_detail.json()["id"] == str(task_id)
@@ -561,7 +561,7 @@ async def test_tasks_permission_cannot_read_list_or_retry_system_operation(monke
             for username in (f"{PREFIX}system_tasks", f"{PREFIX}admin_tasks"):
                 privileged_search = await client.get(
                     "/api/v1/search?scope=tasks&q=Proxy",
-                    headers=_headers(username),
+                    headers=await _headers(username),
                 )
                 assert privileged_search.status_code == 200
                 items = privileged_search.json()["groups"]["tasks"]["items"]
@@ -690,7 +690,7 @@ async def test_integrity_aborted_transaction_fails_task_and_remains_retryable(mo
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             started = await client.post(
                 "/api/v1/admin/integrity-check",
-                headers=_headers(f"{PREFIX}integrity_failure"),
+                headers=await _headers(f"{PREFIX}integrity_failure"),
             )
             assert started.status_code == 202
             task_id = UUID(started.json()["task_id"])
@@ -706,7 +706,7 @@ async def test_integrity_aborted_transaction_fails_task_and_remains_retryable(mo
 
             retry = await client.post(
                 f"/api/v1/admin/operations/{task_id}/retry",
-                headers=_headers(f"{PREFIX}integrity_failure"),
+                headers=await _headers(f"{PREFIX}integrity_failure"),
             )
             assert retry.status_code == 202
             assert retry.json()["task_id"] == str(task_id)
@@ -745,7 +745,7 @@ async def test_latest_endpoint_returns_database_backed_current_operation(monkeyp
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get(
                 "/api/v1/admin/integrity-check/latest",
-                headers=_headers(f"{PREFIX}current"),
+                headers=await _headers(f"{PREFIX}current"),
             )
             assert response.status_code == 200
             assert response.json() == {
@@ -840,7 +840,7 @@ async def test_data_management_latest_endpoints_restore_retryable_operations(mon
             for endpoint, task_id in expected.items():
                 response = await client.get(
                     endpoint,
-                    headers=_headers(f"{PREFIX}data_retry"),
+                    headers=await _headers(f"{PREFIX}data_retry"),
                 )
                 assert response.status_code == 200, (endpoint, response.text)
                 payload = response.json()

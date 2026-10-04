@@ -371,7 +371,7 @@ async def test_http_permissions_and_system_only_batch_control(db):
     from httpx import ASGITransport, AsyncClient
     from app.api.admin import router as admin_router
     from app.api.tasks import router as task_router
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.models import User, TaskRun
 
     app = FastAPI()
@@ -383,7 +383,7 @@ async def test_http_permissions_and_system_only_batch_control(db):
         db.add(user)
         users[role] = user
     await db.commit()
-    headers = {role: {"Authorization": f"Bearer {create_access_token(user.username)}"} for role, user in users.items()}
+    headers = {role: {"Authorization": f"Bearer {await access_token_for_user(user.username)}"} for role, user in users.items()}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.post("/admin/scheduler/sync-now")).status_code == 401
         assert (await client.post("/admin/scheduler/sync-now", headers=headers["tasks"])).status_code == 403

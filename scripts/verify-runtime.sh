@@ -242,10 +242,17 @@ from app.models.user import User
 
 async def verify_docs() -> None:
     async with async_session() as db:
-        username = (
-            await db.execute(select(User.username).where(User.is_admin.is_(True)).limit(1))
-        ).scalar_one()
-    token = create_access_token(username, must_change_password=False)
+        user = (
+            await db.execute(
+                select(User)
+                .where(User.is_admin.is_(True), User.is_active.is_(True))
+                .order_by(User.must_change_password, User.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            raise RuntimeError("Runtime verification requires an active administrator")
+        token = create_access_token(user)
     async with httpx.AsyncClient(
         base_url="http://admin-web:3000",
         cookies={"ag_token": token},
@@ -262,11 +269,27 @@ async def verify_docs() -> None:
                 f"Legacy ag_token cookie still opened a business API ({business.status_code})"
             )
         client.headers["Authorization"] = f"Bearer {token}"
+        identity = await client.get("/api/v1/auth/me")
+        identity.raise_for_status()
+        current = identity.json()
+        if current["id"] != user.id:
+            raise RuntimeError("Runtime verification authenticated a different account")
+        password_change_required = current["must_change_password"]
+        expected_status = 403 if password_change_required else 200
         for path in (
             "/api/docs",
             "/api/redoc",
             "/api/openapi.json",
             "/api/asyncapi.yaml",
+            "/api/v1/system/storage",
+        ):
+            response = await client.get(path)
+            if response.status_code != expected_status:
+                raise RuntimeError(
+                    f"Runtime access check {path} returned {response.status_code}, "
+                    f"expected {expected_status}"
+                )
+        for path in (
             "/api-docs/swagger-ui-bundle.js",
             "/api-docs/redoc.standalone.js",
         ):
@@ -283,13 +306,18 @@ async def verify_docs() -> None:
                     f"Legacy API docs redirect {legacy} returned "
                     f"{response.status_code} -> {response.headers.get('location')}"
                 )
-        business = await client.get("/api/v1/system/storage")
-        business.raise_for_status()
+        if password_change_required:
+            print(
+                "ok: first-login password change blocks documentation and business access; "
+                "authenticated documentation verification pending. "
+                "Change the administrator password through login, then rerun verify-runtime.sh."
+            )
+        else:
+            print("ok: authenticated offline API documentation")
 
 
 asyncio.run(verify_docs())
 PY
-echo "ok: authenticated offline API documentation"
 
 compose exec -T admin-web wget -q -O /dev/null http://127.0.0.1:3000/admin/login
 echo "ok: admin-web login page"

@@ -84,9 +84,9 @@ def _mock_indexed_work_search(monkeypatch):
     monkeypatch.setattr(SearchService, "search", search)
 
 
-def _headers(username):
-    from app.auth import create_access_token
-    token = create_access_token(username, must_change_password=False)
+async def _headers(username):
+    from tests.conftest import access_token_for_user
+    token = await access_token_for_user(username)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -105,7 +105,7 @@ async def test_restricted_user_sees_only_sfw_work_in_list(monkeypatch):
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.get("/api/v1/works", headers=_headers(f"{PREFIX}restricted"))
+            r = await client.get("/api/v1/works", headers=await _headers(f"{PREFIX}restricted"))
             assert r.status_code == 200, r.text
             body = r.json()
             ids = {item["id"] for item in body["items"]}
@@ -132,7 +132,7 @@ async def test_restricted_user_gets_404_on_nsfw_work_detail():
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}restricted2")
+            headers = await _headers(f"{PREFIX}restricted2")
             r = await client.get(f"/api/v1/works/{nsfw.id}", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.get(f"/api/v1/works/{sfw.id}", headers=headers)
@@ -158,7 +158,7 @@ async def test_admin_sees_both_works_and_can_open_nsfw_detail(monkeypatch):
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}admin")
+            headers = await _headers(f"{PREFIX}admin")
             r = await client.get("/api/v1/works", headers=headers)
             assert r.status_code == 200, r.text
             ids = {item["id"] for item in r.json()["items"]}
@@ -247,7 +247,7 @@ async def test_restricted_user_gets_404_on_nsfw_work_assets():
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}restricted_assets")
+            headers = await _headers(f"{PREFIX}restricted_assets")
             r = await client.get(f"/api/v1/works/{nsfw.id}/assets", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.get(f"/api/v1/works/{sfw.id}/assets", headers=headers)
@@ -272,7 +272,7 @@ async def test_restricted_user_gets_404_on_nsfw_work_sources():
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}restricted_sources")
+            headers = await _headers(f"{PREFIX}restricted_sources")
             r = await client.get(f"/api/v1/works/{nsfw.id}/sources", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.get(f"/api/v1/works/{sfw.id}/sources", headers=headers)
@@ -297,7 +297,7 @@ async def test_restricted_user_gets_404_on_nsfw_work_tags():
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}restricted_tags")
+            headers = await _headers(f"{PREFIX}restricted_tags")
             r = await client.get(f"/api/v1/works/{nsfw.id}/tags", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.get(f"/api/v1/works/{sfw.id}/tags", headers=headers)
@@ -330,7 +330,7 @@ async def test_restricted_curation_user_gets_404_favoriting_nsfw_work():
             sfw, nsfw = await _seed_works(db)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}restricted_curation")
+            headers = await _headers(f"{PREFIX}restricted_curation")
             r = await client.post(f"/api/v1/works/{nsfw.id}/favorite", headers=headers)
             assert r.status_code == 404, r.text
             r = await client.post(f"/api/v1/works/{sfw.id}/favorite", headers=headers)
@@ -391,7 +391,7 @@ async def test_restricted_user_gets_404_on_nsfw_work_remote_state_before_account
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get(
                 f"/api/v1/works/{nsfw.id}/remote-state",
-                headers=_headers(f"{PREFIX}restricted_remote_state"),
+                headers=await _headers(f"{PREFIX}restricted_remote_state"),
             )
             assert response.status_code == 404, response.text
             assert adapter.calls == 0

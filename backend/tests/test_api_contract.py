@@ -220,19 +220,15 @@ async def test_online_contracts_require_admin_and_use_local_assets(monkeypatch):
     from app import auth
     from app.main import app
 
-    async def fake_user(_username):
-        return SimpleNamespace(is_admin=True, is_active=True)
-
     monkeypatch.setattr(
         auth,
         "decode_access_token_payload",
-        lambda token: {"sub": "docs-admin", "pwd_chg_required": False} if token == "docs-token" else None,
+        lambda token: {"sub": "docs-admin", "uid": 7, "cv": 1} if token == "docs-token" else None,
     )
-    monkeypatch.setattr(auth, "_load_active_user", fake_user)
     async def fake_session(_token):
         return SimpleNamespace(user_id=7, password_fingerprint=auth.password_fingerprint("hash"))
     async def fake_user_by_id(_id):
-        return SimpleNamespace(is_admin=True, is_active=True, password_hash="hash", username="docs-admin", must_change_password=False)
+        return SimpleNamespace(is_admin=True, is_active=True, id=7, credential_version=1, password_hash="hash", username="docs-admin", must_change_password=False)
     monkeypatch.setattr(auth, "load_browser_session", fake_session)
     monkeypatch.setattr(auth, "_load_active_user_by_id", fake_user_by_id)
 
@@ -279,19 +275,10 @@ async def test_non_admin_cannot_open_contract(monkeypatch):
     from app import auth
     from app.main import app
 
-    async def fake_user(_username):
-        return SimpleNamespace(is_admin=False, is_active=True)
-
-    monkeypatch.setattr(
-        auth,
-        "decode_access_token_payload",
-        lambda _token: {"sub": "ordinary-user", "pwd_chg_required": False},
-    )
-    monkeypatch.setattr(auth, "_load_active_user", fake_user)
     async def fake_session(_token):
         return SimpleNamespace(user_id=8, password_fingerprint=auth.password_fingerprint("hash"))
     async def fake_user_by_id(_id):
-        return SimpleNamespace(is_admin=False, is_active=True, password_hash="hash", username="ordinary-user", must_change_password=False)
+        return SimpleNamespace(is_admin=False, is_active=True, id=8, credential_version=1, password_hash="hash", username="ordinary-user", must_change_password=False)
     monkeypatch.setattr(auth, "load_browser_session", fake_session)
     monkeypatch.setattr(auth, "_load_active_user_by_id", fake_user_by_id)
 

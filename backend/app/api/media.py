@@ -165,10 +165,7 @@ async def thumb(
     the signed-in browser cache, but out of shared intermediary caches.
     """
     if not verify_media_token(asset_id, "thumb", expires, token):
-        username = await get_admin_key(request, credentials)
-        if not getattr(request.state, "auth_user", None):
-            from app.auth import _load_active_user
-            await _load_active_user(username)
+        await get_admin_key(request, credentials)
     resp = await _serve(asset_id, "thumb")
     etag = _thumbnail_etag(asset_id, resp)
     if _etag_matches(request.headers.get("if-none-match"), etag):
