@@ -22,6 +22,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.services.cookie_paths import InvalidCookiePath, resolve_cookie_path
 from app.services.connectivity import TEST_URLS, AUTH_ERROR_PATTERNS, probe_source_connection as _run_source_connection_test
 from app.schemas.admin_operations import (
     AdminOperationAccepted,
@@ -339,10 +340,10 @@ def _convert_to_netscape_cookies(raw: str, source: str) -> str:
 
 
 def _load_config() -> tuple[dict, str]:
-    from app.services.settings import ensure_gallerydl_config, gallerydl_config_path
+    from app.services.settings import read_gallerydl_config, gallerydl_config_path
 
     config_path = gallerydl_config_path()
-    return ensure_gallerydl_config(config_path), str(config_path)
+    return read_gallerydl_config(config_path), str(config_path)
 
 def _read_source_config(extractor_config: dict, schema_map: dict, config: dict | None = None) -> dict:
     """Read gallery-dl extractor config back into our API schema shape."""
@@ -494,8 +495,11 @@ async def get_effective_gallerydl_config(
             "retryable": False,
         })
 
-    provider_config = provider.build_gallerydl_config(None)
-    effective = build_effective_gallerydl_config(provider_source, provider_config)
+    try:
+        provider_config = provider.build_gallerydl_config(None)
+        effective = build_effective_gallerydl_config(provider_source, provider_config)
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
 
     url_valid = bool(source_url and provider.validate_url(provider.normalize_url(source_url) or source_url)) if source_url else None
     return {
@@ -531,15 +535,14 @@ async def get_gallerydl_config(source: str | None = None):
     # Read cookie file contents for sources that have cookies configured
     for src_name, src_cfg in all_config.items():
         if isinstance(src_cfg, dict) and src_cfg.get("cookies_path"):
-            cookie_path = os.path.join(
-                os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
-                src_cfg["cookies_path"].lstrip("/"))
-            if os.path.exists(cookie_path):
-                try:
-                    with open(cookie_path) as cf:
-                        src_cfg["cookie_content"] = cf.read().strip()
-                except Exception:
-                    pass
+            try:
+                cookie_path = resolve_cookie_path(src_cfg["cookies_path"])
+                if cookie_path.exists():
+                    src_cfg["cookie_content"] = cookie_path.read_text().strip()
+            except (InvalidCookiePath, OSError, UnicodeError) as exc:
+                raise HTTPException(status_code=400, detail={
+                    "code": "invalid_cookie_path", "message": f"Cannot read cookies for {src_name}: {exc}",
+                }) from exc
 
     if source:
         return {source: all_config.get(source, {}), "sources": GALLERYDL_SOURCE_OPTIONS}
@@ -551,6 +554,17 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     """Update gallery-dl extractor configs. Only provided source blocks are updated."""
     import os
     from app.services.settings import write_gallerydl_config
+
+    # Validate every supplied path before writing any cookie/config file.
+    try:
+        for source_name in ("pixiv", "twitter", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"):
+            block = getattr(data, source_name, None)
+            if block and getattr(block, "cookies_path", None):
+                block.cookies_path = str(resolve_cookie_path(block.cookies_path))
+            if block and getattr(block, "cookie_content", None) and block.cookie_content.strip():
+                resolve_cookie_path(f"cookies/{source_name}.txt")
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
 
     config, config_path = _load_config()
 
@@ -575,12 +589,13 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         if cc and cc.strip():
             content = _convert_to_netscape_cookies(cc.strip(), source_name)
             os.makedirs(cookies_dir, exist_ok=True)
-            cookie_path = os.path.join(cookies_dir, f"{source_name}.txt")
+            cookie_path = resolve_cookie_path(getattr(source_data, "cookies_path", None) or f"cookies/{source_name}.txt")
+            cookie_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cookie_path, "w") as f:
                 f.write(content + "\n")
             # Auto-set cookies_path if not explicitly provided
             if not getattr(source_data, "cookies_path", None):
-                source_data.cookies_path = f"/gallerydl-config/cookies/{source_name}.txt"
+                source_data.cookies_path = str(cookie_path)
 
     if data.pixiv is not None:
         pixiv = extractors.setdefault("pixiv", {})
@@ -629,7 +644,10 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     pixiv_ugoira = extractors.get("pixiv", {}).get("ugoira")
     _rebuild_managed_postprocessors(config, pixiv_ugoira)
 
-    write_gallerydl_config(config, Path(config_path))
+    try:
+        write_gallerydl_config(config, Path(config_path))
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
     return {"status": "ok", "message": "gallery-dl config updated", "path": config_path}
 
 

@@ -2,6 +2,7 @@ import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
+from app.services.cookie_paths import resolve_cookie_path
 
 
 class IwaraProvider(BaseProvider):
@@ -48,7 +49,7 @@ class IwaraProvider(BaseProvider):
                 "iwara": {}
             }
         }
-        cookies_path = "/gallerydl-config/cookies/iwara.txt"
+        cookies_path = str(resolve_cookie_path("cookies/iwara.txt"))
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             cfg["extractor"]["iwara"]["cookies"] = cookies_path
         return cfg

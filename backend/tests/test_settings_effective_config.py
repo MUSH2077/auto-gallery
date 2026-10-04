@@ -1,5 +1,6 @@
 import asyncio
 import json
+import pytest
 
 from app.services.settings import (
     apply_gallerydl_defaults,
@@ -15,6 +16,96 @@ from app.api.admin import GalleryDLMultiConfig, PixivSourceConfig, _rebuild_mana
 def test_x_source_maps_to_twitter_extractor():
     assert extractor_key_for_source("x") == "twitter"
     assert source_key_for_extractor("twitter") == "x"
+
+
+def test_effective_config_preserves_inline_cookie_values():
+    cookies = {"cookies": "fixture-value", "auth_token": "fixture-token"}
+    effective = build_effective_gallerydl_config("x", {}, user_config={"extractor": {"twitter": {"cookies": cookies}}})
+    assert effective["extractor"]["twitter"]["cookies"] == cookies
+
+
+@pytest.mark.parametrize("source,cookie_name", [("pixiv", "pixiv"), ("x", "twitter"), ("iwara", "iwara"), ("weibo", "weibo")])
+def test_effective_preview_reports_default_cookie_symlink_escape(tmp_path, monkeypatch, source, cookie_name):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.admin.gallerydl import get_effective_gallerydl_config
+    from app.database import get_db
+
+    root = tmp_path / "config"
+    cookies = root / "cookies"
+    cookies.mkdir(parents=True)
+    outside = tmp_path / "fixture.txt"
+    outside.write_text("non-sensitive fixture")
+    (cookies / f"{cookie_name}.txt").symlink_to(outside)
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(root))
+    app = FastAPI()
+    app.get("/gallerydl-config/effective")(get_effective_gallerydl_config)
+    app.dependency_overrides[get_db] = lambda: None
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/gallerydl-config/effective", params={"source": source},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_cookie_path"
+    assert "allowed configuration directory" in response.json()["detail"]["message"]
+
+
+@pytest.mark.parametrize("path_kind", ["relative", "absolute", "container", "legacy"])
+def test_cookie_paths_read_and_execute_from_config_root(tmp_path, monkeypatch, path_kind):
+    from app.api.admin.gallerydl import get_gallerydl_config
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path))
+    cookie = tmp_path / "cookies" / "pixiv.txt"
+    cookie.parent.mkdir()
+    cookie.write_text("fixture cookie")
+    path = {"relative": "cookies/pixiv.txt", "absolute": str(cookie),
+            "container": "/gallerydl-config/cookies/pixiv.txt", "legacy": "/cookies/pixiv.txt"}[path_kind]
+    (tmp_path / "config.json").write_text(json.dumps({"extractor": {"pixiv": {"cookies": path}}}))
+    result = asyncio.run(get_gallerydl_config("pixiv"))
+    assert result["pixiv"]["cookie_content"] == "fixture cookie"
+    effective = build_effective_gallerydl_config("pixiv", {})
+    assert effective["extractor"]["pixiv"]["cookies"] == str(cookie)
+
+
+@pytest.mark.parametrize("path_kind", ["traversal", "absolute", "prefix", "symlink"])
+def test_cookie_paths_reject_escape_before_read_or_download(tmp_path, monkeypatch, path_kind):
+    from fastapi import HTTPException
+    from app.api.admin.gallerydl import get_gallerydl_config
+    root = tmp_path / "config"
+    root.mkdir()
+    outside = tmp_path / "config-other" / "fixture.txt"
+    outside.parent.mkdir()
+    outside.write_text("non-sensitive fixture")
+    (root / "escape.txt").symlink_to(outside)
+    path = {"traversal": "../config-other/fixture.txt", "absolute": str(outside),
+            "prefix": str(outside), "symlink": "escape.txt"}[path_kind]
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(root))
+    (root / "config.json").write_text(json.dumps({"extractor": {"pixiv": {"cookies": path}}}))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(get_gallerydl_config("pixiv"))
+    assert error.value.status_code == 400
+    assert error.value.detail["code"] == "invalid_cookie_path"
+    with pytest.raises(ValueError, match="allowed configuration directory"):
+        build_effective_gallerydl_config("pixiv", {})
+
+
+def test_cookie_save_rejects_escape_before_any_write_and_preserves_valid_content(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from app.api.admin.gallerydl import get_gallerydl_config
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path))
+    result = asyncio.run(update_gallerydl_config(GalleryDLMultiConfig(
+        pixiv=PixivSourceConfig(cookies_path="cookies/valid.txt", cookie_content="# Netscape HTTP Cookie File\nfixture"),
+    )))
+    assert result["status"] == "ok"
+    assert "fixture" in asyncio.run(get_gallerydl_config("pixiv"))["pixiv"]["cookie_content"]
+    original = (tmp_path / "config.json").read_bytes()
+    cookie = (tmp_path / "cookies/valid.txt").read_bytes()
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(update_gallerydl_config(GalleryDLMultiConfig(
+            pixiv=PixivSourceConfig(cookies_path="../outside.txt", cookie_content="fixture"),
+        )))
+    assert error.value.status_code == 400
+    assert (tmp_path / "config.json").read_bytes() == original
+    assert (tmp_path / "cookies/valid.txt").read_bytes() == cookie
+    assert not (tmp_path.parent / "outside.txt").exists()
 
 
 def test_effective_gallerydl_config_keeps_user_values_and_fills_defaults():
@@ -112,14 +203,15 @@ def test_update_gallerydl_config_preserves_defaults_and_custom_values(tmp_path, 
     assert any(pp.get("name") == "metadata" for pp in saved["postprocessors"])
 
 
-def test_gallerydl_directory_is_authoritative():
+def test_gallerydl_directory_is_authoritative(tmp_path, monkeypatch):
+    monkeypatch.setenv("GALLERYDL_CONFIG_ROOT", str(tmp_path))
     effective = build_effective_gallerydl_config(
         "pixiv",
-        {"extractor": {"pixiv": {"cookies": "/default.txt"}}},
+        {"extractor": {"pixiv": {"cookies": "cookies/default.txt"}}},
         user_config={"extractor": {"pixiv": {"directory": ["old"]}}},
     )
     assert effective["extractor"]["pixiv"]["directory"] == ["old"]
-    assert effective["extractor"]["pixiv"]["cookies"] == "/default.txt"
+    assert effective["extractor"]["pixiv"]["cookies"] == str(tmp_path / "cookies/default.txt")
 
 
 def test_pixiv_gif_rebuilds_managed_postprocessors():
@@ -166,7 +258,7 @@ def test_pixiv_zip_removes_managed_ugoira_postprocessor():
 def test_effective_gallerydl_config_includes_user_ugoira_postprocessor():
     effective = build_effective_gallerydl_config(
         "pixiv",
-        {"extractor": {"pixiv": {"cookies": "/default.txt"}}},
+        {"extractor": {"pixiv": {"cookies": "/gallerydl-config/cookies/default.txt"}}},
         user_config={
             "extractor": {"pixiv": {"ugoira": "gif"}},
             "postprocessors": [

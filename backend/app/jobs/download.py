@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.config import settings
+from app.services.cookie_paths import InvalidCookiePath
 from app.database import async_session
 from app.jobs.download_outcome import classify_no_metadata_outcome
 from app.jobs.worker_control import (
@@ -645,7 +646,7 @@ async def run_download_job(job_id: str):
     except PersonalDownloadConfigurationError as exc:
         configuration_error = exc
         logger.error("Private download authentication unavailable for job %s", job_id)
-    except DownloadStageManifestError as exc:
+    except (DownloadStageManifestError, InvalidCookiePath) as exc:
         # An unsafe output template can place files outside this job's staged
         # tree.  Continuing without the rejected per-job config would turn a
         # safety violation into an implicit legacy download.  Defer the error
