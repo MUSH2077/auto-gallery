@@ -211,9 +211,9 @@ Every provider implements:
 
 Providers never access the database. They receive raw metadata dicts and return data dicts. The service layer handles persistence.
 
-## Job Queue (RQ + Redis Stream)
+## Job Queue (RQ)
 
-auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis Stream for event-driven imports. Key design choices:
+auto-gallery uses RQ for downloads, imports and discovery, with an operations queue for administration. PostgreSQL job, lease and artifact records own recovery; Redis carries execution and live notifications. Key design choices:
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
@@ -257,7 +257,6 @@ Scheduler (timezone-aware, configurable interval or daily schedule)
         → subprocess.Popen(["gallery-dl", ...], shell=False)
             with stall detection polling loop
         → Files land in DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
-        → FileIndex registration (SQLite)
         → Job status = downloaded
         → PostgreSQL storage_artifacts → RQ import job
 ```
@@ -271,42 +270,28 @@ Key download details:
 
 ### Import Flow
 
-**Event-driven (primary):**
-```
-Download job completes → storage_artifacts batch UPSERT
-  → worker-import claims work with a lease
-  → FileIndex.query() finds new files by work_id (O(log n), not rglob)
-  → Provider.parse_work_source() → group files by source_work_id
-  → Provider.parse_source_creator() → upsert source_creator
-  → Provider.parse_work_source() → upsert work_source
-  → Create Asset + AssetSource from image files in work directory
-  → Provider.parse_source_tags() → upsert tags + work_source_tags
-  → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → Write metadata.json to LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → FileIndex.mark_imported()
-  → mark artifact work done/failed
-```
+Download execution records files in the PostgreSQL `storage_artifacts` ledger.
+`import_intent.py` creates and publishes durable RQ import intent; `worker-import`
+claims the current attempt and processes bounded work groups under a lease.
+Provider metadata is mapped to creators, work sources, assets and tags, and
+ledger states record progress for recovery. Media derivative requests are
+persisted for background processing; import completion does not synchronously
+generate every thumbnail. Files remain in DOWNLOAD_ROOT, while metadata and
+derivatives live in LIBRARY_ROOT. JSON cleanup follows successful import.
 
-**Batch import (RQ, for Danbooru reference):**
-```
-Worker picks up import_job from imports queue
-  → FileIndex.query_unimported() → new files since last scan
-  → Same parse → upsert → thumbnail → metadata.json pipeline
-  → Job status = complete
-```
-
-Key details:
-- JSON metadata files are deleted after processing; image files remain in DOWNLOAD_ROOT.
-- FileIndex (SQLite) replaces rglob scans — O(log n) lookups by work_id instead of O(n) filesystem traversal.
-- Consumer group `import-workers` ensures at-least-once delivery: if a consumer crashes mid-import, the pending message is reclaimed by another consumer.
+Danbooru reference batches are separate administrative operations. Their
+single, Pixiv-ID and URL entries use `persist_danbooru_artist`, and validate the
+current operation attempt before committing each entry. They do not consume a
+Redis Stream or bypass the media-import lease.
 
 ### Danbooru Reference Flow
 ```
 Admin triggers Danbooru artist import
   → Fetch Danbooru artist page
   → Parse artist tags, related URLs
-  → Create creator_link suggestions (status=pending)
-  → Admin reviews: approve → bind to creator, reject → discard
+  → Match resolvable identities, artist IDs and active source links
+  → Reject conflicting ownership or apply shared persistence rules
+  → Validate the current operation attempt, commit, then invalidate caches
 ```
 
 ## Reliability & Recovery
@@ -320,34 +305,25 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 
 ## Gitllery — On-Disk Curation History
 
-A one-way, git-isomorphic projection of the authoritative curation DAG (`curation_commits` + `curation_changes`, plus the `*_curation_state` tables) onto disk, per source-creator. **PostgreSQL stays authoritative** — the on-disk repo is a read-optimized mirror, never a write path back into the DB. Written best-effort, synchronously, after each curation commit (e.g. `purge`, `revert`, `curate_creator`); failures are swallowed and logged (`project_commit_safe`) so a disk-write hiccup never breaks the curation API response. Catch-up and verification close any gap.
+PostgreSQL curation commits and changes remain authoritative. Curation writes
+durable projection intent in the same transaction; `gitllery_outbox.py` plans
+repository targets and projects them asynchronously in bounded slices. Disk
+failure leaves retryable intent and does not undo the committed domain change.
+Outbox leases, attempt checks and projection locks protect replay and ordering.
 
-- **Layout**: `LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` — sibling of that creator's existing library files, never the library root itself (path containment via `Path.relative_to`, same rule as the rest of `LIBRARY_ROOT`). Contains:
-  - `HEAD` — symbolic ref, always `ref: refs/heads/main`
-  - `refs/heads/main` — current commit hash
-  - `objects/{aa}/{rest}` — content-addressed object store, git-style 2-char shard prefix
-  - `logs/HEAD` — append-only reflog (one JSON line per `set_head`: old/new hash, actor, timestamp, message)
-  - `index.json` — materialized worktree state for fast status checks (`head`, `tree`, `tree_entries`, `entities`)
-  - `config.json` — repo metadata (`schema_version`, `repository_id`, `source`, `creator_id`, `source_creator_id`, `creator_dir`, hash/compression algorithm)
-  - `description` — human-readable label written at init
+The active Gitllery v1 format stores a `manifest.json`, `config.json` and
+compressed, content-addressed `segments/` under each repository's `.gitllery`.
+Publishing writes segments before atomically advancing the manifest. Global
+commit parents and repository parents have distinct meanings; payload mapping
+is shared by incremental projection and builds. Older object/index formats
+remain compatibility readers rather than the current write protocol.
 
-- **Object model**: every object is canonical JSON (sorted keys, compact separators) compressed with zlib, addressed by the sha256 of the *uncompressed* canonical bytes.
-  - **blob** — one entity-state snapshot (`subject_type`, `subject_id`, `state`)
-  - **tree** — worktree manifest: map of `{subject_type}/{subject_id}` → blob hash
-  - **commit** — one projected curation commit: `tree` hash, repo-local `parent` hash (linked list, not the DB commit's parent), `db_commit_id` (links back to `curation_commits.id`), actor/message/trigger/dedupe_key/reverts/occurred_at/stats, and the full list of changes applied
-
-- **Operations** (`GitlleryService`, `backend/app/services/gitllery/`):
-  - **`status`** — per-repository `behind` (pending DB commits not yet projected), `object_integrity_ok` (hash-chain verification from HEAD through tree and blobs), and `drift` (entity states where the on-disk snapshot disagrees with current `*_curation_state`, e.g. a `visibility`/`storage_state` changed outside the projection)
-  - **`reconcile`** — runs catch-up projection (`project_pending`) for missing commits, then returns the refreshed `status`
-  - **`backfill`** — ensures every source-creator repo exists, then projects the entire curation DAG from scratch (used for first-sync / historical seeding)
-  - Per-repository writes are serialized with a Redis lock (`gitllery:{repository_id}`) so concurrent projection attempts never race on the same `.gitllery` directory
-
-- **API**: all endpoints live under the curation router (`RequireAdmin`), at `/api/v1/curation/gitllery/...`:
-  - `GET /gitllery/status`, `GET /repositories/{repository_id}/gitllery/status`
-  - `POST /gitllery/reconcile`, `POST /gitllery/backfill`
-  - `GET /repositories/{repository_id}/gitllery/log`
-
-  The admin-web **GitlleryPanel** surfaces clean/behind state and a one-click reconcile action.
+`services/gitllery/builds.py` manages rebuild, verification and publication;
+`services/gitllery/rebuild.py` reads history for reconstruction. Maintenance
+commands under `/api/v1/curation/gitllery/` use existing administrative
+operations and resource admission. The admin Gitllery panel displays status
+and initiates these commands; API requests do not synchronously write every
+repository or treat disk as a replacement for the live database.
 
 ## Authentication
 
@@ -458,6 +434,32 @@ nonpersistent tmpfs, and validates that boundary before use.
 - **Video playback**: An authorized asset-scoped ticket grants two-hour access to `/media/stream/{asset_id}`. The endpoint serves the original MP4/WebM with HTTP Range support; no transcoding, HLS, audio-only playback, or ugoira ZIP playback is performed.
 - **metadata.json**: Written per-work during import. Contains work_id, source, source_work_id, title, posted_at, creator, assets array.
 - **source_work_id**: The platform-specific work ID (e.g. Pixiv artwork ID "38362603"). Used as the directory name in both downloads/ and library/. Links the two storage trees.
+
+## File, Upload and Rollback Boundaries
+
+Cookie file configuration uses `services/cookie_paths.py`. Relative paths are
+rooted at `GALLERYDL_CONFIG_ROOT`; absolute paths inside that root, historical
+`/gallerydl-config/...` container paths and `/cookies/...` shorthand remain
+supported. Resolved symlinks must stay inside the root. Configuration reads,
+writes and effective download configs reject escapes with a diagnostic error,
+rather than starting an unconfigured download.
+
+Manual uploads accept at most 20 files, 500 MiB per file and 1 GiB of file data,
+with a separate 2 MiB multipart allowance. `UploadRoute` counts received bytes
+before multipart parsing, including absent or misleading Content-Length.
+Copying enforces file, batch and remaining quota budgets. Final usage is charged
+by a quota-conditioned database UPDATE in the same transaction as jobs and
+artifacts; concurrent uploads and purge releases do not use stale accounting.
+Failed copying owns temporary cleanup; failed moves or saves roll back usage
+and remove the current work directory. Committed files/jobs retain their charge
+while durable import intent handles later processing.
+
+Offline restore and deployment rollback stop writers and query Compose for
+running, restarting or paused containers before switching files, databases,
+Redis data or application images. Failed stop/inspection blocks compensation
+and foreground restart. The offline journal records blocked components; the
+deployment receipt records `paused`. Operators fix the stop failure and rerun
+the existing rollback command, preserving its schema-forward policy.
 
 ## Environment Variables
 
@@ -665,7 +667,7 @@ Endpoints:
 Controlled media file serving. Not prefixed with `/api/v1`.
 
 Endpoints:
-- `GET /thumb/{asset_id}` — 400px WebP thumbnail from LIBRARY_ROOT
+- `GET /thumb/{asset_id}` — private 400px WebP thumbnail from LIBRARY_ROOT; active session/Bearer authentication or an asset-and-purpose-scoped signed ticket is required before reading or requesting derivatives
 - `GET /preview/{asset_id}` — original file from DOWNLOAD_ROOT, requires a short-lived signed URL
 - `GET /poster/{asset_id}` — large derived WebP video poster, requires a signed URL
 - `GET /stream/{asset_id}` — original MP4/WebM with HTTP Range support, requires an asset-scoped playback ticket

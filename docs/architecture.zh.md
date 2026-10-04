@@ -234,27 +234,25 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **调度器**：通过 `TIMEZONE` 环境变量支持时区（默认 UTC）。支持间隔模式（每 N 小时同步）或定时模式（每日指定时间同步）。
 
 ### 导入流程
-```
-Worker 取走 import_job
-  → 扫描 DOWNLOAD_ROOT/{source}/ 下的 *.json 元数据文件（--write-metadata 输出）
-  → Provider.parse_work_source() → 按 source_work_id 归组 JSON
-  → Provider.parse_source_creator() → upsert source_creator
-  → Provider.parse_work_source() → upsert work_source
-  → 从作品目录中的图像文件创建 Asset + AssetSource
-  → Provider.parse_source_tags() → upsert tags + work_source_tags
-  → 生成缩略图（pyvips WebP）到 LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → 写出 metadata.json 到 LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → 删除已处理的 JSON 文件（图片文件保留在 DOWNLOAD_ROOT）
-  → 任务状态 → complete
-```
+
+下载执行把文件写入 PostgreSQL `storage_artifacts` 账本，`import_intent.py`
+创建并发布持久 RQ 导入意图；`worker-import` 认领当前 attempt，在租约下分组处理。
+Provider 元数据映射为作者、作品来源、资源和标签，账本状态记录进度以支持恢复。
+媒体派生请求持久化后交给后台执行，导入完成不要求同步生成全部缩略图。
+原始文件保留在 DOWNLOAD_ROOT，元数据和派生文件放在 LIBRARY_ROOT；成功导入后清理 JSON。
+
+Danbooru 参考批次是独立管理操作，单项、Pixiv ID 和 URL 入口共用
+`persist_danbooru_artist`，每项在提交前验证当前管理操作 attempt；
+它们不消费 Redis Stream，也不绕过媒体导入租约。
 
 ### Danbooru 参考流程
 ```
 管理员触发 Danbooru 画师导入
   → 拉取 Danbooru 画师页面
   → 解析画师标签、关联 URL
-  → 创建 creator_link 建议（状态=待审核）
-  → 管理员审核：通过 → 绑定到 creator，拒绝 → 丢弃
+  → 匹配可解析身份、artist ID 与活动来源链接
+  → 归属冲突明确失败，否则应用共同落库规则
+  → 校验当前操作 attempt，提交后失效缓存
 ```
 
 ## 可靠性与恢复
@@ -268,34 +266,18 @@ Worker 取走 import_job
 
 ## Gitllery —— 磁盘上的策展历史
 
-一个单向、与 git 同构的投影，把权威的策展 DAG（`curation_commits` + `curation_changes`，以及各 `*_curation_state` 表）按每个 source-creator 投影到磁盘。**PostgreSQL 始终是权威数据源**——磁盘仓库只是一个面向读取优化的镜像，绝不是回写数据库的路径。每次策展提交（如 `purge`、`revert`、`curate_creator`）之后，以尽力而为（best-effort）、同步的方式写入；失败会被吞掉并记录日志（`project_commit_safe`），因此磁盘写入的偶发故障绝不会破坏策展 API 的响应。追赶投影（catch-up）和校验机制负责补齐任何缺口。
+PostgreSQL 的策展提交和变更始终是权威来源。策展写入在同一事务中保存持久投影意图，
+`gitllery_outbox.py` 规划目标仓库并以受限切片异步投影；磁盘失败保留可重试意图，
+不撤销已提交的领域修改。outbox 租约、attempt 校验与投影锁保护重放和写入顺序。
 
-- **目录结构**：`LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` —— 与该创作者既有的 library 文件同级，绝不是 library 根目录本身（路径包含关系通过 `Path.relative_to` 校验，与 `LIBRARY_ROOT` 下其他规则一致）。包含：
-  - `HEAD` —— 符号引用，固定为 `ref: refs/heads/main`
-  - `refs/heads/main` —— 当前提交哈希
-  - `objects/{aa}/{rest}` —— 内容寻址对象库，采用 git 风格的 2 字符分片前缀
-  - `logs/HEAD` —— 追加写入的引用日志（reflog，每次 `set_head` 写一行 JSON：旧/新哈希、actor、时间戳、message）
-  - `index.json` —— 物化的工作区状态，用于快速状态检查（`head`、`tree`、`tree_entries`、`entities`）
-  - `config.json` —— 仓库元数据（`schema_version`、`repository_id`、`source`、`creator_id`、`source_creator_id`、`creator_dir`、哈希/压缩算法）
-  - `description` —— 初始化时写入的可读标签
+当前 Gitllery v1 格式在各仓库 `.gitllery` 中保存 `manifest.json`、`config.json`
+及压缩、内容寻址的 `segments/`。先写 segment，再原子推进 manifest。
+全局提交父链与仓库父链分别表达，增量投影和构建共用载荷映射；
+旧对象／索引格式保留兼容读取，不再代表当前写入协议。
 
-- **对象模型**：每个对象都是规范化 JSON（按 key 排序、紧凑分隔符）经 zlib 压缩后存储，以**未压缩**规范字节的 sha256 寻址。
-  - **blob** —— 单个实体状态快照（`subject_type`、`subject_id`、`state`）
-  - **tree** —— 工作区清单：`{subject_type}/{subject_id}` → blob 哈希 的映射
-  - **commit** —— 一次被投影的策展提交：`tree` 哈希、仓库本地的 `parent` 哈希（链表结构，并非数据库提交的 parent）、`db_commit_id`（关联回 `curation_commits.id`）、actor/message/trigger/dedupe_key/reverts/occurred_at/stats，以及本次应用的完整变更列表
-
-- **操作**（`GitlleryService`，`backend/app/services/gitllery/`）：
-  - **`status`** —— 每个仓库的 `behind`（尚未投影的待处理 DB 提交数）、`object_integrity_ok`（从 HEAD 经 tree 到 blob 的哈希链校验）、`drift`（磁盘快照与当前 `*_curation_state` 不一致的实体，例如 `visibility`/`storage_state` 在投影之外被修改）
-  - **`reconcile`** —— 对缺失的提交运行追赶投影（`project_pending`），然后返回刷新后的 `status`
-  - **`backfill`** —— 确保每个 source-creator 仓库存在，然后从头投影整个策展 DAG（用于首次同步 / 历史数据回填）
-  - 同一仓库的写入通过 Redis 锁（`gitllery:{repository_id}`）串行化，避免并发投影在同一个 `.gitllery` 目录上产生竞态
-
-- **API**：所有端点都挂在策展路由下（需要 `RequireAdmin`），路径为 `/api/v1/curation/gitllery/...`：
-  - `GET /gitllery/status`、`GET /repositories/{repository_id}/gitllery/status`
-  - `POST /gitllery/reconcile`、`POST /gitllery/backfill`
-  - `GET /repositories/{repository_id}/gitllery/log`
-
-  管理端的 **GitlleryPanel** 组件展示干净/落后状态，并提供一键 reconcile 操作。
+`services/gitllery/builds.py` 管理重建、验证及发布，`services/gitllery/rebuild.py`
+读取历史用于重建。`/api/v1/curation/gitllery/` 下的维护命令使用既有管理操作与资源准入，
+管理端面板展示状态并发起命令；API 不同步写入所有仓库，也不把磁盘当作在线数据库的替代品。
 
 ## 认证
 
@@ -398,6 +380,25 @@ tmpfs `/run/auto-gallery-secrets`，并在使用前验证该边界。
 - **视频播放**：授权后的单资产票据提供两小时 `/media/stream/{asset_id}` 访问权限，以 HTTP Range 方式传输原始 MP4/WebM；不执行转码、HLS、纯音频或 ugoira ZIP 播放。
 - **metadata.json**：导入时为每个作品写入。包含 work_id、source、source_work_id、title、posted_at、creator、assets 数组。
 - **source_work_id**：平台特定的作品 ID（如 Pixiv 作品 ID "38362603"）。在 downloads/ 和 library/ 中都用作目录名。链接两个存储树。
+
+## 文件、上传与回滚边界
+
+Cookie 配置使用 `services/cookie_paths.py` 解释路径。相对路径以
+`GALLERYDL_CONFIG_ROOT` 为根，目录内绝对路径、历史 `/gallerydl-config/...`
+容器路径和 `/cookies/...` 简写继续支持。解析符号链接后仍须位于允许目录内；
+配置读取、写入和有效下载配置对越界返回可诊断错误，不退回无配置下载。
+
+手动上传每次最多 20 个文件、单文件最多 500 MiB、文件累计最多 1 GiB，
+另预留 2 MiB multipart 开销。`UploadRoute` 在 multipart 解析前计算实际接收字节，
+不依赖 Content-Length；复制时分别执行单文件、批次和剩余配额预算。
+最终用量由带配额条件的数据库 UPDATE 原子计费，与任务、产物在同一事务提交，
+并发上传与 purge 释放不使用旧对象读改写。复制失败清理自身临时文件；移动或保存失败
+回滚用量并删除本次作品目录，已提交文件／任务则保留计费，由持久导入意图处理后续执行。
+
+离线恢复和部署回滚必须先停止 writer，并通过 Compose 确认没有运行、重启中或暂停的
+容器，才能切换文件、数据库、Redis 数据或应用镜像。停止或检查失败时，补偿和前台启动
+都被阻断；离线 journal 记录 blocked 组件，部署回执记录 `paused`。
+管理员解决停止失败后重跑原回滚命令，保留原有 schema-forward 策略。
 
 ## 环境变量
 
@@ -598,7 +599,7 @@ Danbooru 参考 provider 操作，用于创作者身份映射。
 受控媒体文件服务。不以 `/api/v1` 为前缀。
 
 端点：
-- `GET /thumb/{asset_id}` — 来自 LIBRARY_ROOT 的 400px WebP 缩略图
+- `GET /thumb/{asset_id}` — LIBRARY_ROOT 中的私有 400px WebP 缩略图；有效会话／Bearer 或绑定资产和用途的短期签名必须在读取及派生请求前通过验证
 - `GET /preview/{asset_id}` — 来自 DOWNLOAD_ROOT 的原始文件，需要短期签名 URL
 - `GET /poster/{asset_id}` — 派生的大尺寸 WebP 视频海报，需要签名 URL
 - `GET /stream/{asset_id}` — 支持 HTTP Range 的原始 MP4/WebM，需要单资产播放票据

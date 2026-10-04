@@ -34,7 +34,7 @@ auto-gallery/
 
 - `postgres`、`redis`、`meilisearch`
 - `backend`
-- `worker-download`、`worker-import`、`worker-operations`
+- `worker-download`、`worker-import`、`worker-operations`、`worker-discovery`
 - `scheduler`
 - `admin-web`
 
@@ -122,12 +122,12 @@ docker compose run --rm backend alembic downgrade -1
 
 ### 技术栈与结构
 
-前端使用 Next.js 14、React 18、TypeScript、Tailwind CSS、TanStack Query 和
+前端使用 Next.js 16.3.5、React 19.2.8、TypeScript、Tailwind CSS、TanStack Query 和
 Playwright。主要产品模块位于 `src/app/admin`；共享页面容器、导航、反馈、对象列表、
 文本溢出和交互原语位于 `src/components`。
 
 API 访问拆分在 `src/lib/api/client.ts`、`types.ts`、`types.generated.ts` 和
-`index.ts`。仅在兼容的 backend 运行时重新生成 OpenAPI 类型：
+`index.ts`。先将后端 OpenAPI 契约导出至 `docs/api/openapi.json`，再从该文件生成前端类型：
 
 ```bash
 cd admin-web
@@ -166,6 +166,26 @@ npx playwright install chromium
 - 当主要工作流与公开图片明显不同时，更新脱敏文档素材。
 
 ## 仓库检查
+
+CI 的 Node 回归组运行 `tests/*.test.mjs`、`tests/*-contract.mjs`、
+`tests/*.contract.mjs` 及明确列出的 Jobs 和任务动作测试。
+`helpers.mjs`、`typescript-loader.mjs` 是辅助模块；`danbooru-import-flow`、
+`test-client-nav`、`test-processing-nav`、`test-result-restore` 是手动浏览器工具，
+不作为 Node test runner 输入。新增行为回归放入这些组或既有后端／Playwright 分片，
+不另建冻结覆盖清单。
+
+Cookie 路径应通过配置读取、保存和有效下载配置构造验证，越界和符号链接使用无敏感内容
+的临时文件。上传同时验证真实请求流、multipart 解析和并发 PostgreSQL 保存：
+最多 20 个文件、单文件 500 MiB、批次 1 GiB，并预留 2 MiB multipart 开销。
+前置预算不能替代最终原子计费；注入读取失败、取消、移动和提交失败后，核对临时文件及用量补偿。
+
+缩略图 GET 和条件 GET 必须在读取及派生请求前验证会话／Bearer 或绑定资产和用途的票据。
+同源浏览器图片会携带会话 Cookie，需保留 private 缓存和 ETag 行为，另测匿名和已撤销会话。
+
+回滚测试使用命令替身，不接触在线部署。停止失败、超时或 writer 仍活跃时，
+切换和前台启动必须阻断。查看 `journal.json` 或 `rollback-receipt.env`，
+解决停止问题后重跑原回滚命令。主机测试的命令替身应使用与测试一致的 Python 版本，
+将测试虚拟环境的 `bin` 放在 PATH 前面。
 
 ```bash
 docker compose --env-file .env.ci config --quiet

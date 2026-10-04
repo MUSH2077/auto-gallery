@@ -302,7 +302,9 @@ jobs:
         run: npm run typecheck
       - name: Check frontend regressions
         working-directory: admin-web
-        run: node --loader ./tests/typescript-loader.mjs --test tests/job-tree.mjs tests/jobs-route.mjs tests/operation-monitor.test.mjs tests/operation-resources.test.mjs tests/task-commands.test.mjs tests/task-action-reconciliation.test.mjs tests/api-client-contract.mjs tests/reference-list-state.test.mjs tests/i18n-catalog.test.mjs tests/auth-health-presentation.test.mjs
+        # Include Node tests and source contracts; standalone browser scripts
+        # and helpers do not follow these patterns.
+        run: node --loader ./tests/typescript-loader.mjs --test tests/*.test.mjs tests/*-contract.mjs tests/*.contract.mjs tests/job-tree.mjs tests/jobs-route.mjs tests/test-task-actions.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
@@ -322,6 +324,7 @@ jobs:
           tests/e2e/task-action-capabilities.spec.ts
           tests/e2e/reference-lists.spec.ts
           tests/e2e/i18n-runtime.spec.ts
+          tests/e2e/media-playback.spec.ts
           tests/e2e/operation-monitor.spec.ts
           tests/e2e/d39-operation-task-links.spec.ts
           tests/e2e/d37-guard-and-data-action.spec.ts

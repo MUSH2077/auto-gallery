@@ -125,14 +125,14 @@ reindexing, long locks, and data-loss risks in the pull request.
 
 ### Stack and structure
 
-The frontend uses Next.js 14, React 18, TypeScript, Tailwind CSS, TanStack Query,
+The frontend uses Next.js 16.3.5, React 19.2.8, TypeScript, Tailwind CSS, TanStack Query,
 and Playwright. Major product areas live under `src/app/admin`; shared page
 shells, navigation, feedback, object lists, overflow handling, and interaction
 primitives live under `src/components`.
 
 API access is split across `src/lib/api/client.ts`, `types.ts`,
-`types.generated.ts`, and `index.ts`. Regenerate the OpenAPI types only while a
-compatible backend is running:
+`types.generated.ts`, and `index.ts`. Export the backend OpenAPI contract to `docs/api/openapi.json`, then regenerate
+the frontend types from that file:
 
 ```bash
 cd admin-web
@@ -173,6 +173,34 @@ npx playwright install chromium
   published image.
 
 ## Repository checks
+
+CI runs Node tests matching `tests/*.test.mjs`, `tests/*-contract.mjs` and
+`tests/*.contract.mjs`, plus the explicitly listed Jobs and task-action tests.
+`helpers.mjs` and `typescript-loader.mjs` support these tests; standalone browser
+scripts (`danbooru-import-flow`, `test-client-nav`, `test-processing-nav`,
+`test-result-restore`) are manual tools and are not Node test-runner inputs.
+New behavior regressions belong in these groups or existing backend/Playwright
+shards, not a separate frozen coverage list.
+
+Test Cookie paths through configuration reads, saves and effective download
+config construction, with non-sensitive fixtures for traversal and symlink
+escapes. For uploads, test the route's real receive stream and multipart parser
+as well as concurrent PostgreSQL saves. Supported bounds are 20 files, 500 MiB
+per file, 1 GiB per batch and 2 MiB multipart overhead; final atomic charging
+still decides acceptance after preflight checks. Inject read, cancellation,
+move and commit failures and verify temporary files and usage are compensated.
+
+Thumbnail GET and conditional GET require session/Bearer authentication or an
+asset-and-purpose-scoped ticket before file access or derivative requests.
+Same-origin browser images send the session cookie; retain private cache and
+ETag behavior, and verify revoked/anonymous requests separately.
+
+Run rollback tests with command substitutes, never against a live deployment.
+Stop command failure, timeout or active writer status must leave switch actions
+and foreground restart blocked. Inspect `journal.json` or
+`rollback-receipt.env`, resolve the stop failure, then rerun the original rollback
+command. Host-test substitutes must use the same Python version as the tests;
+put the test virtualenv's `bin` directory first in PATH.
 
 ```bash
 docker compose --env-file .env.ci config --quiet
