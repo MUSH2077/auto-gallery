@@ -43,6 +43,7 @@ PHASES = (
     "receipt_success",
 )
 WRITERS = (
+    "migrate",
     "scheduler",
     "worker-download",
     "worker-import",
@@ -424,6 +425,7 @@ class RestoreRunner:
         input_path: Path | None = None,
         output_path: Path | None = None,
         check: bool = True,
+        timeout: int = 900,
     ) -> subprocess.CompletedProcess:
         stdin = input_path.open("rb") if input_path else None
         stdout = output_path.open("wb") if output_path else subprocess.PIPE
@@ -436,7 +438,7 @@ class RestoreRunner:
                 stdout=stdout,
                 stderr=subprocess.PIPE,
                 check=check,
-                timeout=900,
+                timeout=timeout,
             )
         finally:
             if stdin:
@@ -725,7 +727,16 @@ class RestoreRunner:
 
     def stop_writers(self) -> None:
         self.enter("stop_writers")
-        self.compose("stop", "-t", "120", *WRITERS)
+        self._stop_and_confirm_writers()
+
+    def _stop_and_confirm_writers(self) -> None:
+        self.compose("stop", "-t", "120", *WRITERS, "admin-web", timeout=180)
+        active = self.compose(
+            "ps", "--all", "--quiet", "--status", "running",
+            "--status", "restarting", "--status", "paused", *WRITERS, "admin-web", timeout=30,
+        )
+        if active.stdout.strip():
+            raise RestoreHostError("Writer containers remain active after stop; data switching is paused")
 
     def freeze_inputs(self) -> None:
         """Copy post-stop, revalidated bytes into host-owned restore storage."""
@@ -1783,8 +1794,13 @@ END
 
         attempt(
             "stop_writers",
-            lambda: self.compose("stop", "-t", "120", *WRITERS, "admin-web"),
+            self._stop_and_confirm_writers,
         )
+        if outcomes["stop_writers"]["status"] != "complete":
+            for name in ("files", "database", "redis", "foreground"):
+                outcomes[name] = {"status": "blocked", "error": "Writer stop has not been confirmed"}
+                self._transition_rollback_component(name, "blocked", error=outcomes[name]["error"])
+            return outcomes
         attempt("files", self._rollback_files)
         if self.journal.get("switch_attempted"):
             attempt("database", self._rollback_database)
@@ -2697,12 +2713,12 @@ def main() -> int:
                         else "recovery_failed"
                     ),
                     phase=failed_phase,
-                    rollback_performed=True,
+                    rollback_performed=outcomes.get("stop_writers", {}).get("status") == "complete",
                     rollback_status=rollback_status,
                     diagnostic=(
                         "Foreground services only; background writers remain stopped."
                         if foreground_running
-                        else "Foreground recovery failed; background writers remain stopped."
+                        else "Recovery is incomplete; inspect rollback components before restarting any writers."
                     ),
                     error=f"Restore failed during {failed_phase}: {type(exc).__name__}",
                     rollback_components=outcomes,

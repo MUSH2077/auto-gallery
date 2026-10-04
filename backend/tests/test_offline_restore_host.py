@@ -62,6 +62,8 @@ state = state_path.read_text() if state_path and state_path.exists() else "initi
 failure = os.environ.get("FAKE_COMPOSE_FAIL_CONTAINS")
 if failure and failure in joined:
     sys.exit(1)
+if "ps" in args and os.environ.get("FAKE_ACTIVE_WRITER"):
+    print("fixture-active-writer")
 if "--set=offline_restore_phase=database-identities" in args and state_path:
     count_path = state_path.with_suffix(".identity-count")
     count = int(count_path.read_text()) + 1 if count_path.exists() else 1
@@ -232,6 +234,52 @@ def _commands(fixture) -> list[list[str]]:
     if not fixture["log"].exists():
         return []
     return [json.loads(line) for line in fixture["log"].read_text().splitlines()]
+
+
+@pytest.mark.parametrize("failure", ["command", "status", "active"])
+def test_rollback_waits_for_stopped_writers_and_can_retry(tmp_path, failure):
+    fixture = _fixture(tmp_path)
+    assert _run(fixture).returncode == 0
+    fixture["log"].write_text("")
+    if failure == "active":
+        fixture["env"]["FAKE_ACTIVE_WRITER"] = "1"
+    else:
+        fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = "stop -t 120" if failure == "command" else "ps --all"
+    result = _run_rollback(fixture)
+    assert result.returncode == 1
+    assert (fixture["live_app"] / "value.txt").read_text() == "new-app"
+    commands = _commands(fixture)
+    assert not any("up" in command or "cp" in command or "exec" in command for command in commands)
+    journal = json.loads((_rollback_path(fixture).parent / "journal.json").read_text())
+    assert journal["rollback_components"]["stop_writers"]["status"] == "failed"
+    assert journal["rollback_components"]["files"]["status"] == "blocked"
+    fixture["env"].pop("FAKE_ACTIVE_WRITER", None)
+    fixture["env"].pop("FAKE_COMPOSE_FAIL_CONTAINS", None)
+    retried = _run_rollback(fixture)
+    assert retried.returncode == 0, retried.stderr
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+
+
+def test_offline_writer_timeout_blocks_compensation_and_preserves_diagnostic(tmp_path, monkeypatch):
+    import importlib.util
+    fixture = _fixture(tmp_path)
+    assert _run(fixture).returncode == 0
+    spec = importlib.util.spec_from_file_location("offline_restore_host_timeout", fixture["script"])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for key, value in fixture["env"].items():
+        monkeypatch.setenv(key, value)
+    runner = module.load_rollback_runner(_rollback_path(fixture).parent)
+    commands = []
+    def compose(*args, **kwargs):
+        commands.append(args)
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+    monkeypatch.setattr(runner, "compose", compose)
+    outcomes = runner.rollback()
+    assert len(commands) == 1 and commands[0][0] == "stop"
+    assert "TimeoutExpired" in outcomes["stop_writers"]["error"]
+    assert all(outcomes[name]["status"] == "blocked" for name in ("files", "database", "redis", "foreground"))
+    assert (fixture["live_app"] / "value.txt").read_text() == "new-app"
 
 
 def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path):
