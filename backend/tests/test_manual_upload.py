@@ -7,6 +7,7 @@ the service against the real (isolated) test PostgreSQL/Redis.
 import io
 import json
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -81,6 +82,271 @@ async def _fake_enqueue(download_job_id, import_error=None, new_json_paths=None)
 async def _unthrottled_import_slice(*_args, **_kwargs):
     """Keep upload integration tests independent of host pressure sampling."""
     yield SimpleNamespace(work_units=25, effective_scale=1.0)
+
+
+@pytest.fixture
+async def media_clear_environment(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.services import admin_data, heavy_io
+
+    downloads, library = tmp_path / "downloads", tmp_path / "library"
+    downloads.mkdir()
+    library.mkdir()
+    monkeypatch.setattr(settings, "download_root", str(downloads))
+    monkeypatch.setattr(settings, "library_root", str(library))
+    monkeypatch.setattr(heavy_io, "_local_lock_path", lambda: downloads / ".locks" / "heavy-io.lock")
+    async def external_search(*_args):
+        pass
+    monkeypatch.setattr(admin_data, "_clear_search_index", external_search)
+    monkeypatch.setattr("app.jobs.import_runner._import_resource_slice", _unthrottled_import_slice)
+    async with async_session() as db:
+        await _clear(db)
+        try:
+            yield db, downloads, library
+        finally:
+            await db.rollback()
+            await _clear(db)
+    await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_http_upload_is_rejected_under_the_real_maintenance_barrier(media_clear_environment):
+    from app.auth import create_access_token
+    from app.main import app
+    from app.services.heavy_io import LocalHeavyIOLock, RenewableRedisLease, HEAVY_IO_LOCK_KEY
+    from app.services.redis_client import get_redis
+    from app.models import StorageArtifact, User
+    from httpx import ASGITransport, AsyncClient
+
+    db, downloads, _ = media_clear_environment
+    user = await _make_user(db, f"{PREFIX}maintenance", permissions=["upload"], quota=1000)
+    lock = LocalHeavyIOLock()
+    assert lock.try_acquire()
+    lease = RenewableRedisLease([HEAVY_IO_LOCK_KEY], workload="operation:clear", owner="upload-clear-test")
+    await lease.acquire()
+    try:
+        assert get_redis().exists(HEAVY_IO_LOCK_KEY)
+        shared = LocalHeavyIOLock(shared=True)
+        assert not shared.try_acquire()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/v1/upload", headers={"Authorization": f"Bearer {create_access_token(user)}"}, files={"files": ("art.png", _png_bytes(), "image/png")})
+        assert response.status_code == 503, response.text
+        assert list((await db.execute(select(StorageArtifact))).scalars()) == []
+        assert (await db.get(User, user.id, populate_existing=True)).upload_used_bytes == 0
+        assert not list(downloads.rglob("*.png"))
+    finally:
+        await lease.release()
+        lock.release()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_upload_copy_keeps_the_maintenance_barrier_until_acceptance(media_clear_environment, monkeypatch):
+    from app.api import upload
+    from app.auth import create_access_token
+    from app.main import app
+    from app.services.heavy_io import LocalHeavyIOLock
+    from httpx import ASGITransport, AsyncClient
+
+    db, _, _ = media_clear_environment
+    user = await _make_user(db, f"{PREFIX}copy", permissions=["upload"], quota=1000)
+    copied, release = asyncio.Event(), asyncio.Event()
+    original = upload._stream_to_temp
+    async def paused_copy(*args, **kwargs):
+        path = await original(*args, **kwargs)
+        copied.set()
+        await release.wait()
+        return path
+    monkeypatch.setattr(upload, "_stream_to_temp", paused_copy)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        request = asyncio.create_task(client.post("/api/v1/upload", headers={"Authorization": f"Bearer {create_access_token(user)}"}, files={"files": ("art.png", _png_bytes(), "image/png")}))
+        probe = LocalHeavyIOLock()
+        try:
+            await asyncio.wait_for(copied.wait(), timeout=5)
+            acquired = probe.try_acquire()
+            probe.release()
+            release.set()
+            response = await request
+            assert not acquired
+            assert response.status_code == 200, response.text
+            assert probe.try_acquire()
+        finally:
+            release.set()
+            await request
+            probe.release()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("entity", ["works", "all"])
+async def test_media_clear_reclaims_only_its_upload_charge_and_closes_pending_imports(media_clear_environment, tmp_path, imported, entity):
+    from app.services.manual_upload import ManualUploadService
+    from app.services.admin_data import clear_entity_data
+    from app.jobs.import_runner import run_import_job
+    from app.models import User, DownloadJob, ImportJob, StorageArtifact, TaskRun, Work
+    from app.services.heavy_io import LocalHeavyIOLock
+
+    db, downloads, _ = media_clear_environment
+    content = _png_bytes()
+    user = await _make_user(db, f"{PREFIX}clear", quota=len(content) + 7, used=7)
+    incoming = _make_upload_file(tmp_path, "art.png", content)
+    accepted = await ManualUploadService().save_upload(db, user, [incoming], {"title": "Clear fixture"})
+    assert accepted.import_job_id
+    if imported:
+        await run_import_job(accepted.import_job_id)
+    lock = LocalHeavyIOLock()
+    assert lock.try_acquire()
+    try:
+        cleared = await clear_entity_data(entity, db)
+        assert cleared["status"] == "ok"
+        assert (await db.get(User, user.id, populate_existing=True)).upload_used_bytes == 7
+        assert not list((await db.execute(select(StorageArtifact))).scalars())
+        assert not list((await db.execute(select(Work))).scalars())
+        job = await db.get(DownloadJob, uuid.UUID(accepted.download_job_id), populate_existing=True)
+        child = await db.get(ImportJob, uuid.UUID(accepted.import_job_id), populate_existing=True)
+        if entity == "all":
+            assert job is None and child is None
+        else:
+            assert job.status == child.status == ("complete" if imported else "cancelled")
+        if not imported and entity == "works":
+            tasks = list((await db.execute(select(TaskRun).where(TaskRun.subject_id.in_([job.id, child.id])))).scalars())
+            assert tasks and all(task.status == "cancelled" for task in tasks)
+        # Clearing data must preserve the inode that currently owns the lock.
+        probe = LocalHeavyIOLock(shared=True)
+        assert not probe.try_acquire()
+        assert not list(downloads.rglob("*.png"))
+    finally:
+        lock.release()
+    replacement = _make_upload_file(tmp_path, "again.png", content)
+    assert (await ManualUploadService().save_upload(db, user, [replacement], {})).used_bytes == len(content) + 7
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_failed_media_clear_preserves_billing_and_retry_facts(media_clear_environment, tmp_path, monkeypatch):
+    from app.services.manual_upload import ManualUploadService
+    from app.services.admin_data import clear_entity_data
+    from app.services.operations import ADMIN_OPERATION_REGISTRY
+    from app.models import User, StorageArtifact, DownloadJob
+    from app.services.task_engine import AppliedCancellation
+
+    db, downloads, _ = media_clear_environment
+    content = _png_bytes()
+    user = await _make_user(db, f"{PREFIX}clear_failure", quota=1000)
+    user_id = user.id
+    accepted = await ManualUploadService().save_upload(db, user, [_make_upload_file(tmp_path, "art.png", content)], {})
+    notified = []
+    monkeypatch.setattr(AppliedCancellation, "notify", lambda cancellation: notified.append(cancellation.job_id))
+    media = next(downloads.rglob("*.png"))
+    original_mode = media.parent.stat().st_mode & 0o777
+    media.parent.chmod(0o500)
+    try:
+        failed = await clear_entity_data("works", db)
+        assert failed["status"] == "partial"
+        assert failed["files"]["failures"]
+        assert ADMIN_OPERATION_REGISTRY["admin-clear"].normalize_result(failed).status == "failed"
+        assert media.exists()
+        assert notified == []
+        assert (await db.get(DownloadJob, uuid.UUID(accepted.download_job_id), populate_existing=True)).status == "importing"
+        assert list((await db.execute(select(StorageArtifact))).scalars())
+        assert (await db.get(User, user_id, populate_existing=True)).upload_used_bytes == len(content)
+    finally:
+        media.parent.chmod(original_mode)
+    assert (await clear_entity_data("works", db))["status"] == "ok"
+    assert notified
+    assert (await db.get(User, user_id, populate_existing=True)).upload_used_bytes == 0
+    assert (await clear_entity_data("works", db))["status"] == "ok"
+    assert (await db.get(User, user_id, populate_existing=True)).upload_used_bytes == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", ["works", "all"])
+@pytest.mark.parametrize("first", ["clear", "purge"])
+async def test_media_clear_and_http_purge_return_upload_charge_once(
+    media_clear_environment, tmp_path, monkeypatch, entity, first,
+):
+    from httpx import ASGITransport, AsyncClient
+    from app.auth import create_access_token
+    from app.database import async_session
+    from app.jobs.import_runner import run_import_job
+    from app.main import app
+    from app.models import User, Work
+    from app.services.admin_data import clear_entity_data
+    from app.services.curation import CurationService
+    from app.services.heavy_io import LocalHeavyIOLock, RenewableRedisLease, HEAVY_IO_LOCK_KEY
+    from app.services.manual_upload import ManualUploadService
+
+    db, _, _ = media_clear_environment
+    content = _png_bytes()
+    user = await _make_user(db, f"{PREFIX}purge_clear", is_admin=True, quota=1000, used=7)
+    user_id = user.id
+    headers = {"Authorization": f"Bearer {create_access_token(user)}"}
+    accepted = await ManualUploadService().save_upload(
+        db, user, [_make_upload_file(tmp_path, "art.png", content)], {"title": "Purge clear fixture"},
+    )
+    await run_import_job(accepted.import_job_id)
+    work = (await db.execute(select(Work).where(Work.title == "Purge clear fixture"))).scalar_one()
+    work_id = work.id
+    await CurationService(db).trash_works([work_id])
+
+    selected, proceed = asyncio.Event(), asyncio.Event()
+    original = CurationService._release_manual_upload_quota
+
+    async def pause_after_asset_selection(service, *args):
+        if (service.db is db) == (first == "clear"):
+            selected.set()
+            await proceed.wait()
+        return await original(service, *args)
+
+    monkeypatch.setattr(CurationService, "_release_manual_upload_quota", pause_after_asset_selection)
+    lock = LocalHeavyIOLock()
+    lease = RenewableRedisLease([HEAVY_IO_LOCK_KEY], workload="operation:clear", owner="purge-clear-test")
+    task = None
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async def purge():
+            return await client.post("/api/v1/curation/purge", headers=headers, json={"work_ids": [str(work_id)]})
+
+        try:
+            if first == "clear":
+                assert lock.try_acquire()
+                await lease.acquire()
+                task = asyncio.create_task(clear_entity_data(entity, db))
+                await asyncio.wait_for(selected.wait(), timeout=5)
+                response = await asyncio.wait_for(purge(), timeout=10)
+                assert response.status_code == 503, response.text
+                assert response.json()["detail"]["code"] == "maintenance_in_progress"
+                assert response.headers["retry-after"] == "10"
+                async with async_session() as check_db:
+                    assert (await check_db.get(User, user_id)).upload_used_bytes == len(content) + 7
+                proceed.set()
+                cleared = await task
+                assert cleared["upload_quota_reclaimed"] == len(content)
+            else:
+                task = asyncio.create_task(purge())
+                await asyncio.wait_for(selected.wait(), timeout=5)
+                acquired = lock.try_acquire()
+                lock.release()
+                assert not acquired, "clear entered while purge was selecting and returning its charge"
+                proceed.set()
+                response = await task
+                assert response.status_code == 200, response.text
+                assert lock.try_acquire()
+                await lease.acquire()
+                cleared = await clear_entity_data(entity, db)
+                assert cleared["upload_quota_reclaimed"] == 0
+            assert cleared["status"] == "ok"
+            async with async_session() as check_db:
+                assert (await check_db.get(User, user_id)).upload_used_bytes == 7
+        finally:
+            proceed.set()
+            if task is not None:
+                await task
+            await lease.release()
+            lock.release()
 
 
 @pytest.mark.integration

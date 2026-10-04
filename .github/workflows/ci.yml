@@ -129,18 +129,23 @@ jobs:
                 tests/test_manual_upload.py::test_save_upload_rejects_disallowed_extension
                 tests/test_manual_upload.py::test_save_upload_quota_exceeded
                 tests/test_manual_upload.py::test_save_upload_creator_id_without_curation_is_forbidden
+                tests/test_manual_upload.py::test_http_upload_is_rejected_under_the_real_maintenance_barrier
+                tests/test_manual_upload.py::test_upload_copy_keeps_the_maintenance_barrier_until_acceptance
               )
               ;;
             manual-upload-linking)
               test_files=(
                 tests/test_manual_upload.py::test_save_upload_creator_id_with_curation_links_target_creator
                 tests/test_manual_upload.py::test_save_upload_personal_space_reused_across_two_uploads
+                tests/test_manual_upload.py::test_failed_media_clear_preserves_billing_and_retry_facts
               )
               ;;
             manual-upload-import-images)
               test_files=(
                 tests/test_manual_upload.py::test_save_upload_runs_through_real_import_runner
                 tests/test_manual_upload.py::test_save_upload_honors_manual_is_nsfw_flag
+                tests/test_manual_upload.py::test_media_clear_reclaims_only_its_upload_charge_and_closes_pending_imports
+                tests/test_manual_upload.py::test_media_clear_and_http_purge_return_upload_charge_once
               )
               ;;
             manual-upload-import-video)

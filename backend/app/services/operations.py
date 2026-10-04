@@ -165,6 +165,8 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
             "app.jobs.admin_operations.run_clear_operation",
             handler="handle_admin_clear",
             internal_profile="maintenance",
+            parent_admission=True,
+            result_policy="media_clear",
             scopes=("library:clear:",),
             timeout=7200,
         ),

@@ -7,6 +7,8 @@ from app.services.operations import ADMIN_OPERATION_REGISTRY
 
 
 @pytest.mark.parametrize("operation,payload,status,reason", [
+    ("admin-clear", {"status": "partial", "message": "File removal failed"}, "failed", "media_clear_incomplete"),
+    ("admin-clear", {"status": "ok"}, "complete", None),
     ("admin-cleanup-metadata-jsons", {"failed": 2, "message": "Two removals failed"}, "failed", "metadata_cleanup_partial_failure"),
     ("subscription-sync-batch", {"failed_count": 1}, "failed", "batch_partial_failure"),
     ("admin-creator-reenrich", {"aborted": True}, "failed", "operation_semantic_failure"),

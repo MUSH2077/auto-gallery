@@ -374,7 +374,13 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
     async def fake_clear_search(_db, _entity):
         return None
 
-    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
+    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: {"removed": 0, "failures": []})
+    async def no_uploads(_db):
+        return 0
+    async def no_pipeline(_db):
+        return []
+    monkeypatch.setattr(admin_data, "_release_media_clear_upload_quota", no_uploads)
+    monkeypatch.setattr(admin_data, "_cancel_cleared_pipeline", no_pipeline)
     monkeypatch.setattr(admin_data, "_clear_search_index", fake_clear_search)
     async def fake_clear_failed_rq_jobs(_db):
         return 0

@@ -33,6 +33,7 @@ from app.models.source_creator import SourceCreator
 from app.models.user import User
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
 from app.services.disk_identity import MetadataIdentity, provision_identity_for_disk_import
+from app.services.heavy_io import storage_write_barrier
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,12 @@ def _assert_contained(path: Path, root: Path) -> None:
 
 class ManualUploadService:
     async def save_upload(
+        self, db: AsyncSession, user: User, files: list[UploadFileInput], meta: dict,
+    ) -> UploadResult:
+        async with storage_write_barrier():
+            return await self._save_upload(db, user, files, meta)
+
+    async def _save_upload(
         self,
         db: AsyncSession,
         user: User,

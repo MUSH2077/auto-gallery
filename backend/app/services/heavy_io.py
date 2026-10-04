@@ -364,6 +364,18 @@ def local_source_lock(source_identity: str) -> "LocalResourceLocks":
     )
 
 
+@asynccontextmanager
+async def storage_write_barrier():
+    """Protect foreground storage writes with the existing maintenance flock."""
+    lock = LocalHeavyIOLock(shared=True)
+    if not lock.try_acquire():
+        raise HeavyIOUnavailable("maintenance_busy")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 class LocalHeavyIOLock:
     """Process-lifetime heavy-I/O mutex on the shared downloads volume."""
 

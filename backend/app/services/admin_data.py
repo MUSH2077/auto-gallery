@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import inspect
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -80,7 +81,7 @@ async def _lock_pipeline_rows_for_clear(entity: str, db: AsyncSession) -> None:
     # so every job-owning clear must lock those affected ledger rows first.
     if entity in {"all", "works", "jobs", "subscriptions", "creators"}:
         models.append(StorageArtifact)
-    if entity in {"all", "jobs", "subscriptions", "creators"}:
+    if entity in {"all", "works", "jobs", "subscriptions", "creators"}:
         models.extend((DownloadJob, ImportJob, TaskRun))
     for model in models:
         await db.execute(
@@ -175,6 +176,26 @@ async def _clear_subscriptions(db: AsyncSession) -> dict[str, int]:
 async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     """Clear one data area and return the legacy response shape."""
     await _lock_pipeline_rows_for_clear(entity, db)
+    cancellations = []
+    reclaimed = 0
+    files = None
+    if entity in {"works", "all"}:
+        # Keep the exact attempt locked across irreversible file deletion.
+        # Billing facts must remain available until the whole clear succeeds.
+        await _fence_registered_admin_commit(db)
+        reclaimed = await _release_media_clear_upload_quota(db)
+        cancellations = await _cancel_cleared_pipeline(db)
+        files = await asyncio.to_thread(
+            _clear_files, [str(settings.download_root), str(settings.library_root)],
+        )
+        if files["failures"]:
+            await db.rollback()
+            return {
+                "status": "partial",
+                "message": "Media deletion incomplete; database and upload charges retained for retry",
+                "deleted": {},
+                "files": files,
+            }
     if entity == "all":
         # Clear self-referencing FKs on curation_commits before delete
         await db.execute(text(
@@ -195,13 +216,17 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
         results = await _delete_tables(order, db)
         await _fence_registered_admin_commit(db)
         await db.commit()
-        _clear_files([str(settings.download_root), str(settings.library_root)])
+        for cancellation in cancellations:
+            cancellation.notify()
         results["files"] = "downloads + library cleared"
         await _clear_search_index(db, "all")
         results["failed_jobs"] = await clear_failed_rq_jobs(db)
         invalidate_creator_subscription_caches(include_works=True)
         invalidate_api_caches("tags")
-        return {"status": "ok", "message": "All data cleared", "deleted": results}
+        return {
+            "status": "ok", "message": "All data cleared", "deleted": results,
+            "files": files, "upload_quota_reclaimed": reclaimed,
+        }
 
     tables = ENTITIES.get(entity)
     if tables is None:
@@ -227,9 +252,10 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
         results["storage_artifacts"] = storage_result.rowcount or 0
     await _fence_registered_admin_commit(db)
     await db.commit()
+    for cancellation in cancellations:
+        cancellation.notify()
 
     if entity == "works":
-        _clear_files([str(settings.download_root), str(settings.library_root)])
         results["files"] = "downloads + library cleared"
         await _clear_search_index(db, "works")
         invalidate_api_caches("works", "creators", "subscriptions")
@@ -241,7 +267,83 @@ async def clear_entity_data(entity: str, db: AsyncSession) -> dict:
     elif entity == "tags":
         invalidate_api_caches("tags", "works")
 
-    return {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
+    result = {"status": "ok", "message": f"Cleared {entity}", "deleted": results}
+    if files is not None:
+        result.update(files=files, upload_quota_reclaimed=reclaimed)
+    return result
+
+
+async def _release_media_clear_upload_quota(db: AsyncSession) -> int:
+    from sqlalchemy import update
+    from app.models import Asset, AssetSource, AssetStorageState, DownloadJob, StorageArtifact, User, Work, WorkSource
+    from app.services.curation import CurationService
+
+    work_ids = list((await db.execute(select(Work.id))).scalars())
+    asset_ids = set((await db.execute(
+        select(Asset.id)
+        .outerjoin(AssetStorageState, AssetStorageState.asset_id == Asset.id)
+        .where(or_(AssetStorageState.asset_id.is_(None), AssetStorageState.storage_state != "purged"))
+    )).scalars())
+    reclaimed = await CurationService(db)._release_manual_upload_quota(work_ids, asset_ids)
+    # Pending uploads have no Work yet. Exclude files already represented by
+    # an AssetSource (including purged assets) to avoid returning a charge twice.
+    represented = set()
+    rows = (await db.execute(
+        select(WorkSource.source_work_id, AssetSource.source_asset_id, Asset.file_name)
+        .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
+        .join(Asset, Asset.id == AssetSource.asset_id)
+        .where(WorkSource.source == "manual")
+    )).all()
+    for work_id, source_name, asset_name in rows:
+        for name in (source_name, asset_name):
+            if name:
+                represented.add((work_id, Path(name).stem))
+    pending = (await db.execute(
+        select(
+            StorageArtifact.source_work_id, StorageArtifact.file_name,
+            StorageArtifact.file_size, DownloadJob.owner_user_id,
+        )
+        .join(DownloadJob, DownloadJob.id == StorageArtifact.download_job_id)
+        .where(
+            StorageArtifact.source == "manual",
+            StorageArtifact.storage_root == "downloads",
+            StorageArtifact.artifact_type.in_(("image", "video")),
+        )
+    )).all()
+    amounts = {}
+    for work_id, name, size, owner in pending:
+        if owner is not None and size and (work_id, Path(name).stem) not in represented:
+            amounts[owner] = amounts.get(owner, 0) + size
+    for owner, amount in amounts.items():
+        await db.execute(
+            update(User).where(User.id == owner)
+            .values(upload_used_bytes=func.greatest(User.upload_used_bytes - amount, 0))
+        )
+    return reclaimed + sum(amounts.values())
+
+
+async def _cancel_cleared_pipeline(db: AsyncSession) -> list:
+    from app.models import DownloadJob, ImportJob
+    from app.models.task_state import DOWNLOAD_CANCELLABLE_STATUSES, IMPORT_CANCELLABLE_STATUSES
+    from app.services.task_engine import TaskEngine
+
+    engine = TaskEngine(db)
+    cancellations = []
+    imports = list((await db.execute(
+        select(ImportJob.id)
+        .where(ImportJob.status.in_(IMPORT_CANCELLABLE_STATUSES))
+        .order_by(ImportJob.id)
+    )).scalars())
+    for job_id in imports:
+        cancellations.append(await engine.apply_cancel_import(job_id, note="Media cleared by administrator", operator="system"))
+    ids = list((await db.execute(
+        select(DownloadJob.id)
+        .where(DownloadJob.status.in_(DOWNLOAD_CANCELLABLE_STATUSES))
+        .order_by(DownloadJob.id)
+    )).scalars())
+    for job_id in ids:
+        cancellations.append(await engine.apply_cancel_download(job_id, note="Media cleared by administrator", operator="system"))
+    return cancellations
 
 
 async def rebuild_library_index(db: AsyncSession, options: dict | None = None, progress_callback=None) -> dict:
@@ -541,18 +643,33 @@ async def _clear_search_index(db: AsyncSession, entity: str) -> None:
         logger.warning("Failed to clear Meilisearch after %r clear", entity, exc_info=True)
 
 
-def _clear_files(paths: list[str]) -> None:
+def _clear_files(paths: list[str]) -> dict:
     """Remove all files in given directories while preserving root dirs."""
+    result = {"removed": 0, "failures": []}
     for path in paths:
+        root = Path(path)
+        if not root.exists():
+            continue
         try:
-            for item in os.listdir(path):
-                item_path = os.path.join(path, item)
-                if os.path.isdir(item_path):
-                    shutil.rmtree(item_path, ignore_errors=True)
+            items = list(root.iterdir())
+        except OSError as exc:
+            result["failures"].append({"path": str(root), "error": type(exc).__name__})
+            continue
+        for item in items:
+            # Unlinking coordination files would create a new, unlocked inode
+            # while the maintenance operation still owns the previous lock.
+            if item.name == ".locks":
+                continue
+            try:
+                if item.is_dir() and not item.is_symlink():
+                    shutil.rmtree(item)
                 else:
-                    os.unlink(item_path)
-        except Exception:
-            logger.warning("Failed to clear files in %s", path, exc_info=True)
+                    item.unlink()
+                result["removed"] += 1
+            except OSError as exc:
+                result["failures"].append({"path": str(item), "error": type(exc).__name__})
+                logger.warning("Failed to clear %s", item, exc_info=True)
+    return result
 
 
 async def clear_failed_rq_jobs(db: AsyncSession, *, dry_run: bool = False) -> int:

@@ -465,6 +465,23 @@ Failed copying owns temporary cleanup; failed moves or saves roll back usage
 and remove the current work directory. Committed files/jobs retain their charge
 while durable import intent handles later processing.
 
+Foreground upload copying, persistence and import publication hold the shared
+POSIX maintenance barrier. Registered clear operations retain its exclusive
+parent-side lock through the workhorse; an upload during maintenance returns
+`503 / maintenance_in_progress` with Retry-After. Media clear preserves `.locks`,
+keeps ownership and charge facts until file deletion succeeds, cancels pending
+pipeline jobs through the existing lifecycle, and releases only the removed
+uploads' charges. File failure returns `status=partial` and a per-path report;
+the registered task becomes failed. Database records and charges remain for
+retry, although some files may already be gone. Retry the same clear after
+fixing the filesystem error. File deletion cannot be undone if the later
+database commit fails; retained database facts allow that failed clear to retry.
+
+HTTP purge also holds the shared barrier from asset eligibility and quota
+release through file removal, commit and result retrieval, and returns the same
+503 during maintenance. Clear and purge cannot interleave to return one charge
+twice.
+
 Offline restore and deployment rollback stop writers and query Compose for
 running, restarting or paused containers before switching files, databases,
 Redis data or application images. Failed stop/inspection blocks compensation

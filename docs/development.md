@@ -194,6 +194,11 @@ Account regressions use formal HTTP login and real PostgreSQL transactions.
 Cover old Bearer credentials after reset, both password-change entries,
 disablement and username reuse, including WebSocket tickets and event delivery.
 Force overlapping administrator removals and retain one active administrator.
+Test upload/clear coordination with the real POSIX lock and auxiliary Redis
+lease, including copying, pending imports, imported works, permission failures
+and retries. Failed clear must retain its billing/ownership facts and must not
+publish cancellation before a successful commit. These cases belong to the
+existing account, upload, operation and worker CI shards.
 
 `scripts/verify-runtime.sh` issues current ID/version credentials from an active
 administrator, preferring one who has completed password change. On first

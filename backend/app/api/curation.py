@@ -34,6 +34,7 @@ from app.schemas.gitllery import (
     GitlleryVerifyOperationResponse,
 )
 from app.services.curation import CurationService
+from app.services.heavy_io import HeavyIOUnavailable, storage_write_barrier
 from app.services.gitllery import GitlleryService
 
 router = APIRouter(dependencies=[RequirePermission("curation")])
@@ -198,8 +199,21 @@ async def purge_trashed_works(
     db: AsyncSession = Depends(get_db),
 ):
     svc = CurationService(db)
-    commit = await svc.purge(data.work_ids, message=data.message)
-    return await svc.commit_payload(commit.id)
+    try:
+        # Keep maintenance out from candidate selection through file removal
+        # and quota commit; checking only before selection leaves a race.
+        async with storage_write_barrier():
+            commit = await svc.purge(data.work_ids, message=data.message)
+            return await svc.commit_payload(commit.id)
+    except HeavyIOUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "maintenance_in_progress",
+                "message": "Storage maintenance is in progress; retry the purge later",
+            },
+            headers={"Retry-After": "10"},
+        ) from exc
 
 
 @router.get("/rule-suggestions", response_model=list[RuleSuggestionRead])

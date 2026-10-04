@@ -1441,7 +1441,7 @@ async def test_registered_clear_preserves_current_and_other_active_authorities(
     from app.services import admin_data, operations
     from app.services.tasks import TaskService
 
-    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
+    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: {"removed": 0, "failures": []})
     monkeypatch.setattr(
         admin_data,
         "_clear_search_index",
@@ -1520,13 +1520,18 @@ async def test_registered_clear_preserves_current_and_other_active_authorities(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_registered_clear_rolls_back_when_attempt_is_superseded(monkeypatch):
+@pytest.mark.parametrize("entity", ["tags", "works"])
+async def test_registered_clear_rolls_back_when_attempt_is_superseded(monkeypatch, tmp_path, entity):
     """Destructive clear commits are fenced by the current TaskRun attempt."""
     from app.database import async_session, engine
     from app.models import Tag
+    from app.config import settings
     from app.services import admin_data, operations
 
     monkeypatch.setattr(admin_data, "invalidate_api_caches", lambda *_domains: {})
+    media = tmp_path / "protected.png"
+    media.write_bytes(b"not-deleted-by-an-old-attempt")
+    monkeypatch.setattr(settings, "download_root", str(tmp_path))
     task_id = None
     tag_id = None
     try:
@@ -1539,10 +1544,10 @@ async def test_registered_clear_rolls_back_when_attempt_is_superseded(monkeypatc
             prepared = await operations.prepare_admin_operation(
                 db,
                 operation_type="admin-clear",
-                scope_key="library:clear:tags",
+                scope_key=f"library:clear:{entity}",
                 title="Clear tags",
-                entity="tags",
-                options={"entity": "tags"},
+                entity=entity,
+                options={"entity": entity},
                 queue_name="maintenance",
                 job_timeout=60,
             )
@@ -1562,7 +1567,8 @@ async def test_registered_clear_rolls_back_when_attempt_is_superseded(monkeypatc
                     operations.AdminOperationAttemptRejected,
                     match="no longer current",
                 ):
-                    await admin_data.clear_entity_data("tags", db)
+                    await admin_data.clear_entity_data(entity, db)
+        assert media.exists()
 
         async with async_session() as verify_db:
             assert await verify_db.get(Tag, tag_id) is not None

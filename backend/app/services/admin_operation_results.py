@@ -26,6 +26,12 @@ def metadata_cleanup(payload: dict) -> AdminOperationResult:
     return success(payload)
 
 
+def media_clear(payload: dict) -> AdminOperationResult:
+    if payload.get("status") in {"partial", "failed"}:
+        return failure(payload, str(payload.get("message") or "Media clear incomplete"), "media_clear_incomplete")
+    return success(payload)
+
+
 def subscription_batch(payload: dict) -> AdminOperationResult:
     progress = {**{key: value for key, value in payload.items() if key.endswith("_count")},
                 "current": payload.get("candidate_count", 0), "total": payload.get("candidate_count", 0)}

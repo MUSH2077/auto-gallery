@@ -15,6 +15,7 @@ from app.api.deps import DBSession
 from app.auth import RequirePermission
 from app.config import settings
 from app.models.user import User
+from app.services.heavy_io import HeavyIOUnavailable, storage_write_barrier
 from app.services.manual_upload import (
     ManualUploadService, QuotaExceededError, UploadFileInput,
     MAX_UPLOAD_FILES, MAX_FILE_SIZE_BYTES, MAX_BATCH_SIZE_BYTES, MAX_REQUEST_SIZE_BYTES,
@@ -104,6 +105,24 @@ async def upload_files(
     db: AsyncSession = DBSession,
     user: User = _require_upload,
 ):
+    try:
+        async with storage_write_barrier():
+            return await _receive_upload_files(files, title, tags, is_nsfw, creator_id, db, user)
+    except HeavyIOUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "maintenance_in_progress",
+                "message": "Storage maintenance is in progress; retry the upload later",
+            },
+            headers={"Retry-After": "10"},
+        ) from exc
+
+
+async def _receive_upload_files(
+    files: list[UploadFile], title: str | None, tags: str | None,
+    is_nsfw: bool, creator_id: str | None, db: AsyncSession, user: User,
+) -> UploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
 

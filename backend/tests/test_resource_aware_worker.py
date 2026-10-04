@@ -1029,6 +1029,7 @@ def test_registered_admin_transport_preserves_child_owned_resource_profile():
 @pytest.mark.parametrize(
     "operation_type",
     [
+        "admin-clear",
         "admin-integrity-scan",
         "admin-backup-estimate",
         "admin-backup-create",
@@ -1087,6 +1088,15 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
             redis_client=object(),
         )
     operations._enqueue_admin_rq(
+        "33333333-3333-4333-8333-333333333333",
+        1,
+        operation_type="admin-clear",
+        rq_job_id="admin-clear-rq",
+        queue_name="maintenance",
+        job_timeout=60,
+        redis_client=object(),
+    )
+    operations._enqueue_admin_rq(
         "22222222-2222-4222-8222-222222222222",
         1,
         operation_type="admin-rebuild",
@@ -1096,10 +1106,18 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
         redis_client=object(),
     )
 
-    assert [entry[3]["meta"] for entry in published[:-1]] == [
+    assert [entry[3]["meta"] for entry in published[:-2]] == [
         {"registered_admin_operation": operation_type}
         for operation_type in operation_types
     ]
+    clear_meta = published[-2][3]["meta"]
+    assert clear_meta == {
+        "registered_admin_operation": "admin-clear",
+        "registered_admin_internal_profile": "maintenance",
+        "registered_admin_resource_profile": "maintenance",
+    }
+    clear_job = type("Job", (), {"meta": clear_meta})()
+    assert ResourceAwareWorker._internal_slice_workload(clear_job) is None
     assert published[-1][3]["meta"] == {
         "registered_admin_operation": "admin-rebuild",
         "registered_admin_internal_profile": "maintenance",
@@ -1108,7 +1126,8 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
 
 
 @pytest.mark.parametrize("raises", [False, True])
-def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises):
+@pytest.mark.parametrize("operation_type", ["admin-backup-create", "admin-clear"])
+def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises, operation_type):
     from app.services import resource_aware_worker
 
     worker = _bare_worker()
@@ -1125,7 +1144,7 @@ def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monke
             "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
             "args": ("11111111-1111-4111-8111-111111111111", 1),
             "meta": {
-                "registered_admin_operation": "admin-backup-create",
+                "registered_admin_operation": operation_type,
                 "registered_admin_internal_profile": "maintenance",
             },
             "refresh": lambda self: None,

@@ -327,6 +327,7 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
         async with async_session() as db:
             result = await clear_entity_data(entity, db)
         if not registered:
+            failed = result.get("status") in {"partial", "failed"}
             complete_progress = {
                 "phase": "complete",
                 "label": result.get("message", "Complete"),
@@ -337,17 +338,19 @@ async def _run_clear_operation(entity: str, job_id: str) -> dict:
                 if task:
                     await svc.update_task(
                         task,
-                        status="complete",
+                        status="failed" if failed else "complete",
                         progress=complete_progress,
                         result=result,
+                        error=result.get("message") if failed else None,
                     )
                     await task_db.commit()
             set_operation_status(
                 job_id,
-                "complete",
+                "failed" if failed else "complete",
                 "admin-clear",
                 progress=complete_progress,
                 result=result,
+                error=result.get("message") if failed else None,
                 meta={"entity": entity},
             )
         return result
