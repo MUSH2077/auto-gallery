@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"}
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB per file
+MAX_UPLOAD_FILES = 20
+MAX_BATCH_SIZE_BYTES = 1024 * 1024 * 1024
+MAX_REQUEST_SIZE_BYTES = MAX_BATCH_SIZE_BYTES + 2 * 1024 * 1024
 
 
 class QuotaExceededError(Exception):
@@ -105,6 +108,8 @@ class ManualUploadService:
     ) -> UploadResult:
         if not files:
             raise ValueError("At least one file is required")
+        if len(files) > MAX_UPLOAD_FILES:
+            raise ValueError(f"At most {MAX_UPLOAD_FILES} files are allowed per upload")
 
         creator_id = meta.get("creator_id")
         title = meta.get("title")
@@ -131,43 +136,43 @@ class ManualUploadService:
                 raise ValueError(f"{f.original_name} failed content validation (extension/content mismatch)")
             validated.append((f, ext, size))
             total_size += size
+            if total_size > MAX_BATCH_SIZE_BYTES:
+                raise QuotaExceededError("Upload exceeds the 1GiB batch limit")
 
-        # ---- Quota check (before any writes) ----
-        if user.upload_quota_bytes is not None and user.upload_used_bytes + total_size > user.upload_quota_bytes:
-            raise QuotaExceededError(
-                f"Upload of {total_size} bytes would exceed quota "
-                f"({user.upload_used_bytes}/{user.upload_quota_bytes} bytes used)"
-            )
-
-        # ---- Creator identity resolution ----
-        source_creator_id, source_url, display_name, target_creator_id = await self._resolve_identity(
-            db, user, creator_id
-        )
-
-        # ---- Storage: DOWNLOAD_ROOT/manual/user_{username}/{work_uuid}/ ----
-        work_uuid = str(uuid.uuid4())
-        root = Path(settings.download_root).resolve()
-        work_dir = root / "manual" / f"user_{user.username}" / work_uuid
-        _assert_contained(work_dir, root)
-        work_dir.mkdir(parents=True, exist_ok=True)
-
-        file_records = []
-        saved_paths: list[Path] = []
-        for f, ext, size in validated:
-            dest_name = f"{uuid.uuid4().hex}{ext}"
-            dest_path = work_dir / dest_name
-            _assert_contained(dest_path, root)
-            os.replace(f.temp_path, dest_path)
-            saved_paths.append(dest_path)
-            file_records.append({"name": dest_name, "original_name": f.original_name, "size": size})
-
-        # ---- Post-move pipeline: metadata write, identity provisioning,
-        # ledger insert, commit. Files are already on disk under work_dir at
-        # this point (moved above via os.replace) -- if anything below raises,
-        # nothing has committed yet, but the files would otherwise be
-        # orphaned on disk with no DB row pointing to them. Best-effort clean
-        # them up before re-raising. ----
+        # Reserve bytes atomically after network reception, in the save transaction.
+        work_dir = None
         try:
+            charged = (await db.execute(update(User).where(
+                User.id == user.id,
+                or_(User.upload_quota_bytes.is_(None),
+                    User.upload_used_bytes + total_size <= User.upload_quota_bytes),
+            ).values(upload_used_bytes=User.upload_used_bytes + total_size)
+                .returning(User.upload_used_bytes, User.upload_quota_bytes)
+                .execution_options(synchronize_session=False))).one_or_none()
+            if charged is None:
+                raise QuotaExceededError("Upload would exceed the current upload quota")
+            used_bytes, quota_bytes = charged
+            # Refresh a session-resident User too; callers must not observe its
+            # pre-upload usage after the atomic database increment.
+            await db.get(User, user.id, populate_existing=True)
+            source_creator_id, source_url, display_name, target_creator_id = await self._resolve_identity(
+                db, user, creator_id
+            )
+            work_uuid = str(uuid.uuid4())
+            root = Path(settings.download_root).resolve()
+            work_dir = root / "manual" / f"user_{user.username}" / work_uuid
+            _assert_contained(work_dir, root)
+            work_dir.mkdir(parents=True, exist_ok=True)
+            file_records = []
+            saved_paths: list[Path] = []
+            for f, ext, size in validated:
+                dest_name = f"{uuid.uuid4().hex}{ext}"
+                dest_path = work_dir / dest_name
+                _assert_contained(dest_path, root)
+                os.replace(f.temp_path, dest_path)
+                saved_paths.append(dest_path)
+                file_records.append({"name": dest_name, "original_name": f.original_name, "size": size})
+
             tag_list = [t.strip() for t in tags_raw.split(",") if t.strip()]
             metadata = {
                 "category": "manual",
@@ -237,16 +242,17 @@ class ManualUploadService:
                     rows.append(ar)
             await ArtifactLedger(db).upsert_many(rows)
 
-            db_user = await db.get(User, user.id)
-            db_user.upload_used_bytes = (db_user.upload_used_bytes or 0) + total_size
-
             from app.services.creator import CreatorService
             await CreatorService(db)._request_creator_projection(
                 provisioned.creator.id,
             )
             await db.commit()
-        except Exception:
-            shutil.rmtree(work_dir, ignore_errors=True)
+        except BaseException:
+            try:
+                await db.rollback()
+            finally:
+                if work_dir is not None:
+                    shutil.rmtree(work_dir, ignore_errors=True)
             raise
 
         from app.services.import_intent import enqueue_import
@@ -256,8 +262,8 @@ class ManualUploadService:
             work_id=work_uuid,
             download_job_id=str(job.id),
             import_job_id=import_job_id,
-            used_bytes=db_user.upload_used_bytes,
-            quota_bytes=db_user.upload_quota_bytes,
+            used_bytes=used_bytes,
+            quota_bytes=quota_bytes,
         )
 
     async def _resolve_identity(

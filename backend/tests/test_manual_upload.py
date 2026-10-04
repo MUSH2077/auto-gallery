@@ -101,7 +101,7 @@ async def test_save_upload_happy_path(tmp_path, monkeypatch):
         enqueued.append((download_job_id, set(new_json_paths or [])))
         return "fake-import-job"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -175,7 +175,7 @@ async def test_save_upload_rejects_bad_magic_bytes(tmp_path, monkeypatch):
 
     download_root = tmp_path / "downloads"
     monkeypatch.setattr(settings, "download_root", str(download_root))
-    monkeypatch.setattr("app.jobs.download._enqueue_import", _fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -307,7 +307,7 @@ async def test_save_upload_creator_id_with_curation_links_target_creator(tmp_pat
 
     download_root = tmp_path / "downloads"
     monkeypatch.setattr(settings, "download_root", str(download_root))
-    monkeypatch.setattr("app.jobs.download._enqueue_import", _fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -358,7 +358,7 @@ async def test_save_upload_personal_space_reused_across_two_uploads(tmp_path, mo
 
     download_root = tmp_path / "downloads"
     monkeypatch.setattr(settings, "download_root", str(download_root))
-    monkeypatch.setattr("app.jobs.download._enqueue_import", _fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
 
     try:
         async with async_session() as db:

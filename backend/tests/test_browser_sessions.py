@@ -179,6 +179,7 @@ async def test_browser_upload_requires_permission_and_session_csrf(store, monkey
 
     user = _user()
     user.permissions = ["upload"]
+    user.upload_quota_bytes = None
 
     async def fake_authenticate(*_args):
         return user
