@@ -34,7 +34,7 @@
     "animejs": "^4.5.0",
     "d3-hierarchy": "^3.1.2",
     "lucide-react": "^1.31.0",
-    "next": "16.3.5",
+    "next": "16.3.6",
     "playwright-core": "^1.62.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -58,7 +58,7 @@
     "@redocly/openapi-core": {
       "js-yaml": "4.3.2",
       "minimatch": {
-        "brace-expansion": "5.0.9"
+        "brace-expansion": "5.0.12"
       }
     },
     "next": {

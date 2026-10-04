@@ -122,7 +122,7 @@ docker compose run --rm backend alembic downgrade -1
 
 ### 技术栈与结构
 
-前端使用 Next.js 16.3.5、React 19.2.8、TypeScript、Tailwind CSS、TanStack Query 和
+前端使用 Next.js 16.3.6、React 19.2.8、TypeScript、Tailwind CSS、TanStack Query 和
 Playwright。主要产品模块位于 `src/app/admin`；共享页面容器、导航、反馈、对象列表、
 文本溢出和交互原语位于 `src/components`。
 

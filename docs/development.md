@@ -125,7 +125,7 @@ reindexing, long locks, and data-loss risks in the pull request.
 
 ### Stack and structure
 
-The frontend uses Next.js 16.3.5, React 19.2.8, TypeScript, Tailwind CSS, TanStack Query,
+The frontend uses Next.js 16.3.6, React 19.2.8, TypeScript, Tailwind CSS, TanStack Query,
 and Playwright. Major product areas live under `src/app/admin`; shared page
 shells, navigation, feedback, object lists, overflow handling, and interaction
 primitives live under `src/components`.
