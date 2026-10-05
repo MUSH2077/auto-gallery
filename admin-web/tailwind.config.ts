@@ -3,7 +3,7 @@ import type { Config } from "tailwindcss";
 // Design tokens for the themeable GitHub-grade system. Colors are backed by the
 // --ag-* CSS vars (RGB triplets in globals.css) via rgb(... / <alpha-value>) so
 // opacity modifiers work (e.g. ring-accent/40) and swapping the palette
-// (data-theme on <html>) reskins everything. See .claude/plans/frontend-style-optimization.md.
+// (data-theme on <html>) reskins everything.
 const t = (v: string) => `rgb(var(${v}) / <alpha-value>)`;
 
 const config: Config = {

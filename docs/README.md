@@ -33,13 +33,13 @@ versions.
 | Security reporting | [Security policy](../SECURITY.md) | — |
 | GitHub repository controls | [Repository settings](../.github/REPOSITORY_SETTINGS.md) | — |
 
-Historical audits and implementation plans are retained for traceability, but
-the current README, architecture, setup, and development guides are normative
-when they conflict with an older plan.
+Retired audits, implementation plans, and task reports are available in Git
+history. Use the maintained README, architecture, setup, and development
+guides for current behavior and procedures.
 
 ## 中文索引
 
 安装和运维请从[部署指南](setup.zh.md)开始；参与开发请先阅读
 [架构文档](architecture.zh.md)、[开发指南](development.zh.md)和
-[中文贡献指南](../CONTRIBUTING.zh.md)。历史审计与实现计划仅用于追溯；当其内容与
-当前 README、架构、部署或开发文档冲突时，以当前文档为准。
+[中文贡献指南](../CONTRIBUTING.zh.md)。已退役的审计、实现计划和任务报告可从 Git 历史
+追溯；当前行为与操作流程以维护中的 README、架构、部署和开发文档为准。

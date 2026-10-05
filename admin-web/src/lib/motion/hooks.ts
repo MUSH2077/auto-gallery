@@ -1,8 +1,7 @@
 "use client";
 // Shared motion hooks. usePresence gives conditionally-rendered overlays an
 // exit phase (React unmounts instantly otherwise); useEnterOnce guards
-// entrance animations against replaying on poll-driven re-renders — the #1
-// motion risk in this app (see docs/frontend-motion-audit.md §3.3.1).
+// entrance animations against replaying on poll-driven re-renders.
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 
