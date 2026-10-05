@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from app.auth import RequirePermission
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.database import get_db
 from app.schemas.creator import CreatorCreate, CreatorListResponse, CreatorRead, CreatorUpdate
@@ -30,6 +31,7 @@ from app.services.cache import (
     invalidate_creator_subscription_caches,
 )
 from app.services.curation import CurationService
+from app.services.redis_budget import http_redis_call
 from app.services.search import SearchBackendUnavailable, SearchService
 from app.services.search_language import SearchQueryError
 
@@ -46,12 +48,18 @@ curation_router = APIRouter(dependencies=[RequirePermission("curation")])
 async def count_creators(db: AsyncSession = Depends(get_db)):
     """Return total number of creators."""
     ck = cache_key("creators:count")
-    cached = cache_get(ck)
+    try:
+        cached = await http_redis_call(cache_get, ck)
+    except RedisTimeoutError:
+        cached = None
     if cached is not None:
         return cached
     result = await db.execute(select(func.count()).select_from(Creator))
     data = {"count": result.scalar() or 0}
-    cache_set(ck, data, TTL["creators:count"])
+    try:
+        await http_redis_call(cache_set, ck, data, TTL["creators:count"])
+    except RedisTimeoutError:
+        pass
     return data
 
 

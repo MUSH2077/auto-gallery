@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -66,6 +67,18 @@ def current_budget_client():
 def current_work_deadline():
     budget = _BUDGET.get()
     return budget.work_deadline if budget else time.monotonic() + 17
+
+
+async def http_redis_call(operation, *args):
+    """Run HTTP Redis work off-loop with finite sockets and a short wait."""
+    def run():
+        with budget_redis(seconds=0.4, reserve_seconds=0):
+            return operation(*args)
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(run), timeout=0.6)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError("HTTP Redis wait budget exhausted") from exc
 
 
 @contextmanager

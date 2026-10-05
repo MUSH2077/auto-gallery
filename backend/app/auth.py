@@ -1,4 +1,6 @@
 import bcrypt as _bcrypt
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -18,6 +20,7 @@ ALGORITHM = "HS256"
 BCRYPT_MAX_PASSWORD_BYTES = 72
 
 bearer_scheme = HTTPBearer(auto_error=False)
+_password_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="password")
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -37,6 +40,14 @@ def verify_password(plain: str, hashed: str) -> bool:
         return _bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
+
+
+async def async_hash_password(password: str) -> str:
+    return await asyncio.get_running_loop().run_in_executor(_password_workers, hash_password, password)
+
+
+async def async_verify_password(plain: str, hashed: str) -> bool:
+    return await asyncio.get_running_loop().run_in_executor(_password_workers, verify_password, plain, hashed)
 
 
 def create_access_token(user: "User") -> str:
@@ -226,7 +237,7 @@ async def ensure_admin_user() -> None:
                 raise RuntimeError("ADMIN_PASSWORD must be set before bootstrapping the admin user.")
             admin = User(
                 username="admin",
-                password_hash=hash_password(bootstrap_password),
+                password_hash=await async_hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
                 is_admin=True,

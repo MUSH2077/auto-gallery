@@ -11,7 +11,7 @@ import secrets
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import hash_password
+from app.auth import async_hash_password
 from app.models.user import User
 from app.permissions import PERMISSION_MODULES
 
@@ -58,7 +58,7 @@ class UserService:
 
         user = User(
             username=username,
-            password_hash=hash_password(password),
+            password_hash=await async_hash_password(password),
             display_name=display_name,
             is_admin=is_admin,
             permissions=permissions,
@@ -116,7 +116,7 @@ class UserService:
         if user is None:
             raise ValueError("user not found")
         plaintext = secrets.token_urlsafe(9)
-        user.password_hash = hash_password(plaintext)
+        user.password_hash = await async_hash_password(plaintext)
         user.credential_version += 1
         user.must_change_password = True
         await self.db.commit()

@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import asyncio
+import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -33,6 +36,29 @@ def test_access_token_binds_account_identity_and_version() -> None:
     assert payload.get("uid") == 7
     assert payload.get("cv") == 1
     assert "password_hash" not in payload
+
+
+@pytest.mark.asyncio
+async def test_password_calculation_uses_at_most_two_workers(monkeypatch):
+    from app import auth
+    active = peak = 0
+    lock = threading.Lock()
+    loop_thread = threading.get_ident()
+    def expensive_hash(_password):
+        nonlocal active, peak
+        assert threading.get_ident() != loop_thread
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.04)
+            return "hashed"
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(auth, "hash_password", expensive_hash)
+    assert await asyncio.gather(*[auth.async_hash_password("fixture") for _ in range(6)]) == ["hashed"] * 6
+    assert peak == 2
 
 
 def test_decode_access_token_still_returns_username() -> None:

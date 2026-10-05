@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import (
     create_access_token,
     get_authenticated_user,
-    hash_password,
-    verify_password,
+    async_hash_password,
+    async_verify_password,
 )
 from app.database import get_db
 from app.models.user import User
@@ -76,7 +76,7 @@ async def _authenticate_login(body: LoginRequest, request: Request, session: Asy
         )
     result = await session.execute(select(User).where(User.username == body.username, User.is_active == True))
     user = result.scalars().first()
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or not await async_verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     user.last_login_at = func.now()
     await session.commit()
@@ -105,7 +105,7 @@ async def _change_password(body: ChangePasswordRequest, current_user: User, sess
     if len(body.new_password) < 6:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters")
     try:
-        new_password_hash = hash_password(body.new_password)
+        new_password_hash = await async_hash_password(body.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -116,7 +116,7 @@ async def _change_password(body: ChangePasswordRequest, current_user: User, sess
         .execution_options(populate_existing=True)
     )
     user = result.scalars().first()
-    if user is None or not user.is_active or not verify_password(body.current_password, user.password_hash):
+    if user is None or not user.is_active or not await async_verify_password(body.current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     user.password_hash = new_password_hash
     user.credential_version += 1

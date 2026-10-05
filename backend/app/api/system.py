@@ -36,6 +36,7 @@ from app.services.subscription_calendar import effective_calendar_rule
 from app.services.sync_outcome import download_job_outcome
 from app.services.auth_health import auth_attention_counts
 from app.services.workbench_cache import read_workbench_generation
+from app.services.redis_budget import http_redis_call
 
 try:
     from zoneinfo import ZoneInfo
@@ -126,11 +127,19 @@ def _storage_risk(storage: dict) -> str:
 
 async def _queue_stats_payload() -> dict:
     try:
-        import redis as redis_lib
+        return await http_redis_call(_queue_stats_payload_sync)
+    except Exception:
+        logger.warning("Redis queue stats wait exhausted", exc_info=True)
+        return _queue_stats_unavailable()
+
+
+def _queue_stats_payload_sync() -> dict:
+    try:
+        from app.services.redis_client import get_redis
         from rq import Queue
         from rq.registry import FailedJobRegistry, ScheduledJobRegistry, StartedJobRegistry
 
-        r = redis_lib.from_url(settings.redis_url)
+        r = get_redis()
         queues = {}
         for qname in QUEUE_NAMES:
             q = Queue(connection=r) if qname == "default" else Queue(name=qname, connection=r)
@@ -158,22 +167,26 @@ async def _queue_stats_payload() -> dict:
         }
     except Exception:
         logger.warning("Failed to fetch Redis queue stats", exc_info=True)
-        return {
-            "default_queue": -1,
-            "scheduled_queue": -1,
-            "failed_jobs": -1,
-            "started_jobs": -1,
-            "next_sync_scan_at": None,
-            "scheduler_loop": {
-                "status": "unknown",
-                "last_started_at": None,
-                "last_finished_at": None,
-                "next_scan_at": None,
-                "watchdog_at": None,
-                "last_error": None,
-            },
-            "queues": {},
-        }
+        return _queue_stats_unavailable()
+
+
+def _queue_stats_unavailable() -> dict:
+    return {
+        "default_queue": -1,
+        "scheduled_queue": -1,
+        "failed_jobs": -1,
+        "started_jobs": -1,
+        "next_sync_scan_at": None,
+        "scheduler_loop": {
+            "status": "unknown",
+            "last_started_at": None,
+            "last_finished_at": None,
+            "next_scan_at": None,
+            "watchdog_at": None,
+            "last_error": None,
+        },
+        "queues": {},
+    }
 
 
 async def _quick_service_health(db: AsyncSession) -> dict:
@@ -184,9 +197,8 @@ async def _quick_service_health(db: AsyncSession) -> dict:
     except Exception:
         services["postgres"] = "down"
     try:
-        import redis as redis_lib
-        r = redis_lib.from_url(settings.redis_url)
-        services["redis"] = "up" if r.ping() else "down"
+        from app.services.redis_client import get_redis
+        services["redis"] = "up" if await http_redis_call(lambda: get_redis().ping()) else "down"
     except Exception:
         services["redis"] = "down"
     try:
@@ -196,7 +208,7 @@ async def _quick_service_health(db: AsyncSession) -> dict:
         services["meilisearch"] = await asyncio.to_thread(_check_meili)
     except Exception:
         services["meilisearch"] = "down"
-    services["gallery-dl"] = "up" if shutil.which("gallery-dl") else "missing"
+    services["gallery-dl"] = "up" if await asyncio.to_thread(shutil.which, "gallery-dl") else "missing"
     return services
 
 
@@ -324,6 +336,13 @@ async def queue_stats():
 
 
 async def _get_proxy_health_summary() -> dict:
+    try:
+        return await http_redis_call(_get_proxy_health_summary_sync)
+    except Exception:
+        return {"sources": {}}
+
+
+def _get_proxy_health_summary_sync() -> dict:
     """Read proxy health from Redis keys set by download pre-flight checks."""
     sources = ["pixiv", "danbooru", "iwara", "weibo", "bilibili", "pinterest", "lofter"]
     result = {}
@@ -344,6 +363,13 @@ async def _get_proxy_health_summary() -> dict:
 
 
 async def _count_active_rebuilds() -> int:
+    try:
+        return await http_redis_call(_count_active_rebuilds_sync)
+    except Exception:
+        return 0
+
+
+def _count_active_rebuilds_sync() -> int:
     try:
         from app.services.redis_client import get_redis
         r = get_redis()

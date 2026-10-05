@@ -1,6 +1,7 @@
 """Tests for /api/v1/users CRUD API and its admin-only guards."""
 import pytest
 import asyncio
+import time
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text, update
 
@@ -67,6 +68,54 @@ async def _headers(username):
 
     token = await access_token_for_user(username)
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_logins_leave_the_event_loop_available(monkeypatch):
+    from app.api import auth_api
+    from app.auth import create_access_token
+    from app.database import async_session, engine
+    from app.main import app
+    from app.services.rate_limiter import RateLimiter
+
+    monkeypatch.setattr(auth_api, "_login_limiter", RateLimiter(prefix="password-thread-test", max_requests=1000))
+    gaps = []
+    done = asyncio.Event()
+    async def ticker():
+        previous = time.monotonic()
+        while not done.is_set():
+            await asyncio.sleep(0.005)
+            now = time.monotonic()
+            gaps.append(now - previous)
+            previous = now
+    tick = None
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, PREFIX + "cpu", permissions=["library"])
+        tick = asyncio.create_task(ticker())
+        await asyncio.sleep(0.02)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            logins = [asyncio.create_task(
+                client.post("/api/v1/auth/login", json={"username": user.username, "password": "hunter22"})
+            )
+                for _ in range(4)
+            ]
+            await asyncio.sleep(0.03)
+            peer = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {create_access_token(user)}"})
+            assert peer.status_code == 200
+            assert any(not request.done() for request in logins)
+            responses = await asyncio.gather(*logins)
+        assert [response.status_code for response in responses] == [200] * 4
+        assert max(gaps) < 0.15, gaps
+    finally:
+        done.set()
+        if tick is not None:
+            await tick
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
 
 
 @pytest.mark.integration
