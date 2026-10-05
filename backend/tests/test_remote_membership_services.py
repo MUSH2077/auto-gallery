@@ -6,10 +6,97 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete
 
 
 PREFIX = "remote_membership_test_"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1, 10, 50])
+async def test_subscription_summary_authorization_is_one_batch(size):
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event
+    from app.auth import create_access_token
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription, UserSubscription
+
+    selects = []
+    creator_ids = []
+    def capture(_connection, _cursor, statement, *_args):
+        if statement.startswith("SELECT user_subscriptions.") and "FROM user_subscriptions" in statement:
+            selects.append(statement)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "summary_batch")
+            creators = [Creator(name=PREFIX + "summary_batch_" + uuid4().hex) for _ in range(size)]
+            db.add_all(creators)
+            await db.flush()
+            creator_ids = [creator.id for creator in creators]
+            subscriptions = [Subscription(creator_id=creators[index].id, name=str(index)) for index in range(size)]
+            db.add_all(subscriptions)
+            await db.flush()
+            db.add_all([UserSubscription(user_id=user.id, subscription_id=sub.id) for sub in subscriptions])
+            await db.commit()
+            ids = [str(sub.id) for sub in subscriptions]
+            token = create_access_token(user)
+        event.listen(engine.sync_engine, "before_cursor_execute", capture)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/subscriptions/summaries", params={"ids": ",".join(ids)}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200, response.text
+        assert [item["subscription_id"] for item in response.json()["items"]] == ids
+        assert len(selects) == 1, selects
+    finally:
+        if event.contains(engine.sync_engine, "before_cursor_execute", capture):
+            event.remove(engine.sync_engine, "before_cursor_execute", capture)
+        async with async_session() as db:
+            await _clear(db)
+            await db.execute(delete(Subscription).where(Subscription.creator_id.in_(creator_ids)))
+            await db.execute(delete(Creator).where(Creator.id.in_(creator_ids)))
+            await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_subscription_summary_filters_private_ids_and_deduplicates(admin):
+    from httpx import ASGITransport, AsyncClient
+    from app.auth import create_access_token
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription, UserSubscription
+
+    creator_ids = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "summary_scope", admin=admin)
+            creators = [Creator(name=PREFIX + "scope_" + uuid4().hex) for _ in range(3)]
+            db.add_all(creators)
+            await db.flush()
+            creator_ids = [creator.id for creator in creators]
+            subscriptions = [Subscription(creator_id=creators[index].id, name=str(index)) for index in range(3)]
+            db.add_all(subscriptions)
+            await db.flush()
+            db.add_all([UserSubscription(user_id=user.id, subscription_id=subscriptions[index].id, is_active=index == 0) for index in range(2)])
+            await db.commit()
+            ids = [str(sub.id) for sub in subscriptions]
+            token = create_access_token(user)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/subscriptions/summaries", params={"ids": ",".join([ids[1], ids[2], ids[0], ids[1], str(uuid4())])}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200, response.text
+        assert [item["subscription_id"] for item in response.json()["items"]] == [ids[1], ids[0]]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+            await db.execute(delete(Subscription).where(Subscription.creator_id.in_(creator_ids)))
+            await db.execute(delete(Creator).where(Creator.id.in_(creator_ids)))
+            await db.commit()
+        await engine.dispose()
 
 
 async def _clear(db) -> None:
