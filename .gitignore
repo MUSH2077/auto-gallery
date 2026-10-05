@@ -104,7 +104,6 @@ tmp/
 temp/
 .cache/
 .playwright-mcp/
-.superpowers/
 admin-web/public/api-docs/
 
 # --- gallery-dl ---
