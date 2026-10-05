@@ -1000,3 +1000,108 @@ for (const pages of [10, 50, 100]) {
     await expect(page.getByRole('checkbox', { name: 'Select Creator 000' })).toBeChecked();
   });
 }
+
+test('creator fields have native labels and associated submission errors', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await context.route('**/api/v1/creators', async route => route.fulfill({ status: 503, json: { detail: 'Create fixture failed' } }));
+  await page.goto('/admin/creators');
+  await page.getByRole('button', { name: /New/, exact: false }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  expect(await dialog.locator('input, textarea').evaluateAll(fields => fields.every(field => (field as HTMLInputElement).labels?.length === 1))).toBe(true);
+  for (const label of await dialog.locator('label').all()) {
+    await label.click();
+    const target = await label.getAttribute('for');
+    await expect(dialog.locator(`[id="${target}"]`)).toBeFocused();
+  }
+  await dialog.getByRole('textbox', { name: /Name.*\*/ }).fill('Fixture name');
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Create fixture failed');
+  await expect(dialog.getByRole('textbox', { name: /Name.*\*/ })).toHaveAttribute('aria-describedby', /error/);
+  expect((await new AxeBuilder({ page }).include('[role="dialog"]').withRules(['label']).analyze()).violations).toEqual([]);
+});
+
+test('creator editing retains native labels', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await page.goto('/admin/creators/creator-0050');
+  await page.getByRole('button', { name: 'Edit profile', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  expect(await dialog.locator('input, textarea').evaluateAll(fields => fields.every(field => (field as HTMLInputElement).labels?.length === 1))).toBe(true);
+  expect((await new AxeBuilder({ page }).include('[role="dialog"]').withRules(['label']).analyze()).violations).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Edit profile', exact: true })).toBeFocused();
+});
+
+test('a command palette above a creator dialog preserves both focus layers', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await page.goto('/admin/creators');
+  await page.getByRole('button', { name: /New/, exact: false }).click();
+  const form = page.getByRole('dialog');
+  await form.getByRole('textbox', { name: /Name.*\*/ }).focus();
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Search', exact: true });
+  await expect(palette).toBeVisible();
+  await palette.getByRole('combobox').focus();
+  for (let index = 0; index < 14; index++) {
+    await page.keyboard.press('Tab');
+    expect(await palette.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
+  await expect(form.getByRole('textbox', { name: /Name.*\*/ })).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe("hidden");
+  expect(await page.locator("#admin-sidebar").evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(form).toBeHidden();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
+  expect(await page.locator("#admin-sidebar").evaluate(element => (element as HTMLElement).inert)).toBe(false);
+});
+
+for (const overflow of ["", "clip"]) {
+  test(`stacked dialog navigation releases its locks and preserves original overflow ${overflow || "default"}`, async ({ context, page }) => {
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+    await installRoutes(context, observations);
+    await page.goto("/admin/creators");
+    await expect(page.getByRole("button", { name: /New/ })).toBeVisible();
+    await page.evaluate(overflow => {
+      document.body.style.overflow = overflow;
+      const existing = document.createElement("div");
+      existing.id = "existing-inert-fixture";
+      existing.inert = true;
+      document.body.append(existing);
+    }, overflow);
+    await page.getByRole("button", { name: /New/ }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Control+k");
+    const palette = page.getByRole("dialog", { name: "Search", exact: true });
+    await expect(palette).toBeVisible();
+    await palette.getByRole("combobox").fill("jobs");
+    await palette.getByRole("option", { name: /Tasks & Issues/ }).click();
+    await expect(page).toHaveURL(/\/admin\/jobs$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => ({
+      overflow: document.body.style.overflow,
+      inert: [...document.querySelectorAll("[inert]")].map(element => element.id),
+    }))).toEqual({ overflow, inert: ["existing-inert-fixture"] });
+    // Reopening and dismissing must not leave ownership behind either.
+    const trigger = page.getByRole("button", { name: /Search/, exact: false }).first();
+    await trigger.click();
+    await expect(palette).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(overflow);
+    await page.evaluate(() => { document.body.style.overflow = ""; });
+    await page.getByRole("link", { name: "Creators", exact: true }).first().click();
+    await expect(page).toHaveURL(/\/admin\/creators$/);
+    await expect(page.getByRole("button", { name: /New/ })).toBeVisible();
+    await page.mouse.move(900, 500);
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  });
+}

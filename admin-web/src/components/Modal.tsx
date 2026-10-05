@@ -1,8 +1,9 @@
 "use client";
 import { X } from "lucide-react";
-import { ReactNode, useEffect, useId, useRef } from "react";
+import { ReactNode, useId, useRef } from "react";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 
 export default function Modal({ open, onClose, title, children }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode;
@@ -10,45 +11,9 @@ export default function Modal({ open, onClose, title, children }: {
   const t = useT();
   const titleId = useId();
   const modalRef = useRef<HTMLDivElement>(null);
-  const prevFocus = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
   const { mounted, closing } = usePresence(open);
 
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    if (!open || !mounted || !modalRef.current) return;
-    prevFocus.current = document.activeElement as HTMLElement;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const first = modalRef.current.querySelector<HTMLElement>(
-      'input:not([disabled]), button:not([disabled]), a[href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    );
-    window.requestAnimationFrame(() => first?.focus());
-
-    const trap = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== "Tab" || !modalRef.current) return;
-      const els = Array.from(modalRef.current.querySelectorAll<HTMLElement>(
-        'input:not([disabled]), button:not([disabled]), a[href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )).filter((element) => !element.hasAttribute("hidden"));
-      if (!els.length) return;
-      if (e.shiftKey && document.activeElement === els[0]) { e.preventDefault(); els[els.length-1].focus(); }
-      else if (!e.shiftKey && document.activeElement === els[els.length-1]) { e.preventDefault(); els[0].focus(); }
-    };
-    document.addEventListener("keydown", trap);
-    return () => {
-      document.removeEventListener("keydown", trap);
-      document.body.style.overflow = previousOverflow;
-      prevFocus.current?.focus();
-    };
-  }, [mounted, open]);
+  useDialogFocus(open && mounted, modalRef, onClose);
 
   if (!mounted) return null;
   return (
@@ -60,6 +25,7 @@ export default function Modal({ open, onClose, title, children }: {
     >
       <div
         ref={modalRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

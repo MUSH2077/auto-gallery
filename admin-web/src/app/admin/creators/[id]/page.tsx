@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, useId, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -197,6 +197,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 }
 
 export default function CreatorDetailPage() {
+  const editFormId = useId();
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
@@ -814,9 +815,9 @@ export default function CreatorDetailPage() {
       </Modal>
       <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="input w-full" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
+          <div><label htmlFor={`${editFormId}-name`} className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input id={`${editFormId}-name`} value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
+          <div><label htmlFor={`${editFormId}-display_name`} className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input id={`${editFormId}-display_name`} value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="input w-full" /></div>
+          <div><label htmlFor={`${editFormId}-description`} className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea id={`${editFormId}-description`} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("creator_detail.cancel")}</button>
             <button onClick={() => update.mutate()} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
@@ -841,6 +842,7 @@ export default function CreatorDetailPage() {
 }
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
+  const linkFormId = useId();
   const t = useT();
   const [url, setUrl] = useState("");
   const [linkType, setLinkType] = useState("website");
@@ -853,9 +855,9 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
-        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
+      <div><label htmlFor={`${linkFormId}-url`} className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input id={`${linkFormId}-url`} value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
+      <div><label htmlFor={`${linkFormId}-type`} className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
+        <select id={`${linkFormId}-type`} value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
           {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </div>

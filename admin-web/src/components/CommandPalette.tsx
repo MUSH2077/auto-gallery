@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/lib/adminNavigation";
 import { useT } from "@/lib/i18n";
 import { usePresence } from "@/lib/motion";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 import { usePermissions } from "@/lib/usePermissions";
 import { SmartSearchInput } from "@/components/SmartSearchInput";
 
@@ -27,11 +28,15 @@ export default function CommandPalette({
 }) {
   const t = useT();
   const pathname = usePathname();
-  const previousPath = useRef(pathname);
+  const params = useSearchParams().toString();
+  const currentHref = params ? `${pathname}?${params}` : pathname;
+  const previousHref = useRef(currentHref);
   const router = useRouter();
   const { has, isAdmin } = usePermissions();
   const { mounted, closing } = usePresence(open);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open && mounted, dialogRef, onClose);
   const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -76,35 +81,18 @@ export default function CommandPalette({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !mounted) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => {
-      cancelAnimationFrame(frame);
-      previousFocus?.focus();
-    };
-  }, [mounted, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== "Escape") return;
-      event.preventDefault();
-      onClose();
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [onClose, open]);
-
-  useEffect(() => {
     setActiveIndex(0);
   }, [query]);
 
   useEffect(() => {
-    if (previousPath.current === pathname) return;
-    previousPath.current = pathname;
+    if (previousHref.current === currentHref) return;
+    previousHref.current = currentHref;
     if (open) onClose();
-  }, [pathname]); // A completed Next route change owns closing the palette.
+  }, [currentHref, open, onClose]); // Close on completed path or query navigation.
+
+  useEffect(() => {
+    if (open) itemRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
 
   if (!mounted) return null;
 
@@ -112,26 +100,36 @@ export default function CommandPalette({
     <div className="fixed inset-0 z-[80] flex items-start justify-center px-3 pt-[12vh]" role="presentation">
       <button
         type="button"
+        tabIndex={-1}
         className={`absolute inset-0 bg-black/45 ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
         onClick={onClose}
         aria-label={t("common.close")}
       />
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={t("search.title")}
         onKeyDownCapture={(event) => {
-          if (event.defaultPrevented) return;
+          if (event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
           if (event.key === "Escape") {
             event.preventDefault();
             onClose();
-          } else if (event.key === "ArrowDown") {
+            return;
+          }
+          const inputFocused = event.target === inputRef.current;
+          const focusedIndex = itemRefs.current.findIndex(item => item !== null && item === event.target);
+          // Buttons keep their native activation. Enter on a link activates
+          // that link, independent of hover or the input's selected result.
+          if (!inputFocused && focusedIndex < 0) return;
+          if ((event.key === "ArrowDown" || event.key === "ArrowUp") && items.length) {
             event.preventDefault();
-            setActiveIndex((index) => items.length ? (index + 1) % items.length : 0);
-          } else if (event.key === "ArrowUp") {
-            event.preventDefault();
-            setActiveIndex((index) => items.length ? (index - 1 + items.length) % items.length : 0);
-          } else if (event.key === "Enter" && items[activeIndex]) {
+            const index = inputFocused ? activeIndex : focusedIndex;
+            const next = (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+            setActiveIndex(next);
+            if (!inputFocused) itemRefs.current[next]?.focus();
+          } else if (event.key === "Enter" && inputFocused && items[activeIndex]) {
             event.preventDefault();
             itemRefs.current[activeIndex]?.click();
           }
@@ -149,6 +147,10 @@ export default function CommandPalette({
             placeholder={t("search.placeholder")}
             ariaLabel={t("search.placeholder")}
             keyboardNavigation={false}
+            showSuggestions={false}
+            aria-controls="admin-command-results"
+            aria-expanded={items.length > 0}
+            aria-activedescendant={items[activeIndex] ? `admin-command-${activeIndex}` : undefined}
           />
           <kbd className="rounded border border-border bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">ESC</kbd>
         </div>
@@ -164,12 +166,16 @@ export default function CommandPalette({
               href={item.href}
               onClick={(event) => {
                 event.preventDefault();
-                if (item.href === pathname) onClose();
+                const target = new URL(item.href, window.location.origin);
+                if (target.pathname === pathname && target.searchParams.toString() === params) onClose();
                 else router.push(item.href);
               }}
               role="option"
               aria-selected={index === activeIndex}
-              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
+              onMouseEnter={() => {
+                if (document.activeElement === inputRef.current) setActiveIndex(index);
+              }}
               className={`flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm ${
                 index === activeIndex ? "bg-accent-subtle text-fg" : "text-muted hover:bg-subtle hover:text-fg"
               }`}

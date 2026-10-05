@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, useId, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
@@ -48,6 +48,9 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
 }) {
   const t = useT();
   const toast = useToast();
+  const formId = useId();
+  const errorId = `${formId}-error`;
+  const errorDescription = error ? errorId : undefined;
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -84,23 +87,23 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
-        <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
+        <label htmlFor={`${formId}-url`} className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
+        <input id={`${formId}-url`} aria-describedby={errorDescription} value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
           className="input w-full font-mono"
           placeholder={t("creators.source_url_placeholder")} />
         <p className="mt-1 text-xs text-muted">{t("creators.source_url_hint")}</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("creators.name_placeholder")} />
+          <label htmlFor={`${formId}-name`} className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
+          <input id={`${formId}-name`} required aria-describedby={errorDescription} value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("creators.name_placeholder")} />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
+          <label htmlFor={`${formId}-display-name`} className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
+          <input id={`${formId}-display-name`} aria-describedby={errorDescription} value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
         </div>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
+      <div><label htmlFor={`${formId}-description`} className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea id={`${formId}-description`} aria-describedby={errorDescription} value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
         <button onClick={submit} disabled={!name || isPending}
@@ -108,7 +111,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
       </div>
-      {error && <p className="text-sm text-danger dark:text-danger">{error.message}</p>}
+      {error && <p id={errorId} role="alert" className="text-sm text-danger dark:text-danger">{error.message}</p>}
     </div>
   );
 }

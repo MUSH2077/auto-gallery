@@ -103,12 +103,14 @@ function WorkViewerShell({ workId }: { workId: string }) {
   }, [totalPages]);
 
   if (assets.isLoading) return <div className="card p-4 animate-pulse"><div className="h-[60vh] rounded-md bg-subtle" /></div>;
+  if (assets.isError && !assets.data?.length) return <ErrorState error={assets.error} onRetry={() => { void assets.refetch(); }} />;
   if (!assets.data || !assets.data.length) return <div className="card p-4"><EmptyState title={t("work_detail.no_assets_title")} description={t("work_detail.no_assets")} /></div>;
 
   const current = assets.data[activeIndex] as AssetData;
 
   return (
     <section className="card overflow-hidden">
+      {assets.isError && <ErrorState error={assets.error} onRetry={() => { void assets.refetch(); }} />}
       <div
         ref={viewerRef}
         className="relative flex min-h-[58vh] items-center justify-center bg-canvas"

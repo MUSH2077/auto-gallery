@@ -4484,3 +4484,230 @@ test("Escape ignores a queued drawer autofocus after focus restoration", async (
   await expect(drawer).toBeHidden();
   await expect(trigger).toBeFocused();
 });
+for (const key of ["Tab", "Shift+Tab"]) {
+  test(`command palette ${key} then Enter opens the focused Works option`, async ({ page }) => {
+    await page.goto("/admin/jobs");
+    await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("combobox").focus();
+    const works = dialog.getByRole("option", { name: /^Works\b/ });
+    for (let index = 0; index < 12 && !await works.evaluate(element => element === document.activeElement); index++) {
+      await page.keyboard.press(key);
+    }
+    await expect(works).toBeFocused();
+    await expect(works).toHaveAttribute("aria-selected", "true");
+    // Hover must not change the target of a focused link's Enter.
+    await dialog.getByRole("option", { name: /^Tags\b/ }).hover();
+    await expect(works).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/admin\/works$/);
+    await expect(dialog).toBeHidden();
+  });
+}
+
+test("command palette arrows move a focused option before Enter", async ({ page }) => {
+  await page.goto("/admin/jobs");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox").focus();
+  await page.keyboard.press("Tab");
+  const dashboard = dialog.getByRole("option", { name: /^Dashboard\b/ });
+  await expect(dashboard).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const works = dialog.getByRole("option", { name: /^Works\b/ });
+  await expect(works).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/admin\/works$/);
+});
+
+test("command palette clear button owns Enter and query changes reset the selected route", async ({ page }) => {
+  await page.goto("/admin/jobs");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  const input = dialog.getByRole("combobox");
+  await input.fill("creator");
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Clear search", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(input).toHaveValue("");
+  await expect(input).toBeFocused();
+  await expect(page).toHaveURL(/\/admin\/jobs$/);
+  await input.fill("jobs");
+  await page.keyboard.press("ArrowDown");
+  await input.fill("creator");
+  await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/admin\/creators$/);
+});
+
+for (const key of ["Enter", "ArrowDown", "Escape"]) {
+  test(`command palette ignores composing ${key}`, async ({ page }) => {
+    await page.goto("/admin/jobs");
+    await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+    const dialog = page.getByRole("dialog");
+    const input = dialog.getByRole("combobox");
+    await expect(input).toBeFocused();
+    const selected = await dialog.locator('[aria-selected="true"]').getAttribute("id");
+    const prevented = await input.evaluate((element, key) => {
+      element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const event = new KeyboardEvent("keydown", { key, isComposing: true, bubbles: true, cancelable: true });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    }, key);
+    expect(prevented).toBe(false);
+    await expect(page).toHaveURL(/\/admin\/jobs$/);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[aria-selected="true"]')).toHaveAttribute("id", selected!);
+    await input.dispatchEvent("compositionend");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  });
+}
+
+test("command palette has one option list even when search assistance returns suggestions", async ({ page }) => {
+  await page.route("**/api/v1/search/assist", async route => {
+    await route.fulfill({ json: {
+      query: "works", canonical_query: "works", parsed: { raw: "works", canonical: "works", scope: "global", targets: ["works"], tokens: [] },
+      diagnostics: [], suggestions: [{ kind: "value", label: "Assisted work", query: "assisted-work", description: "Fixture suggestion" }], catalog: [],
+    } });
+  });
+  await page.goto("/admin/jobs");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  const assistance = page.waitForResponse(response => response.url().includes("/api/v1/search/assist")
+    && response.request().postDataJSON()?.before_cursor === "works");
+  await dialog.getByRole("combobox").fill("works");
+  await assistance;
+  await expect(dialog.getByRole("option", { name: /^Works\b/ })).toBeVisible();
+  await expect(dialog.getByRole("option", { name: /Assisted work/ })).toHaveCount(0);
+  await expect(dialog.getByRole("listbox")).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/admin\/works$/);
+});
+
+test("command palette closes after a query-only search navigation", async ({ page }) => {
+  await page.goto("/admin/search?q=old");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox").fill("new query & 中文");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("new query & 中文");
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
+});
+
+test("command palette input arrows wrap, scroll their option into view and keep input focus", async ({ page }) => {
+  await page.goto("/admin/jobs");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  const input = dialog.getByRole("combobox");
+  await expect(input).toBeFocused();
+  const options = dialog.locator("#admin-command-results").getByRole("option");
+  await page.keyboard.press("ArrowUp");
+  await expect(options.last()).toHaveAttribute("aria-selected", "true");
+  await expect(input).toHaveAttribute("aria-controls", "admin-command-results");
+  await expect(input).toHaveAttribute("aria-activedescendant", (await options.last().getAttribute("id"))!);
+  await expect(options.last()).toBeInViewport();
+  await expect(input).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/admin\/works$/);
+});
+
+test("command palette closes when selecting the same encoded search query", async ({ page }) => {
+  const query = "current query & 中文";
+  await page.goto(`/admin/search?${new URLSearchParams({ q: query })}`);
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox").fill(query);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  expect(new URL(page.url()).searchParams.get("q")).toBe(query);
+});
+
+test("command palette overlay and shortcut dismissal permit a clean reopen", async ({ page }) => {
+  await page.goto("/admin/jobs");
+  const trigger = page.getByRole("button", { name: /Search/, exact: false }).first();
+  await trigger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click({ position: { x: 5, y: 5 } });
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press("Control+k");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("combobox").fill("jobs");
+  await page.keyboard.press("Control+k");
+  await expect(dialog).toBeHidden();
+  await trigger.click();
+  await expect(dialog.getByRole("combobox")).toHaveValue("");
+  await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
+});
+
+test("command palette retains permission filtering and an empty-query target", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", route => route.fulfill({ json: {
+    ...me, is_admin: false, permissions: ["library"], modules: { library: true, tasks: false, system: false, subscriptions: false },
+  } }));
+  await page.goto("/admin/works");
+  await page.getByRole("button", { name: /Search/, exact: false }).first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator('a[href="/admin/jobs"]')).toHaveCount(0);
+  await expect(dialog.locator('a[href="/admin/subscriptions"]')).toHaveCount(0);
+  await expect(dialog.locator('a[href="/admin/settings/users"]')).toHaveCount(0);
+  await dialog.getByRole("combobox").fill("users");
+  await expect(dialog.locator("#admin-command-results").getByRole("option")).toHaveCount(1);
+  await expect(dialog.locator('a[href="/admin/settings/users"]')).toHaveCount(0);
+  await dialog.getByRole("combobox").fill("");
+  await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/admin$/);
+});
+
+for (const query of ['', 'jobs', 'unmatched-phrase']) {
+  test(`command palette confines focus for query ${query || 'empty'}`, async ({ page }) => {
+    await page.goto('/admin/jobs');
+    await page.getByRole('button', { name: /Search/, exact: false }).first().focus();
+    await page.keyboard.press('Control+k');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('combobox').fill(query);
+    await page.waitForTimeout(200);
+    for (const key of ['Tab', 'Shift+Tab']) {
+      for (let index = 0; index < 14; index++) {
+        await page.keyboard.press(key);
+        expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true);
+      }
+    }
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('button', { name: /Search/, exact: false }).first()).toBeFocused();
+  });
+}
+
+test('asset failures are retryable and stale media survives refresh errors', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/v1/works/fixture-work/assets', route => fail
+    ? route.fulfill({ status: 503, json: { detail: 'Fixture asset service unavailable' } })
+    : route.fulfill({ json: [{ id: 'fixture-asset', file_name: 'Fixture.png', mime_type: 'image/png', preview_url: '/fixture-media.png', thumb_url: '/fixture-media.png', original_url: '/fixture-media.png', derivative_status: 'pending' }] }));
+  await page.route('**/fixture-media.png', route => route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1sAAAAASUVORK5CYII=', 'base64') }));
+  await page.goto('/admin/works/fixture-work');
+  await expect(page.getByText('Fixture asset service unavailable', { exact: true })).toBeVisible();
+  await expect(page.getByText('No assets', { exact: true })).toBeHidden();
+  fail = false;
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByRole('img', { name: 'Fixture.png', exact: true }).first()).toBeVisible();
+  fail = true;
+  await expect(page.getByText('Fixture asset service unavailable', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('img', { name: 'Fixture.png', exact: true }).first()).toBeVisible();
+});
+
+test('successful empty assets remain distinct from an asset error', async ({ page }) => {
+  await page.goto('/admin/works/fixture-work');
+  await expect(page.getByText('No assets', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeHidden();
+});
