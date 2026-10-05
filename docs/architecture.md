@@ -137,6 +137,31 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   navigation, sessions, loaded-row selection and legacy pagination recovery;
   each page retains its filters, data requests and business commands.
 
+## Request Scheduling and Interactive Lists
+
+HTTP queue statistics, creator-count caching, workbench Redis health, proxy status and rebuild status
+run synchronous Redis operations in threads through `redis_budget.py`.
+HTTP operations use a 0.4-second Redis command deadline and a 0.6-second caller
+wait limit; unavailable optional reads return their existing fallback shape.
+Workbench executable discovery also runs in a thread so slow PATH lookups do
+not block the event loop.
+Background dequeue timeouts remain unchanged. Password hashing and verification
+use at most two dedicated threads per API process, retaining bcrypt cost,
+rate limits, account locks and credential-version updates.
+
+Reference lists keep at most 32 observed pages and enable queries only for the
+current virtual window and nearby prefetch/restoration pages. Evicted page
+queries are garbage-collected; their disappearance does not erase selections.
+Only confirmed page data can remove a selected ID belonging to that page.
+Sessions retain known selected-ID page offsets independently of the cached
+page window; selections from legacy sessions without an owner remain pending.
+Subscription summaries use one membership batch for visibility and private
+state overlays. Dialogs and the command palette share focus containment and
+background isolation; asset fetch failures expose retry and retain existing
+media instead of presenting an empty result.
+Scroll locks and inert background elements retain their original state until
+the last dialog owner releases them, regardless of cleanup order on navigation.
+
 ## Domain Model
 
 All models use source-agnostic naming. Shared data vs user-scoped data:

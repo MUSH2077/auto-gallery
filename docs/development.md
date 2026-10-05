@@ -190,6 +190,25 @@ per file, 1 GiB per batch and 2 MiB multipart overhead; final atomic charging
 still decides acceptance after preflight checks. Inject read, cancellation,
 move and commit failures and verify temporary files and usage are compensated.
 
+For request scheduling regressions, use isolated Redis pause, refused and silent
+connections and verify that unrelated requests and the event loop still advance.
+Include the full workbench refresh path and inject the pause at its health
+probe so preceding queue reads cannot consume the fault.
+Use real bcrypt for login scheduling checks and verify the two-worker limit
+separately. Subscription summaries must retain one membership batch for 1, 10
+and 50 IDs, including foreign, duplicated and inactive memberships. Browser
+checks cover mutations after 10, 50 and 100 list pages, selection restoration,
+bidirectional dialog focus, field labels and asset failure/retry/empty states.
+For selection restoration, evict a selected page, reload, finish loading the
+retained pages and revisit the original row. Also cover confirmed deletion
+after its owner page reloads and legacy sessions without ownership metadata.
+Dialog checks must include opening a creator form, opening the command palette
+above it and navigating to jobs. After navigation, verify original overflow and
+inert states, working sidebar/topbar controls and actual wheel scrolling.
+Command palette checks must follow focus through Tab/Shift+Tab and arrow keys
+to the final Enter target. Include the clear button, composition events, real
+search suggestions, query-only navigation, permission filtering and reopening.
+
 Account regressions use formal HTTP login and real PostgreSQL transactions.
 Cover old Bearer credentials after reset, both password-change entries,
 disablement and username reuse, including WebSocket tickets and event delivery.
