@@ -98,7 +98,7 @@ function SubscriptionsContent() {
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [syncingSubId, setSyncingSubId] = useState<string | null>(null);
   const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
-  const { listState, setListState, selected, selection, setSelected, onStateChange } = useReferenceListState<SubscriptionSearchHit>({
+  const { listState, setListState, selected, selection, setSelected, onStateChange, restoreSelection, getSelectedOffsets } = useReferenceListState<SubscriptionSearchHit>({
     total: 0,
     loadedItems: [],
     loadedOffsets: [],
@@ -108,7 +108,7 @@ function SubscriptionsContent() {
   const paramsString = sp.toString();
   const { sessionKey, restoredSession, sessionReady, persistListSession } = useReferenceListSession({
     userId: user?.id ?? "current", pathname, queryFingerprint, legacyPage,
-    total: listState.total, loadedOffsets: listState.requestedOffsets ?? listState.loadedOffsets, selected: selection, setSelected,
+    total: listState.total, loadedOffsets: listState.requestedOffsets ?? listState.loadedOffsets, selected: selection, restoreSelection, getSelectedOffsets,
     onQueryChange: () => {
       setSearchMeta(null);
       setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });

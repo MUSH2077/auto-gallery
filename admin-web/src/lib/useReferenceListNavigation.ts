@@ -24,21 +24,44 @@ type ReferenceListState<T> = {
 export function useReferenceListState<T extends { id: string }>(initialState: ReferenceListState<T>) {
   const [listState, setListState] = useState<ReferenceListState<T>>(initialState);
   const [selection, setSelected] = useState<Set<string>>(new Set());
+  const selectedOffsetsRef = useRef(new Map<string, number>());
+  const restoreSelection = useCallback((session: ReferenceListSession | null) => {
+    selectedOffsetsRef.current = new Map(Object.entries(session?.selectedOffsets || {}));
+    setSelected(new Set(session?.selectedIds || []));
+  }, []);
+  const getSelectedOffsets = useCallback(() => {
+    // A checkbox change need not produce a list-state callback before pagehide.
+    for (const page of listState.loadedPages) {
+      for (const item of page.items) if (selection.has(item.id)) selectedOffsetsRef.current.set(item.id, page.offset);
+    }
+    return Object.fromEntries([...selectedOffsetsRef.current].filter(([id]) => selection.has(id)));
+  }, [listState.loadedPages, selection]);
   const selected = useMemo(() => new Set(
     listState.loadedItems.filter((item) => selection.has(item.id)).map((item) => item.id),
   ), [listState.loadedItems, selection]);
   const onStateChange = useCallback((next: ReferenceListState<T>) => {
     setListState(next);
-    // Partial or failed restoration is not evidence that a saved ID vanished.
-    // Only confirmed batches can discard the remaining pending selection.
-    if (!next.loadedOffsets.length || !next.requestedOffsets?.every((offset) => next.loadedOffsets.includes(offset))) return;
-    const loadedIds = new Set(next.loadedItems.map((item) => item.id));
+    if (!next.loadedOffsets.length) return;
+    const pageIds = new Map(next.loadedPages.map(page => [page.offset, new Set(page.items.map(item => item.id))]));
     setSelected((current) => {
-      const pruned = new Set([...current].filter((id) => loadedIds.has(id)));
+      for (const [offset, ids] of pageIds) {
+        for (const id of ids) if (current.has(id)) selectedOffsetsRef.current.set(id, offset);
+      }
+      const pruned = new Set([...current].filter(id => {
+        const offset = selectedOffsetsRef.current.get(id);
+        const page = offset === undefined ? undefined : pageIds.get(offset);
+        // Cache eviction is not evidence of deletion. Only a loaded batch
+        // owning this ID can remove it. Legacy sessions with no known owner
+        // remain pending until the ID is seen or explicitly deselected.
+        return !page || page.has(id);
+      }));
+      for (const id of selectedOffsetsRef.current.keys()) {
+        if (!pruned.has(id)) selectedOffsetsRef.current.delete(id);
+      }
       return pruned.size === current.size ? current : pruned;
     });
   }, []);
-  return { listState, setListState, selected, selection, setSelected, onStateChange };
+  return { listState, setListState, selected, selection, setSelected, onStateChange, restoreSelection, getSelectedOffsets };
 }
 
 type LegacyNavigationOptions = {
@@ -108,7 +131,8 @@ type SessionOptions = {
   total: number;
   loadedOffsets: readonly number[];
   selected: Set<string>;
-  setSelected: (value: Set<string>) => void;
+  restoreSelection: (session: ReferenceListSession | null) => void;
+  getSelectedOffsets: () => Record<string, number>;
   onQueryChange: () => void;
 };
 
@@ -120,7 +144,8 @@ export function useReferenceListSession({
   total,
   loadedOffsets,
   selected,
-  setSelected,
+  restoreSelection,
+  getSelectedOffsets,
   onQueryChange,
 }: SessionOptions) {
   const sessionKey = referenceSessionStorageKey(userId, pathname, queryFingerprint);
@@ -144,12 +169,12 @@ export function useReferenceListSession({
       ? null
       : readReferenceListSession(window.sessionStorage.getItem(sessionKey), queryFingerprint);
     setStoredSession({ key: sessionKey, value: saved });
-    setSelected(new Set(saved?.selectedIds || []));
+    restoreSelection(saved);
     if (queryChanged) {
       onQueryChangeRef.current();
       window.scrollTo({ top: 0 });
     }
-  }, [queryFingerprint, sessionKey, setSelected]);
+  }, [queryFingerprint, sessionKey, restoreSelection]);
 
   const persistListSession = useCallback(() => {
     if (!sessionReady) return;
@@ -158,8 +183,9 @@ export function useReferenceListSession({
       scrollY: window.scrollY,
       loadedOffsets,
       selectedIds: [...selected],
+      selectedOffsets: getSelectedOffsets(),
     })));
-  }, [loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady]);
+  }, [loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady, getSelectedOffsets]);
 
   useEffect(() => {
     window.addEventListener("pagehide", persistListSession);

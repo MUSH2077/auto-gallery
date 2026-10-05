@@ -105,3 +105,31 @@ test("session payloads are versioned, bounded, and reject another query", () => 
   );
   assert.equal(state.readReferenceListSession?.("not-json", "x"), null);
 });
+
+test("bounded sessions retain the latest loaded page positions", () => {
+  const session = state.createReferenceListSession({
+    queryFingerprint: "creators:", scrollY: 50000,
+    loadedOffsets: Array.from({ length: 100 }, (_, index) => index * 50), selectedIds: ["creator-0000"],
+  });
+  assert.equal(session.loadedOffsets.length, 32);
+  assert.equal(session.loadedOffsets[0], 3400);
+  assert.equal(session.loadedOffsets.at(-1), 4950);
+  assert.deepEqual(session.selectedIds, ["creator-0000"]);
+});
+
+test("selected page ownership survives page eviction without inventing legacy ownership", () => {
+  const session = state.createReferenceListSession({
+    queryFingerprint: "creators:", scrollY: 50000,
+    loadedOffsets: Array.from({ length: 100 }, (_, index) => index * 50),
+    selectedIds: ["creator-0250", "unknown", "invalid"],
+    selectedOffsets: { "creator-0250": 250, invalid: 51, unselected: 0 },
+  });
+  assert.equal(session.loadedOffsets.includes(250), false);
+  assert.deepEqual(session.selectedOffsets, { "creator-0250": 250 });
+  assert.deepEqual(state.readReferenceListSession(JSON.stringify(session), "creators:"), session);
+  const legacy = state.readReferenceListSession(JSON.stringify({
+    version: 1, queryFingerprint: "creators:", scrollY: 0, loadedOffsets: [50], selectedIds: ["creator-0250"],
+  }), "creators:");
+  assert.deepEqual(legacy.selectedIds, ["creator-0250"]);
+  assert.equal(legacy.selectedOffsets, undefined);
+});

@@ -122,6 +122,7 @@ async function installRoutes(
     holdCompose?: () => Promise<void>;
     holdSearch?: (scope: string, offset: number) => Promise<void>;
     deletedIds?: Set<string>;
+    total?: number;
   },
   theme: "dark" | "light" = "dark",
 ) {
@@ -205,9 +206,9 @@ async function installRoutes(
         await route.fulfill({ status: 503, json: { detail: "Temporary batch failure" } });
         return;
       }
-      const scopedTotal = scope === "works" ? 0 : TOTAL;
+      const scopedTotal = scope === "works" ? 0 : observations.total ?? TOTAL;
       const items = scope === "works" ? [] : Array.from(
-        { length: Math.max(0, Math.min(limit, TOTAL - offset)) },
+        { length: Math.max(0, Math.min(limit, scopedTotal - offset)) },
         (_, index) => scope === "subscriptions"
           ? subscriptionAt(offset + index)
           : creatorAt(offset + index),
@@ -817,7 +818,8 @@ for (const scope of ["creators", "subscriptions"] as const) {
           const fingerprint = `${scope}:`;
           const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(fingerprint)}`;
           sessionStorage.setItem(key, JSON.stringify({ version: 1, queryFingerprint: fingerprint,
-            scrollY: 0, loadedOffsets: [0, 50], selectedIds: [`${prefix}-0000`, `${prefix}-0050`] }));
+            scrollY: 0, loadedOffsets: [0, 50], selectedIds: [`${prefix}-0000`, `${prefix}-0050`],
+            selectedOffsets: { [`${prefix}-0000`]: 0, [`${prefix}-0050`]: 50 } }));
         }, { scope, prefix });
         await page.setViewportSize({ width: 1440, height: 900 });
         try {
@@ -835,7 +837,9 @@ for (const scope of ["creators", "subscriptions"] as const) {
             await otherRow.check();
             await expect(page.getByText("2 selected / 50 loaded", { exact: true })).toBeVisible();
           }
-          const expectedSelection = outcome === "select-loaded-row"
+          // A saved owner page can confirm deletion before other pages load.
+          const expectedSelection = outcome === "deleted" && firstOffset === 50 ? [`${prefix}-0000`]
+            : outcome === "select-loaded-row"
             ? [`${prefix}-0000`, `${prefix}-0001`, `${prefix}-0050`]
             : [`${prefix}-0000`, `${prefix}-0050`];
           const pending = await page.evaluate((scope) => {
@@ -872,4 +876,127 @@ for (const scope of ["creators", "subscriptions"] as const) {
       });
     }
   }
+}
+for (const scope of ["creators", "subscriptions"] as const) {
+  test(`${scope} legacy selection with unknown page ownership remains pending`, async ({ context, page }) => {
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+    await installRoutes(context, observations);
+    const prefix = scope === "creators" ? "creator" : "subscription";
+    await context.addInitScript(({ scope, prefix }) => {
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      sessionStorage.setItem(key, JSON.stringify({ version: 1, queryFingerprint: `${scope}:`, scrollY: 0,
+        loadedOffsets: [0], selectedIds: [`${prefix}-0250`] }));
+    }, { scope, prefix });
+    await page.goto(`/admin/${scope}`);
+    await expect(page.getByText("0 selected / 50 loaded", { exact: true })).toBeVisible();
+    const saved = await page.evaluate(scope => {
+      window.dispatchEvent(new Event("pagehide"));
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      return JSON.parse(sessionStorage.getItem(key)!);
+    }, scope);
+    expect(saved.selectedIds).toEqual([`${prefix}-0250`]);
+  });
+
+  test(`${scope} evicted selection survives reload and retained-page restoration`, async ({ context, page }) => {
+    test.setTimeout(120_000);
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][], total: 10_000, deletedIds: new Set<string>() };
+    await installRoutes(context, observations);
+    const prefix = scope === "creators" ? "creator" : "subscription";
+    const name = scope === "creators" ? "Creator" : "Custom title";
+    const rowName = (index: number) => scope === "creators"
+      ? `Select ${name} ${String(index).padStart(3, "0")}`
+      : `Select ${name} ${String(TOTAL - index).padStart(3, "0")}`;
+    const save = () => page.evaluate(scope => {
+      window.dispatchEvent(new Event("pagehide"));
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      return JSON.parse(sessionStorage.getItem(key)!);
+    }, scope);
+    const scrollPage = async (index: number) => {
+      const target = index * 50;
+      await expect(async () => {
+        await page.evaluate(target => {
+          const first = document.querySelector("[data-virtual-index]") as HTMLElement;
+          const exact = document.querySelector(`[data-virtual-index="${target}"]`) as HTMLElement | null;
+          const row = exact || first;
+          const distance = exact ? 0 : (target - Number(first.dataset.virtualIndex)) * first.getBoundingClientRect().height;
+          window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY + distance - 150);
+        }, target);
+        await expect(page.getByRole("checkbox", { name: rowName(target), exact: true })).toBeVisible({ timeout: 500 });
+      }).toPass({ timeout: 8_000 });
+    };
+    await page.goto(`/admin/${scope}`);
+    await expect(page.getByRole("checkbox", { name: rowName(0), exact: true })).toBeVisible();
+    await scrollPage(5);
+    await page.getByRole("checkbox", { name: rowName(250), exact: true }).check();
+    for (let index = 6; index <= 45; index++) await scrollPage(index);
+    const before = await save();
+    expect(before.loadedOffsets).not.toContain(250);
+    expect(before.selectedIds).toContain(`${prefix}-0250`);
+    expect(before.selectedOffsets[`${prefix}-0250`]).toBe(250);
+    await page.reload();
+    await expect(page.locator("[data-virtual-reference-list]")).toBeVisible();
+    // Finish loading every retained page without fetching the evicted owner.
+    for (const offset of before.loadedOffsets.toReversed()) await scrollPage(offset / 50);
+    expect((await save()).selectedIds).toContain(`${prefix}-0250`);
+    await scrollPage(5);
+    await expect(page.getByRole("checkbox", { name: rowName(250), exact: true })).toBeChecked();
+    // Once the saved owner really reloads without the ID, it may be pruned.
+    await save();
+    observations.deletedIds.add(`${prefix}-0250`);
+    const beforeDeletion = observations.searches.length;
+    await page.reload();
+    await expect.poll(() => observations.searches.slice(beforeDeletion).some(request => request.offset === 250)).toBe(true);
+    await expect.poll(async () => (await save()).selectedIds).not.toContain(`${prefix}-0250`);
+  });
+}
+
+for (const pages of [10, 50, 100]) {
+  test(`favorite invalidation stays bounded after browsing ${pages} pages`, async ({ context, page }) => {
+    test.setTimeout(90_000);
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][], total: 10_000 };
+    await installRoutes(context, observations);
+    await page.goto('/admin/creators');
+    await expect(page.getByRole('checkbox', { name: 'Select Creator 000' })).toBeVisible();
+    await page.getByRole('checkbox', { name: 'Select Creator 000' }).check();
+    for (let index = 1; index < pages; index++) {
+      await page.evaluate(index => {
+        const row = document.querySelector('[data-virtual-index]') as HTMLElement;
+        const list = document.querySelector('[data-virtual-reference-list]') as HTMLElement;
+        const height = row.getBoundingClientRect().height;
+        window.scrollTo(0, list.getBoundingClientRect().top + window.scrollY + index * 50 * height);
+      }, index);
+      await expect.poll(() => observations.searches.some(request => request.offset >= index * 50)).toBe(true);
+    }
+    await expect(page.getByRole('button', { name: 'Favorite', exact: true }).first()).toBeVisible();
+    await page.waitForTimeout(200);
+    const before = observations.searches.length;
+    await page.getByRole('button', { name: 'Favorite', exact: true }).first().click();
+    await expect.poll(() => observations.searches.length).toBeGreaterThan(before);
+    await page.waitForTimeout(500);
+    expect(observations.searches.length - before).toBeLessThanOrEqual(4);
+    const saved = await page.evaluate(() => {
+      window.dispatchEvent(new Event('pagehide'));
+      const key = 'reference-list:v1:17:' + encodeURIComponent('/admin/creators') + ':' + encodeURIComponent('creators:');
+      return JSON.parse(sessionStorage.getItem(key)!);
+    });
+    expect(saved.loadedOffsets.length).toBeLessThanOrEqual(32);
+    expect(saved.selectedIds).toContain('creator-0000');
+    expect(Math.max(...saved.loadedOffsets)).toBeGreaterThanOrEqual((pages - 1) * 50);
+    if (pages === 50) {
+      const visibleName = await page.getByRole('link', { name: /^Open Creator \d+$/ }).evaluateAll(rows =>
+        rows.find(row => {
+          const rect = row.getBoundingClientRect();
+          return rect.top >= 64 && rect.bottom < window.innerHeight;
+        })?.getAttribute('aria-label'));
+      expect(visibleName).toBeTruthy();
+      const scrollY = await page.evaluate(() => window.scrollY);
+      await page.getByRole('link', { name: visibleName!, exact: true }).click();
+      await expect(page).toHaveURL(/\/admin\/creators\/creator-\d+/);
+      await page.goBack();
+      await expect(page).toHaveURL(/\/admin\/creators$/);
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollY - 300);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(page.getByRole('checkbox', { name: 'Select Creator 000' })).toBeChecked();
+  });
 }
