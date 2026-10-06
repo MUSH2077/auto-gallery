@@ -1,7 +1,9 @@
 import json
+import pytest
 from pathlib import Path
 
 from app.providers.x import XProvider
+from app.providers.danbooru import DanbooruProvider
 from app.services.artifact_discovery import group_metadata_by_work, media_files_for_group
 from app.services.artifact_ledger import artifact_row
 
@@ -58,6 +60,30 @@ def test_date_directory_matches_gallerydl_work_id_and_asset_index(tmp_path):
     assert invalid == []
     assert [path.name for path in media_files_for_group(groups["101"], "101")] == ["101_1.jpg"]
     assert [path.name for path in media_files_for_group(groups["202"], "202")] == ["202_1.jpg"]
+
+
+@pytest.mark.parametrize("extension", ["jpg", "png", "gif", "webm", "mp4"])
+def test_danbooru_default_filename_without_num_matches_only_its_media(tmp_path, extension):
+    directory = tmp_path / "danbooru" / "None" / "2026-10-05"
+    directory.mkdir(parents=True)
+    metadata = directory / "remote-md5.json"
+    metadata.write_text(json.dumps({
+        "id": 12323665, "category": "danbooru", "extension": extension,
+        "tag_string_artist": "test_artist",
+    }), encoding="utf-8")
+    media = directory / f"12323665_None.{extension}"
+    media.write_bytes(b"downloaded-media")
+    (directory / f"12323666_None.{extension}").write_bytes(b"neighboring-work")
+    (directory / "12323665_None.bmp").write_bytes(b"wrong-extension")
+    groups, invalid = group_metadata_by_work(DanbooruProvider(), [metadata])
+    assert invalid == []
+    assert media_files_for_group(groups["12323665"], "12323665") == [media]
+    assert media_files_for_group(
+        groups["12323665"], "12323665", allowed_paths={metadata, media},
+    ) == [media]
+    assert media_files_for_group(
+        groups["12323665"], "12323665", allowed_paths={metadata},
+    ) == []
 
 
 def test_shared_parent_is_inventoried_once_for_all_work_groups(tmp_path, monkeypatch):

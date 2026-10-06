@@ -257,9 +257,9 @@ async def reconcile_repository_artifacts(
         repository,
         subscription.creator_id,
     )
-    if not creator_dirs:
-        return RepositoryArtifactReconciliation(0, 0, 0, (), ())
-
+    # A provider may not infer a creator directory from a tag/pool URL.
+    # Current-job artifacts already have exact ownership; an empty directory
+    # set excludes unrelated backlog in the query without discarding them.
     now = datetime.now(timezone.utc)
     source = repository.source
     eligible = _eligible_artifact(now)

@@ -35,6 +35,40 @@ async def _clear_reconciliation_tables(db) -> None:
     await db.commit()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repository_reconciliation_keeps_owned_metadata_without_provider_directory():
+    from app.database import async_session, engine
+    from app.services.repository_artifact_reconciliation import (
+        _repository_creator_dirs, reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            subscription, repository, _other, current, historical, _manual = await _repository_fixture(
+                db, source="danbooru", source_creator_id="test_artist",
+                source_url="https://danbooru.donmai.us/posts?tags=test_artist",
+            )
+            db.add_all([
+                _artifact(path="danbooru/None/date/current.json", work_id="current",
+                          creator_dir="None", job_id=current.id, source="danbooru"),
+                _artifact(path="danbooru/None/date/other.json", work_id="other",
+                          creator_dir="None", job_id=historical.id, source="danbooru"),
+            ])
+            await db.commit()
+            assert await _repository_creator_dirs(db, repository, subscription.creator_id) == set()
+            result = await reconcile_repository_artifacts(db, current)
+            await db.commit()
+            assert result.downloaded_metadata_paths == ("danbooru/None/date/current.json",)
+            assert result.pending_work_count == 1
+            assert result.recovered_metadata_count == 0
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
 async def _repository_fixture(
     db,
     *,
