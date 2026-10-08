@@ -513,7 +513,18 @@ writes and effective download configs reject escapes with a diagnostic error,
 rather than starting an unconfigured download.
 
 Manual uploads accept at most 20 files, 500 MiB per file and 1 GiB of file data,
-with a separate 2 MiB multipart allowance. `UploadRoute` counts received bytes
+with a separate 2 MiB multipart allowance. Web uploads stream through the
+dedicated `/api/upload` API handler to the existing backend endpoint.
+Multipart parsing is disabled, and Node streams preserve backpressure. This
+avoids Next.js external rewrite body cloning and its default 10 MiB truncation;
+the frontend `/api/v1/upload` URL also routes internally to that handler.
+Authentication, Origin, CSRF, backend status and Retry-After are preserved,
+and client disconnects cancel upstream transfers. File, batch, total request
+and account quota failures have distinct 413 codes. The page checks combined
+uploads against the 20-file and 1 GiB budgets and only stops subsequent files
+on a quota failure.
+
+`UploadRoute` counts received bytes
 before multipart parsing, including absent or misleading Content-Length.
 Copying enforces file, batch and remaining quota budgets. Final usage is charged
 by a quota-conditioned database UPDATE in the same transaction as jobs and

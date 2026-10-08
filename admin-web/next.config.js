@@ -21,11 +21,18 @@ const nextConfig = {
     },
   },
 
-  // API proxying is handled by Next.js rewrites (server-side proxy).
-  // Do NOT add a catch-all route handler under src/app/api/v1/ — rewrites
+  // Most API calls use rewrites. /api/upload has a streaming API handler
+  // to avoid cloning and truncating large multipart request bodies.
+  // Do NOT add a catch-all API handler under src/app/api/v1/ — rewrites
   // intercept those paths first, so any manual proxy there would be dead code.
   async rewrites() {
     return [
+      // Preserve callers of the existing frontend API URL while routing only
+      // uploads through the streaming handler, before the external catch-all.
+      {
+        source: '/api/v1/upload',
+        destination: '/api/upload',
+      },
       {
         source: '/docs',
         destination: 'http://backend:8000/docs',

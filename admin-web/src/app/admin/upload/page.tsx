@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, queryKeys, ApiError } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { useT, type TFunction } from "@/lib/i18n";
+import { MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES, MAX_UPLOAD_BATCH_BYTES } from "@/lib/uploadLimits";
 import { usePermissions } from "@/lib/usePermissions";
 import { useDebounce } from "@/lib/useDebounce";
 import { formatBytes } from "@/lib/format";
@@ -20,7 +21,19 @@ const ACCEPT_ATTR = [
   ...ACCEPT_EXTENSIONS,
   "image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm",
 ].join(",");
-const MAX_FILE_BYTES = 500 * 1024 * 1024;
+const UPLOAD_ERROR_KEYS: Record<string, string> = {
+  upload_file_too_large: "upload.too_large",
+  upload_batch_too_large: "upload.batch_size_limit",
+  upload_request_too_large: "upload.request_too_large",
+  upload_quota_exceeded: "upload.quota_exceeded",
+  upload_proxy_unavailable: "upload.service_unavailable",
+  upload_proxy_timeout: "upload.timeout",
+};
+
+function uploadErrorMessage(error: ApiError, t: TFunction) {
+  const key = error.code && UPLOAD_ERROR_KEYS[error.code];
+  return key ? t(key) : error.message || t("common.unknown_error");
+}
 
 type RowStatus = "queued" | "uploading" | "accepted" | "error" | "cancelled";
 
@@ -188,6 +201,8 @@ function UploadPageContent() {
     }
   };
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showBatchError, setShowBatchError] = useState(false);
+  const batchErrorRef = useRef<HTMLParagraphElement>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const rowEntrance = useStaggeredEntrance(rows.map((row) => row.id));
@@ -201,7 +216,7 @@ function UploadPageContent() {
       if (!ACCEPT_EXTENSIONS.includes(ext)) {
         status = "error";
         error = t("upload.invalid_type");
-      } else if (file.size > MAX_FILE_BYTES) {
+      } else if (file.size > MAX_UPLOAD_FILE_BYTES) {
         status = "error";
         error = t("upload.too_large");
       }
@@ -220,6 +235,9 @@ function UploadPageContent() {
 
   const queuedRows = rows.filter((r) => r.status === "queued");
   const queuedBytes = queuedRows.reduce((sum, r) => sum + r.file.size, 0);
+  const batchError = !combineBatch ? null
+    : queuedRows.length > MAX_UPLOAD_FILES ? t("upload.batch_count_limit")
+    : queuedBytes > MAX_UPLOAD_BATCH_BYTES ? t("upload.batch_size_limit") : null;
   const remainingQuota = me.data?.upload_quota_bytes != null ? me.data.upload_quota_bytes - me.data.upload_used_bytes : null;
   const overQuota = remainingQuota != null && queuedBytes > remainingQuota;
   const hasAccepted = rows.some((r) => r.status === "accepted");
@@ -235,6 +253,12 @@ function UploadPageContent() {
   // work_uuid). All rows in that batch share the same progress and outcome.
   async function handleSubmit() {
     if (isSubmitting) return;
+    if (batchError) {
+      setShowBatchError(true);
+      requestAnimationFrame(() => batchErrorRef.current?.focus());
+      return;
+    }
+    setShowBatchError(false);
     setIsSubmitting(true);
     const toUpload = rows.filter((r) => r.status === "queued");
 
@@ -261,9 +285,8 @@ function UploadPageContent() {
           });
         } catch (e) {
           const err = e as ApiError;
-          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "error", error: err.message || t("common.unknown_error") } : r)));
-          toast.error({ message: err.message || t("common.unknown_error") });
-          if (err.status === 413) toast.warning({ message: t("upload.quota_exceeded_stop") });
+          setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, status: "error", error: uploadErrorMessage(err, t) } : r)));
+          toast.error({ message: uploadErrorMessage(err, t) });
         }
       }
       setIsSubmitting(false);
@@ -292,11 +315,11 @@ function UploadPageContent() {
         });
       } catch (e) {
         const err = e as ApiError;
-        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "error", error: err.message || t("common.unknown_error") } : r)));
-        toast.error({ message: err.message || t("common.unknown_error") });
-        if (err.status === 413) {
-          // Quota is exhausted — every remaining file would fail the same
-          // way, so stop instead of hammering the server, and mark the rest
+        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "error", error: uploadErrorMessage(err, t) } : r)));
+        toast.error({ message: uploadErrorMessage(err, t) });
+        if (err.code === "upload_quota_exceeded") {
+          // The selected file exceeds remaining quota; stop the queued
+          // uploads and mark the rest
           // of the queue cancelled so the UI matches the toast below.
           toast.warning({ message: t("upload.quota_exceeded_stop") });
           const remainingIds = new Set(toUpload.slice(i + 1).map((r) => r.id));
@@ -333,12 +356,12 @@ function UploadPageContent() {
         <SectionPanel title={t("upload.settings_title")}>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1 block text-sm font-medium">{t("upload.title_label")}</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("upload.title_placeholder")} className="input w-full" disabled={isSubmitting} />
+              <label htmlFor="upload-title" className="mb-1 block text-sm font-medium">{t("upload.title_label")}</label>
+              <input id="upload-title" name="title" autoComplete="off" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("upload.title_placeholder")} className="input w-full" disabled={isSubmitting} />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">{t("upload.tags_label")}</label>
-              <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("upload.tags_placeholder")} className="input w-full" disabled={isSubmitting} />
+              <label htmlFor="upload-tags" className="mb-1 block text-sm font-medium">{t("upload.tags_label")}</label>
+              <input id="upload-tags" name="tags" autoComplete="off" value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("upload.tags_placeholder")} className="input w-full" disabled={isSubmitting} />
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1 block text-sm font-medium">{t("upload.creator_label")}</label>
@@ -362,9 +385,10 @@ function UploadPageContent() {
               {t("upload.nsfw_label")}
             </label>
             <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
-              <input type="checkbox" className="rounded" checked={combineBatch} onChange={(e) => setCombineBatch(e.target.checked)} disabled={isSubmitting} />
+              <input type="checkbox" className="rounded" aria-describedby={showBatchError && batchError ? "upload-batch-error" : "upload-combined-limits"} checked={combineBatch} onChange={(e) => setCombineBatch(e.target.checked)} disabled={isSubmitting} />
               {t("upload.combine_batch")}
             </label>
+            <p id="upload-combined-limits" className="text-xs text-muted sm:col-span-2">{t("upload.combined_limits")}</p>
           </div>
         </SectionPanel>
 
@@ -373,7 +397,6 @@ function UploadPageContent() {
             onDrop={onDrop}
             onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
             onDragLeave={(e) => { e.preventDefault(); setDragActive(false); }}
-            onClick={() => fileInputRef.current?.click()}
             className={`cursor-pointer rounded-md border-2 border-dashed p-8 text-center transition-colors ${isSubmitting ? "pointer-events-none opacity-60" : ""} ${dragActive ? "border-accent bg-accent-subtle" : "border-border hover:border-accent/50"}`}
           >
             <input
@@ -387,8 +410,11 @@ function UploadPageContent() {
                 e.target.value = "";
               }}
             />
-            <p className="text-sm font-medium text-fg">{t("upload.dropzone_title")}</p>
-            <p className="mt-1 text-xs text-muted">{t("upload.dropzone_hint")}</p>
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isSubmitting}
+              className="w-full rounded-md text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+              <span className="block text-sm font-medium text-fg">{t("upload.dropzone_title")}</span>
+              <span className="mt-1 block text-xs text-muted">{t("upload.dropzone_hint")}</span>
+            </button>
           </div>
         </SectionPanel>
 
@@ -403,7 +429,7 @@ function UploadPageContent() {
               {rows.map((r, index) => {
                 const entrance = rowEntrance(r.id, index);
                 return (
-                <div key={r.id} className={`${entrance.className} flex items-center gap-3 rounded-md border border-border p-2 text-sm`} style={entrance.style}>
+                <div key={r.id} className={`${entrance.className} flex flex-wrap items-center gap-3 rounded-md border border-border p-2 text-sm`} style={entrance.style}>
                   <span className="min-w-0 flex-1 truncate">{r.file.name}</span>
                   <span className="shrink-0 font-mono text-xs text-muted">{formatBytes(r.file.size)}</span>
                   {r.status === "uploading" && <MiniProgressBar pct={r.progress} />}
@@ -415,7 +441,7 @@ function UploadPageContent() {
                   )}
                   {r.status === "accepted" && canReadLibrary && r.sourceWorkId && <button type="button" disabled={resolvingWorkId === r.sourceWorkId} onClick={() => void openResolvedWork(r.sourceWorkId!)} className="shrink-0 text-xs text-accent hover:underline">{t("upload.view_work")}</button>}
                   {r.status === "error" && r.error && (
-                    <span className="max-w-[160px] shrink-0 truncate text-xs text-danger" title={r.error}>{r.error}</span>
+                    <span role="alert" className="w-full break-words text-xs text-danger">{r.error}</span>
                   )}
                   {(r.status === "queued" || r.status === "error" || r.status === "cancelled") && !isSubmitting && (
                     <button onClick={() => removeRow(r.id)} className="btn-icon shrink-0" aria-label={t("upload.remove")}>&times;</button>
@@ -427,6 +453,9 @@ function UploadPageContent() {
           )}
         </SectionPanel>
 
+        {showBatchError && batchError && (
+          <p id="upload-batch-error" ref={batchErrorRef} tabIndex={-1} role="alert" className="text-sm text-danger">{batchError}</p>
+        )}
         <div className="flex justify-end">
           <button onClick={handleSubmit} disabled={isSubmitting || queuedRows.length === 0} className="btn-primary">
             {isSubmitting ? t("upload.submitting") : t("upload.submit", { count: queuedRows.length })}

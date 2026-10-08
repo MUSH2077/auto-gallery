@@ -436,7 +436,12 @@ Cookie 配置使用 `services/cookie_paths.py` 解释路径。相对路径以
 配置读取、写入和有效下载配置对越界返回可诊断错误，不退回无配置下载。
 
 手动上传每次最多 20 个文件、单文件最多 500 MiB、文件累计最多 1 GiB，
-另预留 2 MiB multipart 开销。`UploadRoute` 在 multipart 解析前计算实际接收字节，
+另预留 2 MiB multipart 开销。网页通过独立的 `/api/upload` API 入口关闭请求体解析，直接流式转发到后端，
+避开 Next.js 外部 rewrites 的请求体克隆与默认 10 MiB 截断；前端原有的 `/api/v1/upload`
+也会内部转发到该入口，其他 API 继续使用原有 rewrites。
+转发保留认证、Origin、CSRF、后端状态及 Retry-After，并在客户端断开时取消上游请求。
+文件、批次、请求总量和账号配额超限分别返回可区分的 413 错误码；网页只在配额不足时
+停止后续文件，合并上传还会预先检查 20 文件与 1 GiB 上限。`UploadRoute` 在 multipart 解析前计算实际接收字节，
 不依赖 Content-Length；复制时分别执行单文件、批次和剩余配额预算。
 最终用量由带配额条件的数据库 UPDATE 原子计费，与任务、产物在同一事务提交，
 并发上传与 purge 释放不使用旧对象读改写。复制失败清理自身临时文件；移动或保存失败

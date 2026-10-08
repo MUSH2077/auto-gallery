@@ -49,7 +49,11 @@ MAX_REQUEST_SIZE_BYTES = MAX_BATCH_SIZE_BYTES + 2 * 1024 * 1024
 
 
 class QuotaExceededError(Exception):
-    """Raised when an upload would push the user past upload_quota_bytes."""
+    """Raised when a file, batch or account capacity budget is exceeded."""
+
+    def __init__(self, message: str, *, code: str = "upload_limit_exceeded"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(slots=True)
@@ -148,7 +152,7 @@ class ManualUploadService:
             validated.append((f, ext, size))
             total_size += size
             if total_size > MAX_BATCH_SIZE_BYTES:
-                raise QuotaExceededError("Upload exceeds the 1GiB batch limit")
+                raise QuotaExceededError("Upload exceeds the 1GiB batch limit", code="upload_batch_too_large")
 
         # Reserve bytes atomically after network reception, in the save transaction.
         work_dir = None
@@ -161,7 +165,7 @@ class ManualUploadService:
                 .returning(User.upload_used_bytes, User.upload_quota_bytes)
                 .execution_options(synchronize_session=False))).one_or_none()
             if charged is None:
-                raise QuotaExceededError("Upload would exceed the current upload quota")
+                raise QuotaExceededError("Upload would exceed the current upload quota", code="upload_quota_exceeded")
             used_bytes, quota_bytes = charged
             # Refresh a session-resident User too; callers must not observe its
             # pre-upload usage after the atomic database increment.

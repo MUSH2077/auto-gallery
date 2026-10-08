@@ -41,6 +41,7 @@ async def test_request_limit_counts_stream_before_route_copy(tmp_path, monkeypat
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
         result = await client.post("/api/v1/upload", content=chunks(), headers=headers)
     assert result.status_code == 413
+    assert result.json()["detail"]["code"] == "upload_request_too_large"
     assert not copied
     assert read < len(body)
     assert not list(tmp_path.rglob("*"))
@@ -87,6 +88,11 @@ async def test_upload_api_rejects_budget_before_saving_and_cleans_batch(tmp_path
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
         result = await client.post("/api/v1/upload", files=files)
     assert result.status_code == (400 if limit == "count" else 413)
+    if limit != "count":
+        assert result.json()["detail"]["code"] == {
+            "file": "upload_file_too_large", "batch": "upload_batch_too_large",
+            "quota": "upload_quota_exceeded",
+        }[limit]
     assert not saved
     assert not list(tmp_path.rglob("*.png"))
 
@@ -326,3 +332,14 @@ async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypat
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_size", [True, False])
+async def test_copy_accepts_exact_file_budget(tmp_path, known_size):
+    from app.api.upload import _stream_to_temp
+    stream = BytesIO(b"x" * 20)
+    upload = UploadFile(filename="photo.png", file=stream, size=20 if known_size else None)
+    saved = await _stream_to_temp(upload, tmp_path, byte_limit=20)
+    assert saved.read_bytes() == b"x" * 20
+    assert stream.closed

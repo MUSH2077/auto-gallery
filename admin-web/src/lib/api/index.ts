@@ -10,7 +10,7 @@ export * from "./endpoints";
 // handling (session cookie, CSRF value and 401 redirect) instead of
 // duplicating it silently.
 function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
-  return uploadWithProgress<T.UploadResponse>(form, "/api/v1/upload", onProgress);
+  return uploadWithProgress<T.UploadResponse>(form, "/api/upload", onProgress);
 }
 
 // ── API ──
