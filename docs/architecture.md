@@ -490,6 +490,15 @@ Failed copying owns temporary cleanup; failed moves or saves roll back usage
 and remove the current work directory. Committed files/jobs retain their charge
 while durable import intent handles later processing.
 
+Personal uploads without an explicit target creator reuse their database identity
+when the creator, subscription, manual source and aliases are complete and
+consistent. The service verifies those records on each upload and refreshes
+alias observation timestamps in one upsert; it does not cache identity state
+across requests. Incomplete or changed identities, and uploads targeting an
+explicit creator, follow the general identity-provisioning path. This reduces
+repeated identity-maintenance queries while retaining the atomic user quota
+update and the caller-owned transaction.
+
 Foreground upload copying, persistence and import publication hold the shared
 POSIX maintenance barrier. Registered clear operations retain its exclusive
 parent-side lock through the workhorse; an upload during maintenance returns

@@ -24,6 +24,9 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Personal uploads reuse complete, consistent identity records to reduce
+  repeated maintenance queries, while retaining alias observation updates,
+  incomplete-identity recovery and atomic quota accounting.
 - X/Twitter directory and metadata import now normalize physical `twitter`
   extractor data to the `x` domain identity.
 - Subscription and other dynamic collection views share consistent list,
