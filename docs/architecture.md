@@ -304,6 +304,14 @@ persisted for background processing; import completion does not synchronously
 generate every thumbnail. Files remain in DOWNLOAD_ROOT, while metadata and
 derivatives live in LIBRARY_ROOT. JSON cleanup follows successful import.
 
+Bulk import writes media, import-curation and search outbox rows in the same
+transaction as the imported records. It registers one wake intent per outbox
+kind; only the outer transaction's successful commit publishes those wakes.
+Rollback, including savepoint rollback, does not publish the rolled-back
+intent. Notification failure leaves the committed outbox rows available for
+recovery. Import completion does not imply thumbnail or search readiness; each
+background result must be observed separately.
+
 Danbooru reference batches are separate administrative operations. Their
 single, Pixiv-ID and URL entries use `persist_danbooru_artist`, and validate the
 current operation attempt before committing each entry. They do not consume a

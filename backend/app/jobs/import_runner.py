@@ -1690,6 +1690,10 @@ async def _execute_bulk_outboxes(
         statement_count += 1
     if staged_works:
         mark_works_generation_pending(db)
+        from app.services.outbox_coordinator import mark_outbox_wake_pending
+
+        for kind in ("media", "import_projection", "search"):
+            mark_outbox_wake_pending(db, kind)
     return statement_count, len(search_rows)
 
 

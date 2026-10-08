@@ -34,6 +34,12 @@ practical pre-1.0 semantic versioning.
 - Documentation now matches the current Docker Compose services, frontend
   structure, manual upload support, test commands, and automatic migrations.
 
+### Fixed
+
+- Bulk imports wake media processing, metadata curation and search indexing
+  after the outer transaction commits, while preserving rollback and recovery
+  when notification delivery fails.
+
 ### Security
 
 - Added privacy-safe release checks, private vulnerability reporting guidance,
