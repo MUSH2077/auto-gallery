@@ -24,15 +24,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select, update, or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.creator import Creator
+from app.models.creator_alias import CreatorAlias
 from app.models.download_job import DownloadJob
 from app.models.source_creator import SourceCreator
+from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
 from app.models.user import User
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
-from app.services.disk_identity import MetadataIdentity, provision_identity_for_disk_import
+from app.services.disk_identity import MetadataIdentity, ProvisionedIdentity, provision_identity_for_disk_import
 from app.services.heavy_io import storage_write_barrier
 
 logger = logging.getLogger(__name__)
@@ -211,7 +215,7 @@ class ManualUploadService:
                 raw_metadata={},
                 creator_dir=f"user_{user.username}",
             )
-            provisioned = await provision_identity_for_disk_import(db, identity, prefer_danbooru=False)
+            provisioned = await self._provision_identity(db, identity, reuse_personal=target_creator_id is None)
             # Manual uploads are user-intentional. Unlike gallery-dl-discovered
             # subscription sources, which default to is_enabled=False pending
             # admin review (CLAUDE.md: "Only Pixiv defaults to is_enabled=True on
@@ -272,6 +276,76 @@ class ManualUploadService:
             used_bytes=used_bytes,
             quota_bytes=quota_bytes,
         )
+
+    async def _provision_identity(
+        self, db: AsyncSession, identity: MetadataIdentity, *, reuse_personal: bool,
+    ) -> ProvisionedIdentity:
+        """Reuse a complete personal space; recover incomplete/curated identities normally.
+
+        The caller still owns the atomic user quota lock. This replaces repeated
+        general disk-recovery queries, rather than weakening upload accounting.
+        """
+        if reuse_personal:
+            row = (await db.execute(
+                select(Creator, Subscription, SubscriptionSource, SourceCreator)
+                .select_from(Creator)
+                .join(SourceCreator, SourceCreator.creator_id == Creator.id)
+                .join(Subscription, Subscription.creator_id == Creator.id)
+                .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
+                .where(
+                    SourceCreator.source == "manual",
+                    SourceCreator.source_creator_id == identity.source_creator_id,
+                    SubscriptionSource.source == "manual",
+                    SubscriptionSource.source_creator_id == identity.source_creator_id,
+                    SubscriptionSource.source_url == identity.source_url,
+                ).limit(1)
+            )).one_or_none()
+            if row is not None:
+                creator, subscription, repository, source_creator = row
+                raw_metadata = source_creator.raw_metadata if isinstance(source_creator.raw_metadata, dict) else {}
+                marker = raw_metadata.get("_disk_import")
+                if (creator.name and creator.display_name and source_creator.display_name
+                        and source_creator.source_url == identity.source_url
+                        and marker == {"needs_enrichment": True, "enrichment_status": "metadata_only"}):
+                    from app.services.creator_aliases import collect_creator_alias_observations, normalize_creator_alias
+
+                    observations = collect_creator_alias_observations(
+                        creator, source_creators=(source_creator,), subscription_sources=(repository,),
+                    )
+                    expected = {
+                        (o.source, o.kind, normalize_creator_alias(o.value, kind=o.kind)):
+                        (o.value.strip(), o.source_ref, o.is_current) for o in observations
+                    }
+                    aliases = list((await db.execute(
+                        select(CreatorAlias).where(CreatorAlias.creator_id == creator.id)
+                    )).scalars())
+                    existing = {
+                        (a.source, a.kind, a.normalized_value): (a.value, a.source_ref, a.is_current)
+                        for a in aliases
+                    }
+                    if existing == expected:
+                        # Keep alias observation timestamps and conflict behavior;
+                        # one upsert replaces the per-alias recovery writes.
+                        from sqlalchemy import func
+                        statement = pg_insert(CreatorAlias).values([
+                            {"creator_id": creator.id, "source": key[0], "kind": key[1],
+                             "normalized_value": key[2], "value": value[0],
+                             "source_ref": value[1], "is_current": value[2]}
+                            for key, value in expected.items()
+                        ])
+                        await db.execute(statement.on_conflict_do_update(
+                            constraint="uq_creator_aliases_identity",
+                            set_={"value": statement.excluded.value,
+                                  "source_ref": statement.excluded.source_ref,
+                                  "is_current": statement.excluded.is_current,
+                                  "last_seen_at": func.now(), "updated_at": func.now()},
+                        ))
+                        return ProvisionedIdentity(
+                            creator=creator, subscription=subscription,
+                            subscription_source=repository, source_creator=source_creator,
+                            enrichment_status="metadata_only",
+                        )
+        return await provision_identity_for_disk_import(db, identity, prefer_danbooru=False)
 
     async def _resolve_identity(
         self, db: AsyncSession, user: User, creator_id: str | None

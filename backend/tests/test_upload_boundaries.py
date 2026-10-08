@@ -226,3 +226,103 @@ async def test_upload_save_failure_rolls_back_bytes_and_files(tmp_path, monkeypa
         assert not list(root.rglob("metadata.json"))
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.parametrize("identity_state", ["new", "complete", "missing_alias", "missing_repository"])
+@pytest.mark.parametrize("limited", [True, False])
+async def test_eight_uploads_preserve_identity_and_quota(tmp_path, monkeypatch, identity_state, limited):
+    from sqlalchemy import func, select
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import CreatorAlias, DownloadJob, SourceCreator, SubscriptionSource, User
+    from app.services.manual_upload import ManualUploadService, QuotaExceededError
+
+    root = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "download_root", str(root))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    size = len(_png_bytes())
+    warmed = identity_state != "new"
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "eight", quota=None)
+            user_id = user.id
+            if warmed:
+                await ManualUploadService().save_upload(db, user, [_make_upload_file(tmp_path, "warm.png", _png_bytes())], {})
+                if identity_state == "missing_alias":
+                    alias = (await db.execute(select(CreatorAlias).limit(1))).scalar_one()
+                    await db.delete(alias)
+                elif identity_state == "missing_repository":
+                    repository = (await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalar_one()
+                    await db.delete(repository)
+            user.upload_quota_bytes = (int(warmed) + 2) * size if limited else None
+            await db.commit()
+        barrier = asyncio.Barrier(8)
+        async def save(index):
+            async with async_session() as db:
+                user = await db.get(User, user_id)
+                file = _make_upload_file(tmp_path, f"eight-{index}.png", _png_bytes())
+                await barrier.wait()
+                try:
+                    return await ManualUploadService().save_upload(db, user, [file], {})
+                except QuotaExceededError:
+                    return None
+        results = await asyncio.wait_for(asyncio.gather(*(save(i) for i in range(8))), timeout=30)
+        accepted = 2 if limited else 8
+        assert sum(r is not None for r in results) == accepted
+        async with async_session() as db:
+            assert (await db.get(User, user_id)).upload_used_bytes == (int(warmed) + accepted) * size
+            assert (await db.scalar(select(func.count()).select_from(SourceCreator).where(SourceCreator.source == "manual"))) == 1
+            assert (await db.scalar(select(func.count()).select_from(SubscriptionSource).where(SubscriptionSource.source == "manual"))) == 1
+            assert (await db.scalar(select(func.count()).select_from(DownloadJob))) == int(warmed) + accepted
+            aliases = list((await db.execute(select(CreatorAlias))).scalars())
+            assert aliases and all(a.is_current for a in aliases)
+        assert len(list(root.rglob("metadata.json"))) == int(warmed) + accepted
+        assert len(list(root.rglob("*.png"))) == int(warmed) + accepted
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.parametrize("change", ["rename", "quota"])
+async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypatch, change):
+    from sqlalchemy import select, update
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import SourceCreator, User
+    from app.services.manual_upload import ManualUploadService, QuotaExceededError
+    root = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "download_root", str(root))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "snapshot", quota=None)
+            user_id = user.id
+            async with async_session() as other:
+                values = {"username": PREFIX + "renamed"} if change == "rename" else {"upload_quota_bytes": 0}
+                await other.execute(update(User).where(User.id == user.id).values(**values))
+                await other.commit()
+            file = _make_upload_file(tmp_path, "snapshot.png", _png_bytes())
+            if change == "quota":
+                with pytest.raises(QuotaExceededError):
+                    await ManualUploadService().save_upload(db, user, [file], {})
+                assert not list(root.rglob("*.png"))
+                assert not list(root.rglob("metadata.json"))
+                assert (await db.get(User, user_id, populate_existing=True)).upload_used_bytes == 0
+            else:
+                result = await ManualUploadService().save_upload(db, user, [file], {})
+                directory = root / "manual" / ("user_" + PREFIX + "renamed") / result.work_id
+                assert (directory / "metadata.json").is_file()
+                assert len(list(directory.glob("*.png"))) == 1
+                source = (await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalar_one()
+                assert source.source_creator_id == "user:" + PREFIX + "renamed"
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

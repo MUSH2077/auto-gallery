@@ -17,6 +17,60 @@ from sqlalchemy import select, text
 PREFIX = "manual_upload_test_"
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", [None, "alias", "repository"])
+async def test_personal_upload_reuses_complete_identity_and_repairs_missing_parts(tmp_path, monkeypatch, damage):
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import CreatorAlias, SourceCreator, SubscriptionSource, User
+    from app.services import manual_upload
+
+    root = tmp_path / "downloads"
+    monkeypatch.setattr(settings, "download_root", str(root))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    original = manual_upload.provision_identity_for_disk_import
+    recovered = []
+
+    async def recover(*args, **kwargs):
+        recovered.append(True)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(manual_upload, "provision_identity_for_disk_import", recover)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "reuse", quota=1024 * 1024)
+            service = manual_upload.ManualUploadService()
+            first = _make_upload_file(tmp_path, "one.png", _png_bytes())
+            size = first.temp_path.stat().st_size
+            await service.save_upload(db, user, [first], {})
+            source = (await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalar_one()
+            aliases = list((await db.execute(select(CreatorAlias).where(CreatorAlias.creator_id == source.creator_id))).scalars())
+            assert aliases
+            if damage == "alias":
+                await db.delete(aliases[0])
+            elif damage == "repository":
+                repository = (await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalar_one()
+                await db.delete(repository)
+            await db.commit()
+
+            second = _make_upload_file(tmp_path, "two.png", _png_bytes())
+            result = await service.save_upload(db, user, [second], {})
+            assert result.used_bytes == 2 * size
+            assert (await db.get(User, user.id, populate_existing=True)).upload_used_bytes == 2 * size
+            assert len(recovered) == (1 if damage is None else 2)
+            assert len(list((await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalars())) == 1
+            assert len(list((await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalars())) == 1
+            restored = list((await db.execute(select(CreatorAlias).where(CreatorAlias.creator_id == source.creator_id))).scalars())
+            assert {(a.source, a.kind, a.normalized_value) for a in restored} == {(a.source, a.kind, a.normalized_value) for a in aliases}
+            assert all(a.is_current for a in restored)
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
 async def _clear(db):
     await db.execute(text(f"DELETE FROM users WHERE username LIKE '{PREFIX}%'"))
     await db.execute(text("""
