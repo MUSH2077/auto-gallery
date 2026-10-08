@@ -336,6 +336,8 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 - **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
 - **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
 
+A completed disk-import administrator task means scanning and child publication have finished; its publication count is not a work count. Actual results require checking all child imports and their download parents. Global and source-scoped replays share the same classification: unchanged existing works are successful idempotent results, so zero new works does not mean total failure. Counts distinguish new or updated works, unchanged existing works and work groups skipped due to processing errors. Terminal progress counts all three as processed groups. A below-threshold skip rate completes with a skip notice; all-failed runs and rates at or above the configured threshold still fail. Both classified terminal outcomes retain statistics and total groups, while artifact errors remain available. Bounded parent results retain the child statuses and aggregate counts.
+
 ### Background Outbox Recovery
 
 An empty queue and a resource-denied task are different outcomes. Media and

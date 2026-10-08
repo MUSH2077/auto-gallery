@@ -2874,3 +2874,49 @@ async def test_completed_partial_salvage_keeps_exhausted_provider_failure():
         async with async_session() as db:
             await _clear(db)
         await engine.dispose()
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_status", ["complete", "failed"])
+async def test_bounded_replay_preserves_existing_skipped_and_child_failure(last_status):
+    from app.database import async_session, engine
+    from app.models.import_job import ImportJob
+    from app.services.import_lifecycle import coordinate_import_parent_completion, close_bounded_import_publication
+
+    first_stats = {"works": 0, "assets": 0, "multi_page": 0, "existing": 23, "skipped": 2}
+    last_stats = {
+        "works": 2 if last_status == "complete" else 0,
+        "assets": 3 if last_status == "complete" else 0,
+        "multi_page": 0, "existing": 0,
+        "skipped": 0 if last_status == "complete" else 2,
+    }
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            parent = await _shared_parent(db)
+            first = ImportJob(download_job_id=parent.id, status="complete")
+            last = ImportJob(download_job_id=parent.id, status="running")
+            db.add_all([first, last])
+            await db.flush()
+            await coordinate_import_parent_completion(
+                db, first, status="complete", stats=first_stats, total_groups=25, message="Replay complete with skips",
+            )
+            last.status = last_status
+            await coordinate_import_parent_completion(
+                db, last, status=last_status, stats=last_stats, total_groups=2, message="Last batch result",
+            )
+            result = await close_bounded_import_publication(db, parent.id)
+            assert result.status == last_status
+            assert result.total_groups == 27
+            assert result.stats == {key: first_stats[key] + last_stats[key] for key in first_stats}
+            batches = parent.manifest["bounded_import_batches"]
+            assert batches[str(first.id)]["stats"] == first_stats
+            assert batches[str(last.id)]["stats"] == last_stats
+            if last_status == "complete":
+                assert "existing=23" in result.message
+                assert "skipped=2" in result.message
+                assert "works=2" in result.message
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()

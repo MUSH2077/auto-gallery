@@ -21,14 +21,15 @@ def classify_import_outcome(
 
     Rules, in order:
       1. total_groups == 0           -> failed (nothing parsed)
-      2. skipped > 0 and works == 0  -> failed (every parsed work failed)
+      2. skipped > 0, works + existing == 0 -> failed (no successful work)
+         Existing unchanged works are successful idempotent results.
       3. skip rate >= threshold      -> failed (provider/gallery-dl format drift)
       4. otherwise                   -> complete (includes all-existing no-op)
     """
     summary = f"works={works} assets={assets} existing={existing} skipped={skipped}"
     if total_groups == 0:
         return "failed", f"No parseable metadata groups found (0). {summary}"
-    if skipped > 0 and works == 0:
+    if skipped > 0 and works + existing == 0:
         return "failed", f"All parsed works failed to import. {summary}"
     if skipped > 0 and (skipped / total_groups) >= threshold:
         pct = round(skipped / total_groups * 100)
@@ -36,4 +37,6 @@ def classify_import_outcome(
             f"High import skip rate: {skipped}/{total_groups} ({pct}%); "
             f"may indicate provider/gallery-dl format change. {summary}"
         )
+    if skipped > 0:
+        return "complete", f"Import complete with {skipped} skipped works. {summary}"
     return "complete", f"Import complete. {summary}"

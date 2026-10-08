@@ -175,9 +175,10 @@ async def complete_import_command(db, job_id, execution_token, *, status, messag
     parent, child, task = locked
     if child.status == "cancelled":
         raise RuntimeError("import execution completed after cancellation")
+    processed = min(total_groups, stats["works"] + stats["existing"] + stats["skipped"])
     await apply_import_state(db, parent, child, task, status, message=message, project_parent=False,
-                             progress={"stage": status, "message": message, "current": stats["works"], "total": total_groups, "assets": stats["assets"]},
-                             result={"stats": stats, "message": message} if status == "complete" else None)
+                             progress={"stage": status, "message": message, "current": processed, "total": total_groups, "assets": stats["assets"]},
+                             result={"stats": dict(stats), "message": message, "total_groups": total_groups})
     completion = await coordinate_import_parent_completion(db, child, status=status, stats=stats, total_groups=total_groups, message=message)
     return completion, dict(child.progress_data or {})
 
@@ -262,8 +263,9 @@ async def _bounded_parent_completion(
             fallback_message
             if len(child_statuses) == 1
             else (
-                f"Imported {aggregate_stats['works']} works across "
-                f"{len(child_statuses)} bounded batches"
+                f"Import complete across {len(child_statuses)} bounded batches. "
+                f"works={aggregate_stats['works']} assets={aggregate_stats['assets']} "
+                f"existing={aggregate_stats['existing']} skipped={aggregate_stats['skipped']}"
             )
         )
     elif aggregate_status == "cancelled":
