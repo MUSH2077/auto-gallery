@@ -316,6 +316,16 @@ def resource_reservation_details(
     return requested, max(0, available - hard_floor)
 
 
+def background_turn_available(redis_client) -> bool:
+    """Read the existing one-per-minute allowance while imports have priority."""
+    if not (redis_client.exists(RESOURCE_DISK_TOKEN_KEY)
+            or redis_client.llen('rq:queue:imports')
+            or redis_client.zcard('rq:wip:imports')):
+        return True
+    last = redis_client.get('resource:lanes:last-background')
+    return last is not None and int(redis_client.time()[0]) - int(last) >= 60
+
+
 def local_lock_for_workload(
     workload: str,
     *,

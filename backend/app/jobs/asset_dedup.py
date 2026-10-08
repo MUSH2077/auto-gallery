@@ -463,6 +463,7 @@ async def process_asset_dedup_outbox(
 
     processed = 0
     failed = 0
+    resource_deferred = False
     successor_delay_seconds = 0.0
     bounded_limit = max(1, min(int(limit), 100))
     while processed + failed < bounded_limit:
@@ -473,11 +474,13 @@ async def process_asset_dedup_outbox(
             max_slice_seconds=20.0,
         )
         if not limits.allowed:
+            resource_deferred = True
             break
         slice_started = monotonic()
         completed_slice = False
         async with try_heavy_io_slot("asset-dedup-outbox", owner) as lease:
             if lease is None:
+                resource_deferred = True
                 break
             event = await _claim_outbox_event()
             if event is None:
@@ -501,6 +504,7 @@ async def process_asset_dedup_outbox(
         "processed": processed,
         "failed": failed,
         "more_likely": bool(processed or failed),
+        "resource_deferred": resource_deferred,
         "successor_delay_seconds": successor_delay_seconds,
     }
 

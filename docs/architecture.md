@@ -336,6 +336,30 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 - **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
 - **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
 
+### Background Outbox Recovery
+
+An empty queue and a resource-denied task are different outcomes. Media and
+asset-dedup runners report resource deferral so the coordinator can record a
+waiting token without marking the durable work complete. PostgreSQL outbox
+rows remain authoritative; Redis wake owners and waiting tokens are recovery
+hints.
+
+After a worker releases its resources, its parent checks deferred outboxes.
+The scheduled supervisor also consumes `resource:control` notifications while
+workers are idle. Its startup and reconnection checks cover waiting work that
+predates the current connection. Media selection and recovery use the same
+memory requirements and resource checks as execution; recovery never bypasses
+memory protection, locks, delayed availability or an active remote-search
+reservation.
+
+Recovery inspection and publication have a bounded time budget. A timeout
+retains waiting work, and a failed notification does not turn an already
+completed domain job into a failure. The existing approximately 60-second
+fallback scan remains available when notifications or Redis waiting hints are
+lost. These mechanisms reduce unnecessary waiting after resources recover;
+they do not guarantee execution while resources remain unavailable. See the
+[operational recovery guide](RUNBOOK.md#background-outbox-recovery).
+
 ## Gitllery — On-Disk Curation History
 
 PostgreSQL curation commits and changes remain authoritative. Curation writes

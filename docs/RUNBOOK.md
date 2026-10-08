@@ -482,6 +482,66 @@ Auto-backup runs every 24 hours if enabled via Settings > Backup & Restore in th
 
 <!-- /AUTO-GENERATED -->
 
+## Background outbox recovery
+
+Bulk import completion confirms committed records, not completion of every
+thumbnail, metadata-curation task or search projection. The importer wakes
+those outboxes after its outer transaction commits. A failed wake does not
+roll back imported records; the pending rows remain recoverable.
+
+When background work appears delayed:
+
+1. Inspect resource pressure and active leases in the system workbench. Read
+   pending outbox counts from `business.outboxes` in
+   `GET /api/v1/system/health`; this is a periodically refreshed snapshot.
+   Low memory, a pause latch, an occupied
+   resource lock or an active remote-search reservation can legitimately keep
+   a task waiting. An empty RQ queue alone does not prove that processing is
+   complete or interrupted.
+2. Check the scheduler and operations worker logs:
+
+   ```bash
+   docker compose logs --tail=100 scheduler worker-operations
+   ```
+
+   Once resources satisfy admission, the worker's release check or the
+   scheduler's resource notification consumer reconsiders waiting work. The
+   consumer stays active when workers are idle and reconnects after Redis
+   connection loss. Recovery checks have a time limit and retain waiting work
+   on timeout.
+3. If a recovery notification is lost, allow the existing approximately
+   60-second fallback scan to run. Confirm that pending rows decrease and
+   results become available, including asset deduplication when checking all
+   background work. If eligible rows remain unchanged after a fallback cycle,
+   inspect scheduler and database/Redis connectivity. Repeating a download or
+   upload is not required for normal resource recovery.
+
+For maintenance changes, verify outer-commit/rollback behavior, recovery after
+resource release, notification failure/reconnection and empty-versus-deferred
+results. The regression suites are `test_bulk_import_wake.py`,
+`test_resource_release_wake.py`, `test_resource_recovery_control.py`,
+`test_media_admission_recovery.py` and `test_dedup_recovery.py`. Run integration
+cases against disposable PostgreSQL and Redis instances as described in the
+[development guide](development.md), rather than the live library database.
+
+### 中文：后台任务延迟排查
+
+批量导入完成表示记录已经提交，不表示缩略图、元数据整理和搜索索引全部完成。
+导入器在外层事务提交后唤醒这些后台任务，通知失败时持久记录仍可恢复。
+
+排查时先看系统工作台的资源压力和活动资源占用；待处理 outbox 数量从
+`GET /api/v1/system/health` 的 `business.outboxes` 读取，该快照定期刷新。内存不足、
+暂停保护、资源锁或远端搜索占用都可能造成正常等待；仅凭 RQ 队列为空，不能
+判断处理完成或中断。资源恢复后，worker 释放资源时的检查或 scheduler 接收的
+恢复通知会重新检查等待任务，监管进程在 worker 空闲时仍接收通知，断线后自动
+重连；检查超时不会丢弃等待任务。
+
+通知丢失时，原有约 60 秒一次的扫描继续负责恢复。分别确认图片、元数据、搜索
+和去重的待处理数下降、结果可用。资源已经满足要求，但经过一次扫描后待处理
+记录仍不变化，才继续检查 scheduler 日志及 PostgreSQL、Redis 连通性；正常
+恢复不需要重新上传或下载。维护时应在独立测试库验证提交与回滚、资源释放、
+通知失败与重连，以及空队列和资源等待的区别。
+
 ## Staged offline restore
 
 The admin Backup settings page uploads the archive in resumable chunks and runs

@@ -36,7 +36,10 @@ def publish_resource_pressure_snapshot(snapshot: dict[str, Any], redis_client=No
         budget = snapshot.get("budget") or {}
         profiles = budget.get("profiles") or {}
         reservation = budget.get("reservation") or {}
+        from app.services.media_admission import media_capacity_signature
+
         signature = (
+            media_capacity_signature(snapshot),
             snapshot.get("status"),
             snapshot.get("controller_mode"),
             tuple(snapshot.get("reasons") or []),

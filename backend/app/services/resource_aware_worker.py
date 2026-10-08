@@ -1142,6 +1142,14 @@ class ResourceAwareWorker(Worker):
                 workload=workload,
                 publisher_attempt=publisher_attempt,
             )
+            try:
+                from app.services.outbox_coordinator import wake_resource_deferred_outboxes
+
+                wake_resource_deferred_outboxes()
+            except Exception:
+                # A completed domain job stays successful; durable outboxes
+                # retain the original scheduler recovery path.
+                self.log.warning("Resource-release outbox wake failed", exc_info=True)
             # Batch shrinking limits peak cost but cannot lower the sustained
             # rate of a permanently backlogged queue.  Sleep only after the
             # workhorse exits and both Redis/POSIX leases are released.

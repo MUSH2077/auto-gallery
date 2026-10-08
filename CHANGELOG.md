@@ -39,6 +39,9 @@ practical pre-1.0 semantic versioning.
 - Bulk imports wake media processing, metadata curation and search indexing
   after the outer transaction commits, while preserving rollback and recovery
   when notification delivery fails.
+- Resource-deferred media and asset-dedup tasks are reconsidered after resources
+  recover, including idle-worker notification handling, bounded recovery checks
+  and reconnection, while retaining admission protection and timer recovery.
 
 ### Security
 

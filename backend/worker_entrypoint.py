@@ -442,6 +442,12 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    recovery_control = None
+    if "scheduled" in supervised_queues:
+        from app.services.outbox_recovery_control import OutboxRecoveryControl
+
+        recovery_control = OutboxRecoveryControl(REDIS_URL)
+
     for worker_queues, scheduler_enabled in worker_specs:
         spawn(worker_queues, scheduler=scheduler_enabled)
 
@@ -471,6 +477,7 @@ def main():
                 )
             last_scheduler_watchdog_at = now
         if "scheduled" in supervised_queues:
+            recovery_control.poll()
             fallback_due = (
                 now - last_outbox_fallback_at >= OUTBOX_FALLBACK_INTERVAL_SECONDS
             )
@@ -580,6 +587,8 @@ def main():
             last_status_at = now
         time.sleep(1)
 
+    if recovery_control is not None:
+        recovery_control.close()
     for managed in processes:
         try:
             return_code = managed.process.wait(timeout=10)

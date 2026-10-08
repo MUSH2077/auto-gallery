@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import json
 import time
+from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
+from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy.exc import SQLAlchemyError
 from rq import Queue
 from sqlalchemy import and_, delete, event, exists, func, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +65,13 @@ OUTBOX_HEALTH_REDIS_TTL_SECONDS = 90
 OUTBOX_HEALTH_REDIS_KEY = "outbox:health:v1"
 _OUTBOX_WAKE_INTENTS = "outbox_wake_intents"
 _OUTBOX_WAKE_COMMITTING = "outbox_wake_committing"
+RESOURCE_DEFERRED_KEY = "outbox:resource-deferred"
+_CLEAR_DEFERRED_SCRIPT = """
+if redis.call('hget', KEYS[1], ARGV[1]) == ARGV[2] then
+  return redis.call('hdel', KEYS[1], ARGV[1])
+end
+return 0
+"""
 _outbox_health_cache: dict[str, dict] | None = None
 _outbox_health_cache_ts = 0.0
 _outbox_health_cache_mode: str | None = None
@@ -440,6 +451,13 @@ def clear_and_wake_outbox_successor(
     60-second scheduler fallback rather than creating a crash loop.
     """
 
+    if isinstance(result, dict) and result.get("resource_deferred"):
+        try:
+            # A new token per deferral prevents an older completion from
+            # clearing a concurrent runner's resource-release notification.
+            get_redis().hset(RESOURCE_DEFERRED_KEY, kind, uuid4().hex)
+        except Exception:
+            logger.debug("Unable to record deferred outbox wake", exc_info=True)
     if not isinstance(result, dict) or not bool(result.get("more_likely")):
         clear_outbox_wake(kind)
         return {"enqueued": 0, "deferred": 0}
@@ -469,6 +487,158 @@ def clear_and_wake_outbox_successor(
         # Redis disappeared during the optimization.  PostgreSQL remains the
         # source of truth and the scheduler fallback retries within 60 seconds.
         logger.warning("Immediate outbox successor wake failed for %s", kind, exc_info=True)
+        return {"enqueued": 0, "deferred": 1}
+
+
+async def _deferred_outbox_readiness() -> dict[str, int]:
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    # The RQ parent forks subsequent jobs and uses new event loops. Never
+    # leave pooled async database connections in that parent process.
+    engine = create_async_engine(
+        settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
+    )
+    try:
+        async with AsyncSession(engine) as db:
+            return await outbox_counts(db, ready_only=True)
+    finally:
+        await engine.dispose()
+
+
+async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[str]:
+    """Check current admission without claiming work or opening parent pools."""
+    from app.services.heavy_io import (
+        collect_active_resource_leases, background_turn_available,
+        local_lock_for_workload, resource_reservation_details,
+    )
+    from app.services.resource_descriptors import descriptor_by_name
+    from app.services.resource_pressure import profile_slice_limits
+
+    snapshot = _recovery_pressure_snapshot(redis_client)
+    if snapshot is None:
+        return set()
+    leases = collect_active_resource_leases(redis_client=redis_client)
+    if leases.get("error"):
+        return set()
+    reserved = int(leases.get("reserved_bytes") or 0)
+    media_profiles = {"image_derive", "video_derive"}
+    if "media" in kinds:
+        from app.models.asset import Asset
+        from app.services.media_derivatives import _video_candidate_condition
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import NullPool
+
+        engine = create_async_engine(
+            settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
+        )
+        try:
+            async with AsyncSession(engine) as db:
+                video = _video_candidate_condition()
+                condition = _leased_ready(MediaDerivativeOutbox, datetime.now(timezone.utc))
+                row = (await db.execute(select(
+                    exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, ~video).label("image"),
+                    exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, video).label("video"),
+                ))).one()
+                media_profiles = {profile for profile, ready in (
+                    ("image_derive", row.image), ("video_derive", row.video),
+                ) if ready}
+        finally:
+            await engine.dispose()
+    admitted = set()
+    for kind in kinds:
+        descriptor = descriptor_by_name(_RESOURCE_DESCRIPTORS[kind])
+        profiles = media_profiles if kind == "media" else {descriptor.profile}
+        for profile in profiles:
+            if not background_turn_available(redis_client):
+                continue
+            if not profile_slice_limits(snapshot, profile).allowed:
+                continue
+            if kind == "media":
+                from app.services.media_admission import media_profile_admissible
+
+                if not media_profile_admissible(snapshot, profile, leases):
+                    continue
+            else:
+                requested, capacity = resource_reservation_details(snapshot, profile)
+                if reserved + requested > capacity:
+                    continue
+            if kind != "media":
+                lock = local_lock_for_workload(profile, lane="background" if kind == "import_projection" else None)
+                if lock is not None:
+                    try:
+                        if not lock.try_acquire():
+                            continue
+                    finally:
+                        lock.release()
+            admitted.add(kind)
+            break
+    return admitted
+
+
+def _recovery_sql_options() -> dict[str, float]:
+    from app.services.redis_budget import current_work_deadline
+
+    remaining = max(0.001, current_work_deadline() - monotonic())
+    return {"timeout": remaining, "command_timeout": remaining}
+
+
+def _recovery_pressure_snapshot(redis_client) -> dict | None:
+    from app.services.resource_pressure_snapshot import read_shared_resource_pressure_snapshot
+    from app.services.resource_pressure import read_resource_pressure_latch
+
+    snapshot = read_shared_resource_pressure_snapshot(redis_client=redis_client)
+    if snapshot is None or read_resource_pressure_latch(redis_client=redis_client):
+        # Recovery is a hint, not a sampling path. A missing snapshot or live
+        # pause latch must wait for the pressure monitor; never sample in the
+        # RQ parent or leave an executor thread alive before its next fork.
+        return None
+    return snapshot
+
+
+async def _inspect_deferred_outboxes(kinds: set[str], redis_client):
+    counts = await _deferred_outbox_readiness()
+    ready = {kind for kind in kinds if counts.get(kind)}
+    admitted = await _admissible_deferred_outboxes(ready, redis_client) if ready else set()
+    return counts, ready, admitted
+
+
+def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str, int]:
+    """Bound recovery reads and publication; retain durable work on timeout."""
+    from app.services.redis_budget import budget_redis
+    from app.services.remote_search_flight import read_marker
+    from app.services.heavy_io import background_turn_available
+
+    deadline = monotonic() + max(0.01, timeout_seconds)
+    try:
+        with budget_redis(seconds=max(0.01, deadline - monotonic()), reserve_seconds=0):
+            redis = get_redis()
+            deferred = redis.hgetall(RESOURCE_DEFERRED_KEY)
+            if not deferred or not background_turn_available(redis):
+                return {"enqueued": 0, "deferred": 0}
+            tokens = {(k.decode() if isinstance(k, bytes) else k): v for k, v in deferred.items()}
+            kinds = set(tokens) & set(_SPECS)
+            if not kinds or redis.exists("lock:resource-budget:background", "lock:heavy-io") or read_marker():
+                return {"enqueued": 0, "deferred": 0}
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return {"enqueued": 0, "deferred": 1}
+            counts, ready, admitted = asyncio.run(asyncio.wait_for(
+                _inspect_deferred_outboxes(kinds, redis), timeout=remaining,
+            ))
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return {"enqueued": 0, "deferred": 1}
+        # Recreate short sockets for the remaining publication budget.
+        with budget_redis(seconds=remaining, reserve_seconds=0):
+            redis = get_redis()
+            for kind in kinds - ready:
+                redis.eval(_CLEAR_DEFERRED_SCRIPT, 1, RESOURCE_DEFERRED_KEY, kind, tokens[kind])
+            if not admitted:
+                return {"enqueued": 0, "deferred": 0}
+            return wake_pending_outboxes({kind: counts[kind] for kind in ready.intersection(admitted)})
+    except (TimeoutError, RedisTimeoutError, OSError, SQLAlchemyError):
+        logger.debug("Resource recovery check timed out; retaining deferred work", exc_info=True)
         return {"enqueued": 0, "deferred": 1}
 
 

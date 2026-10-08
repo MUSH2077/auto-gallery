@@ -243,10 +243,9 @@ def _video_candidate_condition():
 async def _next_resource_candidate() -> tuple[UUID, str] | None:
     """Choose the oldest currently admissible image/video intent.
 
-    Looking at one candidate of each profile prevents a large-video intent
-    from permanently blocking smaller image work when only the 256 MiB
-    reservation fits above the host hard floor.  This is a read-only hint; the
-    exact row is still claimed with ``SKIP LOCKED`` after admission.
+    Looking at one candidate of each profile avoids letting an older image
+    or video hide another profile that fits the current memory and lock budget.
+    Selection shares the execution memory and resource requirements. The exact row is claimed with ``SKIP LOCKED`` after admission.
     """
 
     now = _now()
@@ -289,23 +288,22 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
     if not candidates:
         return None
 
-    from app.services.resource_pressure import (
-        get_resource_pressure_snapshot,
-        resource_profile_permit,
-    )
+    from app.services.resource_pressure import get_resource_pressure_snapshot
+
+    from app.services.heavy_io import HeavyIOUnavailable, collect_active_resource_leases
+    from app.services.media_admission import media_profile_admissible
 
     snapshot = await get_resource_pressure_snapshot()
+    leases = collect_active_resource_leases()
     admissible = [
         candidate
         for candidate in candidates
-        if resource_profile_permit(snapshot, candidate[1])[0]
+        if media_profile_admissible(snapshot, candidate[1], leases)
     ]
     if not admissible:
-        # Do not occupy the single operations worker while waiting on a video
-        # reservation.  The durable row remains pending and the 15-second
-        # outbox coordinator will re-evaluate both profiles; a newly arrived
-        # image can therefore make progress first.
-        return None
+        # A durable intent exists, but none fits current admission. Preserve
+        # this distinction so the runner registers a resource-release retry.
+        raise HeavyIOUnavailable("media_resources_unavailable")
     selected = min(admissible, key=lambda item: item[2])
     return selected[0], selected[1]
 
@@ -646,7 +644,13 @@ async def process_media_derivative_outbox(
     bounded_limit = max(1, limit)
     bounded_seconds = max(0.001, float(max_seconds))
     while claimed < bounded_limit and monotonic() - started < bounded_seconds:
-        candidate = await _next_resource_candidate()
+        from app.services.heavy_io import HeavyIOUnavailable
+
+        try:
+            candidate = await _next_resource_candidate()
+        except HeavyIOUnavailable:
+            resource_deferred = True
+            break
         if candidate is None:
             found_empty = True
             break
