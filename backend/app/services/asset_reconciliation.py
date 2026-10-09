@@ -42,6 +42,7 @@ from app.services.asset_dedup_scope import (
     canonical_source,
     scope_error_message,
 )
+from app.services.image_utils import open_pillow_image
 from app.services.media_signing import signed_media_url
 from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.settings import extractor_key_for_source
@@ -64,6 +65,7 @@ IMAGE_MIME_TYPES = {
     "image/gif",
     "image/webp",
     "image/bmp",
+    "image/avif",
 }
 
 
@@ -194,7 +196,7 @@ def _normalized_pixels(path: Path):
     import numpy as np
     from PIL import Image, ImageOps
 
-    with Image.open(path) as opened:
+    with open_pillow_image(path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
         image = image.resize((256, 256), Image.Resampling.LANCZOS)
         return np.asarray(image, dtype=np.float64) / 255.0

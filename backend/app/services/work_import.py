@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from app.config import settings
+from app.services.image_utils import open_pillow_image
 from app.services.library_sync import resolve_creator_directory, write_metadata_json
 
 
@@ -19,10 +20,14 @@ class WorkImportService:
         return digest.hexdigest()
 
     @staticmethod
-    def phash(path: Path) -> str:
+    def phash(path: Path) -> str | None:
         import imagehash
-        from PIL import Image
-        with Image.open(path) as image:
+
+        with open_pillow_image(path) as image:
+            # An AVIF sequence cannot be represented by a static first-frame
+            # hash. Exact file deduplication still uses its SHA-256.
+            if image.format == "AVIF" and image.n_frames > 1:
+                return None
             return str(imagehash.phash(image))
 
     @staticmethod

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.services.image_utils import IMAGE_EXTS
+
 MediaKind = Literal["image", "animated_image", "video", "archive", "unknown"]
 
 VIDEO_EXTENSIONS = {".mp4", ".webm"}
@@ -54,7 +56,7 @@ def media_kind(mime_type: str | None, file_name: str | None = None) -> MediaKind
         return "video"
     if mime in ANIMATED_IMAGE_MIME_TYPES or suffix in {".gif", ".apng"}:
         return "animated_image"
-    if mime.startswith("image/") or suffix in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+    if mime.startswith("image/") or suffix in IMAGE_EXTS:
         return "image"
     if mime == "application/zip" or suffix in ARCHIVE_EXTENSIONS:
         return "archive"

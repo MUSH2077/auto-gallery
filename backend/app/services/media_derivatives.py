@@ -381,7 +381,8 @@ def _effective_value(
 
 
 def _validate_requested_result(
-    descriptor: dict[str, Any], request: dict[str, Any], values: dict[str, Any]
+    descriptor: dict[str, Any], request: dict[str, Any], values: dict[str, Any],
+    *, phash_applicable: bool = True,
 ) -> None:
     """Reject incomplete derivatives before the outbox can be completed."""
 
@@ -405,7 +406,7 @@ def _validate_requested_result(
     if requested.get("sha256") or requested.get("dedup"):
         if not _effective_value(descriptor, values, "sha256"):
             raise RuntimeError("requested sha256 was not produced")
-    if requested.get("phash") and not _effective_value(
+    if requested.get("phash") and phash_applicable and not _effective_value(
         descriptor, values, "phash"
     ):
         raise RuntimeError("requested perceptual hash was not produced")
@@ -500,6 +501,7 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         not fingerprint_matches or not descriptor.get("sha256")
     ):
         result["sha256"] = WorkImportService.sha256(source)
+    phash_applicable = True
     if (
         requested.get("phash")
         and (not fingerprint_matches or not descriptor.get("phash"))
@@ -509,8 +511,9 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         # changes. ``phash_version`` prevents future algorithms from cross-
         # comparing incompatible values.
         result["phash"] = WorkImportService.phash(source)
-        result["phash_version"] = PHASH_ALGORITHM_VERSION
-    _validate_requested_result(descriptor, request, result)
+        phash_applicable = not (suffix == ".avif" and result["phash"] is None)
+        result["phash_version"] = PHASH_ALGORITHM_VERSION if phash_applicable else None
+    _validate_requested_result(descriptor, request, result, phash_applicable=phash_applicable)
     return result
 
 

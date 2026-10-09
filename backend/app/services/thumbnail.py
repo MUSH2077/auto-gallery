@@ -3,6 +3,8 @@ import os
 import uuid
 from pathlib import Path
 
+from app.services.image_utils import open_pillow_image
+
 logger = logging.getLogger(__name__)
 
 # libvips reads its concurrency environment during initialization.  Set this
@@ -45,12 +47,26 @@ def inspect_and_generate_thumbnail(
         import pyvips
 
         _configure_pyvips(pyvips)
-        image = pyvips.Image.new_from_file(source_path, access="sequential")
-        width, height = image.width, image.height
         target_w = 400
         thumb_path = library_dir / f"{name}.webp"
         temp_path = library_dir / f".{name}.{uuid.uuid4().hex}.tmp.webp"
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            image = pyvips.Image.new_from_file(source_path, access="sequential")
+        except Exception:
+            if Path(source_path).suffix.lower() != ".avif":
+                raise
+            # Bookworm libvips/libheif cannot open AVIF sequences. Pillow can
+            # decode their first frame without loading every frame into RAM.
+            from PIL import Image
+
+            with open_pillow_image(source_path) as opened:
+                width, height = opened.size
+                opened.thumbnail((target_w, height), Image.Resampling.LANCZOS)
+                opened.save(temp_path, format="WEBP", quality=80)
+            os.replace(temp_path, thumb_path)
+            return str(thumb_path), width, height
+        width, height = image.width, image.height
         if width > target_w:
             thumb = image.thumbnail_image(target_w, height=target_w * 1000)
             thumb.webpsave(str(temp_path), Q=80)

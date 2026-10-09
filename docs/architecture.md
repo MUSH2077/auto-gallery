@@ -338,6 +338,8 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 
 A completed disk-import administrator task means scanning and child publication have finished; its publication count is not a work count. Actual results require checking all child imports and their download parents. Global and source-scoped replays share the same classification: unchanged existing works are successful idempotent results, so zero new works does not mean total failure. Counts distinguish new or updated works, unchanged existing works and work groups skipped due to processing errors. Terminal progress counts all three as processed groups. A below-threshold skip rate completes with a skip notice; all-failed runs and rates at or above the configured threshold still fail. Both classified terminal outcomes retain statistics and total groups, while artifact errors remain available. Bounded parent results retain the child statuses and aggregate counts.
 
+Platform downloads and disk imports share image extensions, including AVIF artifacts classified as `image` with asset MIME `image/avif`. Originals are retained and previews use WebP. Static AVIF uses the existing SHA-256 and `imagehash-phash-v1` fingerprints. AVIF sequences preview the first frame and use whole-file SHA-256 for exact deduplication, without a first-frame pHash. Thumbnails prefer libvips, with a Pillow first-frame fallback when libvips cannot open AVIF. Application Pillow AVIF decoding uses one thread and preserves media admission and atomic thumbnail writes. Disk import can register previously omitted files; existing works use the append-asset/idempotent update path.
+
 ### Background Outbox Recovery
 
 An empty queue and a resource-denied task are different outcomes. Media and

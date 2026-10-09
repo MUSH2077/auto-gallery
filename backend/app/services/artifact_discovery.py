@@ -14,10 +14,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.services.image_utils import IMAGE_EXTS
 
-ASSET_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip", ".mp4", ".webm",
-}
+
+ASSET_EXTENSIONS = IMAGE_EXTS | {".zip", ".mp4", ".webm"}
 
 MetadataItem = tuple[Path, dict[str, Any]]
 

@@ -62,7 +62,7 @@ def test_date_directory_matches_gallerydl_work_id_and_asset_index(tmp_path):
     assert [path.name for path in media_files_for_group(groups["202"], "202")] == ["202_1.jpg"]
 
 
-@pytest.mark.parametrize("extension", ["jpg", "png", "gif", "webm", "mp4"])
+@pytest.mark.parametrize("extension", ["jpg", "png", "gif", "webm", "mp4", "avif", "AVIF"])
 def test_danbooru_default_filename_without_num_matches_only_its_media(tmp_path, extension):
     directory = tmp_path / "danbooru" / "None" / "2026-10-05"
     directory.mkdir(parents=True)
