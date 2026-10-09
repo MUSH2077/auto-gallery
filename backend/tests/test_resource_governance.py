@@ -482,12 +482,12 @@ def test_sqlite_maintenance_uses_optimize_daily_and_vacuum_sunday(
 
 
 def test_media_limits_vips_cache_and_ffmpeg_threads(tmp_path, monkeypatch):
-    from app.services import media_assets, thumbnail
+    from app.services import image_utils, media_assets
 
     configured = []
-    thumbnail._configure_pyvips(SimpleNamespace(cache_set_max_mem=configured.append))
+    image_utils.configure_pyvips(SimpleNamespace(cache_set_max_mem=configured.append))
     assert configured == [64 * 1024 * 1024]
-    assert thumbnail.os.environ["VIPS_CONCURRENCY"] == "1"
+    assert image_utils.os.environ["VIPS_CONCURRENCY"] == "1"
 
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"fixture")

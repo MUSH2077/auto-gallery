@@ -48,7 +48,7 @@ from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.settings import extractor_key_for_source
 
 
-ALGORITHM_VERSION = "asset-visual-v2"
+ALGORITHM_VERSION = "asset-visual-v3"
 QUALITY_POLICY_VERSION = "asset-quality-v2"
 PHASH_MAX_DISTANCE = 4
 ASPECT_RATIO_MAX_DELTA = 0.01
@@ -197,12 +197,21 @@ def _normalized_pixels(path: Path):
     from PIL import Image, ImageOps
 
     with open_pillow_image(path) as opened:
-        image = ImageOps.exif_transpose(opened).convert("RGB")
-        image = image.resize((256, 256), Image.Resampling.LANCZOS)
-        return np.asarray(image, dtype=np.float64) / 255.0
+        # Transpose in place and keep already-RGB pixels; the previous path
+        # copied the full bitmap twice even when no orientation was present.
+        ImageOps.exif_transpose(opened, in_place=True)
+        image = opened if opened.mode == "RGB" else opened.convert("RGB")
+        try:
+            with image.resize((256, 256), Image.Resampling.LANCZOS) as resized:
+                return np.asarray(resized, dtype=np.float64) / 255.0
+        finally:
+            if image is not opened:
+                image.close()
 
 
-def structural_similarity(left_path: Path, right_path: Path) -> float:
+def structural_similarity(left_path: Path, right_path: Path, *, shared: bool = False,
+                          cache=None, left_id=None, right_id=None,
+                          left_sha=None, right_sha=None) -> float:
     """Return a deterministic global RGB SSIM score in [-1, 1].
 
     Candidate blocking already enforces a close aspect ratio and pHash.  The
@@ -211,8 +220,16 @@ def structural_similarity(left_path: Path, right_path: Path) -> float:
     """
     import numpy as np
 
-    left = _normalized_pixels(left_path)
-    right = _normalized_pixels(right_path)
+    if shared:
+        from app.services.visual_image import SampleCache
+        samples = cache if cache is not None else SampleCache()
+        left = np.frombuffer(samples.get(left_path, asset_id=left_id, sha256=left_sha)[0],
+                             dtype=np.uint8).reshape(256, 256, 3).astype(np.float64) / 255.0
+        right = np.frombuffer(samples.get(right_path, asset_id=right_id, sha256=right_sha)[0],
+                              dtype=np.uint8).reshape(256, 256, 3).astype(np.float64) / 255.0
+    else:
+        left = _normalized_pixels(left_path)
+        right = _normalized_pixels(right_path)
     c1 = 0.01**2
     c2 = 0.03**2
     scores: list[float] = []
@@ -274,6 +291,8 @@ class AssetReconciliation:
         self.db = db
         self.scope = CrossSourceDedupScope(db)
         self._policy_value: DedupPolicy | None = None
+        from app.services.visual_image import SampleCache
+        self._samples = SampleCache()
 
     async def policy(self) -> DedupPolicy:
         if self._policy_value is None:
@@ -317,17 +336,20 @@ class AssetReconciliation:
             "storage_actions": 0,
             "bytes_reclaimable": 0,
         }
-        for asset_id in asset_ids:
-            results = await self.evaluate_asset(asset_id, auto_apply=auto_apply)
-            totals["assets_scanned"] += 1
-            totals["candidates_evaluated"] += len(results)
-            totals["cases_created"] += sum(1 for item in results if item.case_created)
-            totals["assets_grouped"] += sum(1 for item in results if item.auto_merged)
-            totals["storage_actions"] += sum(item.storage_actions for item in results)
-            totals["bytes_reclaimable"] += sum(
-                item.bytes_reclaimable for item in results
-            )
-        return totals
+        try:
+            for asset_id in asset_ids:
+                results = await self.evaluate_asset(asset_id, auto_apply=auto_apply)
+                totals["assets_scanned"] += 1
+                totals["candidates_evaluated"] += len(results)
+                totals["cases_created"] += sum(1 for item in results if item.case_created)
+                totals["assets_grouped"] += sum(1 for item in results if item.auto_merged)
+                totals["storage_actions"] += sum(item.storage_actions for item in results)
+                totals["bytes_reclaimable"] += sum(
+                    item.bytes_reclaimable for item in results
+                )
+            return totals
+        finally:
+            self._samples.clear()
 
     async def evaluate_asset(
         self,
@@ -718,7 +740,15 @@ class AssetReconciliation:
             left.phash_version,
             right.phash_version,
         )
+        from app.services.visual_image import PHASH_VERSION, display_dimensions
+        shared = left.phash_version == right.phash_version == PHASH_VERSION
         ratio_delta = aspect_ratio_delta(left, right)
+        if not sha_equal and shared and distance is not None and distance <= policy.phash_threshold:
+            left_path, right_path = _safe_download_path(left.file_path), _safe_download_path(right.file_path)
+            if left_path.exists() and right_path.exists():
+                left_dims = await asyncio.to_thread(display_dimensions, left_path)
+                right_dims = await asyncio.to_thread(display_dimensions, right_path)
+                ratio_delta = abs(left_dims[0] / left_dims[1] - right_dims[0] / right_dims[1])
         hard_compatible = (
             distance is not None
             and distance <= policy.phash_threshold
@@ -732,7 +762,10 @@ class AssetReconciliation:
             if left_path.exists() and right_path.exists():
                 try:
                     ssim = await asyncio.to_thread(
-                        structural_similarity, left_path, right_path
+                        structural_similarity, left_path, right_path,
+                        **({"shared": True, "cache": self._samples,
+                            "left_id": left.id, "right_id": right.id,
+                            "left_sha": left.sha256, "right_sha": right.sha256} if shared else {})
                     )
                 except Exception:
                     ssim = None
@@ -1307,6 +1340,7 @@ class AssetReconciliation:
             "id": str(asset.id),
             "sha256": asset.sha256,
             "phash": asset.phash,
+            "phash_version": asset.phash_version,
             "file_size": asset.file_size,
             "width": asset.width,
             "height": asset.height,

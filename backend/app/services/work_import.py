@@ -6,8 +6,39 @@ import hashlib
 from pathlib import Path
 
 from app.config import settings
-from app.services.image_utils import open_pillow_image
+from app.services.image_utils import configure_pyvips, open_pillow_image
 from app.services.library_sync import resolve_creator_directory, write_metadata_json
+
+
+# Below this size Pillow's straightforward path has a small working set.
+PNG_PHASH_STREAM_MIN_PIXELS = 16_000_000
+
+
+def _png_phash_sample(path: Path, image):
+    """Return a direct 32x32 grayscale sample without a full RGB bitmap."""
+    if image.mode not in ("RGB", "RGBA") or getattr(image, "n_frames", 1) != 1:
+        return None
+    with path.open("rb") as handle:
+        header = handle.read(29)
+    # Limit this path to non-interlaced 8-bit PNG. Other layouts retain the
+    # original Pillow decoder, including its existing malformed-file behavior.
+    if len(header) != 29 or header[24] != 8 or header[28] != 0:
+        return None
+
+    import pyvips
+    from PIL import Image
+
+    configure_pyvips(pyvips)
+    rgb = pyvips.Image.new_from_file(str(path), access="sequential", fail_on="error")
+    # Pillow's RGB/RGBA -> L uses these fixed-point coefficients and ignores
+    # alpha. Every intermediate integer is < 2**24, exactly representable in
+    # libvips float arithmetic. Do not substitute colourspace()/floating luma.
+    gray = ((rgb[0] * 19595 + rgb[1] * 38470 + rgb[2] * 7471 + 32768) / 65536).floor().cast("uchar")
+    buffer = gray.write_to_memory()
+    # L is a Pillow mapped mode: this borrows the buffer instead of making a
+    # second full-size grayscale copy. Resize while the buffer is still alive.
+    with Image.frombuffer("L", image.size, buffer, "raw", "L", 0, 1) as mapped:
+        return mapped.resize((32, 32), Image.Resampling.LANCZOS)
 
 
 class WorkImportService:
@@ -20,15 +51,32 @@ class WorkImportService:
         return digest.hexdigest()
 
     @staticmethod
-    def phash(path: Path) -> str | None:
-        import imagehash
+    def phash(path: Path, *, working=None, oriented=False) -> str | None:
+        from app.services.perceptual_hash import grayscale_sample, phash_from_sample
 
+        if working is not None:
+            return working.phash()
+        sample = None
         with open_pillow_image(path) as image:
-            # An AVIF sequence cannot be represented by a static first-frame
-            # hash. Exact file deduplication still uses its SHA-256.
+            # AVIF sequences retain exact-file deduplication, not a first-frame hash.
             if image.format == "AVIF" and image.n_frames > 1:
                 return None
-            return str(imagehash.phash(image))
+            if image.format == "PNG" and image.width * image.height >= PNG_PHASH_STREAM_MIN_PIXELS:
+                sample = _png_phash_sample(path, image)
+                if sample is not None and oriented:
+                    from PIL import ImageOps
+                    from app.services.visual_image import image_orientation
+                    sample.getexif()[274] = image_orientation(image, path) or 1
+                    ImageOps.exif_transpose(sample, in_place=True)
+            if sample is None:
+                if oriented:
+                    from PIL import ImageOps
+                    ImageOps.exif_transpose(image, in_place=True)
+                sample = grayscale_sample(image)
+        # The full decoded bitmap is released before loading the numeric library.
+        with sample:
+            pixels = sample.tobytes()
+        return phash_from_sample(pixels)
 
     @staticmethod
     def library_directory(source: str, raw_metadata: dict, source_work_id: str) -> tuple[str, Path]:

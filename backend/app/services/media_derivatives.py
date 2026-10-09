@@ -34,11 +34,12 @@ from app.services.media_assets import browser_video_mime_type, render_video_deri
 from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.thumbnail import inspect_and_generate_thumbnail
 from app.services.work_import import WorkImportService
+from app.services.visual_image import PHASH_VERSION, prepare_small_visual_work, prepare_visual_work, save_sample
 
 logger = logging.getLogger(__name__)
 
-MEDIA_ALGORITHM_VERSION = "media-v1"
-PHASH_ALGORITHM_VERSION = "imagehash-phash-v1"
+MEDIA_ALGORITHM_VERSION = "media-visual-v3"
+PHASH_ALGORITHM_VERSION = PHASH_VERSION
 _LEASE_SECONDS = 30 * 60
 _REQUEST_SQL_BATCH_SIZE = 500
 MEDIA_DERIVATIVE_STALL_SECONDS = 5 * 60
@@ -338,6 +339,7 @@ async def _load_asset_descriptor(asset_id: UUID) -> dict[str, Any] | None:
             "duration": asset.duration,
             "sha256": asset.sha256,
             "phash": asset.phash,
+            "phash_version": asset.phash_version,
             "thumb_sm_path": asset.thumb_sm_path,
             "thumb_lg_path": asset.thumb_lg_path,
             "derivative_version": asset.derivative_version,
@@ -423,6 +425,9 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         raise RuntimeError("asset mtime changed after derivative intent was recorded")
 
     requested = request["requested"]
+    if (requested.get("phash") and can_compute_phash(source.suffix)
+            and request["algorithm_version"] != MEDIA_ALGORITHM_VERSION):
+        raise RuntimeError("Perceptual fingerprint intent needs an algorithm upgrade")
     library_dir = Path(descriptor["library_dir"])
     library_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {
@@ -435,6 +440,31 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         and descriptor.get("derivative_source_size") == stat.st_size
         and descriptor.get("derivative_source_mtime_ns") == stat.st_mtime_ns
     )
+    suffix = source.suffix.lower()
+    needs_phash = requested.get("phash") and can_compute_phash(suffix) and (
+        not fingerprint_matches or not descriptor.get("phash")
+        or descriptor.get("phash_version") != PHASH_ALGORITHM_VERSION
+    )
+    work = prepare_visual_work(source) if needs_phash else None
+    if work is None and needs_phash and (
+        (requested.get("thumbnail") and (
+            not fingerprint_matches or not _derivative_file_ready(descriptor.get("thumb_sm_path"))
+        ))
+        or (requested.get("dimensions") and (
+            not fingerprint_matches or not descriptor.get("width") or not descriptor.get("height")
+        ))
+    ):
+        work = prepare_small_visual_work(source)
+    try:
+        return _derive_outputs(source, descriptor, request, result, fingerprint_matches, work, needs_phash)
+    finally:
+        if work is not None:
+            work.pixels.close()
+
+
+def _derive_outputs(source, descriptor, request, result, fingerprint_matches, work, needs_phash):
+    requested = request["requested"]
+    library_dir = Path(descriptor["library_dir"])
     suffix = source.suffix.lower()
     image_derivative_missing = (
         requested.get("thumbnail")
@@ -454,7 +484,7 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         not fingerprint_matches or image_derivative_missing
     ) and (requested.get("thumbnail") or requested.get("dimensions")):
         thumb, width, height = inspect_and_generate_thumbnail(
-            str(source), library_dir, f"{source.stem}.thumbnail"
+            str(source), library_dir, f"{source.stem}.thumbnail", **({"working": work} if work is not None else {})
         )
         if width is not None:
             result["width"] = width
@@ -502,17 +532,23 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
     ):
         result["sha256"] = WorkImportService.sha256(source)
     phash_applicable = True
-    if (
-        requested.get("phash")
-        and (not fingerprint_matches or not descriptor.get("phash"))
-        and can_compute_phash(suffix)
-    ):
-        # Preserve the deployed imagehash algorithm exactly; only its scheduling
-        # changes. ``phash_version`` prevents future algorithms from cross-
-        # comparing incompatible values.
-        result["phash"] = WorkImportService.phash(source)
+    if needs_phash:
+        result["phash"] = WorkImportService.phash(source, working=work, oriented=True)
         phash_applicable = not (suffix == ".avif" and result["phash"] is None)
         result["phash_version"] = PHASH_ALGORITHM_VERSION if phash_applicable else None
+        sha = result.get("sha256") or descriptor.get("sha256")
+        if work is not None and work.cache_sample and descriptor.get("asset_id") and sha:
+            # Expendable analysis cache. Failure does not invalidate fingerprints;
+            # the independent dedup task regenerates a missing sample.
+            try:
+                save_sample(source, UUID(str(descriptor["asset_id"])), sha, work)
+            except OSError:
+                logger.warning("Unable to cache visual sample for %s", source, exc_info=True)
+    current = source.stat()
+    if (current.st_size, current.st_mtime_ns) != (
+        result["derivative_source_size"], result["derivative_source_mtime_ns"]
+    ):
+        raise RuntimeError("Image changed during media derivation")
     _validate_requested_result(descriptor, request, result, phash_applicable=phash_applicable)
     return result
 

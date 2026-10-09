@@ -59,6 +59,7 @@ from app.services.redis_client import get_redis
 from app.services.stage_metrics import measure_stage
 from app.services.tasks import TaskService
 from app.services.work_import import WorkImportService
+from app.services.visual_image import PHASH_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -315,6 +316,8 @@ async def _run_quarantine(event: dict) -> None:
         structural_similarity,
         candidate_path,
         representative_path,
+        **({"shared": True} if asset.phash_version == representative.phash_version
+           == PHASH_VERSION else {}),
     )
     if ssim < ssim_limit:
         raise ValueError("SSIM no longer passes the visual gate")

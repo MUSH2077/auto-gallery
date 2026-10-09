@@ -1,10 +1,33 @@
 """Shared image-type detection and metadata helpers used by import flows."""
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PIL import Image
+
+# libvips reads its concurrency environment during initialization.  Set this
+# before the lazy ``import pyvips`` below so a single large image cannot fan out
+# across all NAS cores and multiply its working set.
+os.environ.setdefault("VIPS_CONCURRENCY", "1")
+try:
+    VIPS_CACHE_MAX_MEMORY = min(
+        64,
+        max(
+            1,
+            int(os.environ.get("VIPS_CACHE_MAX_MEM_MB", "64")),
+        ),
+    ) * 1024 * 1024
+except ValueError:
+    VIPS_CACHE_MAX_MEMORY = 64 * 1024 * 1024
+
+
+def configure_pyvips(pyvips) -> None:
+    """Apply the process-wide libvips cache ceiling idempotently."""
+
+    pyvips.cache_set_max_mem(VIPS_CACHE_MAX_MEMORY)
+
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 

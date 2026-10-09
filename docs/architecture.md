@@ -338,7 +338,9 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 
 A completed disk-import administrator task means scanning and child publication have finished; its publication count is not a work count. Actual results require checking all child imports and their download parents. Global and source-scoped replays share the same classification: unchanged existing works are successful idempotent results, so zero new works does not mean total failure. Counts distinguish new or updated works, unchanged existing works and work groups skipped due to processing errors. Terminal progress counts all three as processed groups. A below-threshold skip rate completes with a skip notice; all-failed runs and rates at or above the configured threshold still fail. Both classified terminal outcomes retain statistics and total groups, while artifact errors remain available. Bounded parent results retain the child statuses and aggregate counts.
 
-Platform downloads and disk imports share image extensions, including AVIF artifacts classified as `image` with asset MIME `image/avif`. Originals are retained and previews use WebP. Static AVIF uses the existing SHA-256 and `imagehash-phash-v1` fingerprints. AVIF sequences preview the first frame and use whole-file SHA-256 for exact deduplication, without a first-frame pHash. Thumbnails prefer libvips, with a Pillow first-frame fallback when libvips cannot open AVIF. Application Pillow AVIF decoding uses one thread and preserves media admission and atomic thumbnail writes. Disk import can register previously omitted files; existing works use the append-asset/idempotent update path.
+Platform downloads and disk imports share image extensions, including AVIF artifacts classified as `image` with asset MIME `image/avif`. Originals are retained and previews use WebP. Static AVIF uses SHA-256 and versioned pHash fingerprints. AVIF sequences preview the first frame and use whole-file SHA-256 for exact deduplication, without a first-frame pHash. Thumbnails prefer libvips, with a Pillow first-frame fallback when libvips cannot open AVIF. Application Pillow AVIF decoding uses one thread and preserves media admission and atomic thumbnail writes. Disk import can register previously omitted files; existing works use the append-asset/idempotent update path.
+
+Visual fingerprints use a pure-NumPy real-FFT implementation of the DCT-II on a 32×32 Pillow LANCZOS grayscale sample. There is no SciPy compatibility fallback, and bit-for-bit equality with earlier pHash values is not promised; the version boundary is explicit so production records can be recomputed. Extremely elongated, single-frame, non-interlaced 8-bit RGB/RGBA PNGs that cannot use the proportional work image retain sequential grayscale sampling to bound memory. Other PNG layouts and image formats retain their original path, including Pillow decompression-bomb checks. Without a shared work image, thumbnails wider than 400 pixels use the libvips file entry point so JPEG decoding can shrink on load; dimensions, orientation, alpha and atomic writes retain their existing policy. SSIM applies EXIF orientation in place and reuses already-RGB pixels while preserving the 256×256 resize, score formula and decision thresholds.
 
 ### Background Outbox Recovery
 
@@ -781,3 +783,58 @@ Endpoints:
 - `GET /poster/{asset_id}` — large derived WebP video poster, requires a signed URL
 - `GET /stream/{asset_id}` — original MP4/WebM with HTTP Range support, requires an asset-scoped playback ticket
 - `GET /original/{asset_id}` — original file from DOWNLOAD_ROOT (for download)
+
+
+### Shared visual working pixels
+
+Media derivation keeps the shared working-image path for eligible static images
+of at least 16 million pixels requiring a new pHash. It materializes an image
+with an edge no larger than 1024 pixels, applies EXIF orientation to the reduced
+pixels, and reuses them for pHash, a 256×256 RGB analysis sample, and a missing
+card thumbnail when sufficient pixels are available. The process-wide libvips
+cache ceiling remains 64 MiB. Existing first-card thumbnails are reused and
+elongated images retain the existing thumbnail policy. Images over a 4:1 aspect ratio and unsupported static-image layouts keep direct sampling.
+
+Only when the same media task is missing a card or dimensions, a single-frame
+RGB/RGBA PNG without PNG color-key transparency whose original width is over 400 pixels and whose area is at most
+2 million pixels may share its full-size Pillow image within that task. JPEGs,
+images with an existing first card, and other layouts keep their existing paths.
+This small-image working image does not eagerly create an SSIM sample. A
+`WorkingImage` that is already RGB is sampled without another RGB copy; direct
+source sampling releases the decoded image before loading the numeric library.
+Analysis samples for other images remain on-demand SSIM work using the existing
+direct resize.
+
+The fingerprint version is `numpy-phash-oriented-adaptive-v3` and the media
+version is `media-visual-v3`. Reuse requires matching fingerprint and source
+versions; earlier pHash values must be recomputed and different pHash versions
+are never compared. Visual candidates use oriented display aspect ratios;
+stored source dimensions, exact SHA256 deduplication and representative
+selection remain unchanged.
+
+Analysis samples remain lossless RGB bytes in 1024 fixed slots under
+`library/.visual-samples`, totaling approximately 193 MiB. Headers bind version,
+asset ID, source size/mtime, existing SHA256 and display dimensions. Collisions,
+missing files and stale headers are cache misses; replacement is atomic.
+The 1024 working image is never persisted. Each reconciliation keeps at most
+16 MiB of sample bytes; float arrays are temporary. SSIM keeps its existing
+256×256 sample, formula, thresholds and cache behavior. Asset deletion cleans up
+its owned slot. Quarantine still verifies original SHA256 and regenerates
+fresh samples from originals; the cache cannot replace this check.
+
+For an existing library, stop scheduler and pipeline workers during upgrade,
+then run a temporary import-worker container with the new code and its media budget:
+
+```sh
+docker compose run --rm --no-deps worker-import python -m app.services.visual_fingerprint_rebuild --enqueue --process
+```
+
+It batches intents through the media outbox and processes one admitted asset
+at a time; rerunning resumes an interrupted upgrade. With no flags it reports
+status only. Resume consumers once `remaining_available` and `pending_fingerprints` are both zero and processing has no failures, then request
+a global dedup scan through the existing administration entry point.
+Unavailable purged/quarantined historical members retain old fingerprints and
+groups and are counted separately as `unavailable_historical`; available
+representatives are upgraded. Existing evidence is preserved; new evidence
+uses `numpy-phash-oriented-adaptive-v3` and `media-visual-v3`. The upgrade does
+not rebuild or delete existing groups.

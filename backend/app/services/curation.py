@@ -1958,6 +1958,10 @@ class CurationService:
             (Path(settings.library_root), asset.thumb_md_path),
             (Path(settings.library_root), asset.thumb_lg_path),
         ]
+        from app.services.visual_image import owned_sample_relative
+        sample = owned_sample_relative(asset.id)
+        if sample:
+            roots.append((Path(settings.library_root), sample))
         if storage_state and storage_state.quarantine_path:
             roots.append(
                 (Path(settings.download_root), storage_state.quarantine_path)

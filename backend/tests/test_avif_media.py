@@ -112,6 +112,6 @@ def test_missing_jpeg_phash_still_fails_requested_result_validation(tmp_path, mo
     jpeg = path.with_suffix(".jpg")
     with Image.open(path) as image:
         image.save(jpeg)
-    monkeypatch.setattr(WorkImportService, "phash", lambda _path: None)
+    monkeypatch.setattr(WorkImportService, "phash", lambda _path, **_kwargs: None)
     with pytest.raises(RuntimeError, match="requested perceptual hash was not produced"):
         _derive(jpeg, library)
