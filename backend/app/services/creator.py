@@ -35,24 +35,18 @@ class CreatorService:
         self,
         creator_id: UUID,
     ) -> tuple[set[UUID], set[UUID], set[UUID]]:
-        """Return work/subscription/repository projections owned by a creator.
+        """Return work/subscription/repository projections owned by a creator."""
 
-        The work projection embeds both creator fields and repository IDs.  A
-        creator mutation therefore cannot safely update only the creator
-        document.  These are set-based reads and the resulting outbox writes
-        are chunked by ``request_search_projection``.
-        """
-
-        subscription_ids = set((await self.db.execute(
-            select(Subscription.id).where(Subscription.creator_id == creator_id)
-        )).scalars().all())
-        repository_ids = set((await self.db.execute(
-            select(SubscriptionSource.id)
-            .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
+        # Keep subscriptions without repositories in the dependency scope.
+        references = (await self.db.execute(
+            select(Subscription.id, SubscriptionSource.id)
+            .outerjoin(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
             .where(Subscription.creator_id == creator_id)
-        )).scalars().all())
+        )).all()
+        subscription_ids = {subscription_id for subscription_id, _ in references}
+        repository_ids = {repository_id for _, repository_id in references if repository_id is not None}
 
-        work_ids = set((await self.db.execute(
+        identity_works = (
             select(WorkSource.work_id)
             .join(
                 SourceCreator,
@@ -62,12 +56,10 @@ class CreatorService:
                 ),
             )
             .where(SourceCreator.creator_id == creator_id)
-            .distinct()
-        )).scalars().all())
-
-        # A repository can be associated with a work by identity or by an
-        # exact normalized URL even when no SourceCreator row exists.
-        repository_work_ids = (await self.db.execute(
+        )
+        # A repository can own a work by identity or normalized URL without a
+        # SourceCreator row. UNION preserves both paths and removes overlap.
+        repository_works = (
             select(WorkSource.work_id)
             .select_from(WorkSource)
             .join(
@@ -88,9 +80,8 @@ class CreatorService:
             )
             .join(Subscription, Subscription.id == SubscriptionSource.subscription_id)
             .where(Subscription.creator_id == creator_id)
-            .distinct()
-        )).scalars().all()
-        work_ids.update(repository_work_ids)
+        )
+        work_ids = set((await self.db.execute(identity_works.union(repository_works))).scalars())
         return work_ids, subscription_ids, repository_ids
 
     async def _request_creator_projection(

@@ -304,6 +304,8 @@ persisted for background processing; import completion does not synchronously
 generate every thumbnail. Files remain in DOWNLOAD_ROOT, while metadata and
 derivatives live in LIBRARY_ROOT. JSON cleanup follows successful import.
 
+Creator refresh collects subscriptions and repositories with one LEFT JOIN and combines identity and normalized-URL work dependencies with UNION; subscriptions without repositories remain in scope. Membership fanout combines subscription, creator and repository conditions, using UUID array parameters and 500-row keyset pages so overlapping members discovered through those scopes are enqueued once per action. Independent requests still advance outbox versions, deletes retain precedence, and dependencies captured before creator deletion still refresh surviving works and delete reference documents.
+
 Bulk import writes media, import-curation and search outbox rows in the same
 transaction as the imported records. It registers one wake intent per outbox
 kind; only the outer transaction's successful commit publishes those wakes.

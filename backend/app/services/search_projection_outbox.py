@@ -14,8 +14,8 @@ import logging
 from typing import Iterable
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, event, func, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import and_, any_, bindparam, delete, event, func, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -231,18 +231,28 @@ async def request_membership_projection_where(db: AsyncSession, *conditions, del
 async def _fanout_memberships(db, *, subscription_ids, creator_ids, repository_ids, deleting=False):
     from app.models import Subscription, SubscriptionSource, UserSubscription
 
-    count = 0
+    conditions = []
     for kind, values in (("subscription", subscription_ids), ("creator", creator_ids), ("repository", repository_ids)):
-        for start in range(0, len(values), OUTBOX_SQL_BATCH_SIZE):
-            ids = [UUID(str(value)) for value in values[start:start + OUTBOX_SQL_BATCH_SIZE]]
-            if kind == "subscription":
-                condition = UserSubscription.subscription_id.in_(ids)
-            elif kind == "creator":
-                condition = UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id.in_(ids)))
-            else:
-                condition = UserSubscription.subscription_id.in_(select(SubscriptionSource.subscription_id).where(SubscriptionSource.id.in_(ids)))
-            count += await request_membership_projection_where(db, condition, deleting=deleting)
-    return count
+        ids = tuple(dict.fromkeys(UUID(str(value)) for value in values))
+        if not ids:
+            continue
+        # One typed array per scope avoids expanding large inputs into bind
+        # parameters. The result and outbox writes still use keyset batches.
+        parameter = bindparam(None, list(ids), type_=ARRAY(PG_UUID(as_uuid=True)))
+        if kind == "subscription":
+            condition = UserSubscription.subscription_id == any_(parameter)
+        elif kind == "creator":
+            condition = UserSubscription.subscription_id.in_(
+                select(Subscription.id).where(Subscription.creator_id == any_(parameter))
+            )
+        else:
+            condition = UserSubscription.subscription_id.in_(
+                select(SubscriptionSource.subscription_id).where(SubscriptionSource.id == any_(parameter))
+            )
+        conditions.append(condition)
+    if not conditions:
+        return 0
+    return await request_membership_projection_where(db, or_(*conditions), deleting=deleting)
 
 
 async def request_search_projection(
