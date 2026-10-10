@@ -64,11 +64,38 @@ bash scripts/local-perf.sh benchmark --scope media --native-container CONTAINER 
 
 现有stage为 `thumbnail_and_dimensions`、`sha256`、`phash`、`ssim`、`native_derive_sync`、`native_derive_existing_thumbnail`。每个stage独立进程，`--media-iterations 2` 分别记录首次和重复调用。未显式选择ID时只抽每格式最小／最大像素样本，不能覆盖中等尺寸。
 
-时间模式没有PSS采样线程；`--resource-interval 0` 同时关闭外层Docker／磁盘采集，仅支持media scope。内存模式每100毫秒读取PSS，另记录内核进程RSS高水位、入口导入前后及调用前后。短调用可能漏峰；未采到不等于新增内存为零，采样CPU不能当作纯算法CPU。
+时间模式没有PSS采样线程；`--resource-interval 0` 同时关闭外层Docker／磁盘采集，支持media和tail scope。内存模式每100毫秒读取PSS，另记录内核进程RSS高水位、入口导入前后及调用前后。短调用可能漏峰；未采到不等于新增内存为零，采样CPU不能当作纯算法CPU。
 
 `native_derive_existing_thumbnail` 在另一个进程准备首卡，避免准备工作抬高被测进程的RSS高水位。正式函数计时不包括业务模块入口导入，也不包括解释器启动；原生阶段默认文件缓存已热，不能宣称冷磁盘性能。
 
 `--media-sequence --asset-ids ID_A ID_B` 在同一解释器连续处理不同素材，用于观察缓存与对象生命周期，不代表生产RQ已改为多图任务。汇总按各资产metrics统计，不能再加一次序列顶层metrics。pHash阶段包含解码／采样，不等于数值变换；完整派生包含SHA、指纹和适用的样本生成，嵌套耗时不相加。
+
+## 索引与去重收尾
+
+`tail` 使用已准备的隔离容器，不启动网页、平台下载或媒体格式矩阵。准备容器须挂载当前 `app`、`scripts/perf` 到 `/perf-tools`、持久实验目录到 `/tail`，并共享下载、library 和配置卷；数据库必须为 `autogallery_tail_perf`，索引前缀必须为 `tail_`，脚本拒绝在其他数据库或索引空间内修改数据。使用当前迁移，并运行实际 operations worker 和 scheduler；保留资源治理 `enforce`。Meili 的容器内存配额与索引内部预算须同时配置，隔离栈示例使用 512MiB 容器上限、192MiB 索引预算和 1 个索引线程。一个 operations worker 足够，本工具不调整生产并发。
+
+`/tail/real-small.png` 放置已选定的非对称真实图片，首次准备生成 12 个普通图片资产及当前指纹、预热索引设置；后续复用同一份 `/tail/fixtures.json`。预期素材为两组完全重复、两组 JPEG 变体和四张无关图片，准备后须确认它们符合这一分组；高度对称或无细节的输入不适合作为该素材。`prepare` 要求空隔离数据库，正式计时不包含指纹、迁移与索引设置准备。
+
+```bash
+# 仅在新建的专用测试容器执行一次。
+docker exec -i -e PYTHONPATH=/app CONTAINER python /perf-tools/tail_control.py <<<'{"action":"prepare"}'
+
+# PROJECT 指向该隔离 Compose 项目，/absolute/tail 对应容器内 /tail。
+AUTO_GALLERY_PERF_PROJECT=PROJECT AUTO_GALLERY_PERF_ROOT=/absolute/tail \
+  bash scripts/local-perf.sh benchmark --scope tail --native-container CONTAINER \
+  --fixtures /absolute/tail/fixtures.json --tail-kind mixed \
+  --resource-interval 0 --repeats 3 --timeout-seconds 90
+```
+
+扩大负载时，可以复用已有真实输入：在 /tail/inputs 中准备文件，/tail/cohort.json 中用 assets 数组指定每个资产的 template 与 source，用 expected_pairs 数组指定已知配对的 indexes（两个资产的下标）及 storage_state（hardlinked 或 quarantined），再向 prepare 传入 {"action":"prepare","cohort":"cohort.json"}。准备后的 fixtures.json 保存对应资产 ID 和预期配对；计时与验收均按清单数量执行，搜索读取上限随作品数变化。默认 prepare 仍创建原来的 12 资产素材，旧清单仍可使用。准备、输入筛选和指纹计算只执行一次，不计入性能窗口。
+
+首次运行先单独完成一个 search 准备批次，把数据库索引状态和后继任务也初始化完毕；仅预热 Meili 设置不足以得到稳定基线。控制器在每次复位前等待索引 outbox、receipt 和 operations 普通／定时任务收尾，这段准备不计入本批次。`tail_control.py` 的 `settle` action 可单独用于切换候选源码之前等待完成。测 ORM 启动准备时须在实际 RQ 父进程观察，不能把 supervisor 的准备当作 workhorse 可继承状态；同时记录父进程启动时间和驻留内存。
+
+`--tail-kind search|dedup|mixed` 选择正式 outbox 发布与真实 RQ／Meili 执行。每次复位只在上述专用数据库中进行；素材和原图恢复不计入测量。观察器每秒读取本素材的索引状态与即时去重任务，文档接口读取全部本轮标题，结束时再核对真实搜索查询中的全部标题。`visible_s` 表示全批索引文档可读，不能解释为点击搜索的响应时间；`acknowledged_s` 表示本地确认，`dedup_s` 表示即时去重完成，三者都是单调时钟下的观察完成时间，含发布、排队、准入和执行，受约一秒观察间隔影响；SQL 完成时间、RQ 与远端任务时间戳单独保留用于诊断，不和观察时间混作精确函数耗时。
+
+每次复位会先删除既有路径再复制输入，拆开上一轮的硬链接，保证各窗口从独立原图开始；硬链接验收同时要求实际回收字节数与素材一致。
+
+成功还要求保留全部作品／资产／来源、清单中的已知配对及对应代表，真实硬链接和隔离文件成立，无关图片不变。未来才到期的 retention purge 不纳入即时收尾，已经到期的清理仍须完成。正式时间对照关闭详细埋点和资源采集；单独验收窗口可以用 `--resource-interval 2` 观察内存与数据预算，该窗口不加入无采样的性能配对。
 
 ## 可替换模块
 
@@ -86,7 +113,8 @@ bash scripts/local-perf.sh benchmark --scope upload --no-profile \
 | local-perf-data.py | 通过实际上传建立有限合成样本 |
 | perf/runner.cjs | 认证、预热、有限任务、请求和清理 |
 | perf/bridge.cjs | 项目Playwright、backend控制进程与原生probe |
-| perf/control.py | 现有fixture、导入／下载状态及身份盘点 |
+| perf/control.py | 现有fixture、导入／下载状态及身份盘点，隔离收尾入口 |
+| perf/tail_control.py | 固定素材准备、正式收尾计时、搜索和存储效果核对 |
 | perf/probe.py | 图片／Provider原生测量 |
 | perf/analyze.py | 将客户端、执行、队列和内存结果分别汇总 |
 | perf/budget_check.py | 以9／10字节边界验证gallery-dl写入限制 |

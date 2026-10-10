@@ -6,6 +6,7 @@ const readline = require('node:readline');
 function control(context, payload) {
   if (!context.controlProcess) {
     const child = spawn('docker', ['exec', '-i', '-e', 'AUTO_GALLERY_PERF_TRACE=',
+      ...(context.config.native_only ? ['-e', 'PYTHONPATH=/app'] : []),
       context.config.backend_container, 'python', '/perf-tools/control.py']);
     const pending = [];
     let stderr = '';

@@ -1,4 +1,4 @@
-"""Read-only fixture and per-job inspection inside the existing backend image."""
+"""Fixture/job inspection plus explicitly isolated tail performance control."""
 import asyncio
 import json
 from pathlib import Path
@@ -17,6 +17,9 @@ def stamp(obj, field):
 
 
 async def main(request):
+    if request["action"] == "tail":
+        from tail_control import main as tail
+        return await tail(request["payload"])
     async with async_session() as db:
         if request["action"] == "preview":
             import subprocess

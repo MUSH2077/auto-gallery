@@ -260,6 +260,9 @@ def summarize(output):
         "max_runtime_storage_bytes": max((x["storage_bytes"] or 0 for x in samples), default=0),
         "memory_definition": "Container anon and file are separate. Working set includes active_file and is not process RSS/PSS. Per-container maxima are not simultaneous.",
     }
+    if run.get("scope") == "tail":
+        summary["tail_measurements"] = [operation["measurements"] for case in run["cases"]
+                                        for operation in case["requests"] if operation.get("measurements")]
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     lines = ["# 模块性能测试结果", "", f"范围：{summary['scope']}；完成：{summary['completed']}；结果目录：`{output}`。", "",
              "各模块独立测量；frontend 为真实前端代理，backend 为直接调用相同后端端点。",
@@ -271,6 +274,17 @@ def summarize(output):
         p95s = [c["p95_ms"] for c in cases if c["p95_ms"] is not None]
         latency = f"{statistics.median(p95s):.1f} ms | {min(p95s):.1f}–{max(p95s):.1f} ms" if p95s else "无成功样本 | 无成功样本"
         lines.append(f"| {route} | {via} | {n} | {len(cases)} | {statistics.median(c['qps'] for c in cases):.1f} | {latency} | {sum(c['errors'] for c in cases)}/{sum(len(c['requests']) for c in cases)} |")
+    if run.get("scope") == "tail":
+        tails = summary["tail_measurements"]
+        lines += ["", "## 索引与去重收尾", "",
+                  "| 批次 | 全批索引文档可读 | 本地确认 | 即时去重完成 |", "|---|---:|---:|---:|"]
+        for measurement in tails:
+            marks = measurement["marks"]
+            durations = [f"{marks[key]:.3f} s" if key in marks else "—"
+                         for key in ("visible_s", "acknowledged_s", "dedup_s")]
+            lines.append("| " + measurement["label"] + " | " + " | ".join(durations) + " |")
+        lines += ["", "以上为每秒观察的单调时钟完成上界，含发布、执行与等待；文档可读通过搜索服务文档接口确认，表示全批更新已可读取，不是点击搜索的响应时间。真实搜索查询及分组、代表和存储效果在完成时另行核对。",
+                  "未来才到期的隔离清理不计入即时收尾。远端、RQ 和 SQL 时间戳保留在 tail_measurements，不能把批次 QPS 当作查询吞吐。"]
     lines += ["", "## 内存记录", "", "| 容器 | 匿名内存峰值 | 文件缓存峰值 | 容器工作集峰值 |", "|---|---:|---:|---:|"]
     for name in sorted({c["name"] for x in samples for c in x["containers"]}):
         selected = [c for x in samples for c in x["containers"] if c["name"] == name]
@@ -309,16 +323,17 @@ def summarize(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scope", choices=["queries", "media", "import", "upload", "download", "all"], default="queries")
-    parser.add_argument("--native-container", help="prepared media-only container; skips HTTP login and Compose profiling")
-    parser.add_argument("--fixtures", type=Path, help="explicit media fixture JSON for a prepared native container")
+    parser.add_argument("--scope", choices=["queries", "media", "tail", "import", "upload", "download", "all"], default="queries")
+    parser.add_argument("--native-container", help="prepared media/tail container; skips HTTP login and Compose profiling")
+    parser.add_argument("--fixtures", type=Path, help="explicit fixture JSON for a prepared native container")
     parser.add_argument("--asset-ids", nargs="+", help="restrict media measurements to these fixture IDs")
+    parser.add_argument("--tail-kind", choices=["search", "dedup", "mixed"], default="mixed")
     parser.add_argument("--media-stages", nargs="+", choices=["thumbnail_and_dimensions", "sha256", "phash", "ssim", "native_derive_sync", "native_derive_existing_thumbnail"],
                         default=["thumbnail_and_dimensions", "sha256", "phash", "native_derive_sync"])
     parser.add_argument("--media-measurement", choices=["timing", "memory"], default="timing")
     parser.add_argument("--media-sequence", action="store_true", help="process selected media assets successively in one interpreter")
     parser.add_argument("--media-sample-ms", type=int, default=100)
-    parser.add_argument("--resource-interval", type=float, default=2, help="seconds; 0 disables concurrent collection for media timing")
+    parser.add_argument("--resource-interval", type=float, default=2, help="seconds; 0 disables concurrent collection for media/tail timing")
     parser.add_argument("--media-iterations", type=int, default=2, help="first and repeated calls in each isolated stage process")
     parser.add_argument("--seconds", type=float, default=10, help="seconds per case (default: 10)")
     parser.add_argument("--repeats", type=int, default=3)
@@ -346,12 +361,12 @@ def main():
             parser.error(f"Module file does not exist: {module}")
     if args.media_sample_ms < 20 or args.resource_interval < 0:
         parser.error("media-sample-ms >= 20 and resource-interval >= 0")
-    if args.resource_interval == 0 and args.scope != "media":
-        parser.error("resource-interval 0 is only supported for isolated media measurements")
+    if args.resource_interval == 0 and args.scope not in ("media", "tail"):
+        parser.error("resource-interval 0 is only supported for isolated media/tail measurements")
     if args.media_iterations < 1:
         parser.error("media-iterations >= 1")
-    if args.native_container and (args.scope != "media" or not args.fixtures or args.modules):
-        parser.error("native-container requires --scope media and --fixtures without replacement modules")
+    if args.native_container and (args.scope not in ("media", "tail") or not args.fixtures or args.modules):
+        parser.error("native-container requires --scope media/tail and --fixtures without replacement modules")
     PERF.mkdir(parents=True, exist_ok=True)
     if not args.native_container and not (PERF / "login.json").exists():
         raise RuntimeError("Missing data/local-perf/login.json; configure the local test administrator first")
