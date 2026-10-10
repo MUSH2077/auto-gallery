@@ -333,7 +333,7 @@ def main():
     parser.add_argument("--media-measurement", choices=["timing", "memory"], default="timing")
     parser.add_argument("--media-sequence", action="store_true", help="process selected media assets successively in one interpreter")
     parser.add_argument("--media-sample-ms", type=int, default=100)
-    parser.add_argument("--resource-interval", type=float, default=2, help="seconds; 0 disables concurrent collection for media/tail timing")
+    parser.add_argument("--resource-interval", type=float, default=2, help="seconds; 0 disables concurrent collection for media/tail/upload timing")
     parser.add_argument("--media-iterations", type=int, default=2, help="first and repeated calls in each isolated stage process")
     parser.add_argument("--seconds", type=float, default=10, help="seconds per case (default: 10)")
     parser.add_argument("--repeats", type=int, default=3)
@@ -361,8 +361,8 @@ def main():
             parser.error(f"Module file does not exist: {module}")
     if args.media_sample_ms < 20 or args.resource_interval < 0:
         parser.error("media-sample-ms >= 20 and resource-interval >= 0")
-    if args.resource_interval == 0 and args.scope not in ("media", "tail"):
-        parser.error("resource-interval 0 is only supported for isolated media/tail measurements")
+    if args.resource_interval == 0 and args.scope not in ("media", "tail", "upload"):
+        parser.error("resource-interval 0 is only supported for media/tail/upload measurements")
     if args.media_iterations < 1:
         parser.error("media-iterations >= 1")
     if args.native_container and (args.scope not in ("media", "tail") or not args.fixtures or args.modules):
@@ -376,13 +376,22 @@ def main():
     for c in containers:
         details = docker_get(f"/containers/{c['Id']}/json")
         for mount in details["Mounts"]:
-            source = Path(mount["Source"])
+            source_text = mount["Source"]
+            # Docker Desktop reports WSL bind sources as UNC paths.
+            for host in ("wsl$", "wsl.localhost"):
+                prefix = "//" + host + "/" + os.environ.get("WSL_DISTRO_NAME", "") + "/"
+                normalized = source_text.replace(chr(92), "/")
+                if normalized.startswith(prefix):
+                    source_text = "/" + normalized[len(prefix):]
+                    break
+            source = Path(source_text)
             key = mount.get("Name") or str(source)
             if key in seen_mounts:
                 continue
-            if mount["Type"] == "volume" or source.parent == PERF:
+            local_bind = source != PERF and source.is_relative_to(PERF)
+            if mount["Type"] == "volume" or local_bind:
                 seen_mounts.add(key)
-                excluded = source.name if source.parent == PERF else "__engine_volume__"
+                excluded = str(source) if local_bind else "__engine_volume__"
                 STORAGE_MOUNTS.append((c["Names"][0].lstrip("/"), mount["Destination"], excluded))
     if args.native_container:
         details = docker_get(f"/containers/{args.native_container}/json")

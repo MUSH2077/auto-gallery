@@ -46,6 +46,23 @@ bash scripts/local-perf.sh benchmark --scope all
 
 `--profile` 启用临时Compose埋点，只用于定位。非查询scope默认会启用，正式性能对照使用 `--no-profile`。详细埋点包含SQL计数、函数及资源阶段，具有性能开销；不能将这类结果当作无扰动吞吐。主控恢复临时挂载，异常结果保留在对应运行目录。
 
+## 上传刷新登记
+
+正式对照可用 `upload-register`：通过普通浏览器会话 API 上传，计时截止到响应；所有请求结束后才启动一个批次观察器，检查本轮导入、媒体派生和全部标题的实际搜索结果。它不启动浏览器或调整 worker 数量。每次 invocation 只使用一个并发值和一次重复；配对驱动负责恢复同样的初始数据规模，并等待后台任务结束后再切换实现。
+
+```bash
+bash scripts/local-perf.sh benchmark --scope upload --no-profile \
+  --modules "$PWD/scripts/perf/modules/upload-register.cjs" \
+  --fixtures /absolute/upload-fixtures.json --tasks 16 --concurrency 8 --repeats 1 \
+  --resource-interval 0
+```
+
+fixture 使用 `upload_inputs`（每项含 `id`、`local_path`、`bytes`）和 `upload_batches`（每批为输入 ID 数组）。素材须为 JPEG／PNG；复用已准备的本地输入，避免计时阶段导出文件。完整测试栈须挂载 `/perf-tools`，控制进程的 `PYTHONPATH` 须包含 `/app`。响应失败、维护拒绝和真实搜索缺失都会保留为失败，不从成功分位数中混入失败耗时。资源验收单独用 `--resource-interval 2`，不纳入无采样配对。
+
+`instrumentation/upload_projection.py` 是独立的轻量诊断入口。临时 API 启动器在启动 uvicorn 前调用 `install("/perf-results/upload-projection.jsonl")`；正式计时不调用。每次保存只写一条汇总，包含依赖读取、membership 展开、outbox 写入、保存／提交和配额 UPDATE 返回至提交的间隔，不记录 SQL 参数或逐函数内存。阶段路径表示嵌套关系，父子耗时不能相加；SQL 时间包含驱动往返与等待，并不等于 PostgreSQL 执行 CPU 时间。
+
+Docker Desktop 的 WSL UNC 挂载会映射回本发行版路径，测试目录内的受保护数据库及嵌套数据目录由容器内 `du` 统计，避免漏算或重复计入。关闭连续采样仍保留开始前的存储统计；上传完成后保留其容量估算，后续请求继续累计预算，避免起始占用不变时超出测试空间。相关定向检查：`node --test scripts/perf/tests/runner-storage.test.cjs`。
+
 ## 媒体时间与内存分开测
 
 ```bash
@@ -64,7 +81,7 @@ bash scripts/local-perf.sh benchmark --scope media --native-container CONTAINER 
 
 现有stage为 `thumbnail_and_dimensions`、`sha256`、`phash`、`ssim`、`native_derive_sync`、`native_derive_existing_thumbnail`。每个stage独立进程，`--media-iterations 2` 分别记录首次和重复调用。未显式选择ID时只抽每格式最小／最大像素样本，不能覆盖中等尺寸。
 
-时间模式没有PSS采样线程；`--resource-interval 0` 同时关闭外层Docker／磁盘采集，支持media和tail scope。内存模式每100毫秒读取PSS，另记录内核进程RSS高水位、入口导入前后及调用前后。短调用可能漏峰；未采到不等于新增内存为零，采样CPU不能当作纯算法CPU。
+时间模式没有PSS采样线程；`--resource-interval 0` 同时关闭外层Docker／磁盘采集，支持media、tail和upload scope。内存模式每100毫秒读取PSS，另记录内核进程RSS高水位、入口导入前后及调用前后。短调用可能漏峰；未采到不等于新增内存为零，采样CPU不能当作纯算法CPU。
 
 `native_derive_existing_thumbnail` 在另一个进程准备首卡，避免准备工作抬高被测进程的RSS高水位。正式函数计时不包括业务模块入口导入，也不包括解释器启动；原生阶段默认文件缓存已热，不能宣称冷磁盘性能。
 

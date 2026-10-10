@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {performance} = require('node:perf_hooks');
 let sequence = 0, currentCase = 'setup';
-let reservedBytes = 0;
+let reservedBytes = 0, completedUploadBytes = 0;
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const retainUploadBudget = config.scope === 'upload' && config.resource_interval === 0;
 const report = {scope: config.scope, started_at: new Date().toISOString(), cases: [], limits: config.limits, fixtures: {}};
 let cookie = '', csrf = '';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -51,9 +52,14 @@ const context = {
       guard();
       const latest = path.join(config.output, 'resource-latest.json');
       const storage = fs.existsSync(latest) ? JSON.parse(fs.readFileSync(latest)).storage_bytes : config.initial_runtime_bytes;
-      if ((storage ?? config.initial_runtime_bytes) + reservedBytes + bytes <= config.storage_stop_bytes) {
+      if ((storage ?? config.initial_runtime_bytes) + completedUploadBytes + reservedBytes + bytes <= config.storage_stop_bytes) {
         reservedBytes += bytes;
-        return () => { reservedBytes -= bytes; };
+        return () => {
+          reservedBytes -= bytes;
+          // Without fresh samples, completed uploads still occupy storage.
+          // Keep their estimate until this invocation finishes.
+          if (retainUploadBudget) completedUploadBytes += bytes;
+        };
       }
       if (!reservedBytes) throw Error('Insufficient runtime storage budget for the next finite operation');
       await sleep(500);
