@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,14 +37,12 @@ from app.models import (
     Work,
     WorkSource,
 )
-from app.services.curation import CurationService
 from app.services.asset_dedup_scope import (
     CrossSourceDedupScope,
     canonical_source,
     scope_error_message,
 )
 from app.services.image_utils import open_pillow_image
-from app.services.media_signing import signed_media_url
 from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.settings import extractor_key_for_source
 
@@ -517,6 +516,8 @@ class AssetReconciliation:
         reason: str | None,
         idempotency_key: str,
     ) -> dict[str, Any]:
+        from app.services.curation import CurationService
+
         if action not in {"merge", "separate", "defer"}:
             raise ValueError("Unsupported dedup action")
         request_payload = {
@@ -788,7 +789,20 @@ class AssetReconciliation:
         else:
             visual_score = 0.0
 
-        metadata = await self._metadata_evidence(left.id, right.id)
+        # Rejected visual candidates never produce evidence/cases. Avoid
+        # source queries whose score cannot change that rejection.
+        if hard_gate_passed:
+            metadata = await self._metadata_evidence(left.id, right.id)
+        else:
+            metadata = {
+                "same_canonical_creator": False,
+                "min_posted_delta_hours": None,
+                "score": 0.0,
+                "creator_bonus": 0.0,
+                "time_bonus": 0.0,
+                "left_sources": [],
+                "right_sources": [],
+            }
         metadata_score = (
             float(metadata["score"])
             if hard_gate_passed and not sha_equal
@@ -830,8 +844,9 @@ class AssetReconciliation:
         }
 
     async def _metadata_evidence(self, left_id: UUID, right_id: UUID) -> dict[str, Any]:
-        left = await self._source_contexts(left_id)
-        right = await self._source_contexts(right_id)
+        contexts = await self._source_contexts((left_id, right_id))
+        left = contexts[left_id]
+        right = contexts[right_id]
         left_creators = {item["creator_id"] for item in left if item["creator_id"]}
         right_creators = {item["creator_id"] for item in right if item["creator_id"]}
         same_creator = bool(left_creators & right_creators)
@@ -864,9 +879,11 @@ class AssetReconciliation:
             "right_sources": sorted({item["source"] for item in right}),
         }
 
-    async def _source_contexts(self, asset_id: UUID) -> list[dict[str, Any]]:
+    async def _source_contexts(self, asset_ids: Iterable[UUID]) -> dict[UUID, list[dict[str, Any]]]:
+        asset_ids = tuple(dict.fromkeys(asset_ids))
         rows = await self.db.execute(
             select(
+                AssetSource.asset_id,
                 WorkSource.source,
                 WorkSource.posted_at,
                 SourceCreator.creator_id,
@@ -881,16 +898,16 @@ class AssetReconciliation:
                     == WorkSource.source_creator_id
                 ),
             )
-            .where(AssetSource.asset_id == asset_id)
+            .where(AssetSource.asset_id.in_(asset_ids))
         )
-        return [
-            {
+        contexts = {asset_id: [] for asset_id in asset_ids}
+        for row in rows:
+            contexts[row.asset_id].append({
                 "source": canonical_source(row.source),
                 "posted_at": row.posted_at,
                 "creator_id": str(row.creator_id) if row.creator_id else None,
-            }
-            for row in rows
-        ]
+            })
+        return contexts
 
     async def _persist_evidence(
         self,
@@ -1270,6 +1287,8 @@ class AssetReconciliation:
         return group.id, representative.id, actions, bytes_reclaimable
 
     async def _asset_payload(self, asset_id: UUID) -> dict[str, Any]:
+        from app.services.media_signing import signed_media_url
+
         asset = await self.db.get(Asset, asset_id)
         row = (
             await self.db.execute(

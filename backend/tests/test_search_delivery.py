@@ -1000,7 +1000,7 @@ async def test_submission_cooldown_never_delays_remote_poll(delivery, monkeypatc
     await enqueue_delete()
     async with httpx.AsyncClient(transport=httpx.MockTransport(Remote())) as client:
         outcome = await delivery.run_delivery_slice(client=client)
-    assert outcome["successor_delay_seconds"] == 2
+    assert outcome["successor_delay_seconds"] == 1
 
 
 @pytest.mark.asyncio
@@ -1039,3 +1039,27 @@ def test_poll_coordinator_can_be_dequeued_under_pressure(monkeypatch):
         raise AssertionError("remote poll must be dequeued so it can release accounting")
     worker._wait_until_pressure_allows_dequeue = forbidden
     assert worker._dequeue_heavy_job(None, None, 1) == (job, queue)
+
+
+@pytest.mark.asyncio
+async def test_short_pending_confirmation_retains_bounded_backoff(delivery):
+    await enqueue_delete()
+    remote = Remote()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        submitted = await delivery.run_delivery_slice(client=client)
+        assert submitted["successor_delay_seconds"] == 1
+        for expected in (2, 4, 8, 15, 15):
+            await ready_receipt()
+            pending = await delivery.run_delivery_slice(client=client)
+            assert pending["status"] == "pending"
+            assert pending["successor_delay_seconds"] == expected
+        assert len(remote.writes) == 1
+        assert remote.polls == 5
+        assert delivery.remote_flight.read_marker()["task_uid"] == 41
+        await ready_receipt()
+        remote.status = "succeeded"
+        assert (await delivery.run_delivery_slice(client=client))["status"] == "ok"
+    async with async_session() as db:
+        row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+        assert row.completed_at is not None
+        assert row.attempts == 0

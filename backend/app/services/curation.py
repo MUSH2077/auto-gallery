@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from time import monotonic
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -34,7 +35,10 @@ from app.models import (
     Tag,
     User,
 )
-from app.schemas.curation import CurationChangeRead, CurationCommitRead
+
+if TYPE_CHECKING:
+    from app.schemas.curation import CurationCommitRead
+
 from app.services.search_projection_outbox import request_search_projection
 
 
@@ -2263,6 +2267,8 @@ class CurationService:
         return {"items": [await self.commit_payload(c.id) for c in commits], "total": total_rows.scalar() or 0}
 
     async def commit_payload(self, commit_id: UUID) -> CurationCommitRead:
+        from app.schemas.curation import CurationChangeRead, CurationCommitRead
+
         commit = await self.db.get(CurationCommit, commit_id)
         if not commit:
             raise HTTPException(status_code=404, detail="Commit not found")

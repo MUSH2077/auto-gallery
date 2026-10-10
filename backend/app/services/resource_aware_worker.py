@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import redis
 from rq import Worker
+from rq.defaults import DEFAULT_LOGGING_DATE_FORMAT, DEFAULT_LOGGING_FORMAT
 from rq.exceptions import StopRequested
 from rq.worker import WorkerStatus
 
@@ -121,6 +122,47 @@ class ResourceAwareWorker(Worker):
             # migration/code is present; RQ metadata remains the fallback.
             register_resource_state_callback(None)
         super().__init__(*args, **kwargs)
+
+    def bootstrap(self, *args, **kwargs):
+        # Model registration and relationship configuration are process-local.
+        # Do this once in the real RQ parent, before workhorse forks. This does
+        # not establish or share a database connection with those children.
+        import app.models  # noqa: F401
+        from sqlalchemy.orm import configure_mappers
+
+        configure_mappers()
+        return super().bootstrap(*args, **kwargs)
+
+    def _start_scheduler(
+        self,
+        burst: bool = False,
+        logging_level: str | None = "INFO",
+        date_format: str = DEFAULT_LOGGING_DATE_FORMAT,
+        log_format: str = DEFAULT_LOGGING_FORMAT,
+    ):
+        from app.services.resource_aware_scheduler import ResourceAwareScheduler
+
+        # RQ has no scheduler-class factory here. Preserve its startup/lock
+        # lifecycle, using the notification-aware scheduler for promotion.
+        self.scheduler = ResourceAwareScheduler(
+            self.queues,
+            connection=self.connection,
+            logging_level=logging_level if logging_level is not None else self.log.level,
+            date_format=date_format,
+            log_format=log_format,
+            serializer=self.serializer,
+        )
+        self.scheduler.acquire_locks()
+        if self.scheduler.acquired_locks:
+            if burst:
+                try:
+                    self.scheduler.register_birth()
+                    self.scheduler.enqueue_scheduled_jobs()
+                finally:
+                    self.scheduler.release_locks()
+                    self.scheduler.register_death()
+            else:
+                self.scheduler.start()
 
     def _publish_pressure_state(self, snapshot: dict) -> dict[str, object]:
         """Publish a low-write worker view and close worker-local cgroup gaps.

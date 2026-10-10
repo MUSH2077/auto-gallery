@@ -342,6 +342,16 @@ Platform downloads and disk imports share image extensions, including AVIF artif
 
 Visual fingerprints use a pure-NumPy real-FFT implementation of the DCT-II on a 32×32 Pillow LANCZOS grayscale sample. There is no SciPy compatibility fallback, and bit-for-bit equality with earlier pHash values is not promised; the version boundary is explicit so production records can be recomputed. Extremely elongated, single-frame, non-interlaced 8-bit RGB/RGBA PNGs that cannot use the proportional work image retain sequential grayscale sampling to bound memory. Other PNG layouts and image formats retain their original path, including Pillow decompression-bomb checks. Without a shared work image, thumbnails wider than 400 pixels use the libvips file entry point so JPEG decoding can shrink on load; dimensions, orientation, alpha and atomic writes retain their existing policy. SSIM applies EXIF orientation in place and reuses already-RGB pixels while preserving the 256×256 resize, score formula and decision thresholds.
 
+### Search and Asset Deduplication Completion
+
+After delivery receives a remote taskUid, its first confirmation waits one second. Unfinished tasks back off through 2, 4, 8 and 15 seconds, capped at 15 seconds thereafter. Receipt eligibility and the successor job use the same delay; polling network errors still wait 15 seconds. Pending tasks retain their existing remote identity during confirmation. Durable receipts, version-matched acknowledgement, remote resource markers and ambiguous-write recovery preserve concurrency and failure correctness. Remote indexing completion, local acknowledgement and the next submission are separate milestones.
+
+Asset candidates must pass the SHA/visual gate before loading creator and publication metadata; visually rejected candidates skip those scoring queries. Accepted pairs load both assets in one source-relationship query, partition rows by asset ID, and retain the existing scoring. Candidate source filtering and the locked scope recheck remain independent. Representative selection, work/source relationships and original-file checks before hardlinking or quarantine retain their existing rules. A future quarantine-retention purge is separate from the current batch's immediate completion.
+
+The dedup outbox loads dependencies on the paths that use them: scan administration in scan entry points, curation while applying a group, and case media links and commit response schemas in their presentation paths. RQ function identities, curation audit and response structures retain their existing definitions. After models register, the actual RQ parent configures ORM mappings before its first workhorse fork. Children establish independent database connections; startup preparation and resident-memory costs are measured separately.
+
+Resource-aware workers use `ResourceAwareScheduler` for due-task promotion. It delegates promotion and locking to RQ, then sends a best-effort hint through the existing queue work channel for each due queue. Worker timeout checks remain the recovery path when a hint is lost, and queue records remain authoritative. Remote-task confirmation/backoff, resource admission and completion recovery retain their existing rules.
+
 ### Background Outbox Recovery
 
 An empty queue and a resource-denied task are different outcomes. Media and

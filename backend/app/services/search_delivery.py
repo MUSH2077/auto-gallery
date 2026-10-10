@@ -302,8 +302,8 @@ async def _advance(receipt, token, client, deadline):
             await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=_exception_diagnostic(exc))
             return result("ambiguous")
         await durable(remote_flight.record_task, str(receipt.id), uid)
-        await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=2), lease_until=None)
-        return result("pending", delay=2, claimed=len(receipt.versions))
+        await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=1), lease_until=None)
+        return result("pending", delay=1, claimed=len(receipt.versions))
     try:
         task = await request(client, "GET", f"/tasks/{receipt.task_uid}", deadline)
     except Exception as exc:
@@ -321,7 +321,7 @@ async def _advance(receipt, token, client, deadline):
         if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
             return await _finalize(receipt, token, deadline)
         return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
-    delay = min(15, 2 * 2 ** min(receipt.poll_count + 1, 3))
+    delay = min(15, 2 ** min(receipt.poll_count + 1, 4))
     await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=delay), lease_until=None, poll_count=receipt.poll_count + 1)
     return result("pending", delay=delay, claimed=len(receipt.versions))
 
@@ -341,7 +341,7 @@ async def _run_locked(limit, client, deadline):
         receipt, token = await _claim(deadline)
         if receipt:
             if token is None:
-                return result("pending", delay=max(2, (receipt.available_at - now()).total_seconds()))
+                return result("pending", delay=max(1, (receipt.available_at - now()).total_seconds()))
             if receipt.state == "prepared":
                 marker = await durable(remote_flight.read_marker)
                 if marker:
