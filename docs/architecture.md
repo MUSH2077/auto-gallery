@@ -346,7 +346,27 @@ Visual fingerprints use a pure-NumPy real-FFT implementation of the DCT-II on a 
 
 ### Search and Asset Deduplication Completion
 
-After delivery receives a remote taskUid, its first confirmation waits one second. Unfinished tasks back off through 2, 4, 8 and 15 seconds, capped at 15 seconds thereafter. Receipt eligibility and the successor job use the same delay; polling network errors still wait 15 seconds. Pending tasks retain their existing remote identity during confirmation. Durable receipts, version-matched acknowledgement, remote resource markers and ambiguous-write recovery preserve concurrency and failure correctness. Remote indexing completion, local acknowledgement and the next submission are separate milestones.
+After delivery receives a remote taskUid, it persists the task identity in the
+remote resource marker and commits a pending SQL receipt before confirmation.
+It then gives the task at most 250 ms to finish, with 50 ms between status
+reads, reserving the existing three seconds for SQL acknowledgement and durable
+marker cleanup. HTTP confirmation holds no SQL transaction. A completed settings
+task advances to the document phase without acknowledging the source mutation
+or submitting another write under the same admission.
+
+If this short window ends, its status read fails, or the completion reserve
+leaves no confirmation budget, the known task remains pending and the first
+successor is scheduled after one second. Subsequent unfinished-task polls back
+off through 2, 4, 8 and 15 seconds; network errors in that ordinary polling path
+still wait 15 seconds. Durable receipts, version-matched acknowledgement,
+remote resource markers and ambiguous-write recovery retain their existing
+rules. Remote completion, local acknowledgement and the next submission remain
+separate milestones.
+
+Delayed confirmation releases the local worker and limits polling for slow
+remote tasks. The short window trades a bounded local wait and extra status
+reads for lower latency when the remote task finishes quickly. This is a
+performance optimization of that scheduling policy.
 
 Asset candidates must pass the SHA/visual gate before loading creator and publication metadata; visually rejected candidates skip those scoring queries. Accepted pairs load both assets in one source-relationship query, partition rows by asset ID, and retain the existing scoring. Candidate source filtering and the locked scope recheck remain independent. Representative selection, work/source relationships and original-file checks before hardlinking or quarantine retain their existing rules. A future quarantine-retention purge is separate from the current batch's immediate completion.
 

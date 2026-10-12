@@ -1,4 +1,4 @@
-"""Prepare, submit, poll once, and version-CAS acknowledge a remote write.
+"""Prepare, submit, briefly confirm, and version-CAS acknowledge a remote write.
 
 No HTTP request holds a SQL transaction. Unknown submission outcomes remain
 fenced: Meili lacks idempotency keys, so blindly replaying can reorder writes.
@@ -27,6 +27,8 @@ _SHORT_HTTP_TIMEOUT_SECONDS = 5.0
 _WRITE_COMPLETION_RESERVE_SECONDS = 3.0
 _MIN_PREPARED_WRITE_SECONDS = 8.0
 _PREPARED_BUDGET_RETRY_SECONDS = 30
+_POST_SUBMIT_CONFIRM_SECONDS = 0.25
+_POST_SUBMIT_POLL_INTERVAL_SECONDS = 0.05
 
 
 class _WriteBudgetUnavailable(TimeoutError):
@@ -230,6 +232,41 @@ async def _finalize(receipt, token, deadline, *, error=None):
     return result("error" if error else "ok", claimed=len(receipt.versions), processed=0 if error else len(receipt.versions), action=receipt.action)
 
 
+async def _confirm_new_task(client, task_uid, deadline):
+    # The task UID is already durable. Give fast remote writes a short chance
+    # to finish, while reserving the existing SQL/fence completion budget.
+    confirm_until = min(time.monotonic() + _POST_SUBMIT_CONFIRM_SECONDS,
+                        deadline - _WRITE_COMPLETION_RESERVE_SECONDS)
+    if confirm_until <= time.monotonic():
+        return None
+    try:
+        async with asyncio.timeout_at(confirm_until):
+            while True:
+                task = await request(client, "GET", f"/tasks/{task_uid}", confirm_until)
+                if task["status"] in ("succeeded", "failed", "canceled"):
+                    return task
+                await asyncio.sleep(_POST_SUBMIT_POLL_INTERVAL_SECONDS)
+    except Exception:
+        # A read failure cannot turn a known write into an ambiguous write.
+        # The durable pending receipt will use the ordinary polling path.
+        return None
+
+
+async def _terminal_result(receipt, token, task, deadline):
+    if task["status"] == "succeeded":
+        if receipt.phase == "settings":
+            await _save(receipt, token, deadline, state="prepared", phase="documents", task_uid=None,
+                        available_at=now(), lease_until=None, poll_count=0)
+            await durable(remote_flight.clear_marker, str(receipt.id))
+            return result("pending", delay=2)
+        return await _finalize(receipt, token, deadline)
+    if task["status"] in ("failed", "canceled"):
+        if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
+            return await _finalize(receipt, token, deadline)
+        return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
+    return None
+
+
 async def _advance(receipt, token, client, deadline):
     if receipt.state in ("submitting", "ambiguous"):
         marker = await durable(remote_flight.read_marker)
@@ -303,6 +340,10 @@ async def _advance(receipt, token, client, deadline):
             return result("ambiguous")
         await durable(remote_flight.record_task, str(receipt.id), uid)
         await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=1), lease_until=None)
+        receipt.task_uid = uid
+        task = await _confirm_new_task(client, uid, deadline)
+        if task is not None:
+            return await _terminal_result(receipt, token, task, deadline)
         return result("pending", delay=1, claimed=len(receipt.versions))
     try:
         task = await request(client, "GET", f"/tasks/{receipt.task_uid}", deadline)
@@ -310,17 +351,9 @@ async def _advance(receipt, token, client, deadline):
         await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=15), lease_until=None,
                     last_error=_exception_diagnostic(exc))
         return result("pending", delay=15)
-    if task["status"] == "succeeded":
-        if receipt.phase == "settings":
-            await _save(receipt, token, deadline, state="prepared", phase="documents", task_uid=None,
-                        available_at=now(), lease_until=None, poll_count=0)
-            await durable(remote_flight.clear_marker, str(receipt.id))
-            return result("pending", delay=2)
-        return await _finalize(receipt, token, deadline)
-    if task["status"] in ("failed", "canceled"):
-        if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
-            return await _finalize(receipt, token, deadline)
-        return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
+    terminal = await _terminal_result(receipt, token, task, deadline)
+    if terminal is not None:
+        return terminal
     delay = min(15, 2 ** min(receipt.poll_count + 1, 4))
     await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=delay), lease_until=None, poll_count=receipt.poll_count + 1)
     return result("pending", delay=delay, claimed=len(receipt.versions))

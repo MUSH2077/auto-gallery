@@ -78,6 +78,7 @@ async def test_pending_remote_swap_excludes_ingest_and_network_until_terminal(de
         build.phase = "swap"
         await db.commit()
     remote = Meili()
+    remote.pending = True
     remote.indexes[f"{TAGS_INDEX}__staging_{build_id.hex[:12]}"] = {}
     locks = [heavy_io.local_lock_for_workload(workload) for workload in ("import_db", "download_network", "image_derive", "maintenance")]
     async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
@@ -93,7 +94,6 @@ async def test_pending_remote_swap_excludes_ingest_and_network_until_terminal(de
                 lease = heavy_io.RenewableRedisLease([key], workload=workload, owner="blocked", redis_client=redis,
                     reservation_key=key, reservation_bytes=1, reservation_capacity_bytes=10**10)
                 assert not await lease.try_acquire()
-            remote.pending = True
             await ready_receipt()
             assert (await delivery.run_delivery_slice(client=client))["status"] == "pending"
             assert delivery.remote_flight.read_marker()["profile"] == "maintenance"

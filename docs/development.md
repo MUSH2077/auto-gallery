@@ -60,6 +60,25 @@ execution. Run them against disposable PostgreSQL and Redis instances.
 
 ## Backend
 
+### Search delivery confirmation
+
+After a search write, delivery persists both the remote task UID and its pending
+SQL receipt before checking completion. Delayed polling releases the local
+worker for slow tasks; bounded early confirmation trades a short local wait and
+extra status reads for earlier completion of fast tasks. A new task has a 250 ms confirmation
+window, with 50 ms between status reads and the existing three-second reserve
+for SQL acknowledgement and durable fence cleanup. Fast tasks can finish in the
+same delivery slice. Slow tasks or failed confirmation reads retain the known
+UID and use the ordinary delayed polling path; subsequent pending polls keep
+the 2/4/8/15-second backoff. HTTP reads never hold a SQL transaction.
+
+Settings completion advances to the document phase without acknowledging the
+source mutation or starting another write in the same admission. Unknown
+submission outcomes remain fenced, and acknowledgement still matches the
+submitted outbox versions. `test_search_delivery.py` and
+`test_search_delivery_recovery.py` cover fast completion, pending tasks, read
+failures, cancellation and recovery without duplicate submission.
+
 ### Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2.0 async, Alembic, PostgreSQL 16, Redis/RQ,
