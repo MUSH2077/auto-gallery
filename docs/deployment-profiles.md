@@ -59,13 +59,70 @@ to a trusted network or use the HTTPS reverse proxy.
 | Admin web | unbounded | unbounded | 64 | 100 |
 
 `migrate` exits after applying migrations. Every service uses `json-file`
-rotation (`10m`, 3 files). Download concurrency has a
-deployment ceiling of one; raising the UI setting alone cannot exceed it.
+rotation (`10m`, 3 files). Download concurrency defaults to a deployment
+ceiling of one; raising the UI setting alone cannot exceed the configured
+limits. See [download worker concurrency](#download-worker-concurrency--下载并发).
 
 Redis remains `192mb/noeviction` inside its protected 256M container because it
 stores RQ queues as well as cache data. Its container health check performs a
 short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
 writes is not considered healthy.
+
+## Download worker concurrency · 下载并发
+
+The download setting selects 1–5 consumers and takes effect after restarting
+`worker-download`. Its effective count is the minimum of the persisted setting,
+`DOWNLOAD_CONCURRENCY_CAP` (default 1), and the device download limit. Automatic
+compact/standard/performance limits remain 1/1/2. An optional
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT` from 1–5 overrides only that device download
+limit; leave it empty to retain automatic sizing. Queue and scheduler budgets
+continue using the device profile.
+
+The supervisor passes its effective count to child processes. Actual downloads
+share that bounded slot pool: each slot reserves memory atomically with the
+other resource profiles, and fixed POSIX locks retain the limit after Redis
+coordination-key loss or a configuration decrease. Parallel downloads reserve
+at least 256 MiB each; the single-slot path retains the existing profile reserve.
+Low available memory can admit fewer downloads than configured. A consumer
+count does not promise the same number of active gallery-dl processes.
+
+Jobs from the same platform retain one archive lock because they share
+`archive-{source}.sqlite3`. Archive identity lookup failures defer execution.
+Cancellation, timeout and failure must stop the gallery-dl process group before
+releasing the archive and execution slot. Downloads can coexist with media,
+imports and remote indexing when their aggregate memory budget permits;
+maintenance remains exclusive.
+
+For an upgrade from the old single-token implementation, drain and stop old
+download processes before starting the new version. Apply consistent limits and
+code to the API and all Python worker roles; recreate them after changing
+deployment limits. Changing the page setting still requires a download-worker
+restart. The health response retains configured, effective and restart-required
+values and identifies the automatic or explicit device limit.
+
+Each consumer has its own database pool. Budget download connections as
+`effective consumers × (WORKER_DB_POOL_SIZE + WORKER_DB_MAX_OVERFLOW)`, then add
+API and other worker pools. Nested handoff sessions require at least two
+connections per download consumer. Keep CPU, memory and PID limits appropriate
+for the total consumer count, and select a count using the target device's
+measured workload.
+
+页面下载并发设置选择 1～5 个消费者，重启下载 worker 后生效。实际消费者数取
+页面设置、`DOWNLOAD_CONCURRENCY_CAP`（默认 1）和设备下载上限的最小值。
+自动 compact／standard／performance 档位仍为 1／1／2；可选的
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT`（1～5）仅覆盖设备的下载上限，留空继续
+自动判断，不改变该档位的队列与调度预算。
+
+下载进程使用有上限的执行名额，与其他任务原子核对总内存预留。固定文件锁在
+Redis 协调键丢失、缩小配置时仍限制执行数；并行下载每个任务至少预留 256 MiB，
+单名额沿用原 profile 预留。内存不足可以降低实际并行数，消费者数量不等于
+gallery-dl 正在运行的数量。同平台任务共用归档，继续互斥；归档身份查询失败
+时延后执行。取消、超时和失败先停止下载进程组，再释放归档锁与执行名额。
+
+升级前先排空并停止旧下载进程，新代码和部署上限在 API 与全部 Python worker
+中保持一致，修改部署配置后重新创建这些容器；页面设置仍按重启规则生效。
+按上述公式核对总数据库连接，每个下载消费者至少提供两个连接用于嵌套交接会话，
+同时核对 CPU、内存与 PID 配额，按目标设备实测选择并发数量。
 
 ## Image worker concurrency · 图片处理并行数
 

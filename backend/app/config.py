@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 DEFAULT_ADMIN_PASSWORD = "change-me-admin"
@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # desired concurrency; this cap prevents a stale/high UI setting from
     # recreating a download storm on any device class.
     download_concurrency_cap: int = 1
+    # Optional per-device download override. Empty means use the automatic
+    # capability profile; this setting does not change other profile budgets.
+    download_device_concurrency_limit: int | None = Field(default=None, ge=1, le=5)
+    # Internal value inherited by a running download child from its supervisor.
+    download_execution_concurrency: int = Field(default=1, ge=1, le=5)
     download_queue_max_pending: int = 100
     download_dispatch_recovery_interval_seconds: float = 60.0
     download_dispatch_recovery_grace_seconds: float = 180.0
@@ -156,6 +161,13 @@ class Settings(BaseSettings):
     memory_log_interval_seconds: int = 60
 
     model_config = {"env_prefix": "", "case_sensitive": False}
+
+    @field_validator("download_device_concurrency_limit", mode="before")
+    @classmethod
+    def _empty_download_device_limit_is_none(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

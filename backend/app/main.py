@@ -19,6 +19,7 @@ from app.config import settings
 from app.database import async_session, engine
 from app.openapi_contract import build_openapi_schema, stable_operation_id
 from app.services.danbooru import DanbooruUnavailableError
+from app.services.download_concurrency import resolve_download_concurrency
 from app.services.queue_admission import QueueAdmissionError
 
 # Configure stdlib logging from settings.
@@ -777,23 +778,28 @@ async def _resource_pressure_health() -> dict:
         budget["write_bytes_per_second"] = 0
     elif pressure.get("status") == "normal" and pressure_reasons:
         pressure["status"] = "warning"
-    configured = 3
+    configured_value = None
     try:
         from app.services.settings import get_download_defaults
 
         async with async_session() as session:
             defaults = await get_download_defaults(session)
-        configured = max(1, min(5, int(defaults.get("download_concurrency", 3))))
+        configured_value = defaults.get("download_concurrency")
     except Exception:
         logger.debug("Download concurrency health fallback used", exc_info=True)
     from app.services.device_profile import current_device_profile
 
     device_profile = current_device_profile()
-    cap = min(
-        max(1, min(5, int(settings.download_concurrency_cap))),
-        device_profile.download_concurrency_limit,
+    decision = resolve_download_concurrency(
+        configured_value,
+        None,
+        cap_value=settings.download_concurrency_cap,
+        automatic_device_limit=device_profile.download_concurrency_limit,
+        explicit_device_limit=settings.download_device_concurrency_limit,
     )
-    desired_effective = min(configured, cap)
+    configured = decision.configured
+    cap = decision.cap
+    desired_effective = decision.effective
     running_effective = None
     for supervisor in supervisors.values():
         if supervisor.get("stale"):
@@ -816,6 +822,9 @@ async def _resource_pressure_health() -> dict:
             "configured": configured,
             "cap": cap,
             "device_profile": device_profile.name,
+            "automatic_device_limit": decision.automatic_device_limit,
+            "device_limit": decision.device_limit,
+            "device_limit_source": "explicit" if decision.explicit_device_limit is not None else "automatic",
             # A live supervisor heartbeat is the authoritative actual value.
             # Fall back to the deployment calculation during startup or while
             # upgrading from an image that predates supervisor telemetry.

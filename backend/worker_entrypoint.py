@@ -33,37 +33,26 @@ OUTBOX_FALLBACK_INTERVAL_SECONDS = 60
 OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS = 30
 
 
-def resolve_concurrency(db_value, argv_value, default=3, lo=1, hi=5):
-    """Pick DB -> CLI -> default and clamp the configured value."""
-
-    for candidate in (db_value, argv_value, default):
-        if candidate is None:
-            continue
-        try:
-            n = int(candidate)
-        except (TypeError, ValueError):
-            continue
-        return max(lo, min(hi, n))
-    return default
-
-
-def resolve_concurrency_cap(value=None, *, lo=1, hi=5) -> int:
-    candidate = value if value is not None else os.environ.get("DOWNLOAD_CONCURRENCY_CAP", "1")
-    try:
-        return max(lo, min(hi, int(candidate)))
-    except (TypeError, ValueError):
-        return 1
+from app.services.download_concurrency import (
+    resolve_concurrency,
+    resolve_concurrency_cap,
+    resolve_download_concurrency as _resolve_download_concurrency,
+)
 
 
 def resolve_download_concurrency(db_value, argv_value) -> tuple[int, int, int]:
-    configured = resolve_concurrency(db_value, argv_value, default=3)
+    """Keep the supervisor's tuple API while sharing the pure resolver."""
+
     from app.services.device_profile import current_device_profile
 
-    cap = min(
-        resolve_concurrency_cap(),
-        current_device_profile().download_concurrency_limit,
+    decision = _resolve_download_concurrency(
+        db_value,
+        argv_value,
+        cap_value=os.environ.get("DOWNLOAD_CONCURRENCY_CAP", "1"),
+        automatic_device_limit=current_device_profile().download_concurrency_limit,
+        explicit_device_limit=os.environ.get("DOWNLOAD_DEVICE_CONCURRENCY_LIMIT"),
     )
-    return configured, cap, min(configured, cap)
+    return decision.configured, decision.cap, decision.effective
 
 
 def _db_download_concurrency():
@@ -151,6 +140,16 @@ class PendingRestart:
     due_at: float
     queues: tuple[str, ...]
     with_scheduler: bool = False
+
+
+def download_worker_environment(worker_queues, effective_concurrency: int):
+    """Pass the supervisor's resolved slots to a download child only."""
+
+    if not any(str(queue).startswith("downloads") for queue in worker_queues):
+        return None
+    child_env = os.environ.copy()
+    child_env["DOWNLOAD_EXECUTION_CONCURRENCY"] = str(effective_concurrency)
+    return child_env
 
 
 def _worker_command(queues: list[str], *, with_scheduler: bool) -> list[str]:
@@ -393,7 +392,8 @@ def main():
 
     def spawn(worker_queues: tuple[str, ...], *, scheduler: bool) -> ManagedProcess:
         command = _worker_command(list(worker_queues), with_scheduler=scheduler)
-        process = subprocess.Popen(command)
+        child_env = download_worker_environment(worker_queues, concurrency)
+        process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
         managed = ManagedProcess(
             process=process,
             queues=worker_queues,

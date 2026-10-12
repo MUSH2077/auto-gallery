@@ -12,6 +12,7 @@ from worker_entrypoint import (
     RestartCircuit,
     _worker_command,
     build_worker_specs,
+    download_worker_environment,
     resolve_concurrency,
     resolve_download_concurrency,
 )
@@ -134,3 +135,41 @@ def test_supervisor_reports_actual_child_exit_and_forced_termination(monkeypatch
     assert [event for event in events if event.get("event") == "worker_started"] == [
         {"event":"worker_started", "pid":4242, "queues":["shutdown-test"]}
     ]
+
+
+def test_explicit_device_limit_overrides_only_automatic_download_limit():
+    from app.services.download_concurrency import resolve_download_concurrency as resolve
+
+    decision = resolve(4, "2", cap_value=4, automatic_device_limit=1, explicit_device_limit="4")
+
+    assert decision.configured == 4
+    assert decision.automatic_device_limit == 1
+    assert decision.explicit_device_limit == 4
+    assert decision.cap == 4
+    assert decision.effective == 4
+
+
+def test_empty_explicit_device_limit_uses_automatic_profile_limit():
+    from app.services.download_concurrency import resolve_download_concurrency as resolve
+
+    decision = resolve(4, None, cap_value=5, automatic_device_limit=2, explicit_device_limit="")
+
+    assert decision.explicit_device_limit is None
+    assert decision.cap == 2
+    assert decision.effective == 2
+
+
+def test_download_child_inherits_resolved_execution_slots(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_CONCURRENCY_CAP", "4")
+    env = download_worker_environment(["downloads", "downloads:danbooru"], 4)
+    assert env["DOWNLOAD_CONCURRENCY_CAP"] == "4"
+    assert env["DOWNLOAD_EXECUTION_CONCURRENCY"] == "4"
+    assert download_worker_environment(["imports"], 4) is None
+
+
+def test_execution_limit_is_safe_and_uses_explicit_device_override():
+    from app.services.download_concurrency import execution_limit
+
+    assert execution_limit() == 1
+    assert execution_limit(5, 5, 1, 4) == 4
+    assert execution_limit(5, 5, 2, "") == 2

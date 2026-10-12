@@ -15,6 +15,9 @@ x-application-env: &application-env
   SECRET_KEY: ${SECRET_KEY}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD}
   MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY:-1}
+  DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
+  # Empty keeps the automatic device-profile download limit.
+  DOWNLOAD_DEVICE_CONCURRENCY_LIMIT: ${DOWNLOAD_DEVICE_CONCURRENCY_LIMIT:-}
 
 x-worker-env: &worker-env
   DOWNLOAD_ROOT: /downloads

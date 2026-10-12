@@ -55,6 +55,20 @@ VIPS／OpenBLAS／OMP／MKL 内部线程，避免进程与线程同时扩容。
 
 ## 后端
 
+### 下载并发
+
+下载启动、子进程准入和健康信息共用 `services/download_concurrency.py`。
+原数据库设置仍按重启规则生效，由部署和设备上限约束；可选的
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT` 只覆盖下载。内部运行值
+`DOWNLOAD_EXECUTION_CONCURRENCY` 由 supervisor 传递，不单独设置。
+健康信息区分目标与运行中的消费者数，资源记录另行统计活动网络预留。
+
+在独立 PostgreSQL 和 Redis 中运行 `test_download_concurrency_config.py`、
+`test_worker_concurrency.py`、`test_parallel_download_slots.py` 和
+`test_download_archive_identity.py`，覆盖默认值、配置上限、归档互斥、内存准入、
+协调键丢失、缩容、取消和进程退出。现有下载生命周期与交接测试继续验证进程
+终止和可靠导入发布。部署预算见[部署配置](deployment-profiles.md#download-worker-concurrency--下载并发)。
+
 ### 搜索投递确认
 
 搜索写入取得远端任务 UID 后，先持久保存任务身份和 pending 数据库记录，再检查

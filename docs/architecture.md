@@ -817,6 +817,28 @@ Endpoints:
 - `GET /original/{asset_id}` — original file from DOWNLOAD_ROOT (for download)
 
 
+### Bounded download execution
+
+Download consumers and their execution slots share one concurrency resolver.
+The persisted 1–5 setting remains restart-applied; deployment and device limits
+cap the consumers. An explicit device download limit affects downloads only,
+while the automatic profile continues sizing other queues and publication.
+Each child inherits its supervisor's effective count, preventing a larger
+consumer pool from accidentally sharing one execution slot.
+
+Redis reserves each download's memory atomically against all resource profiles.
+A short POSIX admission mutex and fixed slot locks retain the execution limit
+when coordination keys disappear or the configured pool shrinks. The legacy
+single network token conflicts with new slots while its Redis identity exists;
+old-version processes must be stopped before the upgrade. Single-slot defaults
+retain their profile memory reserve; parallel mode reserves at least 256 MiB.
+Same-platform jobs retain shared-archive exclusivity, including local file locks.
+Failure to determine archive identity defers the job before claim or subprocess
+start. If cancellation arrives during Redis acquisition, the operation completes
+and releases its owned keys before cancellation propagates. The existing
+process-group cleanup precedes release of the source lock and slot. See
+[deployment configuration](deployment-profiles.md#download-worker-concurrency--下载并发).
+
 ### Parallel image execution
 
 `MEDIA_WORKER_CONCURRENCY` sets the image execution slot limit and the Compose

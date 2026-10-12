@@ -2508,8 +2508,9 @@ def test_pause_latch_overrides_an_older_nonpaused_snapshot(monkeypatch):
     assert snapshot["reasons"] == ["memory_available_critical"]
 
 
+@pytest.mark.parametrize("explicit_limit", [None, 3])
 @pytest.mark.asyncio
-async def test_health_resource_shape_is_additive(monkeypatch):
+async def test_health_resource_shape_is_additive(monkeypatch, explicit_limit):
     import app.main as main
     from app.services import device_profile
     from app.services import resource_pressure as pressure_module
@@ -2522,6 +2523,8 @@ async def test_health_resource_shape_is_additive(monkeypatch):
 
     async def fake_defaults(_session):
         return {"download_concurrency": 4}
+    monkeypatch.setattr(main.settings, "download_concurrency_cap", 5)
+    monkeypatch.setattr(main.settings, "download_device_concurrency_limit", explicit_limit)
 
     monkeypatch.setattr(pressure_module, "get_resource_pressure_snapshot", fake_pressure)
     monkeypatch.setattr(
@@ -2591,11 +2594,14 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     }
     assert payload["download_concurrency"] == {
         "configured": 4,
-        "cap": 1,
+        "cap": explicit_limit or 1,
         "device_profile": "standard",
+        "automatic_device_limit": 1,
+        "device_limit": explicit_limit or 1,
+        "device_limit_source": "explicit" if explicit_limit is not None else "automatic",
         "effective": 1,
-        "desired_effective": 1,
-        "restart_required": False,
+        "desired_effective": explicit_limit or 1,
+        "restart_required": explicit_limit is not None,
     }
 
 

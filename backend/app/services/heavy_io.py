@@ -1,8 +1,8 @@
 """Profile-scoped admission for bounded background slices.
 
 Ordinary profiles take a shared POSIX maintenance barrier and a bounded Redis
-reservation. One ingest slice, one background slice and one network download
-may coexist, subject to their aggregate memory reservation. Maintenance takes
+reservation. Ingest, background and bounded network downloads may coexist,
+subject to their aggregate memory reservation. Maintenance takes
 the same POSIX barrier exclusively.
 Redis leases provide cross-process visibility and an atomic RAM reservation;
 POSIX locks on the shared NAS volume remain authoritative if Redis stalls.
@@ -31,6 +31,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 logger = logging.getLogger(__name__)
 
 from app.config import MAX_MEDIA_WORKER_CONCURRENCY
+from app.services.download_concurrency import MAX_DOWNLOAD_CONCURRENCY
 
 HEAVY_IO_LOCK_KEY = "lock:heavy-io"
 RESOURCE_NETWORK_TOKEN_KEY = "lock:resource-budget:network"
@@ -40,12 +41,18 @@ MEDIA_RESERVATION_KEYS = tuple(
     f"lock:resource-budget:media:{slot}"
     for slot in range(MAX_MEDIA_WORKER_CONCURRENCY)
 )
+DOWNLOAD_RESERVATION_KEYS = tuple(
+    f"lock:resource-budget:network:{slot}"
+    for slot in range(MAX_DOWNLOAD_CONCURRENCY)
+)
+PARALLEL_DOWNLOAD_RESERVATION_BYTES = 256 * 1024 ** 2
 RESOURCE_RESERVATION_KEYS = (
     RESOURCE_NETWORK_TOKEN_KEY,
     RESOURCE_DISK_TOKEN_KEY,
     RESOURCE_BACKGROUND_TOKEN_KEY,
     "lock:resource-budget:remote-search",
     *MEDIA_RESERVATION_KEYS,
+    *DOWNLOAD_RESERVATION_KEYS,
 )
 RESOURCE_ADMISSION_MODE = "dual_disk_lanes_v2"
 DEFAULT_LEASE_SECONDS = 300
@@ -92,6 +99,27 @@ if string.find(KEYS[1], "^lock:resource%-budget:media:") then
     end
   end
   if media_active >= media_limit then
+    return 0
+  end
+end
+if KEYS[1] == "lock:resource-budget:network" then
+  for slot = 0, 4 do
+    if redis.call("exists", "lock:resource-budget:network:" .. slot) == 1 then
+      return 0
+    end
+  end
+elseif string.find(KEYS[1], "^lock:resource%-budget:network:") then
+  if redis.call("exists", "lock:resource-budget:network") == 1 then
+    return 0
+  end
+  local network_limit = tonumber(ARGV[5]) or 1
+  local network_active = 0
+  for slot = 0, 4 do
+    if redis.call("exists", "lock:resource-budget:network:" .. slot) == 1 then
+      network_active = network_active + 1
+    end
+  end
+  if network_active >= network_limit then
     return 0
   end
 end
@@ -853,7 +881,7 @@ class RenewableRedisLease:
                         self.lease_seconds,
                         *(
                             [self.reservation_limit]
-                            if self.reservation_key in MEDIA_RESERVATION_KEYS
+                            if self.reservation_key in (*MEDIA_RESERVATION_KEYS, *DOWNLOAD_RESERVATION_KEYS)
                             and self.reservation_limit is not None
                             else []
                         ),
@@ -985,6 +1013,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                 RESOURCE_DISK_TOKEN_KEY,
                 RESOURCE_BACKGROUND_TOKEN_KEY,
                 *MEDIA_RESERVATION_KEYS,
+                *DOWNLOAD_RESERVATION_KEYS,
                 "lock:resource-budget:remote-search",
                 *(profile_lease_key(profile) for profile in (
                     "import_db",
@@ -1071,7 +1100,16 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
         "active": active,
         "active_count": len(active),
         "reserved_bytes": sum(int(value.get("reserved_bytes") or 0) for value in active),
-        "network_active": any(RESOURCE_NETWORK_TOKEN_KEY in value["keys"] for value in active),
+        "network_active": any(
+            RESOURCE_NETWORK_TOKEN_KEY in value["keys"]
+            or set(value["keys"]) & set(DOWNLOAD_RESERVATION_KEYS)
+            for value in active
+        ),
+        "network_active_count": sum(
+            RESOURCE_NETWORK_TOKEN_KEY in value["keys"]
+            or bool(set(value["keys"]) & set(DOWNLOAD_RESERVATION_KEYS))
+            for value in active
+        ),
         "disk_active": any(
             RESOURCE_DISK_TOKEN_KEY in value["keys"]
             or RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"]
@@ -1248,6 +1286,158 @@ async def parallel_media_slot(
             await acquired_lease.release()
 
 
+def parallel_download_locks(slot: int, source_identity: str | None = None) -> "LocalResourceLocks":
+    """Keep a maintenance barrier, one download slot and its archive lock."""
+    if not 0 <= int(slot) < MAX_DOWNLOAD_CONCURRENCY:
+        raise ValueError("download slot is out of range")
+    root = _local_lock_path()
+    locks = [
+        LocalHeavyIOLock(shared=True),
+        LocalHeavyIOLock(root.with_name(f"network-slot-{slot}.lock")),
+    ]
+    if source_identity is not None:
+        locks.extend(local_source_lock(source_identity).locks)
+    return LocalResourceLocks(locks)
+
+
+async def _acquire_download_lease(lease: RenewableRedisLease) -> bool:
+    """Finish Redis I/O before honoring cancellation and releasing its keys."""
+    acquire = asyncio.create_task(lease.try_acquire())
+    cancelled = None
+    while not acquire.done():
+        try:
+            await asyncio.shield(acquire)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    acquired = acquire.result()
+    if cancelled is not None:
+        cleanup = asyncio.create_task(lease.release())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                pass
+        cleanup.result()
+        raise cancelled
+    return acquired
+
+
+@asynccontextmanager
+async def parallel_download_slot(
+    workload: str,
+    owner: str,
+    *,
+    source_identity: str | None = None,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    renew_seconds: int = DEFAULT_RENEW_SECONDS,
+    poll_seconds: float = DEFAULT_POLL_SECONDS,
+    redis_client=None,
+    publisher_attempt: str | None = None,
+    execution_token: str | None = None,
+):
+    """Bound download jobs while retaining shared-archive and RAM protection."""
+    from app.services.download_concurrency import execution_limit
+    from app.services.resource_pressure import workload_profile_name
+
+    if workload_profile_name(workload) != "download_network":
+        raise HeavyIOUnavailable("parallel_download_only")
+
+    async def mark(state: str, reason: str | None = None) -> None:
+        await set_resource_state(owner, state, reason, workload=workload,
+                                 publisher_attempt=publisher_attempt, execution_token=execution_token)
+
+    permitted, snapshot, profile = await resource_profile_permitted(workload)
+    if not permitted:
+        await mark("waiting", str(profile.get("reason") or "resource_pressure"))
+        raise HeavyIOUnavailable("resource_pressure")
+    client = redis_client or _get_lease_redis()
+    try:
+        maintenance_pending = await asyncio.to_thread(client.exists, HEAVY_IO_LOCK_KEY)
+    except Exception as exc:
+        await mark("waiting", "redis_lease_unavailable")
+        raise HeavyIOUnavailable("redis_lease_unavailable") from exc
+    if maintenance_pending:
+        await mark("waiting", "maintenance_pending")
+        raise HeavyIOUnavailable("maintenance_pending")
+
+    limit = execution_limit()
+    requested, capacity = resource_reservation_details(snapshot, workload)
+    if limit > 1:
+        requested = max(requested, PARALLEL_DOWNLOAD_RESERVATION_BYTES)
+    if requested > capacity:
+        await mark("waiting", "profile_memory_reserve_live")
+        raise HeavyIOUnavailable("profile_memory_reserve_live")
+
+    admission = LocalHeavyIOLock(_local_lock_path().with_name("network-admission.lock"))
+    if not admission.try_acquire():
+        await mark("waiting", "profile_busy")
+        raise HeavyIOUnavailable("profile_busy")
+    held_lease = held_locks = None
+    try:
+        # Scan retired slots too; the mutex closes races after Redis key loss.
+        occupied = 0
+        for slot in range(MAX_DOWNLOAD_CONCURRENCY):
+            probe = parallel_download_locks(slot).locks[1]
+            if probe.try_acquire():
+                probe.release()
+            else:
+                occupied += 1
+        if occupied >= limit:
+            await mark("waiting", "profile_busy")
+            raise HeavyIOUnavailable("profile_busy")
+
+        for slot, key in enumerate(DOWNLOAD_RESERVATION_KEYS):
+            keys = [key]
+            if source_identity is not None:
+                keys.append(source_lock_key(source_identity))
+            lease = RenewableRedisLease(
+                keys, workload=workload, owner=owner, redis_client=client,
+                lease_seconds=lease_seconds, renew_seconds=renew_seconds, poll_seconds=poll_seconds,
+                reservation_key=key, reservation_bytes=requested,
+                reservation_capacity_bytes=capacity, reservation_limit=limit,
+            )
+            if not await _acquire_download_lease(lease):
+                reason = lease.denial_reason or "redis_lease_busy"
+                if reason == "resource_reservation_busy":
+                    continue
+                await mark("waiting", reason)
+                raise HeavyIOUnavailable(reason)
+            locks = parallel_download_locks(slot, source_identity)
+            try:
+                if not locks.try_acquire():
+                    await lease.release()
+                    continue
+                permitted, refreshed, profile = await resource_profile_permitted(workload)
+                live_requested, live_capacity = resource_reservation_details(refreshed, workload)
+                if limit > 1:
+                    live_requested = max(live_requested, PARALLEL_DOWNLOAD_RESERVATION_BYTES)
+                if not permitted or live_requested > live_capacity:
+                    reason = "resource_pressure" if not permitted else "profile_memory_reserve_live"
+                    await mark("waiting", reason)
+                    raise HeavyIOUnavailable(reason)
+            except BaseException:
+                if locks.acquired:
+                    locks.release()
+                if lease.acquired:
+                    await lease.release()
+                raise
+            held_lease, held_locks = lease, locks
+            admission.release()
+            lease.start_renewal()
+            await mark("running")
+            yield lease
+            return
+        await mark("waiting", "profile_busy")
+        raise HeavyIOUnavailable("profile_busy")
+    finally:
+        if admission.acquired:
+            admission.release()
+        if held_locks is not None:
+            held_locks.release()
+        if held_lease is not None:
+            await held_lease.release()
+
+
 @asynccontextmanager
 async def heavy_io_slot(
     workload: str,
@@ -1265,6 +1455,17 @@ async def heavy_io_slot(
     from app.services.resource_pressure import workload_profile_name
 
     profile_name = workload_profile_name(workload)
+    if profile_name == "download_network" and not (
+        worker_flock_is_inherited() and worker_inherited_profile() == "legacy-global"
+    ):
+        async with parallel_download_slot(
+            workload, owner, source_identity=source_identity,
+            lease_seconds=lease_seconds, renew_seconds=renew_seconds,
+            poll_seconds=poll_seconds, redis_client=redis_client,
+            publisher_attempt=publisher_attempt, execution_token=execution_token,
+        ) as lease:
+            yield lease
+        return
     if (
         profile_name == "image_derive"
         and _media_slot_limit() > 1
@@ -1724,9 +1925,9 @@ def _defer_current_rq_job(unavailable: HeavyIOUnavailable):
                 job.id,
                 unavailable.reason,
             )
-            # Dedicated heavy workers never reach this path: they hold flock
-            # before dequeue and inherited slots treat Redis as best-effort.
-            # Keep a delayed fallback for direct/SimpleWorker invocations.
+            # Download children can yield on a busy slot or shared archive.
+            # Keep the delayed retry authoritative; release hints never bypass
+            # its availability time or resource admission.
             return Retry(max=1_000_000, interval=int(DEFAULT_REQUEUE_SECONDS))
     except ImportError:
         pass
@@ -1788,9 +1989,12 @@ def heavy_io_async_job(
             owner = _rq_owner(args, kwargs)
             source_identity = None
             if source_identity_resolver:
-                source_identity = source_identity_resolver(*args, **kwargs)
-                if inspect.isawaitable(source_identity):
-                    source_identity = await source_identity
+                try:
+                    source_identity = source_identity_resolver(*args, **kwargs)
+                    if inspect.isawaitable(source_identity):
+                        source_identity = await source_identity
+                except HeavyIOUnavailable as unavailable:
+                    return _defer_current_rq_job(unavailable)
             # Import ingestion is a control/transaction stage now; expensive
             # curation, media, search and Git work is drained by bounded outbox
             # jobs.  Holding import_db across the whole legacy runner would

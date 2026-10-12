@@ -60,7 +60,7 @@ from app.services.download_staging import (
     validate_gallerydl_staging_config,
 )
 from app.services.sync_outcome import build_sync_outcome, had_sync_baseline
-from app.services.heavy_io import heavy_io_async_job
+from app.services.heavy_io import HeavyIOUnavailable, heavy_io_async_job
 from app.services.stage_metrics import measure_async_stage, measure_stage, measured_async_job
 from app.services.search_projection_outbox import request_search_projection
 
@@ -387,9 +387,10 @@ async def _download_source_identity(job_id: str) -> str | None:
             if not job:
                 return None
             return f"gallerydl-archive:{job.source}"
-    except Exception:
+    except Exception as exc:
         logger.warning("Could not resolve source lease identity for %s", job_id, exc_info=True)
-        return f"download-job:{job_id}"
+        # Job-local identity cannot protect the platform-wide archive.
+        raise HeavyIOUnavailable("download_archive_identity_unavailable") from exc
 
 
 def _process_group_exists(process_group_id: int) -> bool:

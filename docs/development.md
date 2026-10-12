@@ -60,6 +60,25 @@ execution. Run them against disposable PostgreSQL and Redis instances.
 
 ## Backend
 
+### Download concurrency
+
+Download worker startup, child admission and health use
+`services/download_concurrency.py`. The existing database setting stays
+restart-applied and bounded by deployment and device limits; the optional
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT` overrides downloads only. The internal
+`DOWNLOAD_EXECUTION_CONCURRENCY` value is supplied by the supervisor rather
+than configured independently. Health distinguishes desired and running
+consumer counts; resource lease accounting separately reports active network
+reservations.
+
+Run `test_download_concurrency_config.py`, `test_worker_concurrency.py`,
+`test_parallel_download_slots.py` and `test_download_archive_identity.py`
+against disposable PostgreSQL and Redis. They cover defaults, caps, shared
+archives, memory admission, key loss, pool decreases, cancellation and process
+exit. Existing download lifecycle/finalization regressions continue verifying
+process termination and reliable import handoff. See
+[deployment budgets](deployment-profiles.md#download-worker-concurrency--下载并发).
+
 ### Search delivery confirmation
 
 After a search write, delivery persists both the remote task UID and its pending
