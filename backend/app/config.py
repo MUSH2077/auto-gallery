@@ -1,8 +1,10 @@
 from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 DEFAULT_ADMIN_PASSWORD = "change-me-admin"
+MAX_MEDIA_WORKER_CONCURRENCY = 8
 
 
 def _is_placeholder(value: str | None) -> bool:
@@ -111,6 +113,8 @@ class Settings(BaseSettings):
     resource_budget_base_write_mb_per_second: float = 10.0
     resource_governance_mode: str = "shadow"  # shadow | enforce
     resource_device_profile: str = "auto"  # auto | compact | standard | performance
+    # Bound independent image jobs; video and other background jobs remain exclusive.
+    media_worker_concurrency: int = Field(default=1, ge=1, le=MAX_MEDIA_WORKER_CONCURRENCY)
     # Optional rollout allowlist for soft AIMD enforcement. An empty value in
     # enforce mode preserves the historical all-profiles behavior; deploy
     # tooling always sets an explicit list during staged rollout.

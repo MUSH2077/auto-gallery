@@ -114,16 +114,19 @@ def record_task(receipt_id: str, task_uid: int | None):
 
 
 _RESTORE_AND_FENCE_SCRIPT = """
-if ARGV[5] ~= "" then
-  redis.call("set", ARGV[6], ARGV[5])
-  local remote = cjson.decode(ARGV[5])
+local marker_key = ARGV[#ARGV]
+local marker_payload = ARGV[#ARGV - 1]
+if marker_payload ~= "" then
+  redis.call("set", marker_key, marker_payload)
+  local remote = cjson.decode(marker_payload)
   if remote["profile"] == "maintenance"
     or KEYS[1] == "lock:resource-budget:background"
+    or string.find(KEYS[1], "^lock:resource%-budget:media:")
     or KEYS[1] == "lock:heavy-io" then
     return -4
   end
 else
-  redis.call("del", ARGV[6])
+  redis.call("del", marker_key)
 end
 """
 

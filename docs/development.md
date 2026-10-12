@@ -41,6 +41,23 @@ The live Docker Compose services are:
 The API and Python workers share the backend image. Only the download worker
 executes gallery-dl.
 
+`MEDIA_WORKER_CONCURRENCY` configures both the operations consumer count and
+image execution slots (1 through 8, default 1). Apply the same value to the API
+and all worker roles and recreate the application containers after changing it.
+Ordinary and large images share these slots. Video, indexing, deduplication,
+maintenance, remote indexing fences, and import priority retain their existing
+resource rules. In parallel mode each image reserves at least 768 MiB; the
+available memory can therefore allow fewer images than the configured maximum.
+Increasing the value does not configure upload, download, or import workers.
+Use the same total operations database connection budget when comparing counts,
+and limit VIPS/OpenBLAS/OMP/MKL threads to avoid competing nested thread pools.
+
+Select a value using the device's CPU, available memory and measured workload;
+the default is not a hardware recommendation. The regression suites
+`test_parallel_media_slots.py`, `test_parallel_media_wakes.py` and
+`test_parallel_media_rq.py` cover resource admission, wake ownership and real RQ
+execution. Run them against disposable PostgreSQL and Redis instances.
+
 ## Backend
 
 ### Stack

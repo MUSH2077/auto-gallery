@@ -30,15 +30,22 @@ from typing import Any, Awaitable, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
 
+from app.config import MAX_MEDIA_WORKER_CONCURRENCY
+
 HEAVY_IO_LOCK_KEY = "lock:heavy-io"
 RESOURCE_NETWORK_TOKEN_KEY = "lock:resource-budget:network"
 RESOURCE_DISK_TOKEN_KEY = "lock:resource-budget:disk"
 RESOURCE_BACKGROUND_TOKEN_KEY = "lock:resource-budget:background"
+MEDIA_RESERVATION_KEYS = tuple(
+    f"lock:resource-budget:media:{slot}"
+    for slot in range(MAX_MEDIA_WORKER_CONCURRENCY)
+)
 RESOURCE_RESERVATION_KEYS = (
     RESOURCE_NETWORK_TOKEN_KEY,
     RESOURCE_DISK_TOKEN_KEY,
     RESOURCE_BACKGROUND_TOKEN_KEY,
     "lock:resource-budget:remote-search",
+    *MEDIA_RESERVATION_KEYS,
 )
 RESOURCE_ADMISSION_MODE = "dual_disk_lanes_v2"
 DEFAULT_LEASE_SECONDS = 300
@@ -76,6 +83,18 @@ _RESERVE_SCRIPT = """
 if redis.call("exists", KEYS[1]) == 1 then
   return 0
 end
+if string.find(KEYS[1], "^lock:resource%-budget:media:") then
+  local media_limit = tonumber(ARGV[5]) or 8
+  local media_active = 0
+  for slot = 0, 7 do
+    if redis.call("exists", "lock:resource-budget:media:" .. slot) == 1 then
+      media_active = media_active + 1
+    end
+  end
+  if media_active >= media_limit then
+    return 0
+  end
+end
 local total = 0
 for index = 2, #KEYS do
   local raw = redis.call("get", KEYS[index])
@@ -93,7 +112,8 @@ if total + requested > capacity then
   return -1
 end
 local background_now = nil
-if KEYS[1] == "lock:resource-budget:background" then
+if KEYS[1] == "lock:resource-budget:background"
+  or string.find(KEYS[1], "^lock:resource%-budget:media:") then
   background_now = tonumber(redis.call("time")[1])
   local ingest_ready = redis.call("exists", "lock:resource-budget:disk") == 1
     or redis.call("llen", "rq:queue:imports") > 0
@@ -371,6 +391,39 @@ def local_source_lock(source_identity: str) -> "LocalResourceLocks":
     ).hexdigest()[:24]
     return LocalResourceLocks(
         [LocalHeavyIOLock(_local_lock_path().with_name(f"source-{digest}.lock"))]
+    )
+
+
+def _media_slot_limit() -> int:
+    from app.config import MAX_MEDIA_WORKER_CONCURRENCY, settings
+
+    try:
+        configured = int(settings.media_worker_concurrency)
+    except (AttributeError, TypeError, ValueError):
+        configured = 1
+    return max(1, min(int(MAX_MEDIA_WORKER_CONCURRENCY), configured))
+
+
+def parallel_media_locks(slot: int) -> "LocalResourceLocks":
+    """Build the shared image barriers and one exclusive fixed media slot."""
+
+    from app.config import MAX_MEDIA_WORKER_CONCURRENCY
+
+    try:
+        slot = int(slot)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("media slot must be an integer") from exc
+    if slot < 0 or slot >= int(MAX_MEDIA_WORKER_CONCURRENCY):
+        raise ValueError(f"media slot must be in [0, {int(MAX_MEDIA_WORKER_CONCURRENCY)})")
+    root = _local_lock_path()
+    return LocalResourceLocks(
+        [
+            LocalHeavyIOLock(shared=True),
+            LocalHeavyIOLock(root.with_name("lane-background.lock"), shared=True),
+            LocalHeavyIOLock(root.with_name("profile-media.lock"), shared=True),
+            LocalHeavyIOLock(root.with_name(f"media-slot-{slot}.lock")),
+        ],
+        remote_exclusive=True,
     )
 
 
@@ -699,6 +752,7 @@ class RenewableRedisLease:
         reservation_key: str | None = None,
         reservation_bytes: int = 0,
         reservation_capacity_bytes: int = 0,
+        reservation_limit: int | None = None,
     ) -> None:
         if not keys:
             raise ValueError("at least one Redis lease key is required")
@@ -716,6 +770,11 @@ class RenewableRedisLease:
             self.keys.insert(0, self.reservation_key)
         self.reservation_bytes = max(0, int(reservation_bytes))
         self.reservation_capacity_bytes = max(0, int(reservation_capacity_bytes))
+        self.reservation_limit = (
+            max(1, min(8, int(reservation_limit)))
+            if reservation_limit is not None
+            else None
+        )
         self.lease_value = json.dumps(
             {
                 "token": self.token,
@@ -792,6 +851,12 @@ class RenewableRedisLease:
                         self.reservation_bytes,
                         self.reservation_capacity_bytes,
                         self.lease_seconds,
+                        *(
+                            [self.reservation_limit]
+                            if self.reservation_key in MEDIA_RESERVATION_KEYS
+                            and self.reservation_limit is not None
+                            else []
+                        ),
                     )
                     ok = int(result or 0) == 1
                     if not ok:
@@ -919,6 +984,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                 RESOURCE_NETWORK_TOKEN_KEY,
                 RESOURCE_DISK_TOKEN_KEY,
                 RESOURCE_BACKGROUND_TOKEN_KEY,
+                *MEDIA_RESERVATION_KEYS,
                 "lock:resource-budget:remote-search",
                 *(profile_lease_key(profile) for profile in (
                     "import_db",
@@ -1007,13 +1073,179 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
         "reserved_bytes": sum(int(value.get("reserved_bytes") or 0) for value in active),
         "network_active": any(RESOURCE_NETWORK_TOKEN_KEY in value["keys"] for value in active),
         "disk_active": any(
-            RESOURCE_DISK_TOKEN_KEY in value["keys"] or RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"]
+            RESOURCE_DISK_TOKEN_KEY in value["keys"]
+            or RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"]
+            or set(value["keys"]) & set(MEDIA_RESERVATION_KEYS)
             for value in active
         ),
         "ingest_active": any(RESOURCE_DISK_TOKEN_KEY in value["keys"] for value in active),
-        "background_active": any(RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"] for value in active),
+        "background_active": any(
+            RESOURCE_BACKGROUND_TOKEN_KEY in value["keys"]
+            or set(value["keys"]) & set(MEDIA_RESERVATION_KEYS)
+            for value in active
+        ),
+        "media_active": sum(
+            bool(set(value["keys"]) & set(MEDIA_RESERVATION_KEYS))
+            for value in active
+        ),
         "maintenance_active": any(HEAVY_IO_LOCK_KEY in value["keys"] or value.get("profile") == "maintenance" for value in active),
     }
+
+
+@asynccontextmanager
+async def parallel_media_slot(
+    workload: str,
+    owner: str,
+    *,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    renew_seconds: int = DEFAULT_RENEW_SECONDS,
+    poll_seconds: float = DEFAULT_POLL_SECONDS,
+    redis_client=None,
+    publisher_attempt: str | None = None,
+    execution_token: str | None = None,
+):
+    """Acquire one bounded image slot while retaining every legacy barrier."""
+
+    from app.services.resource_pressure import workload_profile_name
+    from app.services.remote_search_flight import read_marker
+    from app.services.media_admission import (
+        PARALLEL_IMAGE_RESERVATION_BYTES,
+        media_reservation_details,
+    )
+
+    if workload_profile_name(workload) != "image_derive":
+        raise HeavyIOUnavailable("parallel_media_image_only")
+
+    async def mark(state: str, reason: str | None = None) -> None:
+        await set_resource_state(
+            owner,
+            state,
+            reason,
+            workload=workload,
+            publisher_attempt=publisher_attempt,
+            execution_token=execution_token,
+        )
+
+    permitted, snapshot, profile = await resource_profile_permitted(workload)
+    if not permitted:
+        reason = str(profile.get("reason") or "resource_pressure")
+        await mark("waiting", reason)
+        raise HeavyIOUnavailable("resource_pressure", {"profile": profile, "reasons": snapshot.get("reasons") or []})
+
+    client = redis_client or _get_lease_redis()
+    try:
+        if await asyncio.to_thread(client.exists, HEAVY_IO_LOCK_KEY):
+            await mark("waiting", "maintenance_pending")
+            raise HeavyIOUnavailable("maintenance_pending")
+    except HeavyIOUnavailable:
+        raise
+    except Exception as exc:
+        await mark("waiting", "redis_lease_unavailable")
+        raise HeavyIOUnavailable(
+            "redis_lease_unavailable", {"error_type": type(exc).__name__}
+        ) from exc
+
+    requested, capacity = media_reservation_details(snapshot, workload)
+    requested = max(int(requested), PARALLEL_IMAGE_RESERVATION_BYTES)
+    if requested > int(capacity):
+        await mark("waiting", "profile_memory_reserve_live")
+        raise HeavyIOUnavailable("profile_memory_reserve_live")
+
+    # Serialize the short probe-and-claim transaction. This closes the race
+    # where Redis keys disappear while several entrants observe the same free
+    # POSIX capacity and then claim different slots concurrently.
+    limit = _media_slot_limit()
+    admission_lock = LocalHeavyIOLock(
+        _local_lock_path().with_name("media-admission.lock")
+    )
+    if not admission_lock.try_acquire():
+        await mark("waiting", "profile_busy")
+        raise HeavyIOUnavailable("profile_busy")
+
+    acquired_lease: RenewableRedisLease | None = None
+    acquired_locks: LocalResourceLocks | None = None
+    try:
+        occupied = 0
+        for slot in range(len(MEDIA_RESERVATION_KEYS)):
+            probe = parallel_media_locks(slot).locks[-1]
+            if not probe.try_acquire():
+                occupied += 1
+            else:
+                probe.release()
+        if occupied >= limit:
+            await mark("waiting", "profile_busy")
+            raise HeavyIOUnavailable("profile_busy")
+
+        for slot in range(len(MEDIA_RESERVATION_KEYS)):
+            key = MEDIA_RESERVATION_KEYS[slot]
+            lease = RenewableRedisLease(
+                [key],
+                workload=workload,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                renew_seconds=renew_seconds,
+                poll_seconds=poll_seconds,
+                redis_client=client,
+                reservation_key=key,
+                reservation_bytes=requested,
+                reservation_capacity_bytes=int(capacity),
+                reservation_limit=limit,
+            )
+            if not await lease.try_acquire():
+                reason = lease.denial_reason or "redis_lease_busy"
+                if reason == "resource_reservation_busy":
+                    continue
+                await mark("waiting", reason)
+                raise HeavyIOUnavailable(reason)
+            locks = parallel_media_locks(slot)
+            try:
+                if not locks.try_acquire():
+                    await lease.release()
+                    continue
+                # Refresh pressure, RAM and the durable remote fence after the
+                # slot is reserved, before any image code can start.
+                permitted, refreshed, profile = await resource_profile_permitted(workload)
+                live_requested, live_capacity = media_reservation_details(refreshed, workload)
+                marker = read_marker()
+                if not permitted:
+                    locks.release()
+                    await lease.release()
+                    reason = str(profile.get("reason") or "resource_pressure")
+                    await mark("waiting", reason)
+                    raise HeavyIOUnavailable("resource_pressure")
+                if max(int(live_requested), PARALLEL_IMAGE_RESERVATION_BYTES) > int(live_capacity):
+                    locks.release()
+                    await lease.release()
+                    await mark("waiting", "profile_memory_reserve_live")
+                    raise HeavyIOUnavailable("profile_memory_reserve_live")
+                if marker:
+                    locks.release()
+                    await lease.release()
+                    await mark("waiting", "remote_search_in_flight")
+                    raise HeavyIOUnavailable("remote_search_in_flight")
+            except BaseException:
+                if locks.acquired:
+                    locks.release()
+                if lease.acquired:
+                    await lease.release()
+                raise
+            acquired_lease, acquired_locks = lease, locks
+            # The slot lock and Redis lease now protect the long-running work;
+            # release only the short admission mutex before status callbacks.
+            admission_lock.release()
+            lease.start_renewal()
+            await mark("running")
+            yield lease
+            return
+        await mark("waiting", "profile_busy")
+        raise HeavyIOUnavailable("profile_busy")
+    finally:
+        if admission_lock.acquired:
+            admission_lock.release()
+        if acquired_locks is not None:
+            acquired_locks.release()
+        if acquired_lease is not None:
+            await acquired_lease.release()
 
 
 @asynccontextmanager
@@ -1033,6 +1265,26 @@ async def heavy_io_slot(
     from app.services.resource_pressure import workload_profile_name
 
     profile_name = workload_profile_name(workload)
+    if (
+        profile_name == "image_derive"
+        and _media_slot_limit() > 1
+        and owner.startswith("media-derivative:")
+        and lane is None
+        and source_identity is None
+        and not worker_flock_is_inherited()
+    ):
+        async with parallel_media_slot(
+            workload,
+            owner,
+            lease_seconds=lease_seconds,
+            renew_seconds=renew_seconds,
+            poll_seconds=poll_seconds,
+            redis_client=redis_client,
+            publisher_attempt=publisher_attempt,
+            execution_token=execution_token,
+        ) as lease:
+            yield lease
+        return
     conflict_group = workload_conflict_group(workload)
     inherited_profile = worker_inherited_profile()
     inherited_flock = worker_flock_is_inherited() and inherited_profile in {

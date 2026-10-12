@@ -18,7 +18,7 @@ from sqlalchemy import and_, delete, event, exists, func, literal, or_, select, 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
-from app.config import settings
+from app.config import MAX_MEDIA_WORKER_CONCURRENCY, settings
 from app.models import (
     AssetDedupOutbox,
     CurationCommit,
@@ -429,7 +429,7 @@ def clear_outbox_wake(kind: str) -> None:
         get_redis().eval(
             _CLEAR_WAKE_SCRIPT,
             1,
-            f"outbox:wakeup:{kind}",
+            _wake_key(kind, _job_wake_slot(job)),
             str(job.id),
         )
     except Exception:
@@ -652,6 +652,28 @@ def _clear_owned_wake(redis_client, wake_key: str, job_id: str) -> None:
         # delete a successor's marker and create duplicate wake jobs; the next
         # health pass reconciles it against the referenced durable RQ job.
         logger.debug("Unable to release owned outbox wake %s", wake_key, exc_info=True)
+
+
+def _wake_key(kind: str, slot: int = 0) -> str:
+    return f"outbox:wakeup:{kind}" + (f":{slot}" if slot else "")
+
+
+def _job_wake_slot(job) -> int:
+    return int((getattr(job, "meta", None) or {}).get("outbox_wake_slot", 0))
+
+
+def _retire_media_wakes(redis_client, limit: int) -> None:
+    """Remove terminal retired slots without detaching still-running jobs."""
+    keys = [_wake_key("media", slot) for slot in range(limit, MAX_MEDIA_WORKER_CONCURRENCY)]
+    if not keys:
+        return
+    for key, owner in zip(keys, redis_client.mget(keys)):
+        if not owner:
+            continue
+        if isinstance(owner, bytes):
+            owner = owner.decode()
+        if not _wake_job_is_active(redis_client, str(owner)):
+            _clear_owned_wake(redis_client, key, str(owner))
 
 
 def _wake_job_is_active(redis_client, job_id: str) -> bool:
@@ -1078,7 +1100,7 @@ def wake_pending_outboxes(
     delay_seconds: float = 0.0,
     replace_owner: str | None = None,
 ) -> dict[str, int]:
-    """Publish one wake-up per health aggregation interval with real backlog.
+    """Publish bounded media wakes and one wake for every other outbox kind.
 
     The coordinator is write-free while idle.  Completed jobs clear their
     marker immediately.  A marker whose RQ job is terminal or missing is
@@ -1089,13 +1111,31 @@ def wake_pending_outboxes(
     queue = Queue(name="operations", connection=redis)
     enqueued = 0
     deferred = 0
+    wake_slots = []
     for kind, count in counts.items():
         if count <= 0:
             continue
         if kind == "gitllery" and settings.gitllery_projection_mode.strip().lower() != "active":
             continue
-        wake_key = f"outbox:wakeup:{kind}"
-        job_id = f"outbox-{kind}-{time.time_ns()}"
+        limit = settings.media_worker_concurrency if kind == "media" else 1
+        if kind == "media":
+            _retire_media_wakes(redis, limit)
+        if replace_owner is not None:
+            from rq import get_current_job
+
+            slot = _job_wake_slot(get_current_job())
+            if slot >= limit:
+                _clear_owned_wake(redis, _wake_key(kind, slot), replace_owner)
+                continue
+            slots = (slot,)
+        else:
+            # Post-commit counts are readiness hints, not an exact asset count.
+            # Fill the configured pool; empty runners stop without successors.
+            slots = range(limit)
+        wake_slots.extend((kind, slot) for slot in slots)
+    for kind, slot in wake_slots:
+        wake_key = _wake_key(kind, slot)
+        job_id = f"outbox-{kind}-{slot}-{time.time_ns()}"
         try:
             if replace_owner is not None:
                 if not redis.eval(
@@ -1130,6 +1170,8 @@ def wake_pending_outboxes(
                     "resource_descriptor": _RESOURCE_DESCRIPTORS[kind],
                 },
             }
+            if kind == "media":
+                enqueue_kwargs["meta"]["outbox_wake_slot"] = slot
             if delay_seconds > 0.0:
                 checked_enqueue_in(
                     queue,

@@ -8,6 +8,8 @@ practical pre-1.0 semantic versioning.
 
 ### Added
 
+- Configurable bounded image workers share memory reservations and retain
+  exclusive resource protection for other background workloads.
 - Multi-user administration with module permissions, preferences, and manual
   upload quotas.
 - Manual media upload with validated file types, metadata import, and task

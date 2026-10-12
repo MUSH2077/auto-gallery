@@ -48,6 +48,9 @@ def test_outbox_wakeup_publishes_descriptor_metadata(monkeypatch):
         def get(self, _key):
             return None
 
+        def mget(self, keys):
+            return [None for _key in keys]
+
         def set(self, _key, _value, nx=False):
             return True
 

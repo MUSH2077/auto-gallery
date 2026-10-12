@@ -67,6 +67,39 @@ stores RQ queues as well as cache data. Its container health check performs a
 short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
 writes is not considered healthy.
 
+## Image worker concurrency · 图片处理并行数
+
+Set `MEDIA_WORKER_CONCURRENCY` in `.env` to an integer from 1 through 8; its
+default is 1. Compose uses it for operations consumers, and the application uses
+it for a shared ordinary/large-image execution pool. Apply the same value to the
+API, Python workers and scheduler, then recreate those application containers.
+Upload, download and import consumer counts are configured separately.
+
+With more than one slot, each image reserves at least 768 MiB. The configured
+count is a ceiling: resource pressure can admit fewer tasks, and video,
+indexing, deduplication and maintenance retain their exclusive protection.
+Choose the count using the device's time and peak-memory measurements.
+
+Each operations consumer has its own database pool. Its combined connection
+ceiling is `MEDIA_WORKER_CONCURRENCY × (WORKER_DB_POOL_SIZE +
+WORKER_DB_MAX_OVERFLOW)`; include API and other worker pools in the database's
+total budget. Worker library threads default to 1 through `VIPS_CONCURRENCY`,
+`OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `MKL_NUM_THREADS`, avoiding nested
+thread pools competing with process concurrency.
+
+在 `.env` 中将 `MEDIA_WORKER_CONCURRENCY` 设为 1～8 的整数，默认 1。
+它同时控制 operations 消费者数量和普通图／超大图共用的执行池；API、Python
+worker 和 scheduler 使用相同值，修改后重新创建这些应用容器。上传、下载、
+导入消费者数量分别配置。
+
+并行模式每张图片至少预留 768 MiB，配置值只是上限；内存压力可以降低实际
+执行数量，其他受保护任务的互斥规则继续生效。按设备上的耗时与峰值内存选择
+数量。
+
+每个 operations 消费者都有独立数据库连接池，总连接上限按上述公式估算，
+再加上 API 和其他 worker 的预算。内部库线程默认设为 1；提高进程数时同时
+核对数据库连接、内存与库线程预算。
+
 ## Adaptive algorithm governance · 自适应算法治理
 
 `RESOURCE_GOVERNANCE_MODE=enforce` is the default for non-Gitllery profiles.

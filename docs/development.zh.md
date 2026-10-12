@@ -40,6 +40,19 @@ auto-gallery/
 
 API 和 Python worker 共用 backend 镜像，只有下载 worker 执行 gallery-dl。
 
+`MEDIA_WORKER_CONCURRENCY` 同时设置 operations 消费者数量和图片执行名额，
+范围 1～8，默认 1。API 和所有 worker 使用相同值，修改后重新创建应用容器。
+普通图和超大图共用这些名额；视频、索引、去重、维护、远端索引保护及导入优先级
+继续沿用原资源规则。并行模式每张图片至少预留 768 MiB，可用内存可能使实际
+执行数低于配置上限。该参数不设置上传、下载或导入 worker 数量。
+比较不同数量时保持 operations 总数据库连接预算相同，并限制
+VIPS／OpenBLAS／OMP／MKL 内部线程，避免进程与线程同时扩容。
+
+按设备的 CPU、可用内存和实际负载选择数量，默认值不是硬件建议。
+`test_parallel_media_slots.py`、`test_parallel_media_wakes.py` 和
+`test_parallel_media_rq.py` 分别覆盖资源准入、唤醒任务所有权与真实 RQ 执行。
+这些测试使用独立、可丢弃的 PostgreSQL 和 Redis 环境。
+
 ## 后端
 
 ### 技术栈

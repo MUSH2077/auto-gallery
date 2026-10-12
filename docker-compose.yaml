@@ -14,6 +14,7 @@ x-application-env: &application-env
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY:-1}
 
 x-worker-env: &worker-env
   DOWNLOAD_ROOT: /downloads
@@ -35,6 +36,10 @@ x-worker-env: &worker-env
   GITLLERY_ACTIVE_VERIFIED_GENERATION: ${GITLLERY_ACTIVE_VERIFIED_GENERATION:-}
   DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
   DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+  VIPS_CONCURRENCY: ${VIPS_CONCURRENCY:-1}
+  OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-1}
+  OMP_NUM_THREADS: ${OMP_NUM_THREADS:-1}
+  MKL_NUM_THREADS: ${MKL_NUM_THREADS:-1}
 
 services:
   postgres:
@@ -353,7 +358,7 @@ services:
   worker-operations:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations 1 --with-scheduler
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations ${MEDIA_WORKER_CONCURRENCY:-1} --with-scheduler
     environment:
       <<: [*build-metadata, *application-env, *worker-env]
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}

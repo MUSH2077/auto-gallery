@@ -797,6 +797,30 @@ Endpoints:
 - `GET /original/{asset_id}` — original file from DOWNLOAD_ROOT (for download)
 
 
+### Parallel image execution
+
+`MEDIA_WORKER_CONCURRENCY` sets the image execution slot limit and the Compose
+operations consumer count, from 1 through 8 with a default of 1. Ordinary and
+large images share the same pool. Redis admits slot ownership and aggregate
+memory reservations atomically; shared POSIX barriers and independent slot
+locks retain the local limit when Redis coordination keys disappear. The
+existing database claim and version checks prevent duplicate computation or
+stale result submission for the same asset.
+
+Parallel mode reserves at least 768 MiB per image. Memory pressure or another
+active resource profile can admit fewer images than the configured limit.
+Video, indexing, deduplication, maintenance and unfinished remote search writes
+retain their exclusive barriers. Media wake jobs own distinct bounded slots;
+shrinking the pool preserves live owners while preventing successors above the
+new limit. Image algorithms, source verification and result lease checks
+retain their existing versions and rules.
+
+Apply the same setting to the API and Python worker roles. See
+[deployment profiles](deployment-profiles.md#image-worker-concurrency--图片处理并行数)
+for connection and thread budgets. Select a limit using the device's CPU,
+available memory and measured workload rather than assuming one value suits
+every deployment.
+
 ### Shared visual working pixels
 
 Media derivation keeps the shared working-image path for eligible static images
