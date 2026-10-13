@@ -14,6 +14,14 @@ from sqlalchemy.exc import IntegrityError
 async def bulk_environment(tmp_path, monkeypatch):
     from app.config import settings
     from app.database import async_session, engine
+    from app.services.redis_client import get_redis
+
+    wake_keys = tuple(
+        f"outbox:wakeup:{kind}"
+        for kind in ("media", "import_projection", "search")
+    )
+    redis_client = get_redis()
+    redis_client.delete(*wake_keys)
 
     monkeypatch.setattr(settings, "library_root", str(tmp_path / "library"))
     async with async_session() as db:
@@ -25,6 +33,7 @@ async def bulk_environment(tmp_path, monkeypatch):
             await db.rollback()
             await db.execute(text("TRUNCATE works, assets, search_projection_outbox CASCADE"))
             await db.commit()
+            redis_client.delete(*wake_keys)
     await engine.dispose()
 
 
