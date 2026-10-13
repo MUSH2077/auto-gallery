@@ -246,7 +246,7 @@ auto-gallery uses RQ for downloads, imports and discovery, with an operations qu
   `discovery` child queue. The scheduler only admits due remote accounts;
   provider pagination and cursor checkpoints run in the child worker. Jobs
   carry opaque task/account IDs and never credential material.
-- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
+- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL. Bounded RQ import consumers claim attempts with execution tokens and claim work identities with artifact leases, enabling restart-safe recovery without duplicate ownership. Consumers share bounded ingest slices rather than holding one lock across the whole job.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
 - **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `task_state.py` defines legal transitions; `TaskEngine` coordinates controls and import commands use locked arbitration and aggregation in `import_lifecycle.py`.
 - **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
@@ -838,6 +838,24 @@ start. If cancellation arrives during Redis acquisition, the operation completes
 and releases its owned keys before cancellation propagates. The existing
 process-group cleanup precedes release of the source lock and slot. See
 [deployment configuration](deployment-profiles.md#download-worker-concurrency--下载并发).
+
+### Bounded import consumers
+
+`IMPORT_WORKER_CONCURRENCY` selects 1–4 import consumers, with one as the default.
+An explicit `worker_entrypoint.py imports N` argument overrides the environment;
+changing the environment requires recreating the import service. The independent
+maintenance consumer is counted separately in supervisor queue statistics.
+
+Execution claims retain the DownloadJob → ImportJob → TaskRun lock order and a
+current execution token. Work claims use a representative metadata artifact,
+`FOR UPDATE SKIP LOCKED` and a lease for the source/work identity. Every bounded
+claim and database phase still takes the shared ingest reservation and POSIX
+locks; resource waits hold no SQL transaction. Concurrent consumers can overlap
+job preparation and waiting, while the database slices remain serialized by
+resource admission. Batch commits own domain rows and subsequent media, curation
+and search outboxes together. Recovery and stale-token fencing remain independent
+of the selected consumer count. See
+[import deployment configuration](deployment-profiles.md#import-worker-concurrency--导入并发).
 
 ### Parallel image execution
 

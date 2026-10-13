@@ -79,6 +79,23 @@ exit. Existing download lifecycle/finalization regressions continue verifying
 process termination and reliable import handoff. See
 [deployment budgets](deployment-profiles.md#download-worker-concurrency--下载并发).
 
+### Import concurrency
+
+`IMPORT_WORKER_CONCURRENCY` configures 1–4 import consumers, defaulting to one.
+The supervisor uses the environment value when no explicit `imports N` argument
+is supplied and reports queue-specific target and live counts. Maintenance is
+an independent consumer; restart and scheduler ownership remain queue-specific.
+The parameter changes consumer count rather than the shared ingest slice limit.
+
+Run `test_import_concurrency_config.py`, `test_worker_concurrency.py` and
+`test_parallel_import_execution.py` against disposable PostgreSQL and Redis.
+The parallel execution tests use independent processes and database sessions to
+verify duplicate claims, shared work identities and stale execution ownership.
+Retain the existing lifecycle, finalization, resource-lane and after-commit wake
+regressions. Compare job completion separately from media and search readiness,
+with the same per-process connection pool and container resource limits. See
+[import deployment budgets](deployment-profiles.md#import-worker-concurrency--导入并发).
+
 ### Search delivery confirmation
 
 After a search write, delivery persists both the remote task UID and its pending

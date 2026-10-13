@@ -8,6 +8,8 @@ practical pre-1.0 semantic versioning.
 
 ### Added
 
+- Configurable bounded import consumers with queue-specific supervisor counts,
+  while retaining batch resource admission and durable execution ownership.
 - Bounded parallel downloads with an optional device-specific limit, shared
   archive protection and cancellation-safe resource admission.
 - Configurable bounded image workers share memory reservations and retain

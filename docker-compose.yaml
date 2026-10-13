@@ -15,6 +15,7 @@ x-application-env: &application-env
   SECRET_KEY: ${SECRET_KEY}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD}
   MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY:-1}
+  IMPORT_WORKER_CONCURRENCY: ${IMPORT_WORKER_CONCURRENCY:-1}
   DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
   # Empty keeps the automatic device-profile download limit.
   DOWNLOAD_DEVICE_CONCURRENCY_LIMIT: ${DOWNLOAD_DEVICE_CONCURRENCY_LIMIT:-}
@@ -317,10 +318,10 @@ services:
   worker-import:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    # Single import worker: pyvips thumbnail bursts are the biggest memory
-    # spike, so queue concurrency and adaptive slice budgets remain conservative.
+    # Import defaults to one; imports and maintenance own separate pools,
+    # while batch resource rules remain unchanged.
     # Promote delayed import retries from the imports scheduled registry.
-    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports 1 --with-scheduler
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports --with-scheduler
     environment:
       <<: [*build-metadata, *application-env, *worker-env]
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}

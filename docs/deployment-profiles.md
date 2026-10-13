@@ -124,6 +124,50 @@ gallery-dl 正在运行的数量。同平台任务共用归档，继续互斥；
 按上述公式核对总数据库连接，每个下载消费者至少提供两个连接用于嵌套交接会话，
 同时核对 CPU、内存与 PID 配额，按目标设备实测选择并发数量。
 
+## Import worker concurrency · 导入并发
+
+Set `IMPORT_WORKER_CONCURRENCY` to an integer from 1 through 4; the default is 1.
+Recreate `worker-import` after changing it. An explicit concurrency argument to
+`worker_entrypoint.py imports N` takes precedence over the environment setting.
+This parameter selects import consumers only; it does not configure download,
+image or API workers, and it does not automatically size itself from the host.
+Invalid values are startup errors rather than an unbounded process count.
+
+The base Compose service also runs one independent `maintenance` consumer.
+For example, two import consumers plus maintenance produce three supervised
+processes. Queue-specific supervisor counts distinguish live import consumers
+from maintenance and preserve the existing aggregate health fields.
+
+Concurrent import jobs still acquire the shared ingest resource reservation and
+POSIX locks for each bounded claim or database slice. An increased consumer count
+does not promise concurrent database commits. Execution tokens and artifact
+identity leases retain duplicate-delivery protection, and media and search
+outboxes are published only after the owning transaction commits. Job completion
+and media/search readiness are separate measurement boundaries.
+
+Each import and maintenance consumer has its own database pool. Budget the base
+service as `(IMPORT_WORKER_CONCURRENCY + 1) × (WORKER_DB_POOL_SIZE +
+WORKER_DB_MAX_OVERFLOW)`, then include the API, other worker roles and temporary
+control connections. Keep the aggregate below the configured PostgreSQL limit.
+Select a value using measured time and memory on the target device, including its
+container CPU quota. Preserve resource-pressure and maintenance protection when
+increasing the count.
+
+`IMPORT_WORKER_CONCURRENCY` 的范围是 1～4，默认 1；修改后重新创建
+`worker-import`。直接运行 `worker_entrypoint.py imports N` 时，明确传入的
+数量优先于环境变量。该参数只控制导入消费者，不改变下载、图片处理或 API
+进程，也不按宿主机配置自动扩容；非法值会导致启动报错。
+
+基础配置另有一个独立维护消费者，所以“导入 2”对应三个受监督进程。
+按队列统计区分导入与维护的目标数和存活数。导入任务可同时推进，但每次领取
+和数据库批次仍共享入库资源名额与文件锁；消费者数不等于同时提交的事务数。
+执行令牌、作品身份租约及事务提交后发布保留原有重复投递和恢复保护。
+导入完成与图片、搜索全部就绪需要分别计时。
+
+按上述公式计入维护消费者的连接池，再加上 API、其他 worker 和临时控制连接，
+总量应低于 PostgreSQL 上限。结合目标设备及容器 CPU 配额，测量时间与内存后
+选择数量，并保留资源压力和维护保护。
+
 ## Image worker concurrency · 图片处理并行数
 
 Set `MEDIA_WORKER_CONCURRENCY` in `.env` to an integer from 1 through 8; its

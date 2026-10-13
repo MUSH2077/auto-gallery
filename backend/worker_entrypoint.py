@@ -31,6 +31,10 @@ WORKER_SUPERVISOR_HASH_KEY = "worker:supervisors:v1"
 SCHEDULER_WATCHDOG_INTERVAL_SECONDS = 60
 OUTBOX_FALLBACK_INTERVAL_SECONDS = 60
 OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS = 30
+IMPORT_WORKER_CONCURRENCY_ENV = "IMPORT_WORKER_CONCURRENCY"
+IMPORT_WORKER_CONCURRENCY_DEFAULT = 1
+IMPORT_WORKER_CONCURRENCY_MIN = 1
+IMPORT_WORKER_CONCURRENCY_MAX = 4
 
 
 from app.services.download_concurrency import (
@@ -254,6 +258,59 @@ def build_worker_specs(
     return specs
 
 
+def resolve_import_concurrency(argv_value: str | None) -> int:
+    """Resolve import consumers, preferring an explicit CLI value.
+
+    Unlike the historical generic worker fallback, malformed import values
+    are configuration errors. Silently turning an invalid value into one
+    consumer makes a deployment typo difficult to detect and can hide an
+    unintended throughput change.
+    """
+
+    source = "CLI" if argv_value is not None else IMPORT_WORKER_CONCURRENCY_ENV
+    raw_value = argv_value if argv_value is not None else os.environ.get(
+        IMPORT_WORKER_CONCURRENCY_ENV, str(IMPORT_WORKER_CONCURRENCY_DEFAULT)
+    )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{source} {IMPORT_WORKER_CONCURRENCY_ENV} must be an integer "
+            f"between {IMPORT_WORKER_CONCURRENCY_MIN} and {IMPORT_WORKER_CONCURRENCY_MAX}; "
+            f"got {raw_value!r}"
+        ) from exc
+    if not IMPORT_WORKER_CONCURRENCY_MIN <= value <= IMPORT_WORKER_CONCURRENCY_MAX:
+        raise ValueError(
+            f"{source} {IMPORT_WORKER_CONCURRENCY_ENV} must be between "
+            f"{IMPORT_WORKER_CONCURRENCY_MIN} and {IMPORT_WORKER_CONCURRENCY_MAX}; got {value}"
+        )
+    return value
+
+
+def _queue_worker_counts(
+    processes: list[ManagedProcess],
+    worker_specs: list[tuple[tuple[str, ...], bool]],
+) -> dict[str, dict[str, int]]:
+    """Report fixed-shape counts for the import and maintenance queues."""
+
+    tracked_queues = ("imports", "maintenance")
+    target_counts = {
+        queue: sum(queue in spec_queues for spec_queues, _scheduler in worker_specs)
+        for queue in tracked_queues
+    }
+    alive_counts = {
+        queue: sum(
+            queue in managed.queues and managed.process.poll() is None
+            for managed in processes
+        )
+        for queue in tracked_queues
+    }
+    return {
+        queue: {"alive": alive_counts[queue], "target": target_counts[queue]}
+        for queue in tracked_queues
+    }
+
+
 def _sweep_personal_auth_startup(queues: list[str]) -> int:
     """Recover private-auth crash debris before download workers are spawned."""
 
@@ -322,6 +379,20 @@ def main():
         else None
     )
     with_scheduler = "--with-scheduler" in sys.argv[2:]
+
+    # Resolve imports before the resource bridge imports app.config. The
+    # selected CLI value must also be inherited by the bridge and every RQ
+    # child, otherwise a stale environment value can reject startup or make
+    # children use a different count from the supervisor.
+    import_concurrency: int | None = None
+    if queues and queues[0] == "imports":
+        try:
+            import_concurrency = resolve_import_concurrency(argv_concurrency)
+        except ValueError as exc:
+            print(f"[worker_entrypoint] {exc}", file=sys.stderr, flush=True)
+            sys.exit(2)
+        os.environ[IMPORT_WORKER_CONCURRENCY_ENV] = str(import_concurrency)
+
     _register_resource_state_bridge()
 
     try:
@@ -354,10 +425,14 @@ def main():
             flush=True,
         )
     else:
-        try:
-            concurrency = max(1, int(argv_concurrency)) if argv_concurrency is not None else 1
-        except (TypeError, ValueError):
-            concurrency = 1
+        if queues and queues[0] == "imports":
+            # Already validated before app.config was imported.
+            concurrency = import_concurrency
+        else:
+            try:
+                concurrency = max(1, int(argv_concurrency)) if argv_concurrency is not None else 1
+            except (TypeError, ValueError):
+                concurrency = 1
 
     processes: list[ManagedProcess] = []
     pending_restarts: list[PendingRestart] = []
@@ -393,6 +468,9 @@ def main():
     def spawn(worker_queues: tuple[str, ...], *, scheduler: bool) -> ManagedProcess:
         command = _worker_command(list(worker_queues), with_scheduler=scheduler)
         child_env = download_worker_environment(worker_queues, concurrency)
+        if child_env is None and "imports" in worker_queues:
+            child_env = os.environ.copy()
+            child_env[IMPORT_WORKER_CONCURRENCY_ENV] = str(concurrency)
         process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
         managed = ManagedProcess(
             process=process,
@@ -427,6 +505,7 @@ def main():
                 "state": "stopping",
                 "worker_count": len(processes),
                 "expected_worker_count": expected_worker_count,
+                "queue_worker_counts": _queue_worker_counts(processes, worker_specs),
             },
         )
         for managed in processes:
@@ -577,6 +656,7 @@ def main():
                     "concurrency_cap": concurrency_cap,
                     "effective_concurrency": concurrency,
                     "expected_worker_count": expected_worker_count,
+                    "queue_worker_counts": _queue_worker_counts(processes, worker_specs),
                     "extra_queues": extra_queues,
                     "pending_restarts": len(pending_restarts),
                     "crashes_in_window": len(restart_circuit.crashes),

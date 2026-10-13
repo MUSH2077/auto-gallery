@@ -209,7 +209,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - **远端发现队列**：`worker-discovery` 独占并监督 `discovery` 队列。scheduler
   只准入到期远端账号；provider 分页与游标 checkpoint 在子 worker 中执行。任务只携带不透明的
   task/account ID，绝不携带凭据。
-- **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，单一 RQ 导入管线以租约（lease）认领工作，实现无竞争消费者的可重启恢复。
+- **持久化 RQ 导入**：下载产物记录在 PostgreSQL 中，有上限的 RQ 导入消费者通过执行令牌认领任务，并通过作品身份租约认领工作，实现避免重复占有的可重启恢复。消费者按批次共用入库资源名额，不在整个任务期间持有同一把锁。
 - **任务超时**：所有入队调用使用 `job_timeout=7200`（2 小时），防止 RQ 杀掉长时间运行的下载任务（默认 180s）。
 - **代理预检**：启动 gallery-dl 前，worker 先做 DNS 解析 + 代理连通性检查（非阻塞诊断）。
 - **状态机**（权威来源：`backend/app/models/task_state.py`）：`enqueued → downloading → downloaded → importing → complete`，非终态可转入 `paused`、`cancelled`、`failed`、`stale`。旧状态串（`pending` → `enqueued`）通过向后兼容映射接受。存在 `downloaded → complete` 短路：当下载未产生新元数据（内容已在归档中）时直接完成，避免卡在等待导入。暂停任务跳过执行；`cancelled` 为终态但保留数据库记录以便审计。僵死检测使用 Redis 心跳键（`task:{job_id}:heartbeat_ts`，90s TTL）。超时/失败时支持部分导入恢复。`task_state.py` 定义合法转换，`TaskEngine` 协调控制请求，导入状态通过 `import_lifecycle.py` 的锁后仲裁与聚合入口更新。
@@ -720,6 +720,20 @@ Redis 原子核对每个下载与全部资源任务的总内存预留，短暂�
 归档；归档身份查询失败时在领取和启动下载之前延期。准入过程中收到取消，先
 等待 Redis 申请结束并清理本任务占用，再传播取消；下载进程组清理仍先于释放
 来源锁与名额。部署和连接预算见[部署配置](deployment-profiles.md#download-worker-concurrency--下载并发)。
+
+### 有上限的导入消费者
+
+`IMPORT_WORKER_CONCURRENCY` 设置 1～4 个导入消费者，默认 1；直接传入
+`worker_entrypoint.py imports N` 时命令行数量优先，修改环境变量后重新创建
+导入服务。独立维护消费者在 supervisor 的按队列统计中单独计数。
+
+执行领取保留 DownloadJob → ImportJob → TaskRun 锁顺序和当前执行令牌。
+作品领取使用代表元数据行、`FOR UPDATE SKIP LOCKED` 与来源/作品身份租约。
+每次领取和入库阶段仍取得共用入库资源预留及文件锁，等待时不持有 SQL 事务。
+多个消费者可以重叠准备数据和等待，但数据库批次仍由资源准入串行控制。
+每批事务共同提交作品、资产及媒体、元数据整理、搜索 outbox；恢复和旧令牌
+失效保护不依赖消费者数量。连接预算见
+[导入部署配置](deployment-profiles.md#import-worker-concurrency--导入并发)。
 
 ### 图片并行处理
 

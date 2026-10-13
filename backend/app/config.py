@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     download_device_concurrency_limit: int | None = Field(default=None, ge=1, le=5)
     # Internal value inherited by a running download child from its supervisor.
     download_execution_concurrency: int = Field(default=1, ge=1, le=5)
+    # Import consumers are independently configurable. Keep the default
+    # conservative because import jobs share the same container with the
+    # maintenance consumer and can trigger image-processing work.
+    import_worker_concurrency: int = Field(default=1, ge=1, le=4)
     download_queue_max_pending: int = 100
     download_dispatch_recovery_interval_seconds: float = 60.0
     download_dispatch_recovery_grace_seconds: float = 180.0

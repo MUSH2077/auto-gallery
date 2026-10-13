@@ -69,6 +69,20 @@ VIPS／OpenBLAS／OMP／MKL 内部线程，避免进程与线程同时扩容。
 协调键丢失、缩容、取消和进程退出。现有下载生命周期与交接测试继续验证进程
 终止和可靠导入发布。部署预算见[部署配置](deployment-profiles.md#download-worker-concurrency--下载并发)。
 
+### 导入并发
+
+`IMPORT_WORKER_CONCURRENCY` 设置 1～4 个导入消费者，默认 1。未明确传入
+`imports N` 时使用环境变量；supervisor 按队列报告目标数量和存活数量。
+维护消费者独立，重启和调度所有权仍按队列保留。该参数调整消费者数量，
+不放开共用的入库批次资源名额。
+
+在独立 PostgreSQL 和 Redis 中运行 `test_import_concurrency_config.py`、
+`test_worker_concurrency.py` 和 `test_parallel_import_execution.py`，使用
+独立进程与数据库会话验证重复领取、相同作品身份和旧执行令牌失效后的保护。
+保留既有生命周期、最终提交恢复、资源名额和提交后唤醒测试。比较时统一每进程
+连接池及容器资源限制，分别记录任务完成与图片、搜索全部就绪。
+部署预算见[导入并发配置](deployment-profiles.md#import-worker-concurrency--导入并发)。
+
 ### 搜索投递确认
 
 搜索写入取得远端任务 UID 后，先持久保存任务身份和 pending 数据库记录，再检查
