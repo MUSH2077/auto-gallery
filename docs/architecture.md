@@ -60,6 +60,10 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   source links are counted once, and ordered preview IDs remain bounded to ten
   per work. Single-index text searches reuse one Meilisearch client for that
   execution.
+- `api/media.py` resolves the requested asset, its representative and the final
+  storage state with one query. Authentication, signed URLs, ETag/304 responses,
+  quarantined-file handling and purged-file rejection retain their existing
+  behavior.
 - `import_runner.py` processes work slices, while `import_execution.py`
   owns the claim, lease and completion workflow. `import_lifecycle.py` locks
   and rereads parent, child and TaskRun before token arbitration, control

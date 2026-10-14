@@ -30,6 +30,8 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Media serving resolves representatives and storage state in one bounded query
+  while retaining authentication, conditional caching and purge protections.
 - Work-list and single-index search paths reuse bounded query/client state while
   retaining SQL deduplication, timeout and cancellation protections.
 - Fast search writes can complete within a bounded early-confirmation window,

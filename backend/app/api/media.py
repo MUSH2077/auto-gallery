@@ -1,7 +1,8 @@
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import select
+from sqlalchemy import bindparam, func, select
+from sqlalchemy.orm import aliased
 
 from app.auth import bearer_scheme, get_admin_key
 from app.config import settings
@@ -52,38 +53,64 @@ def _safe_path(root: Path, relative: str) -> Path:
     return full
 
 
+_MEDIA_LOOKUP_ORIGINAL_STATE = aliased(AssetStorageState)
+_MEDIA_LOOKUP_REPRESENTATIVE = aliased(Asset)
+_MEDIA_LOOKUP_REPRESENTATIVE_STATE = aliased(AssetStorageState)
+_MEDIA_LOOKUP_SERVING_ID = func.coalesce(
+    VisualAssetGroup.representative_asset_id,
+    _MEDIA_LOOKUP_ORIGINAL_STATE.served_by_asset_id,
+)
+_MEDIA_LOOKUP_QUERY = (
+    select(
+        Asset,
+        _MEDIA_LOOKUP_SERVING_ID.label("serving_id"),
+        _MEDIA_LOOKUP_REPRESENTATIVE,
+        _MEDIA_LOOKUP_ORIGINAL_STATE.storage_state.label("original_storage_state"),
+        _MEDIA_LOOKUP_REPRESENTATIVE_STATE.storage_state.label("representative_storage_state"),
+    )
+    .select_from(Asset)
+    .outerjoin(VisualAssetMember, VisualAssetMember.asset_id == Asset.id)
+    .outerjoin(
+        VisualAssetGroup,
+        VisualAssetGroup.id == VisualAssetMember.group_id,
+    )
+    .outerjoin(
+        _MEDIA_LOOKUP_ORIGINAL_STATE,
+        _MEDIA_LOOKUP_ORIGINAL_STATE.asset_id == Asset.id,
+    )
+    .outerjoin(
+        _MEDIA_LOOKUP_REPRESENTATIVE,
+        _MEDIA_LOOKUP_REPRESENTATIVE.id == _MEDIA_LOOKUP_SERVING_ID,
+    )
+    .outerjoin(
+        _MEDIA_LOOKUP_REPRESENTATIVE_STATE,
+        _MEDIA_LOOKUP_REPRESENTATIVE_STATE.asset_id == _MEDIA_LOOKUP_REPRESENTATIVE.id,
+    )
+    .where(Asset.id == bindparam("media_asset_id"))
+)
+
+
+async def _load_serving_asset(db, asset_id: str):
+    """Load the effective asset and storage state in one bounded query."""
+    result = await db.execute(_MEDIA_LOOKUP_QUERY, {"media_asset_id": asset_id})
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    asset, representative_id, serving_asset, original_storage_state, serving_storage_state = row
+    storage_state = original_storage_state
+    if representative_id and representative_id != asset.id:
+        if not serving_asset:
+            raise HTTPException(status_code=404, detail="Representative asset not found")
+        asset = serving_asset
+        storage_state = serving_storage_state
+    return asset, storage_state
+
+
 async def _serve(asset_id: str, size: str):
     async with async_session() as db:
-        result = await db.execute(select(Asset).where(Asset.id == asset_id))
-        asset = result.scalar_one_or_none()
-        if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
-        representative_id = (
-            await db.execute(
-                select(VisualAssetGroup.representative_asset_id)
-                .join(
-                    VisualAssetMember,
-                    VisualAssetMember.group_id == VisualAssetGroup.id,
-                )
-                .where(VisualAssetMember.asset_id == asset.id)
-            )
-        ).scalar_one_or_none()
-        if not representative_id:
-            state_result = await db.execute(
-                select(AssetStorageState.served_by_asset_id).where(
-                    AssetStorageState.asset_id == asset.id
-                )
-            )
-            representative_id = state_result.scalar_one_or_none()
-        if representative_id and representative_id != asset.id:
-            representative = await db.get(Asset, representative_id)
-            if not representative:
-                raise HTTPException(status_code=404, detail="Representative asset not found")
-            asset = representative
-
-        storage_result = await db.execute(select(AssetStorageState).where(AssetStorageState.asset_id == asset.id))
-        storage_state = storage_result.scalar_one_or_none()
-        if storage_state and storage_state.storage_state == "purged":
+        asset, storage_state = await _load_serving_asset(db, asset_id)
+        if storage_state == "purged":
             raise HTTPException(status_code=404, detail="File not found")
 
         if size in {"thumb", "poster"}:
