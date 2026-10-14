@@ -463,6 +463,26 @@ LAN HTTP remains supported for local access. Its cookies are exposed to anyone
 who can observe that connection; use the HTTPS reverse-proxy entry for
 transport protection.
 
+## API process runtime
+
+The backend starts through `backend/api_entrypoint.py`, which launches the
+native Uvicorn worker supervisor. `API_WORKER_CONCURRENCY` defaults to one and
+accepts values from one through four. The launcher divides the total API
+budgets for one backend container before importing the application: the database budget is 8 steady plus
+4 overflow connections in total, divided per process by floor (`1 = 8 + 4`,
+`2 = 4 + 2`, `4 = 2 + 1`), and the total Meilisearch search concurrency is 4,
+divided per process with a minimum of one. Direct multi-worker Uvicorn startup
+bypasses this allocation and is not a supported deployment path.
+
+`API_THREAD_POOL_SIZE` defaults to a total of 16 blocking-thread slots and is divided by floor (1 = 16, 2 = 8, 4 = 4). The cap is applied separately to the asyncio default executor and the AnyIO thread limiter; these are independent pools, so 16 is not their combined thread limit. API1 still applies its 16-slot cap while bypassing the Redis lease.
+
+Each API process can run the foreground request and WebSocket paths, while one
+Redis lease owner runs the singleton maintenance group. Recovery, resource
+state and health are published through shared snapshots with owner fencing;
+other processes read the shared health state. Foreground latency samples are
+aggregated at a low frequency, and ordinary request handling performs no Redis
+I/O for this aggregation.
+
 ## Backup System
 
 The system includes automated backup capabilities:

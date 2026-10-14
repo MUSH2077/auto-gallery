@@ -254,7 +254,6 @@ _meili_breaker_lock = Lock()
 _meili_breaker_failures = 0
 _meili_breaker_open_until = 0.0
 _meili_breaker_half_open = False
-MEILI_SEARCH_CONCURRENCY = 4
 MEILI_BREAKER_FAILURE_THRESHOLD = 3
 MEILI_BREAKER_OPEN_SECONDS = 30.0
 
@@ -304,7 +303,7 @@ def _meili_search_semaphore() -> asyncio.BoundedSemaphore:
     with _meili_search_gate_lock:
         semaphore = _meili_search_semaphores.get(loop)
         if semaphore is None:
-            semaphore = asyncio.BoundedSemaphore(MEILI_SEARCH_CONCURRENCY)
+            semaphore = asyncio.BoundedSemaphore(int(settings.meili_search_concurrency))
             _meili_search_semaphores[loop] = semaphore
         return semaphore
 
@@ -356,7 +355,7 @@ def meili_search_circuit_status() -> dict[str, Any]:
             ),
             "consecutive_failures": _meili_breaker_failures,
             "retry_after_seconds": round(remaining, 3),
-            "concurrency_limit": MEILI_SEARCH_CONCURRENCY,
+            "concurrency_limit": int(settings.meili_search_concurrency),
         }
 
 

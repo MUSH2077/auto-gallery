@@ -191,7 +191,7 @@ def test_meili_search_is_bounded_batched_and_circuit_broken():
     assert "_meili_search_semaphore" in source
     assert "multi_search" in source
     assert "SearchParams" in source
-    assert search.MEILI_SEARCH_CONCURRENCY == 4
+    assert search.meili_search_circuit_status()["concurrency_limit"] == search.settings.meili_search_concurrency
 
     search._meili_breaker_success()
     try:
@@ -202,6 +202,20 @@ def test_meili_search_is_bounded_batched_and_circuit_broken():
             search._meili_breaker_before_request()
     finally:
         search._meili_breaker_success()
+
+
+@pytest.mark.asyncio
+async def test_meili_search_concurrency_setting_controls_event_loop_gate(monkeypatch):
+    import app.services.search as search
+
+    search._meili_search_semaphores.clear()
+    monkeypatch.setattr(search.settings, "meili_search_concurrency", 2)
+    try:
+        semaphore = search._meili_search_semaphore()
+        assert semaphore._value == 2
+        assert search.meili_search_circuit_status()["concurrency_limit"] == 2
+    finally:
+        search._meili_search_semaphores.clear()
 
 
 @pytest.mark.asyncio

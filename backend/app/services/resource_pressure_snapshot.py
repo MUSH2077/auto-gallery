@@ -20,6 +20,14 @@ _last_published_signature: tuple[Any, ...] | None = None
 _last_published_at = 0.0
 _last_publish_client_id: int | None = None
 
+_FENCED_SNAPSHOT_SET = """
+if redis.call("get", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("set", KEYS[2], ARGV[2], "ex", ARGV[3])
+return 1
+"""
+
 
 def _redis_client(redis_client=None):
     if redis_client is not None:
@@ -29,7 +37,13 @@ def _redis_client(redis_client=None):
     return get_redis()
 
 
-def publish_resource_pressure_snapshot(snapshot: dict[str, Any], redis_client=None) -> bool:
+def publish_resource_pressure_snapshot(
+    snapshot: dict[str, Any],
+    redis_client=None,
+    *,
+    ownership_key: str | None = None,
+    ownership_token: str | None = None,
+) -> bool:
     global _last_published_signature, _last_published_at, _last_publish_client_id
     try:
         client = _redis_client(redis_client)
@@ -77,11 +91,21 @@ def publish_resource_pressure_snapshot(snapshot: dict[str, Any], redis_client=No
             heartbeat_due = now - _last_published_at >= min(30.0, ttl * 0.75)
             if not changed and not heartbeat_due:
                 return True
-        client.set(
-            PRESSURE_SNAPSHOT_KEY,
-            json.dumps(snapshot, separators=(",", ":"), ensure_ascii=True),
-            ex=ttl,
-        )
+        payload = json.dumps(snapshot, separators=(",", ":"), ensure_ascii=True)
+        if ownership_key and ownership_token:
+            fenced = client.eval(
+                _FENCED_SNAPSHOT_SET,
+                2,
+                ownership_key,
+                PRESSURE_SNAPSHOT_KEY,
+                ownership_token,
+                payload,
+                ttl,
+            )
+            if not fenced:
+                return False
+        else:
+            client.set(PRESSURE_SNAPSHOT_KEY, payload, ex=ttl)
         with _publish_lock:
             _last_published_signature = signature
             _last_published_at = now

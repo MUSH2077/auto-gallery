@@ -8,6 +8,12 @@ practical pre-1.0 semantic versioning.
 
 ### Added
 
+- Configurable bounded API workers with per-container connection/search budgets,
+  singleton maintenance ownership and shared health/resource state; the default
+  remains one API process.
+- Configurable API blocking-thread limits through `API_THREAD_POOL_SIZE`.
+  Each independent asyncio and AnyIO pool has a default container budget of
+  16 slots, divided across API processes.
 - Configurable bounded import consumers with queue-specific supervisor counts,
   while retaining batch resource admission and durable execution ownership.
 - Bounded parallel downloads with an optional device-specific limit, shared

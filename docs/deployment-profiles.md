@@ -68,6 +68,42 @@ stores RQ queues as well as cache data. Its container health check performs a
 short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
 writes is not considered healthy.
 
+## API worker concurrency · API 并发
+
+The backend uses `backend/api_entrypoint.py` and defaults to one native Uvicorn
+worker. Set `API_WORKER_CONCURRENCY` from 1 through 4; invalid values fail
+startup. Before importing the application, the launcher divides the total API budgets for this backend container
+by floor: database 8 steady plus 4 overflow connections become
+`1 = 8 + 4`, `2 = 4 + 2`, or `4 = 2 + 1` per process. Total
+`MEILI_SEARCH_CONCURRENCY=4` is divided per process with at least one slot.
+Direct multi-process Uvicorn bypasses these budgets and is not a supported
+formal deployment path.
+
+`API_THREAD_POOL_SIZE` defaults to a total of 16 blocking-thread slots and is divided by floor (1 = 16, 2 = 8, 4 = 4). The per-process cap applies separately to the asyncio executor and the AnyIO thread limiter; they are independent pools, so 16 is not their combined thread limit. API1 still applies the 16-slot cap.
+
+Every API process serves foreground HTTP and WebSocket traffic. A single Redis
+lease owner runs the maintenance group, with fenced resource-snapshot writes and
+shared health/resource snapshots for the other processes. Foreground latency
+samples are aggregated at low frequency; the ordinary request path does not
+perform Redis I/O for this aggregation. Device CPU, memory and connection
+budgets remain operator-selected; the default does not silently increase. Increasing API worker count does not increase the container CPU quota; select both together and measure before raising the worker count.
+
+## API worker 并发说明
+
+backend 使用 `backend/api_entrypoint.py`，默认启动一个 Uvicorn 原生 worker。
+`API_WORKER_CONCURRENCY` 可设为 1～4，非法值会在启动时失败。应用导入前，launcher
+按进程数向下分配单个 backend 容器的 API 总预算：数据库稳定连接 8 加溢出连接 4，每进程为
+`1 = 8 + 4`、`2 = 4 + 2` 或 `4 = 2 + 1`；总
+`MEILI_SEARCH_CONCURRENCY=4` 按进程分配且每进程至少 1。直接使用多进程 Uvicorn
+会绕过这些预算，不属于正式部署方式。
+
+`API_THREAD_POOL_SIZE` 默认为 backend 容器总计 16 个阻塞线程名额，按进程数向下分配为 1 = 16、2 = 8、4 = 4。该上限分别应用于 asyncio 默认线程池和 AnyIO 线程 limiter；两者是独立线程池，16 不是两者合计的线程上限。API1 仍应用 16 个线程名额。
+
+每个 API 进程都处理前台 HTTP 和 WebSocket；Redis 租约只让一个进程运行维护任务组，
+所有权变化受写入栅栏保护，其他进程读取共享健康／资源快照。前台延迟指标低频汇总，
+普通请求路径不执行这部分 Redis I/O。CPU、内存和连接预算由部署者按设备选择，默认值不会静默扩容。
+增加 API 进程数不会自动增加容器的 CPU 额度；CPU 额度和进程数需要一起选择并测量。
+
 ## Download worker concurrency · 下载并发
 
 The download setting selects 1–5 consumers and takes effect after restarting

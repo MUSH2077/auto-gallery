@@ -60,6 +60,28 @@ execution. Run them against disposable PostgreSQL and Redis instances.
 
 ## Backend
 
+### API worker concurrency
+
+The Compose backend uses `backend/api_entrypoint.py`, which starts Uvicorn's
+native worker supervisor. `API_WORKER_CONCURRENCY` defaults to 1 and accepts
+1 through 4; invalid values fail startup. Before the application is imported,
+the launcher divides the total API budgets by floor: database 8 steady plus 4
+overflow connections become `1 = 8 + 4`, `2 = 4 + 2`, or `4 = 2 + 1` per
+process, while total `MEILI_SEARCH_CONCURRENCY=4` is divided per process with
+at least one slot. Direct multi-worker `uvicorn` bypasses this setup and is not
+an approved deployment command.
+
+`API_THREAD_POOL_SIZE` defaults to a total of 16 blocking-thread slots and is divided by floor (1 = 16, 2 = 8, 4 = 4) before Settings is imported. The per-process cap applies separately to the asyncio executor and the AnyIO thread limiter; these are independent pools, so 16 is not their combined thread limit. API1 keeps the 16-slot cap even though it bypasses the Redis maintenance lease.
+
+Every process may serve foreground HTTP and WebSocket traffic. A Redis lease
+elects one maintenance owner and fences ownership changes; shared health and
+resource snapshots are read by the other processes. Foreground metrics are
+aggregated at low frequency, with no Redis operation on the normal request
+path. Keep the default at one unless the target device's CPU, memory and
+connection budgets have been selected deliberately.
+
+Increasing API worker count does not increase the container CPU quota. Select the worker count together with its CPU and memory limits, then verify it under the target workload.
+
 ### Download concurrency
 
 Download worker startup, child admission and health use

@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 
 from app.services.resource_pressure import (
+    PRESSURE_BASELINE_KEY,
     PRESSURE_LATCH_KEY,
     PRESSURE_SNAPSHOT_KEY,
     PressureBaselineWindow,
@@ -1245,6 +1246,74 @@ def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is False
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+
+class _BaselineFenceRedis(_FakeRedis):
+    def eval(self, script, numkeys, *values):
+        assert script
+        assert numkeys == 2
+        owner_key, baseline_key = values[:2]
+        token, payload, ttl = values[2:]
+        if self.get(owner_key) != token:
+            return 0
+        self.set(baseline_key, payload, ex=ttl)
+        return 1
+
+
+def _dirty_baseline_for_persistence():
+    baseline = PressureBaselineWindow(clock=lambda: 600.0)
+    baseline.hydrate(None)
+    baseline._samples.append((600.0, 1.0, 2.0))
+    baseline._dirty = True
+    baseline._last_persisted_at = 0.0
+    return baseline
+
+
+def test_baseline_persist_rejects_old_owner_after_guard_passed():
+    redis = _BaselineFenceRedis()
+    redis.set("resource:owner", "new-owner")
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(
+        redis_client=redis,
+        ownership_key="resource:owner",
+        ownership_token="old-owner",
+    )
+
+    assert redis.get(PRESSURE_BASELINE_KEY) is None
+    assert monitor.baseline._dirty is True
+
+
+def test_baseline_persist_accepts_current_owner_and_marks_persisted():
+    redis = _BaselineFenceRedis()
+    redis.set("resource:owner", "new-owner")
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(
+        redis_client=redis,
+        ownership_key="resource:owner",
+        ownership_token="new-owner",
+    )
+
+    assert json.loads(redis.get(PRESSURE_BASELINE_KEY))["samples"] == [[600.0, 1.0, 2.0]]
+    assert monitor.baseline._dirty is False
+
+
+def test_baseline_persist_without_ownership_keeps_api1_path():
+    redis = _FakeRedis()
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(redis_client=redis)
+
+    assert json.loads(redis.get(PRESSURE_BASELINE_KEY))["samples"] == [[600.0, 1.0, 2.0]]
+    assert monitor.baseline._dirty is False
 
 
 def test_worker_oom_event_identity_depends_only_on_cgroup_and_counter():

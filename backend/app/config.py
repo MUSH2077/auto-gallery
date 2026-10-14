@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     # conservative because import jobs share the same container with the
     # maintenance consumer and can trigger image-processing work.
     import_worker_concurrency: int = Field(default=1, ge=1, le=4)
+    # API processes share one backend-container connection budget; the launcher
+    # divides DB_POOL_SIZE/DB_MAX_OVERFLOW before importing Settings.
+    api_worker_concurrency: int = Field(default=1, ge=1, le=4)
+    # Shared cap for all API processes; search services consume this budget.
+    meili_search_concurrency: int = Field(default=4, ge=1, le=4)
+    # Budget for each independent API blocking-thread pool, divided per process.
+    api_thread_pool_size: int = Field(default=16, ge=1, le=64)
     download_queue_max_pending: int = 100
     download_dispatch_recovery_interval_seconds: float = 60.0
     download_dispatch_recovery_grace_seconds: float = 180.0

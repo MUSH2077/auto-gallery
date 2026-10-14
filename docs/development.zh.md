@@ -55,6 +55,22 @@ VIPS／OpenBLAS／OMP／MKL 内部线程，避免进程与线程同时扩容。
 
 ## 后端
 
+### API worker 并发
+
+Compose 的 backend 使用 `backend/api_entrypoint.py`，由 Uvicorn 原生 supervisor
+启动 API 进程。`API_WORKER_CONCURRENCY` 默认 1，允许 1～4；非法值会在启动时失败。
+应用导入前，launcher 按进程数向下分配单个 backend 容器的 API 总预算：数据库稳定连接 8 加溢出连接 4，
+每进程为 `1 = 8 + 4`、`2 = 4 + 2` 或 `4 = 2 + 1`；总
+`MEILI_SEARCH_CONCURRENCY=4` 同样按进程分配，但每进程至少保留 1。直接用多进程
+`uvicorn` 会绕过这套预算分配，不属于正式部署命令。
+
+`API_THREAD_POOL_SIZE` 默认为 backend 容器总计 16 个阻塞线程名额，应用导入前向下分配为 1 = 16、2 = 8、4 = 4。该上限分别应用于 asyncio 默认线程池和 AnyIO 线程 limiter；两者是独立线程池，16 不是两者合计的线程上限。API1 虽然跳过 Redis 租约，仍使用 16 个线程名额。
+
+每个进程都可以处理前台 HTTP 和 WebSocket。Redis 租约选出一个维护任务所有者，并在
+所有权变化时保护资源快照的写入；其他进程读取共享健康和资源快照。前台指标低频汇总，普通请求
+路径不执行 Redis 操作。除非已经按目标设备 CPU、内存和连接预算做出选择，否则保留默认 1。
+增加 API 进程数不会自动增加容器的 CPU 额度；两者应一起选择，并按目标负载验证。
+
 ### 下载并发
 
 下载启动、子进程准入和健康信息共用 `services/download_concurrency.py`。

@@ -13,6 +13,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api import api_router
+from app.api_runtime import (
+    ApiMaintenanceCoordinator,
+    configure_api_thread_budget,
+    resource_pressure_owner_kwargs,
+)
 from app.api.media import router as media_router
 from app.api_docs import create_api_docs_router
 from app.config import settings
@@ -148,6 +153,10 @@ def _redact_validation_errors(errors, *, oauth_callback: bool):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Install the per-process blocking-thread limits before startup auth,
+    # session and filesystem work can call asyncio.to_thread/AnyIO.
+    api_thread_executor = configure_api_thread_budget(settings.api_thread_pool_size)
+    maintenance_coordinator = ApiMaintenanceCoordinator()
     # Critical service secrets are validated at config load time; the admin
     # bootstrap password may use the documented first-login default and is
     # always forced through password rotation.
@@ -188,7 +197,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Stale detection cycle failed", exc_info=True)
 
-    stale_task = asyncio.create_task(stale_detection_loop())
     logger.info("Stale detection background task started")
 
     async def operation_maintenance_loop():
@@ -234,7 +242,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Terminal task compaction failed", exc_info=True)
 
-    operation_maintenance_task = asyncio.create_task(operation_maintenance_loop())
     logger.info(
         "Task reconciliation/compaction started (%.0fs/%.0fs)",
         max(30.0, float(settings.task_reconciliation_interval_seconds)),
@@ -257,7 +264,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Import recovery cycle failed", exc_info=True)
 
-    import_recovery_task = asyncio.create_task(import_recovery_loop())
     logger.info("Import recovery background task started")
 
     async def download_dispatch_recovery_loop():
@@ -289,7 +295,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Download dispatch outbox recovery failed", exc_info=True)
 
-    download_dispatch_recovery_task = asyncio.create_task(download_dispatch_recovery_loop())
     logger.info(
         "Download dispatch outbox recovery started (every %.0fs, grace %.0fs, batch %d)",
         max(10.0, float(settings.download_dispatch_recovery_interval_seconds)),
@@ -314,7 +319,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Admin TaskRun dispatch recovery failed", exc_info=True)
 
-    admin_dispatch_recovery_task = asyncio.create_task(admin_dispatch_recovery_loop())
     logger.info("Admin TaskRun dispatch recovery started (every 30s, grace 15s, batch 25)")
 
     # ── Memory monitor — logs RSS so an OOM leaves a visible climb in the
@@ -341,7 +345,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Memory monitor cycle failed", exc_info=True)
 
-    memory_task = asyncio.create_task(memory_monitor_loop())
     logger.info("Memory monitor background task started (warn>=%dMB, every %ds)",
                 settings.memory_warn_mb, settings.memory_log_interval_seconds)
 
@@ -349,7 +352,29 @@ async def lifespan(app: FastAPI):
     # Redis so every RQ process makes the same admission decision without
     # requiring Docker socket access.
     from app.services.resource_pressure import resource_pressure_monitor_loop
-    resource_pressure_task = asyncio.create_task(resource_pressure_monitor_loop())
+    from app.services.resource_pressure_sampling import foreground_latency_snapshot
+
+    async def foreground_sample_loop():
+        # This runs outside request handling. Each API process contributes its
+        # local rolling window so the owner can aggregate all API processes.
+        while True:
+            await asyncio.sleep(10)
+            await maintenance_coordinator.publish_foreground_sample(
+                foreground_latency_snapshot()
+            )
+
+    async def foreground_aggregate_loop():
+        while True:
+            await asyncio.sleep(10)
+            await maintenance_coordinator.aggregate_foreground_samples()
+
+    async def resource_pressure_loop():
+        # Keep the original sampler, state machine, error handling and logging,
+        # while supplying the low-frequency aggregate from all API processes.
+        await resource_pressure_monitor_loop(
+            foreground_provider=maintenance_coordinator.read_foreground_aggregate_sync,
+            **resource_pressure_owner_kwargs(maintenance_coordinator),
+        )
     logger.info(
         "Resource pressure monitor started (every %.0fs)",
         settings.resource_pressure_sample_interval_seconds,
@@ -360,74 +385,80 @@ async def lifespan(app: FastAPI):
         _gallerydl_version = await asyncio.to_thread(_probe_gallerydl_version)
     except Exception:
         _gallerydl_version = None
-    try:
-        # Build once before the application starts accepting requests.  Every
-        # health HTTP request can then remain a pure in-memory snapshot read.
-        _health_snapshot = await _build_health_snapshot()
-    except Exception:
-        logger.warning("Initial health snapshot aggregation failed", exc_info=True)
+    if settings.api_worker_concurrency > 1:
+        # The coordinator group performs the first shared aggregation; avoid
+        # N duplicate DB/Redis health probes while workers are starting.
         _health_snapshot = _starting_health_snapshot()
+    else:
+        try:
+            # Build once before the application starts accepting requests. Every
+            # health HTTP request can then remain a pure in-memory snapshot read.
+            _health_snapshot = await _build_health_snapshot()
+        except Exception:
+            logger.warning("Initial health snapshot aggregation failed", exc_info=True)
+            _health_snapshot = _starting_health_snapshot()
 
     async def health_aggregation_loop():
         global _health_snapshot
         while True:
             await asyncio.sleep(15)
             try:
-                _health_snapshot = await _build_health_snapshot()
+                snapshot = await _build_health_snapshot()
+                _health_snapshot = snapshot
+                await maintenance_coordinator.publish_health_snapshot(snapshot)
             except Exception:
                 logger.warning("Health snapshot aggregation failed", exc_info=True)
 
-    health_aggregation_task = asyncio.create_task(health_aggregation_loop())
-    logger.info("System health snapshot aggregation started (15s)")
+    async def health_sync_loop():
+        global _health_snapshot
+        while True:
+            await asyncio.sleep(15)
+            if settings.api_worker_concurrency <= 1:
+                continue
+            snapshot = await maintenance_coordinator.read_health_snapshot()
+            if snapshot is not None:
+                _health_snapshot = snapshot
+                continue
+            # A Redis outage must not leave non-owner workers with a permanent
+            # startup snapshot; this is an infrequent fallback, outside requests.
+            try:
+                _health_snapshot = await _build_health_snapshot()
+            except Exception:
+                logger.warning("Local health snapshot fallback failed", exc_info=True)
+
+    maintenance_coordinator.enabled = settings.api_worker_concurrency > 1
+    maintenance_task = asyncio.create_task(
+        maintenance_coordinator.run(
+            [
+                stale_detection_loop,
+                operation_maintenance_loop,
+                import_recovery_loop,
+                download_dispatch_recovery_loop,
+                admin_dispatch_recovery_loop,
+                resource_pressure_loop,
+                health_aggregation_loop,
+                foreground_aggregate_loop,
+            ]
+        )
+    )
+    memory_task = asyncio.create_task(memory_monitor_loop())
+    health_sync_task = asyncio.create_task(health_sync_loop())
+    foreground_sample_task = asyncio.create_task(foreground_sample_loop())
+    logger.info("API maintenance coordination started (workers=%d)", settings.api_worker_concurrency)
 
     yield
 
     # ── Cleanup ──
-    ws_task.cancel()
-    stale_task.cancel()
-    operation_maintenance_task.cancel()
-    import_recovery_task.cancel()
-    download_dispatch_recovery_task.cancel()
-    admin_dispatch_recovery_task.cancel()
-    memory_task.cancel()
-    resource_pressure_task.cancel()
-    health_aggregation_task.cancel()
-    try:
-        await ws_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await stale_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await operation_maintenance_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await import_recovery_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await download_dispatch_recovery_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await admin_dispatch_recovery_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await memory_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await resource_pressure_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await health_aggregation_task
-    except asyncio.CancelledError:
-        pass
+    await maintenance_coordinator.stop()
+    for task in (ws_task, maintenance_task, memory_task, health_sync_task, foreground_sample_task):
+        task.cancel()
+    for task in (ws_task, maintenance_task, memory_task, health_sync_task, foreground_sample_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    await maintenance_coordinator.release()
+    api_thread_executor.shutdown(wait=False, cancel_futures=True)
     await engine.dispose()
     logger.info("backend stopped")
 
