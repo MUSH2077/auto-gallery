@@ -33,15 +33,12 @@ from meilisearch_python_sdk import Client as MeiliClient
 from meilisearch_python_sdk.models.search import SearchParams
 from meilisearch_python_sdk.models.settings import MeilisearchSettings
 from sqlalchemy import String, and_, case, cast, exists, func, literal_column, not_, or_, select
-from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.config import settings
 from app.database import async_session
 from app.models import (
     Asset,
-    AssetSource,
     Creator,
     CreatorAlias,
     DownloadJob,
@@ -104,6 +101,7 @@ from app.services.search_projection_fields import (
     _alias_projection_fields,
     _merge_alias_projection_fields,
 )
+from app.services.search_work_page import WORK_PAGE_MEDIA_STATEMENT
 from app.services.search_filters import (
     DEFAULT_SORT,
     HAS_FIELD,
@@ -2354,15 +2352,19 @@ class SearchService(SearchProjection):
                         count_kwargs = {key: value for key, value in kwargs.items() if key not in {"offset", "limit", "sort"}}
                         count_kwargs.update(page=1, hits_per_page=1, attributes_to_retrieve=["id"])
                         requests.append((uid, count_kwargs))
-                client = _client(timeout_seconds=socket_timeout)
-                multi_search = getattr(client, "multi_search", None)
+                multi_search_client = _client(timeout_seconds=socket_timeout)
+                multi_search = getattr(multi_search_client, "multi_search", None)
                 if len(requests) > 1 and callable(multi_search):
-                    results = list(multi_search([
+                    results = list(multi_search_client.multi_search([
                         SearchParams(index_uid=uid, query=text, **kwargs)
                         for uid, kwargs in requests
                     ]))
                 else:
-                    client = _client(timeout_seconds=max(0.1, socket_timeout / len(requests)))
+                    client = (
+                        multi_search_client
+                        if len(requests) == 1
+                        else _client(timeout_seconds=max(0.1, socket_timeout / len(requests)))
+                    )
                     results = [client.index(uid).search(text, **kwargs) for uid, kwargs in requests]
                 if len(results) != len(requests):
                     raise RuntimeError("Meilisearch returned an incomplete multi-search response")
@@ -4188,122 +4190,10 @@ class SearchService(SearchProjection):
                 creator_id_seen[wid].add(rendered_id)
                 creator_ids[wid].append(rendered_id)
 
-        # Collapse duplicate asset links in SQL, then return one aggregate row
-        # plus at most ten preview IDs per work.  The old hydration transferred
-        # every asset row to Python, so one unusually large work could make an
-        # otherwise 30-item page consume unbounded memory.
-        distinct_assets = (
-            select(
-                WorkSource.work_id.label("work_id"),
-                Asset.id.label("asset_id"),
-                Asset.mime_type.label("mime_type"),
-                Asset.file_name.label("file_name"),
-                Asset.width.label("width"),
-                Asset.height.label("height"),
-                func.min(AssetSource.ordinal).label("ordinal"),
-                func.bool_or(
-                    func.lower(func.coalesce(AssetSource.role, "")) == "video"
-                ).label("video_role"),
-                func.bool_or(
-                    func.lower(func.coalesce(AssetSource.role, "")).in_(
-                        ("animation", "archive")
-                    )
-                ).label("animation_role"),
-            )
-            .join(AssetSource, AssetSource.work_source_id == WorkSource.id)
-            .join(Asset, Asset.id == AssetSource.asset_id)
-            .where(WorkSource.work_id.in_(work_ids))
-            .group_by(
-                WorkSource.work_id,
-                Asset.id,
-                Asset.mime_type,
-                Asset.file_name,
-                Asset.width,
-                Asset.height,
-            )
-            .cte("work_page_distinct_assets")
-            .prefix_with("MATERIALIZED", dialect="postgresql")
-        )
-        lowered_mime = func.lower(func.coalesce(distinct_assets.c.mime_type, ""))
-        lowered_name = func.lower(func.coalesce(distinct_assets.c.file_name, ""))
-        media_summary = (
-            select(
-                distinct_assets.c.work_id,
-                func.count().label("asset_count"),
-                func.bool_or(lowered_mime.like("image/%")).label("has_image"),
-                func.bool_or(or_(
-                    distinct_assets.c.video_role,
-                    lowered_mime.like("video/%"),
-                    lowered_name.like("%.mp4"),
-                    lowered_name.like("%.webm"),
-                )).label("has_video"),
-                func.bool_or(or_(
-                    distinct_assets.c.animation_role,
-                    lowered_mime.in_(("image/gif", "image/apng")),
-                    lowered_name.like("%.gif"),
-                    lowered_name.like("%.zip"),
-                )).label("has_animation"),
-            )
-            .group_by(distinct_assets.c.work_id)
-            .cte("work_page_media_summary")
-        )
-
-        ranked_assets = select(
-            distinct_assets.c.work_id,
-            distinct_assets.c.asset_id,
-            distinct_assets.c.width,
-            distinct_assets.c.height,
-            func.row_number().over(
-                partition_by=distinct_assets.c.work_id,
-                order_by=(
-                    distinct_assets.c.ordinal.asc().nulls_last(),
-                    distinct_assets.c.file_name,
-                    distinct_assets.c.asset_id,
-                ),
-            ).label("preview_position"),
-        ).cte("work_page_ranked_assets")
-        media_previews = (
-            select(
-                ranked_assets.c.work_id,
-                func.array_agg(aggregate_order_by(
-                    ranked_assets.c.asset_id,
-                    ranked_assets.c.preview_position,
-                )).label("preview_asset_ids"),
-                func.max(ranked_assets.c.width).filter(
-                    ranked_assets.c.preview_position == 1
-                ).label("preview_width"),
-                func.max(ranked_assets.c.height).filter(
-                    ranked_assets.c.preview_position == 1
-                ).label("preview_height"),
-            )
-            .where(ranked_assets.c.preview_position <= 10)
-            .group_by(ranked_assets.c.work_id)
-            .cte("work_page_media_previews")
-        )
-        thumbnail_asset = aliased(Asset)
+        # The CTE graph is built once in search_work_page; only page IDs vary.
         media_rows = (await self.db.execute(
-            select(
-                media_summary.c.work_id,
-                media_summary.c.asset_count,
-                media_summary.c.has_image,
-                media_summary.c.has_video,
-                media_summary.c.has_animation,
-                media_previews.c.preview_asset_ids,
-                media_previews.c.preview_width,
-                media_previews.c.preview_height,
-                thumbnail_asset.width.label("thumbnail_width"),
-                thumbnail_asset.height.label("thumbnail_height"),
-            )
-            .select_from(media_summary)
-            .join(Work, Work.id == media_summary.c.work_id)
-            .outerjoin(
-                thumbnail_asset,
-                thumbnail_asset.id == Work.thumbnail_asset_id,
-            )
-            .outerjoin(
-                media_previews,
-                media_previews.c.work_id == media_summary.c.work_id,
-            )
+            WORK_PAGE_MEDIA_STATEMENT,
+            {"work_ids": work_ids},
         )).all()
         asset_summary = {
             work_id: {

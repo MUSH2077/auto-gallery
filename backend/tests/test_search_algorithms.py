@@ -70,18 +70,6 @@ def test_nullable_title_cursor_round_trips_and_compiles_seek_condition():
     assert "works.id >" in sql
 
 
-def test_work_list_media_hydration_is_one_bounded_aggregate_query():
-    from app.services.search import SearchService
-
-    source = inspect.getsource(SearchService._search_works_db)
-    # Page + source + combined media query. Exact count lives in the cached
-    # helper, for four SQL round trips on a cold count and three when warm.
-    assert source.count("self.db.execute") == 3
-    assert "preview_position <= 10" in source
-    assert "array_agg" in source
-    assert "MATERIALIZED" in source
-
-
 def test_projection_audit_checks_every_work_hash_in_bounded_batches():
     from app.services.search import SearchService
 

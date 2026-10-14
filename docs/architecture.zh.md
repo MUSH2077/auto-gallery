@@ -52,6 +52,9 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   `scheduler_decisions.py` 的来源资格与凭据阻塞解释。
 - `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
   SearchService 的执行路径中分离。
+- `search_work_page.py` 持有可复用的作品页资产查询语句，每次请求绑定自己的作品 ID；
+  多个来源关联同一资产时只计数一次，按顺序返回的预览 ID 保持每个作品最多 10 个。
+  单索引文本搜索在一次执行中复用同一个 Meilisearch 客户端。
 - `import_runner.py` 处理作品微批，`import_execution.py` 管理领取、租约与完成流程。
   `import_lifecycle.py` 按父任务、ImportJob、TaskRun 顺序锁后重读，负责 token
   仲裁、导入控制命令和父子聚合；涉及 artifact 时先获取 artifact 锁。

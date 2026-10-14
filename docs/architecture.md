@@ -55,6 +55,11 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   for the same source eligibility and credential-blocking interpretation.
 - `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
   compilation from the SearchService execution path.
+- `search_work_page.py` owns the reusable SQLAlchemy statement for page asset
+  hydration. Each request binds its own work IDs; assets shared by several
+  source links are counted once, and ordered preview IDs remain bounded to ten
+  per work. Single-index text searches reuse one Meilisearch client for that
+  execution.
 - `import_runner.py` processes work slices, while `import_execution.py`
   owns the claim, lease and completion workflow. `import_lifecycle.py` locks
   and rereads parent, child and TaskRun before token arbitration, control

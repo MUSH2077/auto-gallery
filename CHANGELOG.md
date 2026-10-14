@@ -30,6 +30,8 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Work-list and single-index search paths reuse bounded query/client state while
+  retaining SQL deduplication, timeout and cancellation protections.
 - Fast search writes can complete within a bounded early-confirmation window,
   while slow tasks retain delayed polling and durable recovery.
 - Personal uploads reuse complete, consistent identity records to reduce

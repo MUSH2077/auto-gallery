@@ -498,6 +498,41 @@ class TestSearchService:
         assert seen["cursor"] is None
 
     @pytest.mark.asyncio
+    async def test_single_index_search_constructs_one_meili_client(self, monkeypatch):
+        from app.services import search
+        from app.services.search import SearchService
+        from app.services.search_language import parse_search_query
+
+        class Index:
+            def search(self, _text, **_kwargs):
+                return SimpleNamespace(hits=[], estimated_total_hits=0)
+
+        class Client:
+            def index(self, _uid):
+                return Index()
+
+        created = []
+
+        def make_client(**_kwargs):
+            client = Client()
+            created.append(client)
+            return client
+
+        monkeypatch.setattr(search, "_client", make_client)
+        service = SearchService(SimpleNamespace())
+        result = await service._search_meili(
+            parse_search_query("landscape", "works"),
+            ["works"],
+            {},
+            0,
+            10,
+            False,
+        )
+
+        assert result["works"]["items"] == []
+        assert len(created) == 1
+
+    @pytest.mark.asyncio
     async def test_meili_random_page_wraps_ring_and_emits_bound_cursor(self, monkeypatch):
         from app.services import search
         from app.services.search import (
