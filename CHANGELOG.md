@@ -36,6 +36,9 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Manual uploads reuse the account returned by atomic quota accounting and avoid
+  redundant creator/work projection fanout for timestamp-only alias observations,
+  while retaining concurrent alias changes and source recovery.
 - Media serving resolves representatives and storage state in one bounded query
   while retaining authentication, conditional caching and purge protections.
 - Work-list and single-index search paths reuse bounded query/client state while

@@ -607,7 +607,19 @@ alias observation timestamps in one upsert; it does not cache identity state
 across requests. Incomplete or changed identities, and uploads targeting an
 explicit creator, follow the general identity-provisioning path. This reduces
 repeated identity-maintenance queries while retaining the atomic user quota
-update and the caller-owned transaction.
+update. `save_upload` owns and commits this save transaction; only after that
+commit does it call `enqueue_import` to publish the durable import intent. That
+UPDATE uses RETURNING to obtain and refresh the current user without a second
+query while holding the quota lock. Identity resolution and file metadata use
+the returned account, including when authentication supplies an object from
+another session. Quota, identity, job, artifact and projection writes retain
+their transaction and lock order.
+For a complete personal identity with an enabled source, alias upserts refresh
+observation times and compare returned row IDs and semantic fields. Timestamp-only
+observations do not repeat creator and dependent-work projection fanout. Concurrent
+alias changes or replacements, source re-enablement, initial provisioning, repairs
+and explicit creator uploads retain projection registration. Exact database alias
+search still uses observation times; import-time work and asset projections remain.
 
 Foreground upload copying, persistence and import publication hold the shared
 POSIX maintenance barrier. Registered clear operations retain its exclusive

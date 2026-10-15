@@ -78,6 +78,12 @@ class UploadResult:
     quota_bytes: int | None
 
 
+@dataclass(slots=True)
+class _UploadIdentity:
+    provisioned: ProvisionedIdentity
+    projection_required: bool
+
+
 def _sniff_magic(header: bytes, ext: str) -> bool:
     """Validate file content matches its extension via magic bytes.
 
@@ -162,14 +168,14 @@ class ManualUploadService:
                 or_(User.upload_quota_bytes.is_(None),
                     User.upload_used_bytes + total_size <= User.upload_quota_bytes),
             ).values(upload_used_bytes=User.upload_used_bytes + total_size)
-                .returning(User.upload_used_bytes, User.upload_quota_bytes)
-                .execution_options(synchronize_session=False))).one_or_none()
+                .returning(User)
+                .execution_options(synchronize_session=False, populate_existing=True))).scalar_one_or_none()
             if charged is None:
                 raise QuotaExceededError("Upload would exceed the current upload quota", code="upload_quota_exceeded")
-            used_bytes, quota_bytes = charged
-            # Refresh a session-resident User too; callers must not observe its
-            # pre-upload usage after the atomic database increment.
-            await db.get(User, user.id, populate_existing=True)
+            # RETURNING refreshes a session-resident account and supplies the
+            # current account for detached authentication objects in one round trip.
+            user = charged
+            used_bytes, quota_bytes = user.upload_used_bytes, user.upload_quota_bytes
             source_creator_id, source_url, display_name, target_creator_id = await self._resolve_identity(
                 db, user, creator_id
             )
@@ -219,7 +225,9 @@ class ManualUploadService:
                 raw_metadata={},
                 creator_dir=f"user_{user.username}",
             )
-            provisioned = await self._provision_identity(db, identity, reuse_personal=target_creator_id is None)
+            resolved = await self._provision_identity(db, identity, reuse_personal=target_creator_id is None)
+            provisioned = resolved.provisioned
+            projection_required = resolved.projection_required or not provisioned.subscription_source.is_enabled
             # Manual uploads are user-intentional. Unlike gallery-dl-discovered
             # subscription sources, which default to is_enabled=False pending
             # admin review (CLAUDE.md: "Only Pixiv defaults to is_enabled=True on
@@ -257,10 +265,11 @@ class ManualUploadService:
                     rows.append(ar)
             await ArtifactLedger(db).upsert_many(rows)
 
-            from app.services.creator import CreatorService
-            await CreatorService(db)._request_creator_projection(
-                provisioned.creator.id,
-            )
+            if projection_required:
+                from app.services.creator import CreatorService
+                await CreatorService(db)._request_creator_projection(
+                    provisioned.creator.id,
+                )
             await db.commit()
         except BaseException:
             try:
@@ -283,7 +292,7 @@ class ManualUploadService:
 
     async def _provision_identity(
         self, db: AsyncSession, identity: MetadataIdentity, *, reuse_personal: bool,
-    ) -> ProvisionedIdentity:
+    ) -> _UploadIdentity:
         """Reuse a complete personal space; recover incomplete/curated identities normally.
 
         The caller still owns the atomic user quota lock. This replaces repeated
@@ -328,8 +337,14 @@ class ManualUploadService:
                         for a in aliases
                     }
                     if existing == expected:
-                        # Keep alias observation timestamps and conflict behavior;
-                        # one upsert replaces the per-alias recovery writes.
+                        # A concurrent edit must remain authoritative. Refresh
+                        # observation times without overwriting semantic fields;
+                        # RETURNING detects changed or replaced rows before we
+                        # decide whether reference documents need a refresh.
+                        observed = {
+                            (a.source, a.kind, a.normalized_value):
+                            (a.id, a.value, a.source_ref, a.is_current) for a in aliases
+                        }
                         from sqlalchemy import func
                         statement = pg_insert(CreatorAlias).values([
                             {"creator_id": creator.id, "source": key[0], "kind": key[1],
@@ -337,19 +352,30 @@ class ManualUploadService:
                              "source_ref": value[1], "is_current": value[2]}
                             for key, value in expected.items()
                         ])
-                        await db.execute(statement.on_conflict_do_update(
+                        returned = (await db.execute(statement.on_conflict_do_update(
                             constraint="uq_creator_aliases_identity",
-                            set_={"value": statement.excluded.value,
-                                  "source_ref": statement.excluded.source_ref,
-                                  "is_current": statement.excluded.is_current,
-                                  "last_seen_at": func.now(), "updated_at": func.now()},
-                        ))
-                        return ProvisionedIdentity(
-                            creator=creator, subscription=subscription,
-                            subscription_source=repository, source_creator=source_creator,
-                            enrichment_status="metadata_only",
+                            set_={"last_seen_at": func.now(), "updated_at": func.now()},
+                        ).returning(
+                            CreatorAlias.id, CreatorAlias.source, CreatorAlias.kind,
+                            CreatorAlias.normalized_value, CreatorAlias.value,
+                            CreatorAlias.source_ref, CreatorAlias.is_current,
+                        ))).all()
+                        actual = {
+                            (source, kind, normalized): (alias_id, value, source_ref, is_current)
+                            for alias_id, source, kind, normalized, value, source_ref, is_current in returned
+                        }
+                        return _UploadIdentity(
+                            provisioned=ProvisionedIdentity(
+                                creator=creator, subscription=subscription,
+                                subscription_source=repository, source_creator=source_creator,
+                                enrichment_status="metadata_only",
+                            ),
+                            projection_required=actual != observed,
                         )
-        return await provision_identity_for_disk_import(db, identity, prefer_danbooru=False)
+        return _UploadIdentity(
+            provisioned=await provision_identity_for_disk_import(db, identity, prefer_danbooru=False),
+            projection_required=True,
+        )
 
     async def _resolve_identity(
         self, db: AsyncSession, user: User, creator_id: str | None

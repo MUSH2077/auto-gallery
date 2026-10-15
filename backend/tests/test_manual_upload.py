@@ -72,7 +72,6 @@ async def test_personal_upload_reuses_complete_identity_and_repairs_missing_part
 
 
 async def _clear(db):
-    await db.execute(text(f"DELETE FROM users WHERE username LIKE '{PREFIX}%'"))
     await db.execute(text("""
         TRUNCATE
             storage_artifacts,
@@ -91,6 +90,9 @@ async def _clear(db):
             creators
         RESTART IDENTITY CASCADE
     """))
+    # Subscription truncation first removes private memberships that reference
+    # fixture accounts through non-cascading user foreign keys.
+    await db.execute(text(f"DELETE FROM users WHERE username LIKE '{PREFIX}%'"))
     await db.commit()
 
 
@@ -738,6 +740,11 @@ async def test_save_upload_runs_through_real_import_runner(tmp_path, monkeypatch
         async with async_session() as db:
             await _clear(db)
             user = await _make_user(db, f"{PREFIX}grace", quota=100 * 1024 * 1024)
+            with monkeypatch.context() as warm:
+                warm.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+                await ManualUploadService().save_upload(
+                    db, user, [_make_upload_file(tmp_path, "warm.png", _png_bytes())], {},
+                )
 
             incoming = tmp_path / "incoming"
             incoming.mkdir()
@@ -880,6 +887,254 @@ async def test_save_upload_video_asset_imports_through_real_import_runner(tmp_pa
             assert len(assets) == 1
             assert assets[0].file_name.endswith(".webm")
             assert assets[0].thumb_sm_path is None
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+async def _upload_reference_ids(db):
+    from app.models import SourceCreator, SubscriptionSource
+    source = (await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalar_one()
+    repository = (await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalar_one()
+    return source.creator_id, repository.subscription_id, repository.id
+
+
+async def _upload_projection_versions(db, identities):
+    from app.models import SearchProjectionOutbox
+    rows = (await db.execute(
+        select(SearchProjectionOutbox.index_uid, SearchProjectionOutbox.entity_id, SearchProjectionOutbox.version)
+        .where(SearchProjectionOutbox.entity_id.in_([str(value) for value in identities]))
+    )).all()
+    return {(index, identity): version for index, identity, version in rows}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_complete_upload_refreshes_observation_without_reference_fanout(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import update
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import Creator, CreatorAlias, UserSubscription
+    from app.services.manual_upload import ManualUploadService
+    from app.services.search import SearchService
+    from app.services.search_projection import SearchProjection
+    from app.services.search_projection_outbox import (
+        request_search_projection, DEFAULT_CREATORS_INDEX_UID,
+        DEFAULT_REPOSITORIES_INDEX_UID, DEFAULT_SUBSCRIPTIONS_INDEX_UID,
+        DEFAULT_MEMBERSHIPS_INDEX_UID,
+    )
+    monkeypatch.setattr(settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "unchanged")
+            service = ManualUploadService()
+            await service.save_upload(db, user, [_make_upload_file(tmp_path, "first.png", _png_bytes())], {})
+            creator_id, subscription_id, repository_id = await _upload_reference_ids(db)
+            shared = (await db.execute(select(CreatorAlias).where(
+                CreatorAlias.creator_id == creator_id, CreatorAlias.source == "local", CreatorAlias.kind == "name",
+            ).limit(1))).scalar_one()
+            competitor = Creator(name="other-observer", display_name="Other observer")
+            db.add(competitor)
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(CreatorAlias(
+                creator_id=competitor.id, source=shared.source, kind=shared.kind,
+                value=shared.value, normalized_value=shared.normalized_value,
+                source_ref="other-observation", is_current=True, last_seen_at=now - timedelta(days=1),
+            ))
+            await db.execute(update(CreatorAlias).where(CreatorAlias.creator_id == creator_id)
+                             .values(last_seen_at=now - timedelta(days=2)))
+            member = UserSubscription(user_id=user.id, subscription_id=subscription_id, name="private upload")
+            db.add(member)
+            await db.flush()
+            await request_search_projection(db, membership_ids=[member.id])
+            await db.commit()
+            scopes = {
+                DEFAULT_CREATORS_INDEX_UID: creator_id, DEFAULT_REPOSITORIES_INDEX_UID: repository_id,
+                DEFAULT_SUBSCRIPTIONS_INDEX_UID: subscription_id, DEFAULT_MEMBERSHIPS_INDEX_UID: member.id,
+            }
+            versions = await _upload_projection_versions(db, scopes.values())
+            projection = SearchProjection(db)
+            before_docs = {index: await projection.build(index, [identity]) for index, identity in scopes.items()}
+            aliases = list((await db.execute(select(CreatorAlias).where(CreatorAlias.creator_id == creator_id))).scalars())
+            before_seen = {a.id: a.last_seen_at for a in aliases}
+            exact = SearchService(db)
+            assert (await exact._exact_creator_aliases_for_value(shared.value))[0].creator_id == competitor.id
+            await service.save_upload(db, user, [_make_upload_file(tmp_path, "second.png", _png_bytes())], {})
+            assert await _upload_projection_versions(db, scopes.values()) == versions
+            after_docs = {index: await projection.build(index, [identity]) for index, identity in scopes.items()}
+            assert after_docs == before_docs
+            aliases = list((await db.execute(
+                select(CreatorAlias).where(CreatorAlias.creator_id == creator_id)
+                .execution_options(populate_existing=True)
+            )).scalars())
+            assert all(a.last_seen_at > before_seen[a.id] for a in aliases)
+            assert (await exact._exact_creator_aliases_for_value(shared.value))[0].creator_id == creator_id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["alias", "repository", "disabled", "marker"])
+async def test_upload_identity_changes_keep_reference_projection(tmp_path, monkeypatch, damage):
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import CreatorAlias, SourceCreator, SubscriptionSource
+    from app.services.creator import CreatorService
+    from app.services.manual_upload import ManualUploadService
+    monkeypatch.setattr(settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    calls = []
+    original = CreatorService._request_creator_projection
+    async def projection(self, creator_id, **kwargs):
+        calls.append(creator_id)
+        return await original(self, creator_id, **kwargs)
+    monkeypatch.setattr(CreatorService, "_request_creator_projection", projection)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "changed")
+            service = ManualUploadService()
+            await service.save_upload(db, user, [_make_upload_file(tmp_path, "first.png", _png_bytes())], {})
+            assert len(calls) == 1  # First creation still registers identity changes.
+            creator_id, _, _ = await _upload_reference_ids(db)
+            repository = (await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalar_one()
+            if damage == "alias":
+                await db.delete((await db.execute(select(CreatorAlias).where(CreatorAlias.creator_id == creator_id).limit(1))).scalar_one())
+            elif damage == "repository":
+                await db.delete(repository)
+            elif damage == "disabled":
+                repository.is_enabled = False
+            else:
+                source = (await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalar_one()
+                source.raw_metadata = {"_disk_import": {"needs_enrichment": False, "enrichment_status": "complete"}}
+            await db.commit()
+            await service.save_upload(db, user, [_make_upload_file(tmp_path, "second.png", _png_bytes())], {})
+            assert calls == [creator_id, creator_id]
+            assert (await db.execute(select(SubscriptionSource).where(SubscriptionSource.source == "manual"))).scalar_one().is_enabled
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["edit", "delete", "replace"])
+async def test_upload_preserves_concurrent_alias_changes_and_registers_projection(tmp_path, monkeypatch, change):
+    from sqlalchemy import update
+    from sqlalchemy.sql.dml import Insert
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import CreatorAlias
+    from app.services.creator import CreatorService
+    from app.services.manual_upload import ManualUploadService
+    monkeypatch.setattr(settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    calls = []
+    original_projection = CreatorService._request_creator_projection
+    async def projection(self, creator_id, **kwargs):
+        calls.append(creator_id)
+        return await original_projection(self, creator_id, **kwargs)
+    monkeypatch.setattr(CreatorService, "_request_creator_projection", projection)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "race")
+            service = ManualUploadService()
+            await service.save_upload(db, user, [_make_upload_file(tmp_path, "first.png", _png_bytes())], {})
+            creator_id, _, _ = await _upload_reference_ids(db)
+            alias = (await db.execute(select(CreatorAlias).where(CreatorAlias.creator_id == creator_id).limit(1))).scalar_one()
+            old_id = alias.id
+            values = {key: getattr(alias, key) for key in (
+                "creator_id", "source", "kind", "normalized_value", "value", "source_ref", "is_current",
+            )}
+            injected = False
+            original_execute = db.execute
+            async def execute(statement, *args, **kwargs):
+                nonlocal injected
+                if not injected and isinstance(statement, Insert) and statement.table.name == "creator_aliases":
+                    injected = True
+                    async with async_session() as other:
+                        if change == "edit":
+                            await other.execute(update(CreatorAlias).where(CreatorAlias.id == old_id).values(
+                                value=values["value"].upper(), source_ref="concurrent-observation", is_current=False,
+                            ))
+                        else:
+                            await other.delete(await other.get(CreatorAlias, old_id))
+                            await other.flush()
+                            if change == "replace":
+                                other.add(CreatorAlias(**values))
+                        await other.commit()
+                return await original_execute(statement, *args, **kwargs)
+            monkeypatch.setattr(db, "execute", execute)
+            await asyncio.wait_for(
+                service.save_upload(db, user, [_make_upload_file(tmp_path, "second.png", _png_bytes())], {}), 15,
+            )
+            assert injected
+            assert calls == [creator_id, creator_id]
+            current_alias = (await original_execute(
+                select(CreatorAlias).where(
+                    CreatorAlias.creator_id == creator_id, CreatorAlias.source == values["source"],
+                    CreatorAlias.kind == values["kind"], CreatorAlias.normalized_value == values["normalized_value"],
+                ).execution_options(populate_existing=True)
+            )).scalar_one()
+            if change == "edit":
+                assert current_alias.id == old_id
+                assert current_alias.value == values["value"].upper()
+                assert current_alias.source_ref == "concurrent-observation"
+                assert not current_alias.is_current
+            else:
+                assert current_alias.id != old_id
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete_identity", [False, True])
+async def test_committed_upload_keeps_required_projection_when_import_preparation_fails(
+    tmp_path, monkeypatch, complete_identity,
+):
+    from app.config import settings
+    from app.database import async_session, engine
+    from app.models import DownloadJob, User
+    from app.services.manual_upload import ManualUploadService
+    monkeypatch.setattr(settings, "download_root", str(tmp_path / "downloads"))
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", _fake_enqueue)
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("controlled import preparation failure")
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _make_user(db, PREFIX + "publication")
+            service = ManualUploadService()
+            before = None
+            if complete_identity:
+                await service.save_upload(db, user, [_make_upload_file(tmp_path, "first.png", _png_bytes())], {})
+                ids = await _upload_reference_ids(db)
+                before = await _upload_projection_versions(db, ids)
+            monkeypatch.setattr("app.services.import_intent.enqueue_import", fail)
+            with pytest.raises(RuntimeError, match="controlled import preparation"):
+                await service.save_upload(db, user, [_make_upload_file(tmp_path, "second.png", _png_bytes())], {})
+            ids = await _upload_reference_ids(db)
+            after = await _upload_projection_versions(db, ids)
+            assert after
+            if complete_identity:
+                assert after == before
+            jobs = list((await db.execute(select(DownloadJob).where(DownloadJob.owner_user_id == user.id))).scalars())
+            assert len(jobs) == 1 + int(complete_identity)
+            assert (await db.get(User, user.id, populate_existing=True)).upload_used_bytes == len(_png_bytes()) * len(jobs)
+            assert len(list((tmp_path / "downloads").rglob("metadata.json"))) == len(jobs)
     finally:
         async with async_session() as db:
             await _clear(db)

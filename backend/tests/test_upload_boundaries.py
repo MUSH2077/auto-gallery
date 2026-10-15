@@ -296,7 +296,8 @@ async def test_eight_uploads_preserve_identity_and_quota(tmp_path, monkeypatch, 
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.parametrize("change", ["rename", "quota"])
-async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize("detached", [False, True])
+async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypatch, change, detached):
     from sqlalchemy import select, update
     from app.config import settings
     from app.database import async_session, engine
@@ -310,6 +311,9 @@ async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypat
             await _clear(db)
             user = await _make_user(db, PREFIX + "snapshot", quota=None)
             user_id = user.id
+            if detached:
+                # Authentication supplies an account loaded by another session.
+                db.expunge(user)
             async with async_session() as other:
                 values = {"username": PREFIX + "renamed"} if change == "rename" else {"upload_quota_bytes": 0}
                 await other.execute(update(User).where(User.id == user.id).values(**values))
@@ -324,6 +328,11 @@ async def test_upload_uses_current_account_after_preparation(tmp_path, monkeypat
             else:
                 result = await ManualUploadService().save_upload(db, user, [file], {})
                 directory = root / "manual" / ("user_" + PREFIX + "renamed") / result.work_id
+                assert result.used_bytes == len(_png_bytes())
+                assert result.quota_bytes is None
+                if not detached:
+                    assert user.username == PREFIX + "renamed"
+                    assert user.upload_used_bytes == result.used_bytes
                 assert (directory / "metadata.json").is_file()
                 assert len(list(directory.glob("*.png"))) == 1
                 source = (await db.execute(select(SourceCreator).where(SourceCreator.source == "manual"))).scalar_one()
