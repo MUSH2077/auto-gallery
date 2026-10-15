@@ -85,6 +85,12 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   before publishing durable status notifications. `download_finalization.py`
   shares parent outcome mapping across import completion, publication close
   and recovery, using the existing bounded-child aggregation.
+  Shared subscription and membership search documents exclude private job and
+  TaskRun state. Nonterminal private transitions therefore update the job and
+  TaskRun without registering an unchanged shared search projection. Public
+  transitions and every terminal transition retain search registration and the
+  existing receipt policy; source, work and asset mutations keep their own
+  projection registration.
   Cancellation application (`TaskEngine.apply_cancel_download/import`) does not
   commit or notify, including download-to-import delegation. Standalone control
   endpoints commit and then notify; scheduler cleanup stages both cancellation

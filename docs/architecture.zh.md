@@ -73,6 +73,10 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   更新 TaskRun。调用方提交后才发布持久化状态通知。`download_finalization.py`
   复用既有 bounded 子任务聚合，为导入完成、publication 关闭与恢复提供共同父级
   outcome 映射和最终化。
+  共享订阅和成员搜索文档不包含私人下载任务与 TaskRun 状态，因此私人任务的中间
+  状态变化仍更新任务与进度，但不再重复登记内容未变化的共享搜索投影。公开任务
+  状态变化和所有终态仍保留搜索登记及原有回执策略；来源、作品和资产变化仍由各自
+  路径登记投影。
   `TaskEngine.apply_cancel_download/import` 只应用取消，不提交或通知，下载委派
   导入也沿用这一事务。独立控制入口提交后通知；批量清理将取消和批次项一起应用，
   最后验证 cleanup attempt，通过后一次提交再通知，失效执行的修改全部回滚。

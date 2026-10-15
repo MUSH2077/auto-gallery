@@ -36,6 +36,9 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Private download and upload jobs skip unchanged shared subscription/member
+  search projections for intermediate state changes; public transitions and
+  terminal receipts retain their existing updates.
 - Manual uploads reuse the account returned by atomic quota accounting and avoid
   redundant creator/work projection fanout for timestamp-only alias observations,
   while retaining concurrent alias changes and source recovery.

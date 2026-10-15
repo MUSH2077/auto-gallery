@@ -203,3 +203,148 @@ async def test_concurrent_retry_rechecks_eligibility_after_lock(domain, monkeypa
             if not pending.done():
                 pending.cancel()
                 await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.fixture
+async def indexed_domain(domain):
+    from sqlalchemy import delete
+    from app.database import async_session
+    from app.models import DownloadJob, User, UserSubscription, UserSubscriptionSource
+    from app.services.search_projection_outbox import request_search_projection
+    from app.services.tasks import TaskService
+
+    async with async_session() as db:
+        job = await db.get(DownloadJob, domain)
+        user = User(username=f"state-projection-{uuid4().hex}", password_hash="unused")
+        db.add(user)
+        await db.flush()
+        member = UserSubscription(user_id=user.id, subscription_id=job.subscription_id,
+                                  schedule_mode="manual", sync_enabled=False)
+        db.add(member)
+        await db.flush()
+        db.add(UserSubscriptionSource(user_id=user.id, subscription_id=job.subscription_id,
+                                     user_subscription_id=member.id,
+                                     subscription_source_id=job.subscription_source_id))
+        await TaskService(db).ensure_download_task(job)
+        await request_search_projection(db, subscription_ids=[job.subscription_id])
+        await db.commit()
+        identity = (job.id, user.id, job.subscription_id, member.id)
+    yield identity
+    async with async_session() as db:
+        await db.execute(delete(UserSubscriptionSource).where(UserSubscriptionSource.user_id == identity[1]))
+        await db.execute(delete(UserSubscription).where(UserSubscription.user_id == identity[1]))
+        await db.execute(delete(User).where(User.id == identity[1]))
+        await db.commit()
+
+
+async def _shared_index_snapshot(db, subscription_id, membership_id):
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services.search_projection import SearchProjection
+
+    versions = {(index, entity): version for index, entity, version in (await db.execute(
+        select(SearchProjectionOutbox.index_uid, SearchProjectionOutbox.entity_id,
+               SearchProjectionOutbox.version)
+        .where(SearchProjectionOutbox.entity_id.in_([str(subscription_id), str(membership_id)]))
+    )).all()}
+    projection = SearchProjection(db)
+    subscriptions = await projection._build_subscription_documents([subscription_id])
+    memberships = await projection._build_membership_documents([membership_id])
+    assert len(versions) == 2 and len(subscriptions) == len(memberships) == 1
+    return versions, subscriptions, memberships
+
+
+@pytest.mark.parametrize("source", ["manual", "pixiv", "x"])
+async def test_private_nonterminal_state_updates_task_without_unchanged_shared_projection(indexed_domain, source):
+    from app.database import async_session
+    from app.services.download_lifecycle import apply_download_state, lock_download
+    from app.services.tasks import TaskService
+
+    job_id, user_id, subscription_id, membership_id = indexed_domain
+    async with async_session() as db:
+        job = await lock_download(db, job_id)
+        job.owner_user_id, job.source = user_id, source
+        task = await TaskService(db).get_by_subject("download_job", job_id)
+        task.owner_user_id = user_id
+        await db.commit()
+        before = await _shared_index_snapshot(db, subscription_id, membership_id)
+        job = await lock_download(db, job_id)
+        await apply_download_state(db, job, "downloading",
+                                   progress={"stage": "configuring", "message": "private progress"})
+        await db.commit()
+        after = await _shared_index_snapshot(db, subscription_id, membership_id)
+        await db.refresh(task)
+        assert job.status == "downloading" and task.status == "running"
+        assert job.progress_data == task.progress_data
+        assert after[1:] == before[1:]
+        assert after[0] == before[0]
+
+
+async def test_public_nonterminal_state_refreshes_shared_projection(indexed_domain):
+    from app.database import async_session
+    from app.services.download_lifecycle import apply_download_state, lock_download
+
+    job_id, _, subscription_id, membership_id = indexed_domain
+    async with async_session() as db:
+        before = await _shared_index_snapshot(db, subscription_id, membership_id)
+        job = await lock_download(db, job_id)
+        await apply_download_state(db, job, "downloading")
+        await db.commit()
+        after = await _shared_index_snapshot(db, subscription_id, membership_id)
+        assert after[0].keys() == before[0].keys()
+        assert all(after[0][key] > version for key, version in before[0].items())
+        assert after[1][0]["running_job_count"] == 1
+        assert after[1][0]["latest_job_status"] == "running"
+
+
+@pytest.mark.parametrize("status", ["complete", "failed", "stale", "cancelled"])
+async def test_private_terminal_state_retains_receipt_and_shared_projection(indexed_domain, status):
+    from app.database import async_session
+    from app.models.repository_sync_receipt import RepositorySyncReceipt
+    from app.services.download_lifecycle import apply_download_state, lock_download
+    from app.services.tasks import TaskService
+
+    job_id, user_id, subscription_id, membership_id = indexed_domain
+    async with async_session() as db:
+        job = await lock_download(db, job_id)
+        job.owner_user_id, job.status = user_id, "importing"
+        task = await TaskService(db).get_by_subject("download_job", job_id)
+        task.owner_user_id, task.status = user_id, "running"
+        await db.commit()
+        before = await _shared_index_snapshot(db, subscription_id, membership_id)
+        job = await lock_download(db, job_id)
+        await apply_download_state(db, job, status)
+        await db.commit()
+        after = await _shared_index_snapshot(db, subscription_id, membership_id)
+        await db.refresh(task)
+        receipt = (await db.execute(select(RepositorySyncReceipt).where(
+            RepositorySyncReceipt.source_download_job_id == job_id))).scalar_one()
+        assert job.status == task.status == receipt.status == status
+        assert after[0].keys() == before[0].keys()
+        assert all(after[0][key] > version for key, version in before[0].items())
+
+
+async def test_private_terminal_projection_and_receipt_roll_back_together(indexed_domain):
+    from app.database import async_session
+    from app.models import DownloadJob
+    from app.models.repository_sync_receipt import RepositorySyncReceipt
+    from app.services.download_lifecycle import apply_download_state, lock_download
+    from app.services.tasks import TaskService
+
+    job_id, user_id, subscription_id, membership_id = indexed_domain
+    async with async_session() as db:
+        job = await lock_download(db, job_id)
+        job.owner_user_id, job.status = user_id, "importing"
+        task = await TaskService(db).get_by_subject("download_job", job_id)
+        task.owner_user_id, task.status = user_id, "running"
+        await db.commit()
+        before = await _shared_index_snapshot(db, subscription_id, membership_id)
+        job = await lock_download(db, job_id)
+        await apply_download_state(db, job, "failed", error="rollback fixture")
+        await db.rollback()
+        after = await _shared_index_snapshot(db, subscription_id, membership_id)
+        job = await db.get(DownloadJob, job_id)
+        await db.refresh(task)
+        assert job.status == "importing" and task.status == "running"
+        assert after == before
+        assert (await db.execute(select(RepositorySyncReceipt).where(
+            RepositorySyncReceipt.source_download_job_id == job_id))).scalar_one_or_none() is None

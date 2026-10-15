@@ -62,10 +62,19 @@ async def project_download_state(db, job, *, task=None, result=_KEEP, reason_cod
     if reason_code is not _KEEP:
         values["reason_code"] = reason_code
     await service.update_task(task, **values)
-    if receipt and job.status in {"complete", "failed", "stale", "cancelled"}:
+    terminal = job.status in {"complete", "failed", "stale", "cancelled"}
+    if receipt and terminal:
         from app.services.operation_attention import upsert_repository_sync_receipt
         await upsert_repository_sync_receipt(db, job, status=job.status)
-    await request_search_projection(db, subscription_ids=[job.subscription_id] if job.subscription_id else ())
+    # Shared subscription and membership documents exclude private job state.
+    # Terminal transitions still refresh their materialized repository receipts.
+    public_job = all(value is None for value in (
+        job.owner_user_id,
+        job.triggering_user_subscription_id,
+        job.triggering_remote_account_id,
+    ))
+    if public_job or terminal:
+        await request_search_projection(db, subscription_ids=[job.subscription_id] if job.subscription_id else ())
     await db.flush()
     return task
 
