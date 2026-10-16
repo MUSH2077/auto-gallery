@@ -41,7 +41,10 @@ def inspect_and_generate_thumbnail(
             target_height = max(1, round(display_height * target_w / display_width))
             if target_w <= working.pixels.width and target_height <= working.pixels.height:
                 with working.pixels.resize((target_w, target_height), Image.Resampling.LANCZOS) as resized:
-                    resized.save(temp_path, format="WEBP", quality=80)
+                    resized.save(
+                        temp_path, format="WEBP", quality=80,
+                        icc_profile=resized.info.get("icc_profile", b""),
+                    )
                 os.replace(temp_path, thumb_path)
                 return str(thumb_path), *working.original_size
         import pyvips

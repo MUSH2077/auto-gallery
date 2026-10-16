@@ -21,7 +21,7 @@ from app.services.image_utils import configure_pyvips, open_pillow_image
 
 WORK_EDGE = 1024
 SHARED_MIN_PIXELS = 16_000_000
-SMALL_WORK_MAX_PIXELS = 2_000_000
+SMALL_WORK_MAX_PIXELS = 8_000_000
 PHASH_VERSION = "numpy-phash-oriented-adaptive-v3"
 
 
@@ -111,12 +111,14 @@ def prepare_visual_work(path: Path) -> WorkingImage | None:
 
 
 def prepare_small_visual_work(path: Path) -> WorkingImage | None:
-    # Decode a bounded RGB card once, preserving direct pHash sampling.
+    # Decode a bounded card once for both thumbnail and direct pHash sampling.
+    # Keeping these JPEG/PNG tasks on Pillow also avoids loading a second
+    # native image stack just to create their card thumbnail.
     from PIL import ImageOps
 
     image = open_pillow_image(path)
     try:
-        if (image.format != "PNG" or image.mode not in ("RGB", "RGBA")
+        if (image.format not in ("JPEG", "PNG") or image.mode not in ("RGB", "RGBA")
                 or image.width <= 400 or image.width * image.height > SMALL_WORK_MAX_PIXELS
                 or (image.mode == "RGB" and "transparency" in image.info)
                 or getattr(image, "n_frames", 1) != 1):

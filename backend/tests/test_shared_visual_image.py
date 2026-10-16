@@ -331,9 +331,9 @@ def test_small_missing_card_shares_one_png_decode_without_native_cache(tmp_path,
 
 
 @pytest.mark.parametrize("suffix,mode,size", [
-    (".jpg", "RGB", (800, 600)),
+    (".jpg", "CMYK", (800, 600)),
     (".png", "L", (800, 600)),
-    (".png", "RGB", (1500, 1500)),
+    (".png", "RGB", (3000, 3000)),
     (".png", "RGB", (280, 210)),
 ])
 def test_small_shared_policy_keeps_unmeasured_layouts_on_existing_path(tmp_path, suffix, mode, size):
@@ -364,3 +364,74 @@ def test_rgb_png_color_key_keeps_thumbnail_transparency(tmp_path, monkeypatch):
         assert thumb.mode == "RGBA"
         assert thumb.getpixel((0, 0))[3] == 0
         assert thumb.getpixel((200, 150))[3] == 255
+
+
+@pytest.mark.parametrize("format,mode", [("JPEG", "RGB"), ("PNG", "RGB"), ("PNG", "RGBA")])
+@pytest.mark.parametrize("orientation", [1, 2, 3, 4, 5, 6, 7, 8])
+def test_bounded_card_reuses_pixels_without_changing_direct_phash(tmp_path, format, mode, orientation):
+    path = tmp_path / ("card.jpg" if format == "JPEG" else "card.png")
+    source = drawing((900, 600)).convert(mode)
+    if mode == "RGBA":
+        source.putalpha(96)
+    exif = source.getexif()
+    exif[274] = orientation
+    from PIL import ImageCms
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    source.save(path, exif=exif, icc_profile=profile)
+    expected = WorkImportService.phash(path, oriented=True)
+    from app.services.thumbnail import inspect_and_generate_thumbnail
+    with visual_image.prepare_small_visual_work(path) as work:
+        assert work.original_size == (900, 600)
+        assert work.display_size == ((600, 900) if orientation in (5, 6, 7, 8) else (900, 600))
+        assert work.phash() == expected
+        thumbnail, width, height = inspect_and_generate_thumbnail(str(path), tmp_path / "cards", working=work)
+    with Image.open(thumbnail) as card:
+        assert card.info["icc_profile"] == profile
+        assert card.width == 400
+        assert card.height == round(work.display_size[1] * 400 / work.display_size[0])
+        assert ("A" in card.getbands()) == (mode == "RGBA")
+    assert (width, height) == (900, 600)
+    with pytest.raises(ValueError):
+        work.pixels.getpixel((0, 0))
+
+
+def test_bounded_card_keeps_pixel_limit_and_special_format_fallbacks(tmp_path, monkeypatch):
+    monkeypatch.setattr(visual_image, "SMALL_WORK_MAX_PIXELS", 600 * 400)
+    for size, expected in [((600, 400), True), ((601, 400), False)]:
+        path = tmp_path / f"{size[0]}.jpg"
+        drawing(size).save(path)
+        work = visual_image.prepare_small_visual_work(path)
+        assert (work is not None) is expected
+        if work is not None:
+            work.pixels.close()
+    for name, image, kwargs in [
+        ("palette.png", drawing((600, 400)).convert("P"), {}),
+        ("transparent.png", drawing((600, 400)), {"transparency": (255, 255, 255)}),
+        ("cmyk.jpg", drawing((600, 400)).convert("CMYK"), {}),
+        ("animated.png", drawing((600, 400)).convert("RGBA"), {"save_all": True, "append_images": [Image.new("RGBA", (600, 400), "red")]})
+    ]:
+        path = tmp_path / name
+        image.save(path, **kwargs)
+        assert visual_image.prepare_small_visual_work(path) is None
+
+
+def test_jpeg_card_task_does_not_load_second_native_image_stack(tmp_path):
+    import subprocess
+    import sys
+    path = tmp_path / "card.jpg"
+    drawing((900, 600)).save(path)
+    code = """
+import sys
+from pathlib import Path
+from app.config import settings
+from app.services.media_derivatives import _derive_sync, MEDIA_ALGORITHM_VERSION
+path = Path(sys.argv[1]); library = Path(sys.argv[2]); settings.download_root = str(path.parent); settings.library_root = str(library)
+stat = path.stat()
+value = _derive_sync({'file_path':path.name,'file_name':path.name,'mime_type':'image/jpeg','library_dir':str(library)},
+    {'source_size':stat.st_size,'source_mtime_ns':stat.st_mtime_ns,'algorithm_version':MEDIA_ALGORITHM_VERSION,
+     'requested':{'thumbnail':True,'dimensions':True,'sha256':True,'phash':True}})
+assert value['phash'] and value['thumb_sm_path'] and (value['width'],value['height']) == (900,600)
+assert 'pyvips' not in sys.modules
+"""
+    result = subprocess.run([sys.executable, "-c", code, str(path), str(tmp_path / "library")], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

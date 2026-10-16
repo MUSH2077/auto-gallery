@@ -942,11 +942,15 @@ card thumbnail when sufficient pixels are available. The process-wide libvips
 cache ceiling remains 64 MiB. Existing first-card thumbnails are reused and
 elongated images retain the existing thumbnail policy. Images over a 4:1 aspect ratio and unsupported static-image layouts keep direct sampling.
 
-Only when the same media task is missing a card or dimensions, a single-frame
-RGB/RGBA PNG without PNG color-key transparency whose original width is over 400 pixels and whose area is at most
-2 million pixels may share its full-size Pillow image within that task. JPEGs,
-images with an existing first card, and other layouts keep their existing paths.
-This small-image working image does not eagerly create an SSIM sample. A
+Only when the same media task needs a pHash and is missing a card or dimensions,
+a single-frame RGB JPEG or RGB/RGBA PNG without PNG color-key transparency may
+share its full-size Pillow image within that task, provided the original width
+is over 400 pixels and the area is at most 8 million pixels. This avoids a second
+decode and loading libvips solely for that card. The Pillow card preserves its
+embedded ICC profile when encoding WebP. Images with an existing first
+card, larger images, CMYK JPEGs and other layouts keep their existing paths.
+This bounded working image preserves direct pHash sampling and is closed when
+the task's derivation returns or raises; it does not eagerly create an SSIM sample. A
 `WorkingImage` that is already RGB is sampled without another RGB copy; direct
 source sampling releases the decoded image before loading the numeric library.
 Analysis samples for other images remain on-demand SSIM work using the existing
