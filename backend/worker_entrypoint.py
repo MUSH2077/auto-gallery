@@ -15,7 +15,11 @@ import subprocess
 import sys
 import time
 from collections import deque
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from app.services.shared_worker_process import SharedWorkerProcess
 from datetime import datetime, timedelta, timezone
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
@@ -140,7 +144,7 @@ class RestartCircuit:
 
 @dataclass
 class ManagedProcess:
-    process: subprocess.Popen
+    process: subprocess.Popen | SharedWorkerProcess
     queues: tuple[str, ...]
     with_scheduler: bool = False
 
@@ -448,6 +452,17 @@ def main():
         with_scheduler=with_scheduler,
         extra_queues=extra_queues,
     )
+    shared_factory = None
+    shared_mode = os.environ.get("WORKER_SHARED_INITIALIZATION", "0").strip().lower()
+    if shared_mode not in {"0", "false", "1", "true"}:
+        raise ValueError("WORKER_SHARED_INITIALIZATION must be 0 or 1")
+    if shared_mode in {"1", "true"}:
+        if queues != ["operations"] or concurrency < 2 or extra_queues:
+            raise ValueError("Shared initialization currently requires multiple operations consumers")
+        from app.services.shared_worker_process import SharedWorkerFactory
+
+        shared_factory = SharedWorkerFactory()
+    fatal_shared_failure = False
     expected_worker_count = len(worker_specs)
     supervised_queues = list(
         dict.fromkeys(name for spec, _scheduler in worker_specs for name in spec)
@@ -468,7 +483,15 @@ def main():
         if child_env is None and "imports" in worker_queues:
             child_env = os.environ.copy()
             child_env[IMPORT_WORKER_CONCURRENCY_ENV] = str(concurrency)
-        process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
+        if shared_factory is not None:
+            process = shared_factory.start(command, child_env)
+        else:
+            process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
+        if not running:
+            # A stop can arrive while a shared template is still initializing.
+            # Include the just-created consumer in teardown, never leave it
+            # running after the shutdown handler has finished its first pass.
+            process.terminate()
         managed = ManagedProcess(
             process=process,
             queues=worker_queues,
@@ -524,10 +547,23 @@ def main():
 
         recovery_control = OutboxRecoveryControl(REDIS_URL)
 
-    for worker_queues, scheduler_enabled in worker_specs:
-        spawn(worker_queues, scheduler=scheduler_enabled)
+    try:
+        for worker_queues, scheduler_enabled in worker_specs:
+            if not running:
+                break
+            spawn(worker_queues, scheduler=scheduler_enabled)
+    except BaseException:
+        shutdown(signal.SIGTERM, None)
+        for managed in processes:
+            managed.process.wait(timeout=10)
+        raise
 
     while running:
+        if shared_factory is not None and not shared_factory.alive():
+            print("[worker_entrypoint] shared initialization process exited; stopping consumers", file=sys.stderr, flush=True)
+            fatal_shared_failure = True
+            shutdown(signal.SIGTERM, None)
+            break
         now = time.monotonic()
         restart_circuit.refresh(now)
 
@@ -629,9 +665,19 @@ def main():
                     continue
                 # Schedulers are queue-scoped. Preserve the crashed spec even
                 # when a different queue's scheduler is still alive.
-                spawn(pending.queues, scheduler=pending.with_scheduler)
+                try:
+                    spawn(pending.queues, scheduler=pending.with_scheduler)
+                except Exception as exc:
+                    if shared_factory is None:
+                        raise
+                    print(f"[worker_entrypoint] shared consumer restart failed: {type(exc).__name__}", file=sys.stderr, flush=True)
+                    fatal_shared_failure = True
+                    shutdown(signal.SIGTERM, None)
+                    break
                 pending_restarts.remove(pending)
 
+        if not running:
+            break
         if len(processes) == expected_worker_count and not pending_restarts:
             restart_circuit.observe_fully_running(now)
 
@@ -675,7 +721,11 @@ def main():
             # Do not claim success before the killed child has been reaped.
             return_code = managed.process.wait(timeout=10)
         record_exit(managed, return_code)
+    if shared_factory is not None:
+        shared_factory.close()
     print("All workers stopped.", flush=True)
+    if fatal_shared_failure:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
