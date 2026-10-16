@@ -59,32 +59,38 @@ def resolve_download_concurrency(db_value, argv_value) -> tuple[int, int, int]:
     return decision.configured, decision.cap, decision.effective
 
 
-def _db_download_concurrency():
-    """Best-effort read from DB; boot remains possible while DB is recovering."""
+def _download_startup(argv_value: str | None) -> dict:
+    """Run one-off imports outside the long-lived download supervisor."""
+
+    command = [sys.executable, "-m", "app.services.download_startup"]
+    if argv_value is not None:
+        command.append(argv_value)
+    process = subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+    )
+    previous_handlers = {}
+
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
 
     try:
-        import asyncio
-
-        from app.database import async_session, engine
-        from app.services.settings import get_download_defaults
-
-        async def _query():
-            try:
-                async with async_session() as db:
-                    defaults = await get_download_defaults(db)
-                    return defaults.get("download_concurrency")
-            finally:
-                # The supervisor never queries PostgreSQL again; do not retain
-                # one of the 40 budgeted connections for its whole lifetime.
-                await engine.dispose()
-
-        return asyncio.run(_query())
-    except Exception as exc:  # noqa: BLE001 - boot-time best effort
-        print(
-            f"[worker_entrypoint] DB concurrency read failed ({exc}); using fallback",
-            file=sys.stderr,
-        )
-        return None
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, interrupted)
+        output, diagnostic = process.communicate(timeout=15)
+        if diagnostic:
+            print(diagnostic, end="", file=sys.stderr)
+        if process.returncode:
+            raise RuntimeError(f"download startup helper exited with code {process.returncode}")
+        return json.loads(output)
+    finally:
+        # Also reap on timeout, malformed output, or a stop during startup.
+        # No credential checker or database helper remains as a resident child.
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 class RestartCircuit:
@@ -381,11 +387,16 @@ def main():
     # registering it here cannot reach those consumers and loads unused ORM
     # dependencies into an otherwise lightweight process.
 
+    download_startup = None
     try:
-        removed_auth_configs = _sweep_personal_auth_startup(queues)
+        if queues and queues[0].startswith("downloads"):
+            download_startup = _download_startup(argv_concurrency)
+            removed_auth_configs = download_startup["removed_auth_configs"]
+        else:
+            removed_auth_configs = _sweep_personal_auth_startup(queues)
     except Exception as exc:
         print(
-            f"[worker_entrypoint] personal authentication tmpfs validation failed: {exc}",
+            f"[worker_entrypoint] startup validation failed: {exc}",
             file=sys.stderr,
             flush=True,
         )
@@ -401,9 +412,9 @@ def main():
     configured_concurrency: int | None = None
     concurrency_cap: int | None = None
     if queues and queues[0].startswith("downloads"):
-        configured_concurrency, concurrency_cap, concurrency = resolve_download_concurrency(
-            _db_download_concurrency(), argv_concurrency
-        )
+        configured_concurrency = download_startup["configured"]
+        concurrency_cap = download_startup["cap"]
+        concurrency = download_startup["effective"]
         print(
             "[worker_entrypoint] downloads concurrency "
             f"configured={configured_concurrency} cap={concurrency_cap} effective={concurrency}",
