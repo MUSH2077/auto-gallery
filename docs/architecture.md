@@ -387,6 +387,8 @@ Asset candidates must pass the SHA/visual gate before loading creator and public
 
 The dedup outbox loads dependencies on the paths that use them: scan administration in scan entry points, curation while applying a group, and case media links and commit response schemas in their presentation paths. RQ function identities, curation audit and response structures retain their existing definitions. After models register, the actual RQ parent configures ORM mappings before its first workhorse fork. Children establish independent database connections; startup preparation and resident-memory costs are measured separately.
 
+`worker_entrypoint.py` launches RQ consumers in independent interpreters. The actual consumer registers the TaskRun resource-state bridge in `ResourceAwareWorker` before workhorse forks. The supervisor does not repeat that registration or load business services and ORM solely for it. Download startup configuration reads, scheduled-supervisor control-plane work, and consumer mapper preparation, admission and durable state publication retain their existing behavior.
+
 Resource-aware workers use `ResourceAwareScheduler` for due-task promotion. It delegates promotion and locking to RQ, then sends a best-effort hint through the existing queue work channel for each due queue. Worker timeout checks remain the recovery path when a hint is lost, and queue records remain authoritative. Remote-task confirmation/backoff, resource admission and completion recovery retain their existing rules.
 
 ### Background Outbox Recovery

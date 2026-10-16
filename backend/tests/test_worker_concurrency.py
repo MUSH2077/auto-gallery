@@ -119,7 +119,6 @@ def test_supervisor_reports_actual_child_exit_and_forced_termination(monkeypatch
 
     monkeypatch.setattr(worker_entrypoint.sys, "argv", ["worker_entrypoint.py", "shutdown-test", "1"])
     monkeypatch.delenv("WORKER_EXTRA_QUEUES", raising=False)
-    monkeypatch.setattr(worker_entrypoint, "_register_resource_state_bridge", lambda: None)
     monkeypatch.setattr(worker_entrypoint, "_sweep_personal_auth_startup", lambda _: 0)
     monkeypatch.setattr(worker_entrypoint, "_publish_supervisor_status", lambda *_: None)
     monkeypatch.setattr(worker_entrypoint.subprocess, "Popen", lambda _: Process())

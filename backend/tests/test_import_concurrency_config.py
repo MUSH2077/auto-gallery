@@ -75,7 +75,7 @@ def test_import_queue_targets_keep_maintenance_at_one_when_imports_scale():
 
 
 
-def test_import_main_cli_value_reaches_bridge_and_child_environment(monkeypatch):
+def test_import_main_cli_value_precedes_startup_and_reaches_child_environment(monkeypatch):
     monkeypatch.setenv('IMPORT_WORKER_CONCURRENCY', '5')
     monkeypatch.setenv('WORKER_EXTRA_QUEUES', 'maintenance')
     monkeypatch.setattr(
@@ -84,17 +84,16 @@ def test_import_main_cli_value_reaches_bridge_and_child_environment(monkeypatch)
         ['worker_entrypoint.py', 'imports', '4', '--with-scheduler'],
     )
 
-    bridge_values = []
+    startup_values = []
     popen_calls = []
     handlers = {}
     shutdown_requested = False
 
     monkeypatch.setattr(
         worker_entrypoint,
-        '_register_resource_state_bridge',
-        lambda: bridge_values.append(os.environ['IMPORT_WORKER_CONCURRENCY']),
+        '_sweep_personal_auth_startup',
+        lambda _: startup_values.append(os.environ['IMPORT_WORKER_CONCURRENCY']) or 0,
     )
-    monkeypatch.setattr(worker_entrypoint, '_sweep_personal_auth_startup', lambda _: 0)
     monkeypatch.setattr(worker_entrypoint, '_publish_supervisor_status', lambda *_: None)
 
     class Process:
@@ -139,7 +138,7 @@ def test_import_main_cli_value_reaches_bridge_and_child_environment(monkeypatch)
 
     worker_entrypoint.main()
 
-    assert bridge_values == ['4']
+    assert startup_values == ['4']
     import_calls = [
         (command, env)
         for command, env in popen_calls
@@ -159,7 +158,7 @@ def test_import_main_cli_value_reaches_bridge_and_child_environment(monkeypatch)
 
 
 
-def test_import_main_rejects_invalid_environment_before_config_bridge(monkeypatch):
+def test_import_main_rejects_invalid_environment_before_startup_or_spawn(monkeypatch):
     monkeypatch.setenv('IMPORT_WORKER_CONCURRENCY', '5')
     monkeypatch.delenv('WORKER_EXTRA_QUEUES', raising=False)
     monkeypatch.setattr(
@@ -167,15 +166,15 @@ def test_import_main_rejects_invalid_environment_before_config_bridge(monkeypatc
         'argv',
         ['worker_entrypoint.py', 'imports', '--with-scheduler'],
     )
-    bridge_called = []
+    startup_called = []
     monkeypatch.setattr(
         worker_entrypoint,
-        '_register_resource_state_bridge',
-        lambda: bridge_called.append(True),
+        '_sweep_personal_auth_startup',
+        lambda _: startup_called.append(True) or 0,
     )
 
     with pytest.raises(SystemExit) as exc_info:
         worker_entrypoint.main()
 
     assert exc_info.value.code == 2
-    assert bridge_called == []
+    assert startup_called == []

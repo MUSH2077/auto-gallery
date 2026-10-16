@@ -224,22 +224,6 @@ def _publish_supervisor_status(queues: list[str], payload: dict) -> None:
         print(f"[worker_entrypoint] status publish failed: {exc}", file=sys.stderr)
 
 
-def _register_resource_state_bridge() -> None:
-    try:
-        from app.services.heavy_io import register_resource_state_callback
-        from app.services.tasks import update_task_resource_state
-
-        register_resource_state_callback(update_task_resource_state)
-    except Exception as exc:
-        # RQ metadata is still populated if an older database is being rolled
-        # forward.  ResourceAwareWorker repeats registration in the actual RQ
-        # interpreter so its forked workhorse inherits the callback.
-        print(
-            f"[worker_entrypoint] TaskRun resource-state bridge unavailable: {exc}",
-            file=sys.stderr,
-        )
-
-
 def build_worker_specs(
     queues: list[str],
     concurrency: int,
@@ -380,10 +364,9 @@ def main():
     )
     with_scheduler = "--with-scheduler" in sys.argv[2:]
 
-    # Resolve imports before the resource bridge imports app.config. The
-    # selected CLI value must also be inherited by the bridge and every RQ
-    # child, otherwise a stale environment value can reject startup or make
-    # children use a different count from the supervisor.
+    # Resolve imports before starting consumers. Each independent RQ
+    # interpreter must inherit the selected CLI value, otherwise a stale
+    # environment value can reject startup or select a different count.
     import_concurrency: int | None = None
     if queues and queues[0] == "imports":
         try:
@@ -393,7 +376,10 @@ def main():
             sys.exit(2)
         os.environ[IMPORT_WORKER_CONCURRENCY_ENV] = str(import_concurrency)
 
-    _register_resource_state_bridge()
+    # RQ is launched in a separate interpreter. Its ResourceAwareWorker
+    # registers the TaskRun resource-state bridge before forking workhorses;
+    # registering it here cannot reach those consumers and loads unused ORM
+    # dependencies into an otherwise lightweight process.
 
     try:
         removed_auth_configs = _sweep_personal_auth_startup(queues)
