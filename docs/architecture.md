@@ -396,6 +396,8 @@ The dedup outbox loads dependencies on the paths that use them: scan administrat
 
 After configuring mappings, the real RQ parent collects temporary initialization garbage and freezes the initialized object graph before scheduler and workhorse forks. Cyclic GC then skips those long-lived objects, preserving shared pages; automatic collection remains enabled for subsequently created task objects. Freezing changes GC tracking, not object mutability or reference-count deallocation. Task payloads and results are created after this startup step. Mapper preparation still creates no database connection, and workhorses establish their own connections.
 
+Subscription scanning, Pixiv ranking, heat expiry and heat recomputation publishers enqueue stable RQ function paths; task execution resolves the handlers. Job identities, arguments, retries and dependency handling retain their existing behavior.
+
 Resource-aware workers use `ResourceAwareScheduler` for due-task promotion. It delegates promotion and locking to RQ, then sends a best-effort hint through the existing queue work channel for each due queue. Worker timeout checks remain the recovery path when a hint is lost, and queue records remain authoritative. Remote-task confirmation/backoff, resource admission and completion recovery retain their existing rules.
 
 ### Background Outbox Recovery

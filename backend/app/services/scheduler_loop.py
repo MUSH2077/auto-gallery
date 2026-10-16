@@ -205,8 +205,6 @@ def ensure_next_subscription_scan(
         if existing is not None:
             return {"created": False, "job_id": existing.id, **scheduler_loop_snapshot(redis_client=redis_client, scan_interval_minutes=interval)}
 
-        from app.jobs.subscription_sync import sync_subscriptions
-
         target_at = now + timedelta(minutes=interval)
         job_id = subscription_sync_job_id(interval, target_at)
         try:
@@ -220,7 +218,7 @@ def ensure_next_subscription_scan(
         checked_enqueue_in(
             queue,
             timedelta(minutes=interval),
-            sync_subscriptions,
+            "app.jobs.subscription_sync.sync_subscriptions",
             job_id=job_id,
         )
         _write_state(

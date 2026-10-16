@@ -99,13 +99,11 @@ def schedule_pixiv_heat_expiry(
         # the terminal record; a finished check remains satisfied.
         existing.delete()
 
-    from app.jobs.work_heat import expire_pixiv_heat
-
     queue = Queue(name="scheduled", connection=redis_client)
     checked_enqueue_in(
         queue,
         max(timedelta(), expires_at - current),
-        expire_pixiv_heat,
+        "app.jobs.work_heat.expire_pixiv_heat",
         job_id=job_id,
         job_timeout=5 * 60,
         result_ttl=48 * 60 * 60,
@@ -176,12 +174,10 @@ def ensure_pixiv_ranking_sync(
         # record so the deterministic job id can be queued again.
         existing.delete()
 
-    from app.jobs.pixiv_ranking_sync import sync_pixiv_rankings
-
     queue = Queue(name="scheduled", connection=redis_client)
     checked_enqueue(
         queue,
-        sync_pixiv_rankings,
+        "app.jobs.pixiv_ranking_sync.sync_pixiv_rankings",
         plan.ranking_date.isoformat(),
         job_id=job_id,
         job_timeout=3600,

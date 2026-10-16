@@ -238,7 +238,6 @@ def request_work_heat_recompute(
 
     redis_client = redis_client or get_redis()
     queue = Queue(name="maintenance", connection=redis_client)
-    from app.jobs.work_heat import run_work_heat_recompute
 
     for source in normalized:
         try:
@@ -312,7 +311,7 @@ def request_work_heat_recompute(
                 _ensure_enqueue_lock_owned(lock_guard)
                 job = _enqueue_recompute_job(
                     queue,
-                    run_work_heat_recompute,
+                    "app.jobs.work_heat.run_work_heat_recompute",
                     source,
                     job_id,
                     dependency_id=dependency_id,
