@@ -21,6 +21,51 @@ wait for it to complete, while Meilisearch is deliberately not a backend startup
 dependency: an unavailable search index must degrade search, not take down the
 whole application.
 
+## Meilisearch upgrades · 搜索服务升级
+
+Compose and search integration CI pin Meilisearch **1.54.3** by image digest.
+This version includes upstream indexing-memory fixes. `MEILI_MAX_INDEXING_MEMORY`
+(default `320Mb`) bounds indexing work, not total process RSS; the container's
+memory, CPU, PID and no-swap limits apply separately.
+
+When upgrading an existing 1.12 deployment:
+
+1. Pause application mutations and let projection receipts and Meilisearch tasks
+   finish. Stop the application writers before exporting with the old engine.
+   Submit `POST /dumps`, poll `GET /tasks/{taskUid}` until `succeeded`, and retain
+   the resulting `/meili_data/dumps/{dumpUid}.dump` securely.
+2. Stop Meilisearch and retain its original data directory and old pinned image.
+   Use an empty directory for the new version; copy only the dump into it.
+3. Start 1.54.3 with `--import-dump /meili_data/dumps/{dumpUid}.dump`, using the
+   same master-key configuration. After import, restart with the normal command
+   and check application search, filters, private visibility and indexing.
+   PostgreSQL-backed application projections can also rebuild a fresh index
+   through the administrative search-rebuild operation.
+4. To roll back, stop the new engine and restore **both** the old image and its
+   retained original directory. Do not open a directory written by 1.54.3 with
+   1.12. Keep application writes paused until validation is accepted or rolled
+   back. If new mutations were already accepted, pause and drain again, then
+   rebuild search from PostgreSQL on the restored engine before reopening writes.
+   Remove the old directory only after the new deployment is accepted.
+
+See the [official upgrade guide](https://www.meilisearch.com/docs/resources/migration/updating)
+for other upgrade paths. Index migration is separate from PostgreSQL migrations.
+
+Compose 与搜索集成 CI 按镜像摘要固定为 **Meilisearch 1.54.3**，采用上游索引内存修复。
+`MEILI_MAX_INDEXING_MEMORY`（默认 `320Mb`）限制索引工作，不能当作整个进程的
+内存上限；容器的内存、CPU、PID 和禁用 Swap 限制单独生效。
+
+已有 1.12 部署升级时，先暂停业务写入，等待投递回执和引擎任务完成，再停止应用写入者；
+由旧引擎发起 `POST /dumps`，通过 `GET /tasks/{taskUid}` 等待成功，妥善保存生成的
+`/meili_data/dumps/{dumpUid}.dump`。停止旧引擎并保留原数据目录和旧镜像，为新版本
+准备空目录，只放入 dump，以相同主密钥配置使用 `--import-dump` 启动；导入完成后
+恢复普通启动命令，再验证搜索、筛选、私人可见性和索引更新。也可以通过管理端搜索重建
+操作，从 PostgreSQL 投影建立全新索引。回退时需同时恢复旧镜像与旧原始目录，不能让
+1.12 读取 1.54.3 写过的目录。验证接受或回退前保持暂停业务写入；若新环境已经接受
+过业务变更，回退前需再次暂停并排空任务，恢复旧引擎后从 PostgreSQL 重建索引，
+验证后再恢复写入。确认新环境可用后再清理旧目录。搜索索引迁移独立于
+PostgreSQL 数据库迁移，其他升级路径参见上述官方文档。
+
 ## Browser sessions · 浏览器会话
 
 Set `BROWSER_SESSION_ORIGINS` to the exact browser origins used at this

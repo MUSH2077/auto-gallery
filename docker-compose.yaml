@@ -135,7 +135,7 @@ services:
     logging: *default-logging
 
   meilisearch:
-    image: getmeili/meilisearch:v1.12@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
+    image: getmeili/meilisearch:v1.54.3@sha256:e68913ab7d6f5b159529e472cfd362ce3c741fafd3c127961b2142abbe41b3c9
     environment:
       <<: *build-metadata
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}

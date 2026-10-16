@@ -53,6 +53,11 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   and Meilisearch adapters. `subscription_schedule.py` owns pure calendar and
   interval policy; scheduler search and the dashboard use `scheduler_decisions.py`
   for the same source eligibility and credential-blocking interpretation.
+  Deployments and search CI pin Meilisearch 1.54.3, which includes upstream
+  allocation and document-operation cleanup fixes. Application projections,
+  durable delivery receipts and rebuilds define index consistency. See
+  [search-engine upgrades](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)
+  for migrating existing indexes and restoring the previous version.
 - `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
   compilation from the SearchService execution path.
 - `search_work_page.py` owns the reusable SQLAlchemy statement for page asset

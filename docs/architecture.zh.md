@@ -50,6 +50,9 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   持有文档构建和增量投递、全量重建共用的投影定义；SearchService 保留旧调用兼容入口。
   `subscription_schedule.py` 提供纯日程计算，调度页面和搜索共用
   `scheduler_decisions.py` 的来源资格与凭据阻塞解释。
+  部署和搜索 CI 固定使用 Meilisearch 1.54.3，包含上游的内存分配和文档操作释放修复。
+  应用投影、持久投递回执与重建流程共同维护索引一致性。已有索引的迁移与回退见
+  [搜索服务升级](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)。
 - `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
   SearchService 的执行路径中分离。
 - `search_work_page.py` 持有可复用的作品页资产查询语句，每次请求绑定自己的作品 ID；
