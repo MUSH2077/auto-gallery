@@ -201,3 +201,83 @@ def test_initial_registry_prepare_failure_falls_back_to_rq(monkeypatch):
     scheduler.enqueue_scheduled_jobs()
 
     assert promoted == [True]
+
+
+def _scheduled_counter(counter_key, fail_first=False):
+    import redis
+    connection=redis.Redis.from_url(os.environ['REDIS_URL'])
+    try:
+        attempt=connection.incr(counter_key)
+        if fail_first and attempt==1:
+            raise ValueError('retry once')
+        return attempt
+    finally:
+        connection.close()
+
+
+@pytest.mark.integration
+def test_preloaded_worker_promotes_retries_and_recovers_scheduler(tmp_path):
+    import re
+    import signal
+    import subprocess
+    import sys
+    import time
+    import redis
+    from rq import Queue, Retry
+    from rq.job import JobStatus
+    from rq.registry import ScheduledJobRegistry
+
+    connection=redis.Redis.from_url(os.environ['REDIS_URL'])
+    suffix=uuid4().hex
+    queue_name='memory-scheduler-'+suffix
+    queue=Queue(queue_name,connection=connection)
+    counter='test:memory-scheduler:'+suffix
+    retry_counter=counter+':retry'
+    log_path=tmp_path/'worker.log'
+    worker_source=(
+        "import os,sys;from redis import Redis;"
+        "from app.services.resource_aware_worker import ResourceAwareWorker;"
+        "w=ResourceAwareWorker([sys.argv[1]],connection=Redis.from_url(os.environ['REDIS_URL']),"
+        "maintenance_interval=1,worker_ttl=20);w.work(with_scheduler=True)"
+    )
+    log=log_path.open('w')
+    process=subprocess.Popen([sys.executable,'-u','-c',worker_source,queue_name],stdout=log,stderr=subprocess.STDOUT,env={**os.environ,'PYTHONPATH':os.path.dirname(__file__)+os.pathsep+os.environ.get('PYTHONPATH','')})
+    jobs=[]
+    def until(condition,seconds=20):
+        deadline=time.monotonic()+seconds
+        while time.monotonic()<deadline:
+            if condition():return
+            assert process.poll() is None,log_path.read_text()[-2500:]
+            time.sleep(.05)
+        raise AssertionError(log_path.read_text()[-2500:])
+    def schedulers():
+        return [int(x)for x in re.findall(r'Scheduler for .* started with PID (\d+)',log_path.read_text())]
+    try:
+        until(lambda:bool(schedulers()))
+        due=queue.enqueue_at(datetime.now(timezone.utc)+timedelta(seconds=1),_scheduled_counter,counter)
+        jobs.append(due)
+        retry=queue.enqueue_at(datetime.now(timezone.utc)+timedelta(seconds=1),_scheduled_counter,retry_counter,True,retry=Retry(max=1,interval=1))
+        jobs.append(retry)
+        until(lambda:due.get_status(refresh=True)==JobStatus.FINISHED and retry.get_status(refresh=True)==JobStatus.FINISHED)
+        assert int(connection.get(counter))==1
+        assert int(connection.get(retry_counter))==2
+        old_pid=schedulers()[-1]
+        os.kill(old_pid,signal.SIGKILL)
+        recovered=queue.enqueue_at(datetime.now(timezone.utc)+timedelta(seconds=1),_scheduled_counter,counter)
+        jobs.append(recovered)
+        until(lambda:recovered.get_status(refresh=True)==JobStatus.FINISHED)
+        assert schedulers()[-1]!=old_pid
+        assert int(connection.get(counter))==2
+        assert ScheduledJobRegistry(queue_name,connection=connection).count==0
+    finally:
+        process.terminate()
+        try:process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill();process.wait(timeout=5)
+        log.close()
+        for job in jobs:
+            job.delete()
+        queue.delete(delete_jobs=True)
+        connection.delete(counter,retry_counter)
+        connection.close()
+    assert process.returncode==0,log_path.read_text()[-2500:]

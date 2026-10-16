@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import random
 import time
 from datetime import datetime, timezone
@@ -131,6 +132,14 @@ class ResourceAwareWorker(Worker):
         from sqlalchemy.orm import configure_mappers
 
         configure_mappers()
+        # RQ forks long-lived schedulers and short-lived workhorses after this
+        # point. Cyclic GC can dirty long-lived preload pages through
+        # per-object bookkeeping, turning shared memory into private copies.
+        # Collect initialization garbage once, then leave that static graph
+        # out of future collections. New task objects remain collectable;
+        # normal GC stays enabled in both the consumer and its children.
+        gc.collect()
+        gc.freeze()
         return super().bootstrap(*args, **kwargs)
 
     def _start_scheduler(

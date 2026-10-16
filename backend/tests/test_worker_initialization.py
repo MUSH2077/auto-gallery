@@ -118,3 +118,51 @@ async def test_obsolete_scan_failure_keeps_attempt_fence(monkeypatch):
         raise AssertionError("Obsolete scan must not change task state")
     monkeypatch.setattr(asset_dedup, "async_session", unexpected_session)
     assert await asset_dedup._fail_scan_operation(uuid4(), "obsolete-scan", AdminOperationAttemptRejected("rotated")) is None
+
+
+def test_worker_preload_freeze_preserves_collection_of_new_task_objects():
+    source = textwrap.dedent("""
+        import gc,json,os,weakref
+        from unittest.mock import patch
+        from app.services.resource_aware_worker import ResourceAwareWorker
+
+        gc.enable()
+        worker=object.__new__(ResourceAwareWorker)
+        with patch('rq.Worker.__init__'):
+            worker.__init__()
+        frozen_before=gc.get_freeze_count()
+        with patch('rq.Worker.bootstrap'):
+            worker.bootstrap()
+        frozen=gc.get_freeze_count()
+        assert frozen>frozen_before
+        assert gc.isenabled()
+        class TaskObject:
+            pass
+        def collect_task_cycle():
+            value=TaskObject();value.self=value
+            reference=weakref.ref(value)
+            del value
+            gc.collect()
+            assert reference() is None
+            assert gc.isenabled()
+            assert 0 < gc.get_freeze_count() <= frozen
+        collect_task_cycle()
+        read_fd,write_fd=os.pipe()
+        child=os.fork()
+        if child==0:
+            os.close(read_fd)
+            try:
+                for _ in range(3):collect_task_cycle()
+                os.write(write_fd,json.dumps({'collected':True}).encode())
+                os._exit(0)
+            except BaseException:os._exit(1)
+        os.close(write_fd)
+        data=os.read(read_fd,4096);os.close(read_fd)
+        _,status=os.waitpid(child,0)
+        assert status==0
+        for _ in range(3):collect_task_cycle()
+        print(json.dumps({'child':json.loads(data),'parent_collected':True}))
+    """)
+    result=subprocess.run([sys.executable,"-c",source],capture_output=True,text=True,timeout=30)
+    assert result.returncode==0,result.stderr
+    assert json.loads(result.stdout)=={'child':{'collected':True},'parent_collected':True}
