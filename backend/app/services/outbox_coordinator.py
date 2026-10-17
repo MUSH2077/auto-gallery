@@ -14,7 +14,7 @@ from time import monotonic
 from redis.exceptions import TimeoutError as RedisTimeoutError, WatchError
 from sqlalchemy.exc import SQLAlchemyError
 from rq import Queue
-from sqlalchemy import and_, delete, event, exists, func, literal, or_, select, tuple_
+from sqlalchemy import and_, case, delete, event, exists, func, literal, or_, select, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
@@ -408,27 +408,28 @@ def _discard_rolled_back_outbox_wakes(session: Session, previous_transaction) ->
         intents.pop(previous_transaction, None)
 
 
-def clear_outbox_wake(kind: str) -> None:
+def clear_outbox_wake(kind: str) -> bool:
     """Release only the wake marker owned by the current RQ job."""
 
     if kind not in _SPECS:
-        return
+        return False
     try:
         from rq import get_current_job
 
         job = get_current_job()
         if job is None:
-            return
-        get_redis().eval(
+            return False
+        return bool(get_redis().eval(
             _CLEAR_WAKE_SCRIPT,
             1,
             _wake_key(kind, _job_wake_slot(job)),
             str(job.id),
-        )
+        ))
     except Exception:
         # The health coordinator reconciles the marker against durable RQ
         # status, so Redis loss cannot strand the PostgreSQL outbox.
         logger.debug("Unable to clear outbox wake marker for %s", kind, exc_info=True)
+        return False
 
 
 def clear_and_wake_outbox_successor(
@@ -452,7 +453,11 @@ def clear_and_wake_outbox_successor(
         except Exception:
             logger.debug("Unable to record deferred outbox wake", exc_info=True)
     if not isinstance(result, dict) or not bool(result.get("more_likely")):
-        clear_outbox_wake(kind)
+        released = clear_outbox_wake(kind)
+        if released and isinstance(result, dict) and not result.get("resource_deferred"):
+            # Clear first: commits before this point are visible to the read;
+            # later commits can publish against the now-empty owner key.
+            return _wake_after_empty_slice(kind)
         return {"enqueued": 0, "deferred": 0}
     try:
         current_owner = None
@@ -497,6 +502,96 @@ async def _deferred_outbox_readiness() -> dict[str, int]:
             return await outbox_counts(db, ready_only=True)
     finally:
         await engine.dispose()
+
+
+# Far-future cleanup keeps the normal timer fallback instead of retaining an
+# RQ job for days. This is a scheduling horizon, never an early-claim allowance.
+_EMPTY_WAKE_HORIZON_SECONDS = 60.0
+
+
+def _next_outbox_deadline_statement(kind: str, now: datetime):
+    def leased(state, available, lease):
+        return select(func.min(case(
+            (state.in_(("pending", "failed")), available),
+            (state == "processing", lease),
+        )).label("due"))
+
+    if kind == "media":
+        model = MediaDerivativeOutbox
+        queries = [leased(model.state, model.available_at, model.lease_expires_at)]
+    elif kind == "import_projection":
+        model = ImportCurationOutbox
+        queries = [leased(model.state, model.available_at, model.lease_expires_at),
+            leased(model.metadata_state, model.metadata_available_at, model.metadata_lease_expires_at)]
+    elif kind == "dedup":
+        model = AssetDedupOutbox
+        queries = [leased(model.state, model.available_at, model.updated_at + timedelta(minutes=15))]
+    elif kind == "search":
+        from app.models.repository_sync_receipt import SearchIndexState
+        from app.models.search_delivery_receipt import SearchDeliveryReceipt
+        from app.models.search_rebuild import SearchRebuild
+        from app.services.search_rebuild import membership_bootstrap_due_condition
+
+        receipt = SearchDeliveryReceipt
+        active_delivery = exists().where(receipt.state.not_in(("complete", "failed")))
+        queries = [
+            select(func.min(func.greatest(receipt.available_at, receipt.lease_until)).label("due"))
+                .where(receipt.state.not_in(("complete", "failed", "ambiguous"))),
+            select(func.min(func.greatest(SearchProjectionOutbox.available_at, SearchProjectionOutbox.lease_until)).label("due"))
+                .where(~active_delivery, SearchProjectionOutbox.completed_at.is_(None)),
+            select(func.min(func.coalesce(SearchIndexState.last_verified_at + timedelta(seconds=30), now)).label("due"))
+                .where(~active_delivery, SearchIndexState.database_generation > SearchIndexState.indexed_generation,
+                    ~exists().where(SearchProjectionOutbox.index_uid == SearchIndexState.index_uid,
+                        SearchProjectionOutbox.completed_at.is_(None))),
+            select(literal(now).label("due")).where(exists().where(SearchRebuild.state.not_in(("complete", "failed")))),
+            select(literal(now).label("due")).where(~active_delivery, membership_bootstrap_due_condition()),
+        ]
+    else:
+        return None
+    deadlines = union_all(*queries).subquery()
+    return select(func.min(deadlines.c.due)).where(
+        deadlines.c.due <= now + timedelta(seconds=_EMPTY_WAKE_HORIZON_SECONDS)
+    )
+
+
+async def _deferred_outbox_next_delays(kinds: set[str]) -> dict[str, float]:
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(
+        settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
+    )
+    try:
+        async with AsyncSession(engine) as db:
+            delays = {}
+            for kind in sorted(kinds):
+                statement = _next_outbox_deadline_statement(kind, datetime.now(timezone.utc))
+                if statement is None:
+                    continue
+                due = await db.scalar(statement)
+                if due is not None:
+                    # RQ scheduled scores have one-second precision. A short
+                    # delayed recheck avoids spinning on a still-locked row.
+                    delays[kind] = max(1.0, (due - datetime.now(timezone.utc)).total_seconds())
+            return delays
+    finally:
+        await engine.dispose()
+
+
+def _wake_after_empty_slice(kind: str) -> dict[str, int]:
+    from app.services.redis_budget import budget_redis
+
+    try:
+        with budget_redis(seconds=0.5, reserve_seconds=0):
+            delays = asyncio.run(asyncio.wait_for(_deferred_outbox_next_delays({kind}), timeout=0.5))
+            if kind in delays:
+                return wake_pending_outboxes({kind: 1}, delay_seconds=delays[kind])
+    except Exception:
+        # The slice is complete; an unavailable recheck must not fail it or
+        # invent ready work. PostgreSQL and the existing timer retain recovery.
+        logger.debug("Empty outbox follow-up check unavailable for %s", kind, exc_info=True)
+        return {"enqueued": 0, "deferred": 1}
+    return {"enqueued": 0, "deferred": 0}
 
 
 async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[str]:
@@ -593,7 +688,8 @@ async def _inspect_deferred_outboxes(kinds: set[str], redis_client):
     counts = await _deferred_outbox_readiness()
     ready = {kind for kind in kinds if counts.get(kind)}
     admitted = await _admissible_deferred_outboxes(ready, redis_client) if ready else set()
-    return counts, ready, admitted
+    future = await _deferred_outbox_next_delays(kinds - ready) if kinds - ready else {}
+    return counts, ready, admitted, future
 
 
 def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str, int]:
@@ -616,7 +712,7 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
             remaining = deadline - monotonic()
             if remaining <= 0:
                 return {"enqueued": 0, "deferred": 1}
-            counts, ready, admitted = asyncio.run(asyncio.wait_for(
+            counts, ready, admitted, future = asyncio.run(asyncio.wait_for(
                 _inspect_deferred_outboxes(kinds, redis), timeout=remaining,
             ))
         remaining = deadline - monotonic()
@@ -625,11 +721,20 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
         # Recreate short sockets for the remaining publication budget.
         with budget_redis(seconds=remaining, reserve_seconds=0):
             redis = get_redis()
+            outcome = {"enqueued": 0, "deferred": 0}
             for kind in kinds - ready:
+                if kind in future:
+                    wake = wake_pending_outboxes({kind: 1}, delay_seconds=future[kind])
+                    outcome["enqueued"] += wake["enqueued"]
+                    outcome["deferred"] += wake["deferred"] or int(not wake["enqueued"])
+                    if not wake["enqueued"]:
+                        continue  # A current runner may not have cleared yet.
                 redis.eval(_CLEAR_DEFERRED_SCRIPT, 1, RESOURCE_DEFERRED_KEY, kind, tokens[kind])
-            if not admitted:
-                return {"enqueued": 0, "deferred": 0}
-            return wake_pending_outboxes({kind: counts[kind] for kind in ready.intersection(admitted)})
+            if admitted:
+                wake = wake_pending_outboxes({kind: counts[kind] for kind in ready.intersection(admitted)})
+                for key in outcome:
+                    outcome[key] += wake[key]
+            return outcome
     except (TimeoutError, RedisTimeoutError, OSError, SQLAlchemyError):
         logger.debug("Resource recovery check timed out; retaining deferred work", exc_info=True)
         return {"enqueued": 0, "deferred": 1}
@@ -1143,7 +1248,7 @@ def wake_pending_outboxes(
             slots = (slot,)
         else:
             # Post-commit counts are readiness hints, not an exact asset count.
-            # Fill the configured pool; empty runners stop without successors.
+            # Fill the configured pool; empty runners only retain near-deadline work.
             slots = range(limit)
         wake_slots.extend((kind, slot) for slot in slots)
     for kind, slot in wake_slots:

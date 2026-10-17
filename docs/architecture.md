@@ -343,6 +343,16 @@ are sent after the transaction commits. A lost transaction reply keeps the
 owner for durable RQ-status reconciliation; queued wake markers still have no
 TTL, and resource protection and timer recovery remain unchanged.
 
+After a successful media, import-projection, deduplication or search slice
+reports no more work, its owned marker is released before a final bounded
+deadline check. Already-due or near-future work within 60 seconds retains a
+delayed continuation; this also covers search generation
+verification and resource-deferred records whose availability time has not
+arrived. The check never claims work early or bypasses worker admission and
+leases. Far-future cleanup uses the existing fallback, and a failed or timed-out
+check does not turn a completed slice into a failed task. The Redis/SQL check
+shares a 500 ms budget and leaves no pooled connection in the forking parent.
+
 Danbooru reference batches are separate administrative operations. Their
 single, Pixiv-ID and URL entries use `persist_danbooru_artist`, and validate the
 current operation attempt before committing each entry. They do not consume a
