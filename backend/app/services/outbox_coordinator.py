@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
-from redis.exceptions import TimeoutError as RedisTimeoutError
+from redis.exceptions import TimeoutError as RedisTimeoutError, WatchError
 from sqlalchemy.exc import SQLAlchemyError
 from rq import Queue
 from sqlalchemy import and_, delete, event, exists, func, literal, or_, select, tuple_
@@ -33,6 +33,7 @@ from app.services.queue_admission import (
     QueueAdmissionError,
     checked_enqueue,
     checked_enqueue_in,
+    notify_queue_worker,
 )
 from app.services.redis_client import get_redis
 
@@ -41,14 +42,6 @@ logger = logging.getLogger(__name__)
 _CLEAR_WAKE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('del', KEYS[1])
-end
-return 0
-"""
-
-_REPLACE_WAKE_SCRIPT = """
-if redis.call('get', KEYS[1]) == ARGV[1] then
-  redis.call('set', KEYS[1], ARGV[2])
-  return 1
 end
 return 0
 """
@@ -445,9 +438,9 @@ def clear_and_wake_outbox_successor(
     """Atomically hand this job's token to one likely-needed successor.
 
     A bounded worker reports ``more_likely`` only when its item/time budget was
-    exhausted. Production workers compare/swap the marker to the successor id
-    before publication, closing the clear-then-health race that could bypass a
-    scheduled cooldown. Exceptions pass ``None`` and deliberately rely on the
+    exhausted. Production workers replace the marker and save the successor RQ
+    record in one transaction, preserving ownership and any scheduled cooldown.
+    Exceptions pass ``None`` and deliberately rely on the
     60-second scheduler fallback rather than creating a crash loop.
     """
 
@@ -1094,6 +1087,26 @@ async def cleanup_completed_outboxes(
     }
 
 
+class _AtomicOutboxQueue(Queue):
+    """Keep delayed registry writes inside the caller's transaction as well."""
+
+    def schedule_job(self, job, datetime, pipeline=None, unique=False):
+        if pipeline is None or unique:
+            return super().schedule_job(job, datetime, pipeline=pipeline, unique=unique)
+        from calendar import timegm
+        from rq.job import JobStatus
+        from rq.registry import ScheduledJobRegistry
+
+        # RQ's registry.schedule currently writes ZADD on its connection even
+        # when given a pipeline. Use its normal persistence with an explicit
+        # pipelined registry write, so a failed WATCH leaves no orphan entry.
+        registry = ScheduledJobRegistry(queue=self)
+        pipeline.sadd(self.redis_queues_keys, self.key)
+        self._persist_job(job, pipeline, status=JobStatus.SCHEDULED)
+        pipeline.zadd(registry.key, {job.id: timegm(datetime.utctimetuple())})
+        return job
+
+
 def wake_pending_outboxes(
     counts: dict[str, int],
     *,
@@ -1108,7 +1121,7 @@ def wake_pending_outboxes(
     duplicate queue during a long resource pause.
     """
     redis = get_redis()
-    queue = Queue(name="operations", connection=redis)
+    queue = _AtomicOutboxQueue(name="operations", connection=redis)
     enqueued = 0
     deferred = 0
     wake_slots = []
@@ -1136,63 +1149,71 @@ def wake_pending_outboxes(
     for kind, slot in wake_slots:
         wake_key = _wake_key(kind, slot)
         job_id = f"outbox-{kind}-{slot}-{time.time_ns()}"
+        function, args = _SPECS[kind]
+        enqueue_kwargs = {
+            "job_id": job_id,
+            "job_timeout": 3600,
+            "result_ttl": 300,
+            "failure_ttl": 300,
+            "meta": {"resource_descriptor": _RESOURCE_DESCRIPTORS[kind]},
+        }
+        if kind == "media":
+            enqueue_kwargs["meta"]["outbox_wake_slot"] = slot
         try:
-            if replace_owner is not None:
-                if not redis.eval(
-                    _REPLACE_WAKE_SCRIPT,
-                    1,
-                    wake_key,
-                    replace_owner,
-                    job_id,
-                ):
-                    continue
-            else:
-                existing = redis.get(wake_key)
-                if isinstance(existing, bytes):
-                    existing = existing.decode()
-                if existing:
-                    if _wake_job_is_active(redis, str(existing)):
-                        continue
-                    _clear_owned_wake(redis, wake_key, str(existing))
-                if not redis.set(
-                    wake_key,
-                    job_id,
-                    nx=True,
-                ):
-                    continue
-            function, args = _SPECS[kind]
-            enqueue_kwargs = {
-                "job_id": job_id,
-                "job_timeout": 3600,
-                "result_ttl": 300,
-                "failure_ttl": 300,
-                "meta": {
-                    "resource_descriptor": _RESOURCE_DESCRIPTORS[kind],
-                },
-            }
-            if kind == "media":
-                enqueue_kwargs["meta"]["outbox_wake_slot"] = slot
-            if delay_seconds > 0.0:
-                checked_enqueue_in(
-                    queue,
-                    timedelta(seconds=delay_seconds),
-                    function,
-                    *args,
-                    **enqueue_kwargs,
-                )
-            else:
-                checked_enqueue(
-                    queue,
-                    function,
-                    *args,
-                    **enqueue_kwargs,
-                )
-            enqueued += 1
+            if _publish_outbox_wake(
+                redis, queue, wake_key, function, args, enqueue_kwargs,
+                delay_seconds=delay_seconds, replace_owner=replace_owner,
+            ):
+                enqueued += 1
         except QueueAdmissionError:
             deferred += 1
-            _clear_owned_wake(redis, wake_key, job_id)
         except Exception:
             deferred += 1
-            _clear_owned_wake(redis, wake_key, job_id)
+            # EXEC may have committed despite a lost response. Keep its owner;
+            # durable RQ status and the health fallback reconcile ambiguity.
             logger.warning("Outbox wake-up failed for %s", kind, exc_info=True)
     return {"enqueued": enqueued, "deferred": deferred}
+
+
+def _publish_outbox_wake(
+    redis, queue, wake_key: str, function: str, args: tuple, enqueue_kwargs: dict,
+    *, delay_seconds: float, replace_owner: str | None,
+) -> bool:
+    """Commit the owner and executable RQ record in the same Redis transaction.
+
+    Publishing an owner before saving its job lets another writer mistake an
+    in-flight publication for a crashed job. WATCH also preserves successor
+    ownership without introducing a publication TTL or expiring queued work.
+    """
+    for _ in range(3):
+        try:
+            with redis.pipeline() as pipeline:
+                pipeline.watch(wake_key)
+                owner = pipeline.get(wake_key)
+                if isinstance(owner, bytes):
+                    owner = owner.decode()
+                if replace_owner is not None:
+                    if owner != replace_owner:
+                        return False
+                elif owner and _wake_job_is_active(redis, str(owner)):
+                    return False
+                pipeline.multi()
+                pipeline.set(wake_key, enqueue_kwargs["job_id"])
+                if delay_seconds > 0:
+                    checked_enqueue_in(
+                        queue, timedelta(seconds=delay_seconds), function, *args,
+                        pipeline=pipeline, **enqueue_kwargs,
+                    )
+                else:
+                    checked_enqueue(
+                        queue, function, *args, pipeline=pipeline, **enqueue_kwargs,
+                    )
+                pipeline.execute()
+            if delay_seconds <= 0:
+                notify_queue_worker(queue.name, redis)
+            return True
+        except WatchError:
+            # A concurrent producer or finishing worker changed the owner.
+            # Re-read its durable status rather than stealing the new marker.
+            continue
+    raise WatchError("Outbox wake owner kept changing during publication")

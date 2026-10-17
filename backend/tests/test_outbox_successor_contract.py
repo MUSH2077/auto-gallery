@@ -55,13 +55,20 @@ def test_outbox_wakeup_publishes_descriptor_metadata(monkeypatch):
             return True
 
     monkeypatch.setattr(outbox_coordinator, "get_redis", lambda: FakeRedis())
-    monkeypatch.setattr(outbox_coordinator, "Queue", lambda **kwargs: kwargs)
+    monkeypatch.setattr(outbox_coordinator, "_AtomicOutboxQueue", lambda **kwargs: kwargs)
     monkeypatch.setattr(
         outbox_coordinator,
         "checked_enqueue",
         lambda queue, function, *args, **kwargs: published.append((function, args, kwargs)),
     )
     monkeypatch.setattr(outbox_coordinator.settings, "gitllery_projection_mode", "active")
+    monkeypatch.setattr(outbox_coordinator.settings, "media_worker_concurrency", 1)
+
+    def publish(_redis, queue, _key, function, args, options, **_kwargs):
+        published.append((function, args, options))
+        return True
+
+    monkeypatch.setattr(outbox_coordinator, "_publish_outbox_wake", publish)
 
     result = outbox_coordinator.wake_pending_outboxes(
         {"import_projection": 1, "media": 1, "gitllery": 1, "search": 1, "dedup": 1}

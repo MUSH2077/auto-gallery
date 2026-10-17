@@ -160,6 +160,8 @@ async def test_bulk_commit_survives_notification_failure_and_can_retry(bulk_envi
     db, library = bulk_environment
     staged = await _staged_work(db, library)
     await db.commit()
+    # This test counts outbox kinds, not media pool slots.
+    monkeypatch.setattr(outbox_coordinator.settings, "media_worker_concurrency", 1)
     real_client = get_redis()
     queued = []
     original_redis = outbox_coordinator.get_redis

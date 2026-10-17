@@ -219,3 +219,19 @@ def test_checked_enqueue_does_not_mislabel_application_errors():
         checked_enqueue(queue, object())
 
     assert redis.rejections == 0
+
+
+def test_external_pipeline_defers_queue_hint_until_caller_commits(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import queue_admission
+
+    hints = []
+    pipeline = object()
+    queue = SimpleNamespace(
+        name="operations", connection=object(),
+        enqueue=lambda *args, **kwargs: kwargs["pipeline"],
+    )
+    monkeypatch.setattr(queue_admission, "ensure_redis_enqueue_capacity", lambda _: None)
+    monkeypatch.setattr(queue_admission, "notify_queue_worker", lambda *args: hints.append(args))
+    assert queue_admission.checked_enqueue(queue, "app.jobs.noop", pipeline=pipeline) is pipeline
+    assert hints == []

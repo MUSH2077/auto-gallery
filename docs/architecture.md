@@ -334,6 +334,15 @@ intent. Notification failure leaves the committed outbox rows available for
 recovery. Import completion does not imply thumbnail or search readiness; each
 background result must be observed separately.
 
+Outbox wake ownership and its RQ job are published in one Redis transaction.
+Immediate publication includes the queue entry; delayed publication includes
+both the job and its scheduled-registry entry. Concurrent publishers recheck a
+changed owner instead of reclaiming a marker while its job is still being
+saved. Capacity admission remains in place, and immediate queue notifications
+are sent after the transaction commits. A lost transaction reply keeps the
+owner for durable RQ-status reconciliation; queued wake markers still have no
+TTL, and resource protection and timer recovery remain unchanged.
+
 Danbooru reference batches are separate administrative operations. Their
 single, Pixiv-ID and URL entries use `persist_danbooru_artist`, and validate the
 current operation attempt before committing each entry. They do not consume a

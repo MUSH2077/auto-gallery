@@ -182,7 +182,10 @@ def checked_enqueue(queue, *args: Any, **kwargs: Any):
     """Capacity-check and call ``Queue.enqueue`` with structured failures."""
 
     job = _checked_queue_write(queue, lambda: queue.enqueue(*args, **kwargs))
-    notify_queue_worker(str(getattr(queue, "name", "")), queue.connection)
+    # An external pipeline has not committed yet. Its caller publishes the
+    # responsiveness hint after EXEC, when the queue record is visible.
+    if kwargs.get("pipeline") is None:
+        notify_queue_worker(str(getattr(queue, "name", "")), queue.connection)
     return job
 
 
