@@ -110,20 +110,24 @@ def test_shared_handles_track_actual_consumers_after_template_crash():
     assert 'P5_HANDLE_CHECK_OK' in result.stdout
 
 
-@pytest.mark.parametrize('mode',['startup-stop','restart','restart-scheduler','template-failure'])
-def test_supervisor_restarts_consumers_and_stops_group_on_template_loss(tmp_path,mode):
+@pytest.mark.parametrize(('queue','count','extra'),[('operations',4,''),('imports',2,'maintenance')])
+@pytest.mark.parametrize('mode',['startup-stop','restart','restart-scheduler','restart-maintenance-scheduler','template-failure'])
+def test_supervisor_restarts_consumers_and_stops_group_on_template_loss(tmp_path,mode,queue,count,extra):
     import redis
     from rq import Worker
 
+    if mode=='restart-maintenance-scheduler' and not extra:
+        pytest.skip('This service has no maintenance consumer')
+    expected=count+bool(extra)
     connection=redis.Redis.from_url(os.environ['REDIS_URL'])
     initial={w.name for w in Worker.all(connection=connection)}
     log=(tmp_path/'supervisor.log').open('w+')
-    process=subprocess.Popen([sys.executable,'worker_entrypoint.py','operations','4','--with-scheduler'],
-        env={**os.environ,'WORKER_SHARED_INITIALIZATION':'1','MEDIA_WORKER_CONCURRENCY':'4'},
+    process=subprocess.Popen([sys.executable,'worker_entrypoint.py',queue,str(count),'--with-scheduler'],
+        env={**os.environ,'WORKER_SHARED_INITIALIZATION':'1','MEDIA_WORKER_CONCURRENCY':'4','WORKER_EXTRA_QUEUES':extra},
         stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     owned=[]
     def workers():
-        return [w for w in Worker.all(connection=connection) if w.name not in initial and w.queues[0].name=='operations']
+        return [w for w in Worker.all(connection=connection) if w.name not in initial and w.queues[0].name in {queue,extra}]
     def wait_for(predicate,timeout=25):
         end=time.monotonic()+timeout
         while time.monotonic()<end:
@@ -140,29 +144,33 @@ def test_supervisor_restarts_consumers_and_stops_group_on_template_loss(tmp_path
             wait_for(template_started)
             process.terminate();assert process.wait(20)==0
             return
-        wait_for(lambda:len(workers())==4)
+        wait_for(lambda:len(workers())==expected)
         owned=workers();old_pids={w.pid for w in owned}
         parent_pid=int(Path(f'/proc/{next(iter(old_pids))}/stat').read_text().split(') ')[1].split()[1])
-        if mode in {'restart', 'restart-scheduler'}:
+        if mode in {'restart', 'restart-scheduler', 'restart-maintenance-scheduler'}:
             def scheduler_children(pid):
                 children=Path(f'/proc/{pid}/task/{pid}/children')
                 return {int(v) for v in children.read_text().split()} if children.exists() else set()
-            wait_for(lambda:any(scheduler_children(pid) for pid in old_pids))
-            scheduler_owner=next(pid for pid in old_pids if scheduler_children(pid))
+            scheduler_queue='maintenance' if mode=='restart-maintenance-scheduler' else queue
+            queue_pids={w.pid for w in owned if w.queues[0].name==scheduler_queue}
+            wait_for(lambda:any(scheduler_children(pid) for pid in queue_pids))
+            scheduler_owner=next(pid for pid in queue_pids if scheduler_children(pid))
             scheduler_pids=scheduler_children(scheduler_owner)
-            victim=scheduler_owner if mode=='restart-scheduler' else next(pid for pid in old_pids if pid!=scheduler_owner)
+            victim=scheduler_owner if mode!='restart' else next(pid for pid in queue_pids if pid!=scheduler_owner)
             os.kill(victim,signal.SIGKILL)
             wait_for(lambda:len({w.pid for w in workers()}-old_pids)==1)
             # RQ's stale registration may persist until maintenance, but exactly
-            # four live OS consumers must remain, with one replacement.
+            # the configured live OS consumers must remain, with one replacement.
             live=[w for w in workers() if Path(f'/proc/{w.pid}').exists()]
-            assert len(live)==4
+            assert len(live)==expected
+            assert sum(w.queues[0].name==queue for w in live)==count
+            assert sum(w.queues[0].name=='maintenance' for w in live)==bool(extra)
             owned=workers();process.terminate()
             try:
                 assert process.wait(20)==0
             except subprocess.TimeoutExpired:
                 log.flush();pytest.fail('Restarted shared supervisor did not stop:\n'+Path(log.name).read_text())
-            if mode=='restart-scheduler':
+            if mode in {'restart-scheduler','restart-maintenance-scheduler'}:
                 wait_for(lambda:all(not Path(f'/proc/{pid}').exists() for pid in scheduler_pids),timeout=5)
         else:
             os.kill(parent_pid,signal.SIGKILL)
@@ -175,43 +183,53 @@ def test_supervisor_restarts_consumers_and_stops_group_on_template_loss(tmp_path
         log.close();connection.close()
 
 
-def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isolated():
+@pytest.mark.parametrize('queues',[('operations',)*4,('imports','imports','maintenance')])
+def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isolated(queues):
     code = textwrap.dedent("""
         import json,os,signal,time
         import redis
         from rq import Queue,Retry
+        from datetime import timedelta
         from app.services.shared_worker_process import SharedWorkerFactory
         from app.services.resource_pressure import RESOURCE_CONTROL_CHANNEL
         from tests.shared_worker_fixture import isolated_task
         if __name__=='__main__':
             namespace=os.environ['P5_NAMESPACE'];connection=redis.Redis.from_url(os.environ['REDIS_URL'])
-            queue=Queue('operations',connection=connection);factory=SharedWorkerFactory();handles=[];jobs=[]
+            queue_names=json.loads(os.environ['P5_QUEUES']);queue_map={name:Queue(name,connection=connection) for name in queue_names}
+            factory=SharedWorkerFactory();handles=[];jobs=[]
             def wait_for(check):
                 deadline=time.monotonic()+25
                 while time.monotonic()<deadline:
                     if check():return
                     time.sleep(.02)
                 raise AssertionError('Owned shared-worker lifecycle timed out')
-            def enqueue(mode,profile='light'):
-                job=queue.enqueue(isolated_task,namespace,mode,job_id=namespace+'-'+str(len(jobs)),meta={'resource_profile':profile},retry=Retry(max=1,interval=0))
+            def enqueue(mode,profile='light',queue_name=None,delayed=False):
+                queue=queue_map[queue_name or queue_names[0]]
+                method=queue.enqueue_in if delayed else queue.enqueue
+                args=(timedelta(seconds=1),isolated_task,namespace,mode) if delayed else (isolated_task,namespace,mode)
+                job=method(*args,job_id=namespace+'-'+str(len(jobs)),meta={'resource_profile':profile},retry=Retry(max=1,interval=0))
                 jobs.append(job);return job
             try:
-                for i in range(4):
-                    handles.append(factory.start(['rq','worker','-w','tests.shared_worker_fixture.SharedTestWorker','--url',os.environ['REDIS_URL'],*(['--with-scheduler'] if i==0 else []),'operations'],{'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4'}))
-                wait_for(lambda:connection.hlen(namespace+':consumers')==4)
+                for i,name in enumerate(queue_names):
+                    handles.append(factory.start(['rq','worker','-w','tests.shared_worker_fixture.SharedTestWorker','--url',os.environ['REDIS_URL'],*(['--with-scheduler'] if name not in queue_names[:i] else []),name],{'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4','WORKER_SHARED_INITIALIZATION':'1'}))
+                wait_for(lambda:connection.hlen(namespace+':consumers')==len(queue_names))
                 parents=[json.loads(v)for v in connection.hvals(namespace+':consumers')]
-                assert len({v['redis_id']for v in parents})==4
-                assert len({v['backend_pid']for v in parents})==4
-                for _ in range(4):enqueue('held')
-                wait_for(lambda:connection.hlen(namespace+':started')==4)
+                assert len({v['redis_id']for v in parents})==len(queue_names)
+                assert len({v['backend_pid']for v in parents})==len(queue_names)
+                for name in queue_names:enqueue('held',queue_name=name)
+                wait_for(lambda:connection.hlen(namespace+':started')==len(queue_names))
                 rows=[json.loads(v)for v in connection.hvals(namespace+':started')]
                 assert {v['parent']for v in rows}=={h.pid for h in handles}
                 assert all(v['parent']==v['marker'] and v['pid']!=v['parent']for v in rows)
-                assert len({v['backend_pid']for v in rows})==4
+                assert len({v['backend_pid']for v in rows})==len(queue_names)
                 connection.set(namespace+':release','1')
                 wait_for(lambda:all(job.get_status(refresh=True)=='finished' for job in jobs))
+                # Each queue retains its own scheduler, including maintenance.
+                for name in queue_map:
+                    delayed=enqueue('normal',queue_name=name,delayed=True)
+                    wait_for(lambda:delayed.get_status(refresh=True)=='finished')
                 connection.set(namespace+':pressure','1')
-                pressured=enqueue('normal','image_derive')
+                pressured=enqueue('normal','import_db' if queue_names[0]=='imports' else 'image_derive')
                 time.sleep(.3)
                 assert not connection.hexists(namespace+':started',pressured.id)
                 connection.delete(namespace+':pressure');connection.publish(RESOURCE_CONTROL_CHANNEL,'resume')
@@ -240,7 +258,7 @@ def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isol
                 if keys:connection.delete(*keys)
                 factory.close();connection.close()
     """)
-    result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'P5_NAMESPACE':'p5-'+uuid4().hex},capture_output=True,text=True,timeout=100)
+    result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'P5_NAMESPACE':'p5-'+uuid4().hex,'P5_QUEUES':json.dumps(queues)},capture_output=True,text=True,timeout=100)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'P5_ISOLATION_RETRY_PRESSURE_OK' in result.stdout
 

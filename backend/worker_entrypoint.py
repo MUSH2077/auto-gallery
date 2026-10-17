@@ -457,8 +457,16 @@ def main():
     if shared_mode not in {"0", "false", "1", "true"}:
         raise ValueError("WORKER_SHARED_INITIALIZATION must be 0 or 1")
     if shared_mode in {"1", "true"}:
-        if queues != ["operations"] or concurrency < 2 or extra_queues:
-            raise ValueError("Shared initialization currently requires multiple operations consumers")
+        supported_queues = (
+            queues == ["operations"] and not extra_queues
+        ) or (
+            queues == ["imports"] and extra_queues in ([], ["maintenance"])
+        )
+        if not supported_queues or concurrency < 2:
+            raise ValueError(
+                "Shared initialization requires multiple operations or imports consumers; "
+                "only imports may include the independent maintenance queue"
+            )
         from app.services.shared_worker_process import SharedWorkerFactory
 
         shared_factory = SharedWorkerFactory()

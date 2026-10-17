@@ -172,3 +172,17 @@ def test_execution_limit_is_safe_and_uses_explicit_device_override():
     assert execution_limit() == 1
     assert execution_limit(5, 5, 1, 4) == 4
     assert execution_limit(5, 5, 2, "") == 2
+
+
+@pytest.mark.parametrize(('queue','count','extra'),[
+    ('operations',1,''),('operations',4,'maintenance'),
+    ('imports',1,'maintenance'),('imports',2,'discovery'),
+    ('imports',2,'maintenance,discovery'),('scheduled',2,''),
+])
+def test_shared_initialization_rejects_unsupported_queue_combinations(monkeypatch,queue,count,extra):
+    monkeypatch.setenv('WORKER_SHARED_INITIALIZATION','1')
+    monkeypatch.setenv('WORKER_EXTRA_QUEUES',extra)
+    monkeypatch.setattr(worker_entrypoint.sys,'argv',['worker_entrypoint.py',queue,str(count)])
+    monkeypatch.setattr(worker_entrypoint,'_sweep_personal_auth_startup',lambda _:0)
+    with pytest.raises(ValueError,match='Shared initialization requires'):
+        worker_entrypoint.main()
