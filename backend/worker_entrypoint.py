@@ -469,7 +469,7 @@ def main():
             )
         from app.services.shared_worker_process import SharedWorkerFactory
 
-        shared_factory = SharedWorkerFactory()
+        shared_factory = SharedWorkerFactory(preload_control=queues == ["operations"])
     fatal_shared_failure = False
     expected_worker_count = len(worker_specs)
     supervised_queues = list(
@@ -492,7 +492,7 @@ def main():
             child_env = os.environ.copy()
             child_env[IMPORT_WORKER_CONCURRENCY_ENV] = str(concurrency)
         if shared_factory is not None:
-            process = shared_factory.start(command, child_env)
+            process = shared_factory.start(command)
         else:
             process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
         if not running:

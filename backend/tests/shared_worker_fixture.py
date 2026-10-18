@@ -33,6 +33,9 @@ class SharedTestWorker(ResourceAwareWorker):
     def bootstrap(self,*args,**kwargs):
         global CONSUMER_PID
         CONSUMER_PID=os.getpid()
+        from app.config import settings
+        assert settings.media_worker_concurrency == 4
+        assert settings.import_worker_concurrency == 2
         self.connection.hset(os.environ['P5_NAMESPACE']+':consumers',str(os.getpid()),json.dumps({
             'redis_id':self.connection.client_id(),'backend_pid':asyncio.run(backend_pid())}))
         return super().bootstrap(*args,**kwargs)

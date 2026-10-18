@@ -37,16 +37,23 @@ def inspect_preload(connection):
         "gc":gc.isenabled(),"frozen":gc.get_freeze_count(),
         "database_imported":"app.database" in sys.modules,
         "config_imported":"app.config" in sys.modules,
+        "control_imported":"app.services.worker_control_preload" in sys.modules,
+        "resource_callback_registered":bool(getattr(sys.modules.get("app.services.heavy_io"),"_resource_state_callback",None)),
+        "lease_client_created":getattr(sys.modules.get("app.services.heavy_io"),"_lease_redis_client",None) is not None,
         "template_sockets":sum(p.startswith("socket:") for p in template_fds)})
     connection.close()
 
 
-def test_template_is_inherited_and_contains_no_business_connections_or_threads():
+@pytest.mark.parametrize("preload_control", [False, True])
+def test_template_is_inherited_and_contains_no_business_connections_or_threads(preload_control):
     code = textwrap.dedent("""
-        import json,multiprocessing
+        import json,multiprocessing,os
         from tests.test_shared_worker_process import inspect_preload
         if __name__=='__main__':
-            multiprocessing.set_forkserver_preload(['app.services.worker_preload'])
+            control=os.environ['P5_PRELOAD_CONTROL']=='1'
+            modules=['app.services.worker_preload']
+            if control:modules.append('app.services.worker_control_preload')
+            multiprocessing.set_forkserver_preload(modules)
             context=multiprocessing.get_context('forkserver')
             rows=[]
             for _ in range(2):
@@ -58,11 +65,12 @@ def test_template_is_inherited_and_contains_no_business_connections_or_threads()
                 assert process.exitcode==0
             assert rows[0]['template']==rows[1]['template']
             assert all(row['template']!=row['pid'] and row['threads']==1 and row['gc'] and row['frozen']>0 for row in rows)
-            assert all(not row['database_imported'] and not row['config_imported'] for row in rows)
+            assert all(not row['database_imported'] and row['config_imported']==control and row['control_imported']==control for row in rows)
+            assert all(not row['resource_callback_registered'] and not row['lease_client_created'] for row in rows)
             assert all(row['template_sockets']==1 for row in rows) # forkserver listener only
             print(json.dumps(rows))
     """)
-    result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,timeout=40)
+    result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'P5_PRELOAD_CONTROL':str(int(preload_control))},capture_output=True,text=True,timeout=40)
     assert result.returncode==0,result.stderr
     assert len(json.loads(result.stdout))==2
 
@@ -196,7 +204,7 @@ def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isol
         if __name__=='__main__':
             namespace=os.environ['P5_NAMESPACE'];connection=redis.Redis.from_url(os.environ['REDIS_URL'])
             queue_names=json.loads(os.environ['P5_QUEUES']);queue_map={name:Queue(name,connection=connection) for name in queue_names}
-            factory=SharedWorkerFactory();handles=[];jobs=[]
+            factory=SharedWorkerFactory(environment={'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4','IMPORT_WORKER_CONCURRENCY':'2','WORKER_SHARED_INITIALIZATION':'1'},preload_control=queue_names[0]=='operations');handles=[];jobs=[]
             def wait_for(check):
                 deadline=time.monotonic()+25
                 while time.monotonic()<deadline:
@@ -211,7 +219,7 @@ def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isol
                 jobs.append(job);return job
             try:
                 for i,name in enumerate(queue_names):
-                    handles.append(factory.start(['rq','worker','-w','tests.shared_worker_fixture.SharedTestWorker','--url',os.environ['REDIS_URL'],*(['--with-scheduler'] if name not in queue_names[:i] else []),name],{'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4','WORKER_SHARED_INITIALIZATION':'1'}))
+                    handles.append(factory.start(['rq','worker','-w','tests.shared_worker_fixture.SharedTestWorker','--url',os.environ['REDIS_URL'],*(['--with-scheduler'] if name not in queue_names[:i] else []),name]))
                 wait_for(lambda:connection.hlen(namespace+':consumers')==len(queue_names))
                 parents=[json.loads(v)for v in connection.hvals(namespace+':consumers')]
                 assert len({v['redis_id']for v in parents})==len(queue_names)
@@ -258,7 +266,7 @@ def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isol
                 if keys:connection.delete(*keys)
                 factory.close();connection.close()
     """)
-    result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'P5_NAMESPACE':'p5-'+uuid4().hex,'P5_QUEUES':json.dumps(queues)},capture_output=True,text=True,timeout=100)
+    result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'P5_NAMESPACE':'p5-'+uuid4().hex,'P5_QUEUES':json.dumps(queues),'MEDIA_WORKER_CONCURRENCY':'1','IMPORT_WORKER_CONCURRENCY':'1'},capture_output=True,text=True,timeout=100)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'P5_ISOLATION_RETRY_PRESSURE_OK' in result.stdout
 
@@ -276,3 +284,23 @@ def test_scheduler_parent_loss_before_signal_installation_requests_rq_stop(monke
     follow_consumer_lifetime(999999999)
     prctl.assert_called_once_with(1, signal.SIGTERM, 0, 0, 0)
     sent.assert_called_once_with(os.getpid(), signal.SIGTERM)
+
+
+def test_template_environment_is_restored_when_process_start_fails(monkeypatch):
+    from types import SimpleNamespace
+    from app.services.shared_worker_process import SharedWorkerFactory
+
+    monkeypatch.setenv("MEDIA_WORKER_CONCURRENCY", "1")
+    monkeypatch.delenv("P5_ONLY_IN_TEMPLATE", raising=False)
+    factory = SharedWorkerFactory(environment={"MEDIA_WORKER_CONCURRENCY": "4", "P5_ONLY_IN_TEMPLATE": "yes"}, preload_control=True)
+    def fail_start():
+        assert os.environ["MEDIA_WORKER_CONCURRENCY"] == "4"
+        assert os.environ["P5_ONLY_IN_TEMPLATE"] == "yes"
+        raise OSError("Injected forkserver start failure")
+    process = SimpleNamespace(start=fail_start, pid=None)
+    monkeypatch.setattr(factory._context, "Process", lambda **_: process)
+    with pytest.raises(OSError, match="Injected"):
+        factory.start(["rq", "worker", "operations"])
+    assert os.environ["MEDIA_WORKER_CONCURRENCY"] == "1"
+    assert "P5_ONLY_IN_TEMPLATE" not in os.environ
+    factory.close()

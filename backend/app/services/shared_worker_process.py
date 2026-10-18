@@ -1,6 +1,7 @@
 """Optional forkserver consumers; task execution remains in RQ workhorses."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import multiprocessing
 import os
 import select
@@ -8,10 +9,9 @@ import signal
 import subprocess
 
 
-def _run_rq(arguments: list[str], environment: dict[str, str], ready) -> None:
-    # Apply resolved per-consumer values before importing app.config or RQ's
-    # resource worker. The template contains definitions, never live clients.
-    os.environ.update(environment)
+def _run_rq(arguments: list[str], ready) -> None:
+    # The common service environment was applied before template preload.
+    # Clients and resource-state callbacks are still created in this consumer.
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     from app.services import worker_preload
@@ -89,24 +89,51 @@ class SharedWorkerProcess:
 
 
 class SharedWorkerFactory:
-    def __init__(self):
+    def __init__(
+        self, *, environment: dict[str, str] | None = None, preload_control: bool = False,
+    ):
         # Explicit local context: RQ's own scheduler/workhorse fork mechanism
         # and other services retain their existing multiprocessing defaults.
         self._context = multiprocessing.get_context("forkserver")
-        multiprocessing.set_forkserver_preload(["app.services.worker_preload"])
+        modules = ["app.services.worker_preload"]
+        if preload_control:
+            modules.append("app.services.worker_control_preload")
+        multiprocessing.set_forkserver_preload(modules)
+        self._environment = dict(environment or {})
         self.template_pid = None
         self._template_pidfd = None
 
-    def start(self, command: list[str], environment: dict[str, str] | None = None):
+    @contextmanager
+    def _template_environment(self):
+        # A factory serves one service configuration. The forkserver imports
+        # settings before consumers start, so delayed per-child overrides would
+        # leave its cached settings stale. Restore the supervisor even if the
+        # first process cannot start. This supervisor starts consumers serially.
+        previous = {key: os.environ.get(key) for key in self._environment}
+        try:
+            os.environ.update(self._environment)
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def start(self, command: list[str]):
         if not self.alive():
             raise RuntimeError("Shared initialization process exited")
         read, write = self._context.Pipe(duplex=False)
         process = self._context.Process(
-            target=_run_rq, args=(command[1:], environment or {}, write), daemon=False,
+            target=_run_rq, args=(command[1:], write), daemon=False,
         )
         handle = None
         try:
-            process.start()
+            if self.template_pid is None:
+                with self._template_environment():
+                    process.start()
+            else:
+                process.start()
             handle = SharedWorkerProcess(process)
             write.close()
             if not read.poll(15):
