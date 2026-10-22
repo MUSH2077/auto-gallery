@@ -1,4 +1,4 @@
-"""Connection-free consumer control definitions for the shared image service."""
+"""Connection-free control definitions shared by image and import consumers."""
 from __future__ import annotations
 
 import gc

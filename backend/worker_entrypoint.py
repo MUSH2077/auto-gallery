@@ -469,7 +469,9 @@ def main():
             )
         from app.services.shared_worker_process import SharedWorkerFactory
 
-        shared_factory = SharedWorkerFactory(preload_control=queues == ["operations"])
+        shared_factory = SharedWorkerFactory(
+            preload_control=queues in (["operations"], ["imports"]),
+        )
     fatal_shared_failure = False
     expected_worker_count = len(worker_specs)
     supervised_queues = list(

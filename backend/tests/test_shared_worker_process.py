@@ -204,7 +204,7 @@ def test_shared_consumers_keep_connections_task_memory_pressure_and_retries_isol
         if __name__=='__main__':
             namespace=os.environ['P5_NAMESPACE'];connection=redis.Redis.from_url(os.environ['REDIS_URL'])
             queue_names=json.loads(os.environ['P5_QUEUES']);queue_map={name:Queue(name,connection=connection) for name in queue_names}
-            factory=SharedWorkerFactory(environment={'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4','IMPORT_WORKER_CONCURRENCY':'2','WORKER_SHARED_INITIALIZATION':'1'},preload_control=queue_names[0]=='operations');handles=[];jobs=[]
+            factory=SharedWorkerFactory(environment={'P5_NAMESPACE':namespace,'MEDIA_WORKER_CONCURRENCY':'4','IMPORT_WORKER_CONCURRENCY':'2','WORKER_SHARED_INITIALIZATION':'1'},preload_control=queue_names[0] in ('operations','imports'));handles=[];jobs=[]
             def wait_for(check):
                 deadline=time.monotonic()+25
                 while time.monotonic()<deadline:
