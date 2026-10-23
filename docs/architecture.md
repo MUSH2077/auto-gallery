@@ -601,6 +601,12 @@ NAS host paths are mapped in `docker-compose.yaml` only.
 
 Download consumers remain resident by default and read the expiring drain lease only with explicit `DOWNLOAD_WORKER_LIFECYCLE=on_demand`. While draining they stop claiming, return jobs caught during admission to their queues, and finish running work. The supervisor suppresses respawns and acknowledges the matching token only after consumers exit. Cancelling or expiring the lease reaps exited consumers before restoring only missing specs; intentional drain exits do not enter crash backoff. Unreadable Redis state never acknowledges a stop. Other queues and the default resident mode retain their behavior.
 
+The optional foreground controller runs on a Linux/WSL Docker host. Set the opt-in mode, deploy and verify the normal stack, then run `python3 scripts/download-runtime.py --project <compose-project> --compose-file <compose-file>` under a restarting host service manager. It does not mount the Docker socket in the API container or change concurrency, archive locks, resource admission, or database budgets. Its default idle grace is 300 seconds; the first job after a stop pays worker cold-start latency.
+
+A lightweight Redis bridge inside the existing backend subscribes to `resource:work:download_network` and checks all download queues every two seconds, including a scan on startup/reconnect. Notifications are hints: the durable download dispatch outbox and its existing recovery still publish jobs. Runnable, inflight, and dependency-waiting work keeps downloads resident. Future scheduled retries may remain in Redis while stopped; the host starts the download consumers and their queue-scoped schedulers ten seconds before the earliest deadline. Both the host process and bridge memory count against net savings.
+
+The controller requires the current drain token acknowledgement and rechecks queue state before stopping the container. A job arriving during stop stays queued and triggers another start. Normal SIGINT/SIGTERM restores resident downloads; stop the controller normally before deployment, rollback, or existing all-service verification. A forcibly killed controller cannot restart a stopped container from inside that container: host supervision must restart it and rescan durable queues. Do not enable this mode without host supervision.
+
 Personal account authentication overlays are not part of the NAS tree. The
 download worker writes them under `/run/auto-gallery-secrets`, a dedicated
 nonpersistent tmpfs, and validates that boundary before use.
