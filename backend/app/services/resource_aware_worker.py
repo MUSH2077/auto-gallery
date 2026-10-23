@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import os
 import random
 import time
 from datetime import datetime, timezone
@@ -44,6 +45,9 @@ REDIS_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 REDIS_CONNECTION_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
 HEAVY_QUEUE_NAMES = frozenset({"imports", "operations", "maintenance"})
 RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
+DOWNLOAD_DRAIN_KEY = "worker:download:drain:v1"
+DOWNLOAD_DRAIN_CHANNEL = "worker:download:drain:control"
+DOWNLOAD_WORKER_LIFECYCLE_ENV = "DOWNLOAD_WORKER_LIFECYCLE"
 IDLE_WAIT_MIN_SECONDS = 2.0
 IDLE_WAIT_MAX_SECONDS = 30.0
 WORKER_STATE_HEARTBEAT_SECONDS = 30.0
@@ -601,10 +605,48 @@ class ResourceAwareWorker(Worker):
             except Exception:
                 self.log.debug("Unable to close resource control subscriber", exc_info=True)
 
+    def _is_download_worker(self) -> bool:
+        """Return whether this consumer owns one or more download queues."""
+
+        return any(
+            self._is_heavy_queue(queue)
+            and (
+                str(getattr(queue, "name", "")) == "downloads"
+                or str(getattr(queue, "name", "")).startswith("downloads:")
+            )
+            for queue in getattr(self, "queues", ())
+        )
+
+    def _download_lifecycle_enabled(self) -> bool:
+        return (
+            str(os.environ.get(DOWNLOAD_WORKER_LIFECYCLE_ENV, "resident"))
+            .strip()
+            .lower()
+            == "on_demand"
+        )
+
+    def _download_drain_requested(self) -> bool:
+        """Read the short-lived host-controller drain lease.
+
+        A missing or unreadable lease keeps the resident worker behaviour. The
+        controller only acknowledges a drain after every consumer has exited,
+        so a Redis read failure cannot make it stop the container prematurely.
+        """
+
+        if not self._is_download_worker() or not self._download_lifecycle_enabled():
+            return False
+        try:
+            return self.connection.get(DOWNLOAD_DRAIN_KEY) is not None
+        except REDIS_CONNECTION_ERRORS:
+            return False
+
     def _raise_if_shutdown_requested(self) -> None:
         if getattr(self, "_stop_requested", False) or getattr(
             self, "_shutdown_requested_date", None
         ) is not None:
+            self._close_control_pubsub()
+            raise StopRequested()
+        if self._download_drain_requested():
             self._close_control_pubsub()
             raise StopRequested()
 
@@ -624,6 +666,8 @@ class ResourceAwareWorker(Worker):
                     RESOURCE_CONTROL_CHANNEL,
                     f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}",
                 )
+                if self._is_download_worker() and self._download_lifecycle_enabled():
+                    pubsub.subscribe(DOWNLOAD_DRAIN_CHANNEL)
                 self._resource_control_workload = workload
             # An accepted job marks the worker busy, so RQ's warm signal sets
             # a flag instead of raising. Observe it without resampling pressure.

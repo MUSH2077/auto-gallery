@@ -14,7 +14,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from typing import TYPE_CHECKING
 from dataclasses import dataclass
 
@@ -32,6 +32,8 @@ SUPERVISOR_STATUS_TTL_SECONDS = 75
 SUPERVISOR_STATUS_INTERVAL_SECONDS = 5
 SUPERVISOR_STABLE_HEARTBEAT_SECONDS = 30
 WORKER_SUPERVISOR_HASH_KEY = "worker:supervisors:v1"
+DOWNLOAD_DRAIN_KEY = "worker:download:drain:v1"
+DOWNLOAD_WORKER_LIFECYCLE_ENV = "DOWNLOAD_WORKER_LIFECYCLE"
 SCHEDULER_WATCHDOG_INTERVAL_SECONDS = 60
 OUTBOX_FALLBACK_INTERVAL_SECONDS = 60
 OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS = 30
@@ -191,6 +193,34 @@ def _supervisor_status_field(queues: list[str]) -> str:
     return "+".join(queues).replace(":", "_")
 
 
+def _read_download_drain_token(queues: list[str]) -> str | None:
+    """Read the host controller's short-lived download drain lease."""
+
+    if os.environ.get(DOWNLOAD_WORKER_LIFECYCLE_ENV, "resident").strip().lower() != "on_demand":
+        return None
+    if not any(
+        str(queue) == "downloads" or str(queue).startswith("downloads:")
+        for queue in queues
+    ):
+        return None
+    global _status_client
+    try:
+        if _status_client is None:
+            import redis
+
+            _status_client = redis.from_url(
+                REDIS_URL,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+        value = _status_client.get(DOWNLOAD_DRAIN_KEY)
+        if value is None:
+            return None
+        return value.decode() if isinstance(value, bytes) else str(value)
+    except Exception:  # noqa: BLE001 - control polling cannot kill supervisor
+        return None
+
+
 def _publish_supervisor_status(queues: list[str], payload: dict) -> None:
     global _status_client, _last_status_signature, _last_status_publish_at
     try:
@@ -279,6 +309,49 @@ def resolve_import_concurrency(argv_value: str | None) -> int:
             f"{IMPORT_WORKER_CONCURRENCY_MIN} and {IMPORT_WORKER_CONCURRENCY_MAX}; got {value}"
         )
     return value
+
+
+def _missing_worker_restarts(
+    worker_specs: list[tuple[tuple[str, ...], bool]],
+    processes: list[ManagedProcess],
+    pending_restarts: list[PendingRestart],
+    *,
+    due_at: float,
+) -> list[PendingRestart]:
+    """Return only worker specs absent from live and pending processes."""
+
+    active_specs = Counter(
+        (managed.queues, managed.with_scheduler)
+        for managed in processes
+    )
+    active_specs.update(
+        (pending.queues, pending.with_scheduler)
+        for pending in pending_restarts
+    )
+    missing: list[PendingRestart] = []
+    for spec_queues, scheduler in worker_specs:
+        spec = (tuple(spec_queues), scheduler)
+        if active_specs[spec]:
+            active_specs[spec] -= 1
+        else:
+            missing.append(
+                PendingRestart(
+                    due_at=due_at, queues=tuple(spec_queues), with_scheduler=scheduler
+                )
+            )
+    return missing
+
+
+def _clear_restarts_on_download_drain_start(
+    pending_restarts: list[PendingRestart],
+    *,
+    drain_active: bool,
+    was_drain_active: bool,
+) -> None:
+    """Discard crash backoff plans while an intentional drain is active."""
+
+    if drain_active and not was_drain_active:
+        pending_restarts.clear()
 
 
 def _queue_worker_counts(
@@ -445,6 +518,9 @@ def main():
     last_scheduler_watchdog_at = 0.0
     last_outbox_fallback_at = 0.0
     last_outbox_health_at = 0.0
+    drain_token: str | None = None
+    drain_active = False
+    was_drain_active = False
 
     worker_specs = build_worker_specs(
         queues,
@@ -576,7 +652,8 @@ def main():
             break
         now = time.monotonic()
         restart_circuit.refresh(now)
-
+        drain_token = _read_download_drain_token(supervised_queues)
+        drain_active = drain_token is not None
         if (
             "scheduled" in supervised_queues
             and now - last_scheduler_watchdog_at >= SCHEDULER_WATCHDOG_INTERVAL_SECONDS
@@ -643,7 +720,10 @@ def main():
                 "return_code": return_code,
                 "at": datetime.now(timezone.utc).isoformat(),
             }
-            if not running:
+            if not running or drain_active or was_drain_active:
+                # A deliberate drain is a warm stop, not a crash. During the
+                # cancellation transition, reap those normal exits first; the
+                # exact-spec recovery below recreates only missing consumers.
                 continue
             delay = restart_circuit.record_exit(now)
             due_at = now + delay
@@ -668,8 +748,23 @@ def main():
                     flush=True,
                 )
 
+        _clear_restarts_on_download_drain_start(
+            pending_restarts,
+            drain_active=drain_active,
+            was_drain_active=was_drain_active,
+        )
+        if was_drain_active and not drain_active:
+            # Reap processes before comparing specs. A parent that already
+            # returned during drain must not be counted as live or scheduled
+            # through crash backoff; only missing specs are recreated now.
+            pending_restarts.extend(
+                _missing_worker_restarts(
+                    worker_specs, processes, pending_restarts, due_at=now
+                )
+            )
+
         circuit_open = restart_circuit.is_open(now)
-        if not circuit_open:
+        if not circuit_open and not drain_active:
             for pending in list(pending_restarts):
                 if pending.due_at > now:
                     continue
@@ -692,7 +787,14 @@ def main():
             restart_circuit.observe_fully_running(now)
 
         if now - last_status_at >= SUPERVISOR_STATUS_INTERVAL_SECONDS:
-            state = "circuit_open" if circuit_open else "backoff" if pending_restarts else "running"
+            drained = drain_active and not processes and not pending_restarts
+            state = (
+                "drained" if drained
+                else "draining" if drain_active
+                else "circuit_open" if circuit_open
+                else "backoff" if pending_restarts
+                else "running"
+            )
             circuit_open_until = None
             if restart_circuit.circuit_until is not None:
                 remaining = max(0.0, restart_circuit.circuit_until - now)
@@ -715,9 +817,14 @@ def main():
                     "crashes_in_window": len(restart_circuit.crashes),
                     "circuit_open_until": circuit_open_until,
                     "last_exit": last_exit,
+                    "drain_token": drain_token,
+                    "drain_ack": drained,
                 },
             )
             last_status_at = now
+            if drained:
+                print("[worker_entrypoint] download drain acknowledged; all consumers stopped", flush=True)
+        was_drain_active = drain_active
         time.sleep(1)
 
     if recovery_control is not None:

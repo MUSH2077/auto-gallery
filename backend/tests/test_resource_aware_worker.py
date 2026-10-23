@@ -6,9 +6,12 @@ from uuid import uuid4
 import redis
 import pytest
 from rq import Worker
+from rq.exceptions import StopRequested
 from sqlalchemy import text
 
 from app.services.resource_aware_worker import (
+    DOWNLOAD_DRAIN_CHANNEL,
+    DOWNLOAD_DRAIN_KEY,
     ResourceAwareWorker,
     adaptive_wait_delay,
     redis_retry_delay,
@@ -1318,3 +1321,95 @@ def test_running_workhorse_heartbeat_resamples_worker_cgroup(monkeypatch):
 
     assert result == ("base-heartbeat", job)
     assert observed == [snapshot]
+
+
+def test_download_drain_lease_is_ignored_in_default_resident_mode(monkeypatch):
+    monkeypatch.delenv("DOWNLOAD_WORKER_LIFECYCLE", raising=False)
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    worker.connection = SimpleNamespace(get=lambda _key: b"drain-token")
+
+    worker._raise_if_shutdown_requested()
+
+
+def test_download_drain_lease_stops_only_download_consumers(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    worker.connection = SimpleNamespace(get=lambda key: b"drain-token" if key == DOWNLOAD_DRAIN_KEY else None)
+
+    with pytest.raises(StopRequested):
+        worker._raise_if_shutdown_requested()
+
+    worker.queues = [SimpleNamespace(name="imports")]
+    worker._raise_if_shutdown_requested()
+
+
+def test_download_drain_returns_claimed_job_before_workhorse(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    eval_calls = []
+    worker.connection = SimpleNamespace(
+        get=lambda key: b"drain-token" if key == DOWNLOAD_DRAIN_KEY else None,
+        eval=lambda *args: eval_calls.append(args),
+    )
+    queue = SimpleNamespace(
+        name="downloads:danbooru",
+        key="rq:queue:downloads:danbooru",
+        redis_queues_keys=["rq:queues"],
+        intermediate_queue=SimpleNamespace(
+            key="rq:intermediate:downloads:danbooru",
+            get_first_seen_key=lambda job_id: f"rq:first:{job_id}",
+        ),
+    )
+    job = SimpleNamespace(id="drain-job", key="rq:job:drain-job")
+
+    monkeypatch.setattr(Worker, "execute_job", lambda *_args: pytest.fail("workhorse must not start"))
+
+    with pytest.raises(StopRequested):
+        worker.execute_job(job, queue)
+
+    assert eval_calls
+
+
+def test_download_drain_control_channel_is_subscribed_for_waiting_download_worker(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    class PubSub:
+        def __init__(self):
+            self.channels = set()
+            self.closed = False
+
+        def subscribe(self, *channels):
+            self.channels.update(channels)
+
+        def get_message(self, *, timeout):
+            return {"type": "message", "data": "drain"}
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        def __init__(self):
+            self.pubsubs = []
+
+        def pubsub(self, *, ignore_subscribe_messages):
+            assert ignore_subscribe_messages is True
+            pubsub = PubSub()
+            self.pubsubs.append(pubsub)
+            return pubsub
+
+        def get(self, key):
+            return None
+
+    worker = _bare_worker()
+    worker.connection = Connection()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+
+    worker._wait_for_control_event(1.0, "download_network")
+
+    assert worker.connection.pubsubs[0].channels == {
+        "resource:control",
+        "resource:work:download_network",
+        DOWNLOAD_DRAIN_CHANNEL,
+    }

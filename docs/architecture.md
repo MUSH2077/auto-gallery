@@ -599,6 +599,8 @@ NAS host paths are mapped in `docker-compose.yaml` only.
     └── metadata/                       # metadata.json copies
 ```
 
+Download consumers remain resident by default and read the expiring drain lease only with explicit `DOWNLOAD_WORKER_LIFECYCLE=on_demand`. While draining they stop claiming, return jobs caught during admission to their queues, and finish running work. The supervisor suppresses respawns and acknowledges the matching token only after consumers exit. Cancelling or expiring the lease reaps exited consumers before restoring only missing specs; intentional drain exits do not enter crash backoff. Unreadable Redis state never acknowledges a stop. Other queues and the default resident mode retain their behavior.
+
 Personal account authentication overlays are not part of the NAS tree. The
 download worker writes them under `/run/auto-gallery-secrets`, a dedicated
 nonpersistent tmpfs, and validates that boundary before use.
