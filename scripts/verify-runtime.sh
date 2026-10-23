@@ -12,8 +12,8 @@ case "$verify_scope" in
     application_services=(backend admin-web worker-import worker-operations)
     ;;
   full)
-    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
-    application_services=(backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
+    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations scheduler)
+    application_services=(backend admin-web worker-download worker-import worker-operations scheduler)
     ;;
   *)
     echo "Unsupported VERIFY_SCOPE: $verify_scope" >&2
@@ -41,6 +41,26 @@ compose() {
     docker compose "$@"
   fi
 }
+
+if [[ "$verify_scope" == "full" ]]; then
+  compose_config="$(compose config --format json)"
+  resolved_worker_services_output="$(
+    printf '%s' "$compose_config" | python3 scripts/runtime-services.py
+  )" || {
+    echo "Runtime verification could not resolve effective worker services" >&2
+    exit 1
+  }
+  mapfile -t resolved_worker_services <<<"$resolved_worker_services_output"
+  discovery_runtime_state="$(compose ps worker-discovery --format '{{.State}}')" || {
+    echo "Runtime verification could not inspect discovery service state" >&2
+    exit 1
+  }
+  if printf '%s\n' "${resolved_worker_services[@]}" | grep -qx 'worker-discovery' ||
+     [[ "$discovery_runtime_state" == "running" ]]; then
+    services+=(worker-discovery)
+    application_services+=(worker-discovery)
+  fi
+fi
 
 require_service_ok() {
   local service="$1"
@@ -352,7 +372,10 @@ if [[ "$verify_scope" == "full" ]]; then
   rq_download_hostname="$(current_container_hostname worker-download)"
   rq_import_hostname="$(current_container_hostname worker-import)"
   rq_operations_hostname="$(current_container_hostname worker-operations)"
-  rq_discovery_hostname="$(current_container_hostname worker-discovery)"
+  rq_discovery_hostname=""
+  if printf "%s\n" "${application_services[@]}" | grep -qx "worker-discovery"; then
+    rq_discovery_hostname="$(current_container_hostname worker-discovery)"
+  fi
   rq_scheduler_hostname="$(current_container_hostname scheduler)"
 
   compose exec -T \
@@ -384,17 +407,19 @@ for worker in Worker.all(connection=connection):
             ),
         }
     )
+expected_hostnames = {
+    "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
+    "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
+    "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
+    "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
+}
+if os.environ.get("VERIFY_RQ_DISCOVERY_HOSTNAME"):
+    expected_hostnames["discovery"] = os.environ["VERIFY_RQ_DISCOVERY_HOSTNAME"]
 print(
     json.dumps(
         {
             "observed_at": datetime.now(timezone.utc).isoformat(),
-            "expected_hostnames": {
-                "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
-                "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
-                "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
-                "discovery": os.environ["VERIFY_RQ_DISCOVERY_HOSTNAME"],
-                "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
-            },
+            "expected_hostnames": expected_hostnames,
             "workers": workers,
         },
         separators=(",", ":"),

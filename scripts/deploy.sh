@@ -28,6 +28,7 @@ CANDIDATE_SOURCE_DIGEST=""
 CANDIDATE_BACKEND_IMAGE=""
 CANDIDATE_ADMIN_IMAGE=""
 GOVERNED_PROFILES="download_network,import_db,image_derive,video_derive,search_index,maintenance"
+BACKGROUND_SERVICES=(worker-download worker-import worker-operations scheduler)
 
 usage() {
     cat <<'EOF'
@@ -485,6 +486,125 @@ EOF
     echo -e "${GREEN}  Complete rollback point: $ROLLBACK_DIR${NC}"
 }
 
+discovery_queue_has_work() {
+    local payload pending
+    payload="$(compose exec -T backend python3 - <<'PY'
+import asyncio
+import json
+import os
+
+from redis import Redis
+from rq import Queue
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models import TaskRun
+from app.services.tasks import NONTERMINAL_STATUSES
+
+
+def registry_count(queue, attribute):
+    registry = getattr(queue, attribute, None)
+    return int(registry.count) if registry is not None else 0
+
+
+async def persisted_nonterminal_count():
+    async with async_session() as db:
+        return int(
+            await db.scalar(
+                select(func.count())
+                .select_from(TaskRun)
+                .where(
+                    TaskRun.operation_type == "remote-discovery-scan",
+                    TaskRun.status.in_(set(NONTERMINAL_STATUSES) | {"waiting"}),
+                )
+            )
+            or 0
+        )
+
+
+queue = Queue("discovery", connection=Redis.from_url(os.environ["REDIS_URL"]))
+print(json.dumps({
+    "queue": {
+        "queued": len(queue),
+        "started": registry_count(queue, "started_job_registry"),
+        "scheduled": registry_count(queue, "scheduled_job_registry"),
+        "deferred": registry_count(queue, "deferred_job_registry"),
+        "retry": registry_count(queue, "retry_job_registry"),
+    },
+    "persisted_nonterminal": asyncio.run(persisted_nonterminal_count()),
+}))
+PY
+)" || return 2
+    pending="$(printf '%s' "$payload" | python3 scripts/runtime-services.py --check-discovery-backlog)" || return 2
+    [[ "$pending" == "1" ]]
+}
+
+live_discovery_producer_enabled() {
+    local service container_id environment enabled
+    for service in backend scheduler; do
+        container_id="$(compose ps -q "$service" 2>/dev/null)" || return 2
+        [[ -n "$container_id" ]] || continue
+        environment="$(docker inspect "$container_id" --format '{{json .Config.Env}}')" || return 2
+        enabled="$(printf '%s' "$environment" | python3 scripts/runtime-services.py --check-discovery-environment)" || return 2
+        [[ "$enabled" == "1" ]] && return 0
+    done
+    return 1
+}
+check_disabled_discovery_backlog() {
+    if discovery_queue_has_work; then
+        echo "Refusing deploy: discovery queue or persisted tasks have pending work while remote discovery is disabled" >&2
+        return 1
+    else
+        local status=$?
+        if [[ "$status" -eq 1 ]]; then
+            return 0
+        fi
+        echo "Refusing deploy: discovery backlog state could not be inspected safely" >&2
+        return 1
+    fi
+}
+
+resolve_background_services() {
+    local compose_config backend_state background_state resolved_background_services
+    compose_config="$(compose config --format json)"
+    resolved_background_services="$(
+        printf '%s' "$compose_config" | python3 scripts/runtime-services.py
+    )" || {
+        echo "Refusing deploy: effective worker service selection failed" >&2
+        return 1
+    }
+    mapfile -t BACKGROUND_SERVICES <<<"$resolved_background_services"
+    if ! printf '%s\n' "${BACKGROUND_SERVICES[@]}" | grep -qx 'worker-discovery'; then
+        if live_discovery_producer_enabled; then
+            echo "Refusing deploy: live backend/scheduler discovery producers are still enabled; disable admission and drain discovery before deploying" >&2
+            return 1
+        else
+            local producer_status=$?
+            if [[ "$producer_status" -ne 1 ]]; then
+                echo "Refusing deploy: live producer discovery flags could not be inspected safely" >&2
+                return 1
+            fi
+        fi
+        backend_state="$(compose ps backend --format '{{.State}}' 2>/dev/null)" || {
+            echo "Refusing deploy: backend state could not be inspected safely" >&2
+            return 1
+        }
+        if [[ "$backend_state" == "running" ]]; then
+            check_disabled_discovery_backlog || return $?
+        else
+            background_state="$(compose ps worker-discovery scheduler --format '{{.Service}} {{.State}}' 2>/dev/null)" || {
+                echo "Refusing deploy: background worker state could not be inspected safely" >&2
+                return 1
+            }
+            if [[ -n "$background_state" ]]; then
+                echo "Refusing deploy: background discovery/scheduler workers are running while backend is unavailable" >&2
+                return 1
+            fi
+        fi
+    fi
+    [[ "${#BACKGROUND_SERVICES[@]}" -eq 4 || "${#BACKGROUND_SERVICES[@]}" -eq 5 ]]
+}
+
 all_services_ready() {
     local service container_id state health
     local services=("$@")
@@ -596,6 +716,7 @@ command -v docker >/dev/null
 command -v timeout >/dev/null
 docker info >/dev/null
 compose config --quiet
+resolve_background_services
 install -d -m 700 "$ROLLBACK_ROOT"
 [[ -w "$ROLLBACK_ROOT" ]] || {
     echo "Refusing deploy: rollback root is not writable: $ROLLBACK_ROOT" >&2
@@ -668,13 +789,17 @@ VERIFY_SCOPE=core \
     VERIFY_EXPECT_ENFORCED_PROFILES="$GOVERNED_PROFILES" \
     bash scripts/verify-runtime.sh
 
+if ! printf '%s\n' "${BACKGROUND_SERVICES[@]}" | grep -qx 'worker-discovery'; then
+    check_disabled_discovery_backlog
+fi
+
 if [[ "$CORE_ONLY" -eq 0 ]]; then
     echo -e "${YELLOW}[7/7] Starting adaptive background workers...${NC}"
     compose up -d --force-recreate --no-build \
-        worker-download worker-import worker-operations worker-discovery scheduler
+        "${BACKGROUND_SERVICES[@]}"
     ready=0
     for attempt in $(seq 1 36); do
-        if all_services_ready worker-download worker-import worker-operations worker-discovery scheduler; then
+        if all_services_ready "${BACKGROUND_SERVICES[@]}"; then
             ready=1
             break
         fi
@@ -683,7 +808,7 @@ if [[ "$CORE_ONLY" -eq 0 ]]; then
     done
     [[ "$ready" -eq 1 ]] || {
         compose ps >&2
-        compose logs --tail=50 worker-download worker-import worker-operations worker-discovery scheduler >&2 || true
+        compose logs --tail=50 "${BACKGROUND_SERVICES[@]}" >&2 || true
         false
     }
     VERIFY_SCOPE=full \

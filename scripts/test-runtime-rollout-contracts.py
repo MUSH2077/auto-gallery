@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -179,7 +180,7 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
         cls.verifier = _load_script("verify-rq-worker-registrations.py")
 
     @staticmethod
-    def _payload(*, stale_queue=None, omit_queue=None):
+    def _payload(*, stale_queue=None, omit_queue=None, omit_role=None):
         fresh = "2026-08-30T10:00:00+00:00"
         stale = "2026-08-30T09:50:00+00:00"
         role_queues = (
@@ -205,6 +206,8 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
         )
         workers = []
         for role, registered in role_queues:
+            if role == omit_role:
+                continue
             remaining = [name for name in registered if name != omit_queue]
             if not remaining:
                 continue
@@ -220,9 +223,30 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
             "expected_hostnames": {
                 role: f"current-{role}"
                 for role in ("download", "import", "operations", "discovery", "scheduler")
+                if role != omit_role
             },
             "workers": workers,
         }
+
+    def test_missing_core_role_hostname_fails_closed(self):
+        payload = self._payload()
+        del payload["expected_hostnames"]["operations"]
+        ready, summary = self.verifier.evaluate_registrations(payload)
+        self.assertFalse(ready)
+        self.assertIn("operations", summary)
+
+    def test_disabled_topology_without_discovery_role_passes(self):
+        ready, summary = self.verifier.evaluate_registrations(
+            self._payload(omit_role="discovery")
+        )
+        self.assertTrue(ready, summary)
+
+    def test_enabled_topology_missing_discovery_coverage_fails(self):
+        ready, summary = self.verifier.evaluate_registrations(
+            self._payload(omit_queue="discovery")
+        )
+        self.assertFalse(ready)
+        self.assertIn("discovery", summary)
 
     def test_actual_service_queue_topology_accepts_separate_child_registrations(self):
         ready, summary = self.verifier.evaluate_registrations(self._payload())
@@ -293,7 +317,216 @@ class RqWorkerRegistrationContractTests(unittest.TestCase):
             self.assertEqual(queues, self.verifier.ROLE_QUEUES[role], service)
 
 
+class RuntimeServiceSelectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.resolver = _load_script("runtime-services.py")
+
+    @staticmethod
+    def _config(**environment):
+        return {"services": {"backend": {"environment": environment}}}
+
+    def test_disabled_effective_flags_omit_discovery(self):
+        services = self.resolver.worker_services(
+            self._config(
+                REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED="false",
+                REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED="true",
+            )
+        )
+        self.assertEqual(
+            services,
+            ["worker-download", "worker-import", "worker-operations", "scheduler"],
+        )
+
+    def test_live_container_environment_parser_detects_enabled_producer(self):
+        self.assertTrue(
+            self.resolver.discovery_enabled_environment(
+                [
+                    "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=true",
+                    "REMOTE_DISCOVERY_X_ENABLED=true",
+                ]
+            )
+        )
+        self.assertFalse(
+            self.resolver.discovery_enabled_environment(
+                [
+                    "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED=false",
+                    "REMOTE_DISCOVERY_X_ENABLED=true",
+                ]
+            )
+        )
+
+    def test_private_members_and_provider_preview_enable_discovery(self):
+        services = self.resolver.worker_services(
+            self._config(
+                REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED="true",
+                REMOTE_DISCOVERY_X_ENABLED="true",
+            )
+        )
+        self.assertIn("worker-discovery", services)
+
+    def test_scheduler_enabled_override_keeps_discovery_with_backend_disabled(self):
+        config = self._config(REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED="false")
+        config["services"]["scheduler"] = {"environment": {
+            "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED": "true",
+            "REMOTE_DISCOVERY_X_ENABLED": "true",
+        }}
+        self.assertIn("worker-discovery", self.resolver.worker_services(config))
+
+    def test_persisted_nonterminal_discovery_task_blocks_disabled_selection(self):
+        self.assertTrue(
+            self.resolver.discovery_work_pending(
+                {"queue": {}, "persisted_nonterminal": 1}
+            )
+        )
+
+    def test_deferred_registry_blocks_disabled_selection(self):
+        self.assertTrue(
+            self.resolver.discovery_work_pending(
+                {"queue": {"deferred": 1}, "persisted_nonterminal": 0}
+            )
+        )
+
+    def test_retry_registry_blocks_disabled_selection(self):
+        self.assertTrue(
+            self.resolver.discovery_work_pending(
+                {"queue": {"retry": 1}, "persisted_nonterminal": 0}
+            )
+        )
+
+    def test_invalid_backlog_input_fails_closed(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "runtime-services.py"),
+                "--check-discovery-backlog",
+            ],
+            input="{",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_invalid_effective_flag_fails_closed(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "runtime-services.py")],
+            input=json.dumps(
+                self._config(
+                    REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED="maybe",
+                )
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_deploy_refuses_running_workers_when_backend_is_unavailable(self):
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("compose ps worker-discovery scheduler", deploy)
+        self.assertIn(
+            "background discovery/scheduler workers are running while backend is unavailable",
+            deploy,
+        )
+
+    def test_disabled_deploy_refuses_live_enabled_producers_before_mutation(self):
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("live_discovery_producer_enabled", deploy)
+        self.assertIn(
+            "live backend/scheduler discovery producers are still enabled",
+            deploy,
+        )
+        self.assertLess(
+            deploy.index("live_discovery_producer_enabled"),
+            deploy.index("compose stop -t 120 worker-download"),
+        )
+
+    def test_fresh_deploy_defers_probe_until_backend_exists(self):
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn('compose ps backend --format', deploy)
+        self.assertLess(
+            deploy.index("compose config --quiet\nresolve_background_services"),
+            deploy.index("compose stop -t 120 worker-download"),
+        )
+        self.assertGreater(
+            deploy.rindex("check_disabled_discovery_backlog"),
+            deploy.index('VERIFY_SCOPE=core'),
+        )
+
+
 class DeploymentOrderingContractTests(unittest.TestCase):
+    def test_service_resolution_executes_and_propagates_pending_refusal(self):
+        deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+        functions = deploy.split("discovery_queue_has_work() {", 1)[1]
+        functions = "discovery_queue_has_work() {" + functions.split("all_services_ready() {", 1)[0]
+        stub = """set -euo pipefail
+compose() {
+  case "$1" in
+    config) printf '%s' "$RUNTIME_TEST_CONFIG" ;;
+    ps)
+      case "$RUNTIME_TEST_PS_FAIL:$2" in producer:-q|backend:backend|background:worker-discovery) return 9 ;; esac
+      if [[ "$2" == backend && "$RUNTIME_TEST_BACKEND" == running ]]; then printf 'running'; fi ;;
+    exec) cat >/dev/null; printf '%s' "$RUNTIME_TEST_BACKLOG" ;;
+    *) return 2 ;;
+  esac
+}
+"""
+        script = stub + functions + """
+BACKGROUND_SERVICES=()
+if resolve_background_services; then
+  printf '%s\\n' "${BACKGROUND_SERVICES[@]}"
+else
+  exit 77
+fi
+"""
+        for name, running, enabled, pending, ps_failure, code in [
+            ("fresh", "", False, 0, "", 0),
+            ("idle", "running", False, 0, "", 0),
+            ("pending", "running", False, 1, "", 77),
+            ("enabled", "", True, 0, "", 0),
+            ("malformed", "", "invalid", 0, "", 77),
+            ("producer-inspection-failed", "", False, 0, "producer", 77),
+            ("backend-inspection-failed", "", False, 0, "backend", 77),
+            ("background-inspection-failed", "", False, 0, "background", 77),
+        ]:
+            with self.subTest(name=name):
+                environment = {
+                    "REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED": enabled,
+                    "REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED": True,
+                }
+                result = subprocess.run(
+                    ["bash", "-c", script], cwd=ROOT, text=True, capture_output=True,
+                    env={**os.environ,
+                        "RUNTIME_TEST_CONFIG": json.dumps({"services": {"backend": {"environment": environment}}}),
+                        "RUNTIME_TEST_BACKEND": running,
+                        "RUNTIME_TEST_PS_FAIL": ps_failure,
+                        "RUNTIME_TEST_BACKLOG": json.dumps({"queue": {}, "persisted_nonterminal": pending})},
+                )
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                if code == 0:
+                    self.assertEqual("worker-discovery" in result.stdout, enabled)
+                    self.assertIn("scheduler", result.stdout)
+
+    def test_verification_refuses_unreadable_discovery_service_state(self):
+        verify = (ROOT / "scripts" / "verify-runtime.sh").read_text(encoding="utf-8")
+        section = verify.split('if [[ "$verify_scope" == "full" ]]; then', 1)[1]
+        section = 'if [[ "$verify_scope" == "full" ]]; then' + section.split("require_service_ok() {", 1)[0]
+        script = """set -euo pipefail
+verify_scope=full
+services=()
+application_services=()
+compose() {
+  case "$1" in
+    config) printf '{"services":{"backend":{"environment":{}}}}' ;;
+    ps) return 9 ;;
+  esac
+}
+""" + section
+        result = subprocess.run(["bash", "-c", script], cwd=ROOT, text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not inspect discovery service state", result.stderr)
+
     def test_deploy_waits_for_natural_hard_recovery_before_workers(self):
         deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
         rollout = deploy.split(

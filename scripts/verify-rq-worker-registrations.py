@@ -75,9 +75,15 @@ def evaluate_registrations(
     role_hostnames: dict[str, str] = {}
     for role in ROLE_QUEUES:
         hostname = expected_hostnames.get(role)
+        if hostname is None:
+            if role == "discovery":
+                continue
+            return False, f"{role} current container hostname is missing"
         if not isinstance(hostname, str) or not hostname:
             return False, f"{role} current container hostname is missing"
         role_hostnames[role] = hostname
+    if not role_hostnames:
+        return False, "expected worker hostnames are missing"
     if len(set(role_hostnames.values())) != len(role_hostnames):
         return False, "current worker container hostnames are not unique"
 
@@ -104,6 +110,8 @@ def evaluate_registrations(
 
     failures: list[str] = []
     for role, required in ROLE_QUEUES.items():
+        if role not in role_hostnames:
+            continue
         hostname = role_hostnames[role]
         missing = sorted(required - fresh_queues.get(hostname, set()))
         if missing:

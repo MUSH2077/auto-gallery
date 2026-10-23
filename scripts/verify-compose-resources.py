@@ -135,6 +135,8 @@ def verify_runtime_resource_contract(config: dict) -> None:
         directory = Path(raw_dir)
         fixture_path = directory / "inspect.json"
         inspect_log = directory / "inspect.log"
+        compose_path = directory / "compose.json"
+        compose_path.write_text(json.dumps(config), encoding="utf-8")
         fixture_path.write_text(json.dumps(fixtures), encoding="utf-8")
         docker = directory / "docker"
         docker.write_text(
@@ -146,6 +148,10 @@ import sys
 fixtures = json.load(open(os.environ["RUNTIME_CONTRACT_FIXTURE"], encoding="utf-8"))
 args = sys.argv[1:]
 if args and args[0] == "compose":
+    if "config" in args:
+        with open(os.environ["RUNTIME_CONTRACT_COMPOSE"], encoding="utf-8") as source:
+            print(source.read())
+        raise SystemExit(0)
     if "ps" in args:
         service = args[args.index("ps") + 1]
         if "-q" in args:
@@ -188,6 +194,7 @@ raise SystemExit(2)
                 "PATH": f"{directory}:{env['PATH']}",
                 "COMPOSE_ENV_FILE": str(directory / "absent.env"),
                 "RUNTIME_CONTRACT_FIXTURE": str(fixture_path),
+                "RUNTIME_CONTRACT_COMPOSE": str(compose_path),
                 "RUNTIME_CONTRACT_LOG": str(inspect_log),
                 "VERIFY_RESOURCES_ONLY": "1",
                 "VERIFY_SCOPE": "full",
