@@ -2,9 +2,9 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { adminRoutes } from "@/lib/adminRoutes";
+import { loginDestination } from "@/lib/loginDestination";
 import { SOURCE_CODE_URL } from "@/lib/sourceCode";
-import { AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser } from "@/lib/authFlow";
+import { AuthLoginError, AuthUserLookupError, clearLegacyToken, csrfToken, loadUser, loginAndLoadUser } from "@/lib/authFlow";
 import loginCopy from "@/lib/locales/login.json";
 import { Code2, Eye, EyeOff, Globe2, Images, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 
@@ -32,6 +32,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const loginGeneration = useRef(0);
+  const submitting = useRef(false);
+  const errorRef = useRef<HTMLParagraphElement>(null);
   const copy = COPY[lang];
 
   useEffect(() => {
@@ -49,11 +51,11 @@ export default function LoginPage() {
     } catch {}
 
     clearLegacyToken();
-    if (!csrfToken()) return;
+    if (submitting.current || !csrfToken()) return;
     loadUser()
       .then((user) => {
         if (active && generation === loginGeneration.current) {
-          router.replace(user.must_change_password ? adminRoutes.profile : adminRoutes.dashboard);
+          router.replace(loginDestination(new URLSearchParams(window.location.search).get("redirect"), user.must_change_password));
         }
       })
       .catch((error: Error & { status?: number }) => {
@@ -63,6 +65,9 @@ export default function LoginPage() {
       });
     return () => { active = false; };
   }, [router, copy.sessionUnavailable]);
+
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+  useEffect(() => () => { loginGeneration.current += 1; }, []);
 
   const changeLang = () => {
     const next = lang === "zh" ? "en" : "zh";
@@ -80,23 +85,32 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    loginGeneration.current += 1;
+    if (submitting.current) return;
+    submitting.current = true;
+    const generation = ++loginGeneration.current;
     setLoading(true);
     setError("");
     try {
       const authUser = await loginAndLoadUser(username, password);
-      if (authUser.must_change_password) {
-        router.replace(adminRoutes.profile);
-      } else {
-        router.replace(adminRoutes.dashboard);
+      if (generation === loginGeneration.current) {
+        router.replace(loginDestination(new URLSearchParams(window.location.search).get("redirect"), authUser.must_change_password));
       }
     } catch (err: unknown) {
-      const message = err instanceof AuthUserLookupError
-        ? err.status === 503 ? copy.sessionUnavailable : copy.invalidCredentials
-        : err instanceof Error ? err.message : copy.invalidCredentials;
+      if (generation !== loginGeneration.current) return;
+      let message = copy.invalidCredentials;
+      if (err instanceof AuthLoginError) {
+        message = err.status >= 500 ? copy.sessionUnavailable : err.status === 401 ? copy.invalidCredentials : err.message;
+      } else if (err instanceof AuthUserLookupError) {
+        message = copy.sessionUnavailable;
+      } else if (err instanceof TypeError) {
+        message = copy.sessionUnavailable;
+      } else if (err instanceof Error && err.message !== "Incorrect username or password") {
+        message = err.message;
+      }
       setError(message);
     } finally {
-      setLoading(false);
+      submitting.current = false;
+      if (generation === loginGeneration.current) setLoading(false);
     }
   }
 
@@ -190,7 +204,7 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+              {error && <p ref={errorRef} tabIndex={-1} role="alert" className="text-sm text-danger">{error}</p>}
 
               <button type="submit" disabled={loading} className="btn-primary mt-2 w-full">
                 {loading ? copy.loggingIn : copy.loginButton}

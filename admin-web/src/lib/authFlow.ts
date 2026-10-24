@@ -1,5 +1,12 @@
 /** Shared browser login flow for the public login page and AuthProvider. */
 
+export class AuthLoginError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 export class AuthUserLookupError extends Error {
   readonly status: number;
 
@@ -63,7 +70,7 @@ export async function loginAndLoadUser(
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "Login failed");
+    throw new AuthLoginError(typeof body.detail === "string" ? body.detail : "Login failed", response.status);
   }
   // A failed lookup leaves the session cookie to be replaced by the next
   // successful login. Automatic logout could race with a newer login.

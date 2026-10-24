@@ -54,7 +54,7 @@ export function proxy(request: NextRequest) {
 
   if (!token) {
     const loginUrl = new URL(LOGIN, request.url);
-    loginUrl.searchParams.set("redirect", pathname);
+    loginUrl.searchParams.set("redirect", pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 
