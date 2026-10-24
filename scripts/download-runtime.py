@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import shutil
 import signal
 import subprocess
@@ -20,19 +21,231 @@ import sys
 import time
 import tempfile
 import uuid
+from urllib.parse import urlparse, unquote
+
+
+class UnsupportedDockerEndpoint(RuntimeError):
+    """The configured Docker endpoint cannot use the local socket bridge."""
+
+
+def _context_docker_host(docker):
+    """Return the effective local Docker Unix socket, or None for remote endpoints."""
+    explicit_context = os.environ.get("DOCKER_CONTEXT")
+    explicit_host = os.environ.get("DOCKER_HOST")
+    if explicit_context:
+        current = explicit_context
+    elif explicit_host:
+        value = explicit_host
+        parsed = urlparse(value)
+        return unquote(parsed.path) if parsed.scheme == "unix" and parsed.path else None
+    else:
+        try:
+            current = subprocess.run([docker, "context", "show"], capture_output=True,
+                text=True, timeout=10, check=True).stdout.strip() or "default"
+        except (OSError, subprocess.SubprocessError):
+            return None
+    try:
+        value = subprocess.run([docker, "context", "inspect", current,
+            "--format", "{{json .Endpoints.docker.Host}}"], capture_output=True,
+            text=True, timeout=10, check=True).stdout.strip()
+        value = json.loads(value) if value else ""
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme != "unix" or not parsed.path:
+        return None
+    return unquote(parsed.path)
+
+
+def _UnixHTTPConnection(socket_path):
+    """Create one HTTP connection while keeping http.client off the CLI path."""
+    import http.client
+
+    class UnixHTTPConnection(http.client.HTTPConnection):
+        def __init__(self, path):
+            super().__init__("localhost", timeout=10)
+            self.socket_path = path
+
+        def connect(self):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock = sock
+            try:
+                sock.settimeout(self.timeout)
+                sock.connect(self.socket_path)
+            except Exception:
+                sock.close()
+                self.sock = None
+                raise
+
+    return UnixHTTPConnection(socket_path)
+
+
+class UnixDockerBridge:
+    """Run the Redis bridge through a local Docker Engine exec/attach stream."""
+
+    def __init__(self, docker, backend_id, token):
+        path = _context_docker_host(docker)
+        if not path:
+            raise UnsupportedDockerEndpoint("Docker endpoint is not a local Unix socket")
+        self.socket_path = path
+        self.buffer = b""
+        self.stdout_buffer = b""
+        self.messages = []
+        self.work_hint = False
+        version = self._json_request("GET", "/version")
+        api_version = os.environ.get("DOCKER_API_VERSION") or version.get("ApiVersion")
+        if not api_version:
+            raise UnsupportedDockerEndpoint("Docker API version is unavailable")
+        created = self._json_request("POST", f"/v{api_version}/containers/{backend_id}/exec",
+            {"AttachStdin": True, "AttachStdout": True, "AttachStderr": True,
+             "Tty": False, "Cmd": ["python", "-u", "-m", "app.services.download_runtime", token]})
+        exec_id = created.get("Id")
+        if not exec_id:
+            raise RuntimeError("Docker exec did not return an id")
+        try:
+            self.sock = self._connect()
+            self._start_stream(f"/v{api_version}/exec/{exec_id}/start")
+        except Exception:
+            if getattr(self, "sock", None) is not None:
+                self.sock.close()
+            raise
+
+    def _connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(10)
+            sock.connect(self.socket_path)
+        except Exception:
+            sock.close()
+            raise
+        return sock
+
+    def _send_request(self, method, path, payload=None, upgrade=False):
+        body = b"" if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+        headers = [f"{method} {path} HTTP/1.1", "Host: docker", "Content-Type: application/json",
+                   f"Content-Length: {len(body)}", "Connection: Upgrade" if upgrade else "Connection: close"]
+        if upgrade:
+            headers.append("Upgrade: tcp")
+        self.sock.sendall(("\r\n".join(headers) + "\r\n\r\n").encode() + body)
+
+    def _json_request(self, method, path, payload=None):
+        connection = _UnixHTTPConnection(self.socket_path)
+        try:
+            body = b"" if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+            connection.request(method, path, body=body,
+                headers={"Host": "docker", "Content-Type": "application/json"})
+            response = connection.getresponse()
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"Docker Engine HTTP {response.status}")
+            return json.loads(response.read() or b"{}")
+        finally:
+            connection.close()
+
+    def _read_http(self):
+        response = b""
+        while b"\r\n\r\n" not in response:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise RuntimeError("Docker Engine closed the control connection")
+            response += chunk
+        header, _, body = response.partition(b"\r\n\r\n")
+        lines = header.decode("latin1").split("\r\n")
+        status = int(lines[0].split()[1])
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                headers[key.lower()] = value.strip()
+        return status, headers, body
+
+    def _start_stream(self, path):
+        self._send_request("POST", path, {"Detach": False, "Tty": False}, upgrade=True)
+        status, _headers, body = self._read_http()
+        if status not in (101, 200):
+            raise RuntimeError(f"Docker exec attach HTTP {status}")
+        self.buffer = body
+
+    def _parse_frames(self):
+        while True:
+            if len(self.buffer) < 8:
+                return
+            stream = self.buffer[0]
+            size = int.from_bytes(self.buffer[4:8], "big")
+            if len(self.buffer) < 8 + size:
+                return
+            payload = self.buffer[8:8 + size]
+            self.buffer = self.buffer[8 + size:]
+            if stream == 1:
+                self.stdout_buffer += payload
+                while b"\n" in self.stdout_buffer:
+                    line, self.stdout_buffer = self.stdout_buffer.split(b"\n", 1)
+                    if line:
+                        self.messages.append(json.loads(line))
+
+    def receive(self, timeout):
+        if not self.messages:
+            self._parse_frames()
+        if not self.messages:
+            ready, _, _ = select.select([self.sock], [], [], timeout)
+            if not ready:
+                return None
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise RuntimeError("Redis bridge exited")
+            self.buffer += chunk
+            self._parse_frames()
+        if self.messages:
+            value = self.messages.pop(0)
+            if value.get("event") == "work":
+                self.work_hint = True
+            return value
+        return None
+
+    def send(self, data):
+        self.sock.sendall(data)
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        self.sock.settimeout(3)
+        try:
+            while self.sock.recv(65536):
+                pass
+        except (OSError, socket.timeout):
+            pass
+        finally:
+            self.sock.close()
 
 
 class BridgeProcess:
-    def __init__(self, docker, backend_id, token):
-        self.process = subprocess.Popen([docker, "exec", "-i", backend_id, "python", "-u", "-m",
-            "app.services.download_runtime", token], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL)
+    def __init__(self, docker, backend_id, token, transport="cli"):
+        self.transport = "cli"
+        self.process = None
+        self.stream = None
+        if transport == "unix":
+            try:
+                self.stream = UnixDockerBridge(docker, backend_id, token)
+                self.transport = "unix"
+            except UnsupportedDockerEndpoint:
+                # Remote contexts and unsupported endpoints keep the old CLI path.
+                self.stream = None
+        if self.stream is None:
+            self.process = subprocess.Popen([docker, "exec", "-i", backend_id, "python", "-u", "-m",
+                "app.services.download_runtime", token], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL)
         self.buffer = b""
         self.messages = []
         self.work_hint = False
         self.sequence = 0
 
     def receive(self, timeout):
+        if self.stream is not None:
+            value = self.stream.receive(timeout)
+            if value and value.get("event") == "work":
+                self.work_hint = True
+            return value
         if not self.messages:
             ready, _, _ = select.select([self.process.stdout], [], [], timeout)
             if not ready:
@@ -55,8 +268,12 @@ class BridgeProcess:
         self.sequence += 1
         wanted = self.sequence
         request = dict(id=wanted, action=action, **arguments)
-        self.process.stdin.write((json.dumps(request) + "\n").encode())
-        self.process.stdin.flush()
+        data = (json.dumps(request) + "\n").encode()
+        if self.stream is not None:
+            self.stream.send(data)
+        else:
+            self.process.stdin.write(data)
+            self.process.stdin.flush()
         end = time.monotonic() + 7
         while time.monotonic() < end:
             value = self.receive(max(0, end-time.monotonic()))
@@ -76,6 +293,12 @@ class BridgeProcess:
                 break
 
     def close(self):
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
+            return
+        if self.process is None:
+            return
         try:
             self.process.stdin.close()
             self.process.wait(timeout=3)
@@ -178,6 +401,7 @@ class Controller:
     def emit(self, event, **extra):
         value = dict(event=event, state=self.state, wall_unix_s=time.time(),
                      monotonic_s=time.monotonic(), pid=os.getpid(), token=self.token,
+                     transport=getattr(self.bridge, "transport", None),
                      last_transition_unix_s=self.last_transition, **extra, **process_memory())
         print(json.dumps(value, separators=(",", ":")), flush=True)
         if self.args.status_file:
@@ -268,7 +492,7 @@ class Controller:
             enabled = environment.get("DOWNLOAD_WORKER_LIFECYCLE") == "on_demand"
         if not enabled:
             raise ValueError("worker-download must explicitly set DOWNLOAD_WORKER_LIFECYCLE=on_demand")
-        self.bridge = BridgeProcess(self.args.docker, backend, self.token)
+        self.bridge = BridgeProcess(self.args.docker, backend, self.token, getattr(self.args, "bridge_transport", "cli"))
         value = self.bridge.command("acquire")
         if not value["owned"]:
             raise PermissionError("Another download lifecycle controller owns this project")
@@ -336,6 +560,8 @@ def main():
     parser.add_argument("--idle-seconds", type=float, default=300)
     parser.add_argument("--start-lead-seconds", type=float, default=10)
     parser.add_argument("--status-file", type=Path)
+    parser.add_argument("--bridge-transport", choices=("cli", "unix"), default="cli",
+                        help="Persistent Redis bridge transport; unix falls back to cli for remote Docker endpoints.")
     args = parser.parse_args()
     if args.idle_seconds < 1 or args.start_lead_seconds < 3:
         parser.error("idle-seconds >= 1 and start-lead-seconds >= 3 are required")
