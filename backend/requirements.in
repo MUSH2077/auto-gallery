@@ -14,7 +14,7 @@ pyvips==3.1.1
 # pyvips discovers this build dependency when libvips-dev is present.
 pkgconfig==1.6.0
 imagehash==4.3.2
-Pillow==12.3.0
+Pillow==13.0.0
 python-multipart==0.0.32
 PyJWT[crypto]==2.13.0
 cryptography==50.0.0
