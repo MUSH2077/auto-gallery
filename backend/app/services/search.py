@@ -77,6 +77,25 @@ from app.services.search_projection_outbox import (
     prune_completed_projection_events,
     replay_projection_events,
 )
+from app.services.operation_attention import ACTIVE_TASK_STATUSES
+
+
+def task_scope_condition(scope: str):
+    """Return the canonical SQL predicate for a task list scope."""
+    if scope == "all":
+        return None
+    if scope == "attention":
+        return TaskRun.attention_state == "open"
+    if scope == "running":
+        return TaskRun.status == "running"
+    if scope == "waiting":
+        return and_(
+            TaskRun.status.in_(ACTIVE_TASK_STATUSES),
+            TaskRun.resource_state == "waiting",
+            TaskRun.resource_reason.is_not(None),
+            TaskRun.resource_reason != "",
+        )
+    raise ValueError(f"Unknown task scope: {scope}")
 from app.services.search_language import (
     HAS_TARGETS,
     IS_TARGETS,
@@ -2457,6 +2476,8 @@ class SearchService(SearchProjection):
         permissions: set[str] | frozenset[str],
         user_id: int | None = None,
         operation_type: str | None = None,
+        scope: str = "all",
+        include_summary: bool = False,
     ) -> dict:
         conditions = [TaskRun.kind != "account"]
         if operation_type:
@@ -2521,6 +2542,18 @@ class SearchService(SearchProjection):
             if expressions:
                 conditions.append(and_(*expressions) if negated else or_(*expressions))
 
+        summary = None
+        if include_summary:
+            summary_base = and_(*conditions)
+            summary = {
+                "all": int((await self.db.execute(select(func.count(TaskRun.id)).where(summary_base))).scalar_one()),
+                "attention": int((await self.db.execute(select(func.count(TaskRun.id)).where(summary_base, task_scope_condition("attention")))).scalar_one()),
+                "running": int((await self.db.execute(select(func.count(TaskRun.id)).where(summary_base, task_scope_condition("running")))).scalar_one()),
+                "waiting": int((await self.db.execute(select(func.count(TaskRun.id)).where(summary_base, task_scope_condition("waiting")))).scalar_one()),
+            }
+        scope_condition = task_scope_condition(scope)
+        if scope_condition is not None:
+            conditions.append(scope_condition)
         stmt = select(TaskRun).where(and_(*conditions))
         count_stmt = select(func.count(TaskRun.id)).where(and_(*conditions))
         sort = query.values("sort")
@@ -2534,7 +2567,10 @@ class SearchService(SearchProjection):
         rows = (await self.db.execute(stmt.offset(offset).limit(limit))).scalars().all()
         from app.services.task_actions import enrich_actions
         await enrich_actions(self.db, rows, user_id=user_id)
-        return {"total": total, "items": [task_payload(row) for row in rows]}
+        result = {"total": total, "items": [task_payload(row) for row in rows]}
+        if summary is not None:
+            result["summary"] = summary
+        return result
 
     async def search_tasks(
         self,
@@ -2546,6 +2582,8 @@ class SearchService(SearchProjection):
         permissions: set[str] | frozenset[str] | None = None,
         user_id: int | None = None,
         operation_type: str | None = None,
+        scope: str = "all",
+        include_summary: bool = False,
     ) -> dict:
         parsed = parse_search_query(query, "tasks")
         resolved = await self._resolve_qualifiers(parsed)
@@ -2558,6 +2596,8 @@ class SearchService(SearchProjection):
             permissions=permissions if permissions is not None else frozenset(),
             user_id=user_id,
             operation_type=operation_type,
+            scope=scope,
+            include_summary=include_summary,
         )
 
     async def search_download_jobs(

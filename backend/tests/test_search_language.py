@@ -203,3 +203,10 @@ def test_catalog_is_scope_aware():
         assert item["help_id"] == f"search.qualifier.{item['key']}"
         assert item["example"]
         assert item["description"]
+
+
+def test_recovering_status_is_valid_for_task_search_and_composition():
+    query = parse_search_query("status:recovering", "tasks")
+    assert query.values("status") == ("recovering",)
+    composed = compose_search_query("status:recovering", "tasks", key="status", value="recovering", operation="set")
+    assert composed.canonical == "status:recovering"

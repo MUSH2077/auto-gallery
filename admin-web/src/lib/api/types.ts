@@ -218,7 +218,9 @@ export type TaskRun = Omit<TaskRunFields, "progress_data" | "result_data" | "met
 
 export type SyncOutcome = components["schemas"]["SyncOutcomeRead"];
 
+export type TaskListSummary = { all: number; attention: number; running: number; waiting: number };
 export type TaskRunListResponse = Omit<SchemaFields<components["schemas"]["TaskPage"]>, "items"> & {
+  summary?: TaskListSummary | null;
   items: TaskRun[];
 };
 

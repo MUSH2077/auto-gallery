@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import RequireAdminUser, RequirePermission, RequireAnyPermission, get_admin_key
@@ -24,7 +24,7 @@ from app.services.operations import (
 )
 from app.services.redis_client import get_redis
 from app.services.queue_admission import checked_enqueue, ensure_redis_enqueue_capacity
-from app.services.search import SearchService
+from app.services.search import SearchService, task_scope_condition
 from app.services.search_language import SearchQueryError, compose_search_query
 from app.services.backpressure import DownloadAdmissionError
 from app.services.task_actions import enrich_actions, require_action
@@ -100,11 +100,15 @@ async def list_tasks(
     q: str | None = None,
     include_account: bool = False,
     visibility: Literal["actionable", "all"] = "all",
+    scope: Literal["all", "attention", "running", "waiting"] = "all",
+    include_summary: bool = False,
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
     user=_require_task_surface,
 ):
+    if include_account and (scope != "all" or include_summary):
+        raise HTTPException(status_code=422, detail="scope and summary are not supported with include_account")
     if not user.is_admin and "tasks" not in (user.permissions or []):
         # System-only access is restricted to the global batch surface. It
         # does not grant private task or credential visibility, even for self.
@@ -122,12 +126,27 @@ async def list_tasks(
             filters.append(TaskRun.source == source)
         if q:
             filters.append(TaskRun.title.icontains(q, autoescape=True))
+        summary = None
+        if include_summary:
+            base = list(filters)
+            summary = {
+                "all": int((await db.execute(select(func.count()).select_from(TaskRun).where(*base))).scalar_one()),
+                "attention": int((await db.execute(select(func.count()).select_from(TaskRun).where(*base, task_scope_condition("attention")))).scalar_one()),
+                "running": int((await db.execute(select(func.count()).select_from(TaskRun).where(*base, task_scope_condition("running")))).scalar_one()),
+                "waiting": int((await db.execute(select(func.count()).select_from(TaskRun).where(*base, task_scope_condition("waiting")))).scalar_one()),
+            }
+        scope_condition = task_scope_condition(scope)
+        if scope_condition is not None:
+            filters.append(scope_condition)
         total = (await db.execute(select(func.count()).select_from(TaskRun).where(*filters))).scalar_one()
         rows = (await db.execute(select(TaskRun).where(*filters).order_by(TaskRun.created_at.desc())
             .offset(max(0, offset)).limit(max(1, min(100, limit))))).scalars()
         rows = list(rows)
         await enrich_actions(db, rows, user=user)
-        return {"total": total, "items": [task_payload(task) for task in rows]}
+        result = {"total": total, "items": [task_payload(task) for task in rows]}
+        if summary is not None:
+            result["summary"] = summary
+        return result
     excluded_operation_types = inaccessible_admin_operation_types(user)
     if include_account:
         svc = TaskService(db)
@@ -166,6 +185,8 @@ async def list_tasks(
             visibility=visibility,
             permissions=admin_operation_permissions_for_user(user),
             user_id=user.id,
+            scope=scope,
+            include_summary=include_summary,
         )
     except SearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.diagnostic.payload()) from exc

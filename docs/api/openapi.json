@@ -12371,6 +12371,16 @@
             "title": "Items",
             "type": "array"
           },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "total": {
             "title": "Total",
             "type": "integer"
@@ -12806,6 +12816,32 @@
           "status"
         ],
         "title": "TaskRead",
+        "type": "object"
+      },
+      "TaskSummary": {
+        "properties": {
+          "all": {
+            "default": 0,
+            "title": "All",
+            "type": "integer"
+          },
+          "attention": {
+            "default": 0,
+            "title": "Attention",
+            "type": "integer"
+          },
+          "running": {
+            "default": 0,
+            "title": "Running",
+            "type": "integer"
+          },
+          "waiting": {
+            "default": 0,
+            "title": "Waiting",
+            "type": "integer"
+          }
+        },
+        "title": "TaskSummary",
         "type": "object"
       },
       "TokenResponse": {
@@ -33561,6 +33597,32 @@
               ],
               "title": "Visibility",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "attention",
+                "running",
+                "waiting"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_summary",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Summary",
+              "type": "boolean"
             }
           },
           {

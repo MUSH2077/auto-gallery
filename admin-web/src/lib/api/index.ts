@@ -63,8 +63,10 @@ export const api = {
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
 
   // Unified task runs
-  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; visibility?: "actionable" | "all"; offset?: number; limit?: number }) => {
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; visibility?: "actionable" | "all"; scope?: "all" | "attention" | "running" | "waiting"; include_summary?: boolean; offset?: number; limit?: number }) => {
     const q = new URLSearchParams();
+    if (params?.scope) q.set("scope", params.scope);
+    if (params?.include_summary) q.set("include_summary", "true");
     if (params?.kind) q.set("kind", params.kind);
     if (params?.status) q.set("status", params.status);
     if (params?.operation_type) q.set("operation_type", params.operation_type);

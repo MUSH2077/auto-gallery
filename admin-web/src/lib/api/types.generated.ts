@@ -9349,6 +9349,7 @@ export interface components {
         TaskPage: {
             /** Items */
             items: components["schemas"]["TaskRead"][];
+            summary?: components["schemas"]["TaskSummary"] | null;
             /** Total */
             total: number;
         } & {
@@ -9455,6 +9456,29 @@ export interface components {
             updated_at?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** TaskSummary */
+        TaskSummary: {
+            /**
+             * All
+             * @default 0
+             */
+            all: number;
+            /**
+             * Attention
+             * @default 0
+             */
+            attention: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Waiting
+             * @default 0
+             */
+            waiting: number;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -21315,6 +21339,8 @@ export interface operations {
                 q?: string | null;
                 include_account?: boolean;
                 visibility?: "actionable" | "all";
+                scope?: "all" | "attention" | "running" | "waiting";
+                include_summary?: boolean;
                 offset?: number;
                 limit?: number;
             };
