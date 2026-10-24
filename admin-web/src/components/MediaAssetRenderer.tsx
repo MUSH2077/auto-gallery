@@ -240,14 +240,13 @@ function VideoAssetPlayer({ workId, asset }: { workId: string; asset: MediaAsset
   const [source, setSource] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error" | "unsupported">("idle");
 
-  const requestTicket = useCallback(async (resume = false) => {
+  const requestTicket = useCallback(async (resume = false, playAfterLoad = true) => {
     if (resume && videoRef.current) {
       resumeAt.current = videoRef.current.currentTime || 0;
-      shouldPlay.current = !videoRef.current.paused;
     } else {
       resumeAt.current = 0;
-      shouldPlay.current = true;
     }
+    shouldPlay.current = playAfterLoad;
     setStatus("loading");
     setSource(null);
     try {
@@ -259,13 +258,13 @@ function VideoAssetPlayer({ workId, asset }: { workId: string; asset: MediaAsset
   }, [asset.id, workId]);
 
   useEffect(() => {
+    const video = videoRef.current;
     const pauseWhenHidden = () => {
       if (document.hidden) videoRef.current?.pause();
     };
     document.addEventListener("visibilitychange", pauseWhenHidden);
     return () => {
       document.removeEventListener("visibilitychange", pauseWhenHidden);
-      const video = videoRef.current;
       if (video) {
         video.pause();
         video.removeAttribute("src");
@@ -290,7 +289,7 @@ function VideoAssetPlayer({ workId, asset }: { workId: string; asset: MediaAsset
     const code = videoRef.current?.error?.code;
     if (code === MediaError.MEDIA_ERR_NETWORK && retryCount.current < 1) {
       retryCount.current += 1;
-      void requestTicket(true);
+      void requestTicket(true, shouldPlay.current);
       return;
     }
     setStatus(
@@ -324,6 +323,12 @@ function VideoAssetPlayer({ workId, asset }: { workId: string; asset: MediaAsset
         onError={handleMediaError}
         onPlay={() => {
           shouldPlay.current = true;
+        }}
+        onPause={event => {
+          // Loading or a media error can pause the element without user intent.
+          if (status === "ready" && !event.currentTarget.error && event.currentTarget.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            shouldPlay.current = false;
+          }
         }}
         onEnded={() => {
           shouldPlay.current = false;

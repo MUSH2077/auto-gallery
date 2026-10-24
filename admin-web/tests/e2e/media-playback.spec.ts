@@ -121,7 +121,8 @@ async function installMediaRoutes(
       body: GENERATED_VIDEO,
     });
   });
-  await context.route("**/media/**", async (route) => {
+  await context.route(url => url.pathname.startsWith("/media/"), async (route) => {
+    if (new URL(route.request().url()).pathname.startsWith("/media/stream/")) return route.fallback();
     await route.fulfill({ body: PIXEL, contentType: "image/png" });
   });
   await context.route("**/api/v1/**", async (route: Route) => {
@@ -307,8 +308,10 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(video).toHaveAttribute("controls", "");
   await page.screenshot({ path: "/tmp/auto-gallery-media-playing.png", fullPage: false });
 
+  const releasedVideo = await video.elementHandle();
   await page.getByTitle("generated-still.webp").click();
   await expect(page.locator("video")).toHaveCount(0);
+  await expect.poll(() => releasedVideo!.evaluate(element => (element as HTMLVideoElement).paused && !element.getAttribute("src"))).toBe(true);
   expect(consoleErrors, calls.join("\n")).toEqual([]);
 });
 
@@ -356,3 +359,31 @@ test("slideshow retries the exact failed thumbnail and keeps a complete foregrou
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
+
+
+for (const failure of ["ticket", "stream"] as const) {
+  test(`video retries a failed ${failure} request and resumes real playback`, async ({ context, page }) => {
+    const calls: string[] = [];
+    await installMediaRoutes(context, calls);
+    let allowRecovery = false;
+    const tickets: string[] = [];
+    page.on("request", request => { if (request.url().includes("playback-ticket")) tickets.push(request.url()); });
+    if (failure === "ticket") {
+      await context.route("**/api/v1/works/video-work/assets/asset-video/playback-ticket", route => allowRecovery ? route.fallback() : route.fulfill({ status: 503, json: { detail: "Temporary playback service failure" } }));
+    } else {
+      await context.route("**/media/stream/asset-video**", route => allowRecovery ? route.fallback() : route.fulfill({ status: 404, json: { detail: "Temporary media stream failure" } }));
+    }
+    await page.goto("/admin/works/video-work");
+    const video = page.locator("video");
+    await video.evaluate(element => { (element as HTMLVideoElement).loop = true; });
+    await page.getByRole("button", { name: "Play video" }).click();
+    const retry = page.getByRole("button", { name: "Retry", exact: true });
+    await expect(retry).toBeVisible();
+    allowRecovery = true;
+    await retry.click();
+    await expect.poll(() => tickets.length).toBeGreaterThan(1);
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState >= 2 && !(element as HTMLVideoElement).paused && (element as HTMLVideoElement).currentTime > 0)).toBe(true);
+    await video.evaluate(element => (element as HTMLVideoElement).pause());
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).paused)).toBe(true);
+  });
+}
