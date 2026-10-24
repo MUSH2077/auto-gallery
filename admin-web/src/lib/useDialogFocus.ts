@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type RefObject } from "react";
 
-const FOCUSABLE = 'input:not([disabled]), button:not([disabled]), a[href], select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'input:not([disabled]), button:not([disabled]), a[href], select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 // Save the original value only for the first owner. Nested dialogs may unmount
 // in either order during navigation, so per-dialog snapshots cannot restore it.
@@ -60,6 +60,7 @@ export function useDialogFocus(
     const frame = window.requestAnimationFrame(focusFirst);
     const trap = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || dialog.closest("[inert]")) return;
+      if (dialog.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeRef.current();

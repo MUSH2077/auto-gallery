@@ -516,3 +516,27 @@ test("NSFW blur also covers the desktop hover preview independently of its badge
   await expect(page.locator('.popover > [data-nsfw-blurred="true"]')).toHaveCount(0);
   await expect(card.getByText("NSFW", { exact: true })).toHaveCount(0);
 });
+
+
+test("favorite requests lock only their own work", async ({ context, page }) => {
+  await setup(context);
+  const calls: string[] = [];
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await context.route("**/api/v1/works/*/favorite", async route => {
+    const id = new URL(route.request().url()).pathname.split("/")[4];
+    calls.push(id);
+    await pending;
+    await json(route, { id, is_favorite: id !== "work-sfw" });
+  });
+  try {
+    await page.goto("/admin/works");
+    const first = page.locator("article").filter({ hasText: works[0].title });
+    const second = page.locator("article").filter({ hasText: works[1].title });
+    await first.getByRole("button", { name: "Unfavorite work", exact: true }).click();
+    const other = second.getByRole("button", { name: "Favorite work", exact: true });
+    await expect(other).toBeEnabled();
+    await other.click();
+    await expect.poll(() => calls).toEqual(["work-sfw", "work-nsfw"]);
+  } finally { release(); }
+});

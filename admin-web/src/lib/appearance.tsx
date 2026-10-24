@@ -6,7 +6,8 @@ import { pushPreferences } from "@/lib/preferencesSync";
 export type WorkPreviewDelayMs = 150 | 250 | 400;
 export type WorkPreviewSize = "medium" | "large" | "fit";
 export type WorkPreviewWheelSensitivity = "normal" | "relaxed";
-export type WorksViewMode = "grid" | "list" | "masonry";
+import type { WorksViewMode } from "../features/works/view";
+export type { WorksViewMode } from "../features/works/view";
 export type WorkCardSize = "small" | "medium" | "large";
 
 export interface AppearanceSettings {

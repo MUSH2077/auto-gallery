@@ -4,19 +4,21 @@ import { useEffect, useId, useState } from "react";
 
 import { useT } from "@/lib/i18n";
 
-export type WorksVisibilityFilter = "visible" | "trashed";
-export type WorksSafetyFilter = "all" | "sfw" | "nsfw";
-export type WorksAiFilter = "all" | "human" | "ai";
-export type WorksMediaFilter = "image" | "animation" | "video" | "multiple-assets";
+import type {
+  WorksAiFilter,
+  WorksFilterValue,
+  WorksMediaFilter,
+  WorksSafetyFilter,
+  WorksVisibilityFilter,
+} from "@/features/works/types";
 
-export interface WorksFilterValue {
-  visibility: WorksVisibilityFilter;
-  sources: string[];
-  safety: WorksSafetyFilter;
-  ai: WorksAiFilter;
-  favorite: boolean;
-  media: WorksMediaFilter[];
-}
+export type {
+  WorksAiFilter,
+  WorksFilterValue,
+  WorksMediaFilter,
+  WorksSafetyFilter,
+  WorksVisibilityFilter,
+} from "@/features/works/types";
 
 const SOURCE_OPTIONS = ["pixiv", "x", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"];
 

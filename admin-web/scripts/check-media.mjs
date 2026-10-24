@@ -7,6 +7,8 @@ const renderer = path.join(sourceRoot, "components", "MediaAssetRenderer.tsx");
 const targetFiles = [
   "app/admin/works/page.tsx",
   "app/admin/works/[id]/page.tsx",
+  "features/gallery/WorksPage.tsx",
+  "features/gallery/WorkDetailDialog.tsx",
   "app/admin/creators/[id]/page.tsx",
   "app/admin/tags/[id]/page.tsx",
   "app/admin/search/page.tsx",

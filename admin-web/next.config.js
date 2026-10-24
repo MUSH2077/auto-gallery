@@ -1,3 +1,4 @@
+const backendOrigin = (process.env.BACKEND_INTERNAL_URL || 'http://backend:8000').replace(/\/$/, '')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
@@ -35,39 +36,39 @@ const nextConfig = {
       },
       {
         source: '/docs',
-        destination: 'http://backend:8000/docs',
+        destination: backendOrigin + '/docs',
       },
       {
         source: '/redoc',
-        destination: 'http://backend:8000/redoc',
+        destination: backendOrigin + '/redoc',
       },
       {
         source: '/openapi.json',
-        destination: 'http://backend:8000/openapi.json',
+        destination: backendOrigin + '/openapi.json',
       },
       {
         source: '/api/docs',
-        destination: 'http://backend:8000/api/docs',
+        destination: backendOrigin + '/api/docs',
       },
       {
         source: '/api/redoc',
-        destination: 'http://backend:8000/api/redoc',
+        destination: backendOrigin + '/api/redoc',
       },
       {
         source: '/api/openapi.json',
-        destination: 'http://backend:8000/api/openapi.json',
+        destination: backendOrigin + '/api/openapi.json',
       },
       {
         source: '/api/asyncapi.yaml',
-        destination: 'http://backend:8000/api/asyncapi.yaml',
+        destination: backendOrigin + '/api/asyncapi.yaml',
       },
       {
         source: '/api/v1/:path*',
-        destination: 'http://backend:8000/api/v1/:path*',
+        destination: backendOrigin + '/api/v1/:path*',
       },
       {
         source: '/media/:path*',
-        destination: 'http://backend:8000/media/:path*',
+        destination: backendOrigin + '/media/:path*',
       },
     ]
   },

@@ -38,11 +38,13 @@ for (const file of files(sourceRoot)) {
     [forbiddenJobLinks, "legacy job-filter URL; encode the condition in q"],
     [legacyListWorkFilter, "legacy listWorks search filter; use api.search with scope=works"],
   ];
-  if (relative === path.join("app", "admin", "works", "page.tsx")) {
+  if ([path.join("app", "admin", "works", "page.tsx"), path.join("features", "works", "useWorksLibrary.ts"), path.join("features", "gallery", "WorksPage.tsx")].includes(relative)) {
     checks.push([forbiddenWorkParams, "legacy work URL parameter; only q/page/view are allowed"]);
   }
   if (
     relative.includes(path.join("app", "admin", "works"))
+    || relative.includes(path.join("features", "works"))
+    || relative.includes(path.join("features", "gallery"))
     || relative.includes(path.join("app", "admin", "creators"))
     || relative.includes(path.join("app", "admin", "subscriptions"))
     || relative.includes(path.join("app", "admin", "jobs"))

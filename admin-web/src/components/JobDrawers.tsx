@@ -20,6 +20,7 @@ import { POLL_ACTIVE_MS } from "@/lib/polling";
 import { secureRandomUuid } from "@/lib/random";
 import { useTaskCommand } from "@/lib/useTaskCommand";
 import { usePermissions } from "@/lib/usePermissions";
+import { resourceReasonLabel } from "@/lib/taskPresentation";
 
 export function shortId(id?: string | null) {
   return id ? id.slice(0, 8) : "-";
@@ -41,15 +42,6 @@ function DetailRow({ label, value }: { label: string; value?: ReactNode }) {
       <dd className="min-w-0 break-all">{value || "—"}</dd>
     </div>
   );
-}
-
-function resourceReasonLabel(t: TFunction, reason?: string | null) {
-  if (!reason) return null;
-  const [code, detail] = reason.split(":", 2);
-  const key = `jobs.resource.reason.${code}`;
-  const translated = t(key);
-  if (translated === key) return reason;
-  return detail ? `${translated} (${detail})` : translated;
 }
 
 export function TaskDetailDrawer({

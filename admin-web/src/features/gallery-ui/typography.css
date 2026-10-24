@@ -1,0 +1,126 @@
+
+@font-face {
+  font-family: 'LXGW WenKai'; src: url('./assets/typography/wenkai/wenkai-400.woff2') format('woff2');
+  font-style: normal; font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'LXGW WenKai'; src: url('./assets/typography/wenkai/wenkai-500.woff2') format('woff2');
+  font-style: normal; font-weight: 500; font-display: swap;
+}
+.gallery-ui[data-cjk] {
+  /* Readable text shares one ink; type size and placement carry the hierarchy. */
+  --muted: var(--ink);
+  --weight-functional: 600;
+  font-weight: var(--weight-functional);
+  --font-ui: 'Fraunces', var(--font-cjk), serif;
+  --font-content: 'Fraunces', var(--font-cjk-content), serif;
+  --type-meta: 14px;
+  --leading-meta: 22px;
+  --type-control: 16px;
+  --leading-control: 26px;
+  --type-body: 18px;
+  --leading-body: 28px;
+  --type-work: 22px;
+  --leading-work: 32px;
+  --type-heading: 28px;
+  --leading-heading: 38px;
+  --type-login: 33px;
+  --leading-login: 44px;
+  font-synthesis: var(--font-small-synthesis, none);
+  font-optical-sizing: auto;
+  font-variation-settings: 'SOFT' 45, 'WONK' 0;
+}
+.gallery-ui[data-cjk] .work-title-line h2,
+.gallery-ui[data-cjk] .layout-login-intro h1,
+.gallery-ui[data-cjk] .dialog-top h2,
+.gallery-ui[data-cjk] .state-view :is(h1, h2, h3) {
+  font-family: var(--font-content);
+  font-weight: 600;
+  font-synthesis: none;
+  font-variation-settings: 'opsz' 32, 'SOFT' 80, 'WONK' 1;
+  color: var(--ink);
+}
+.gallery-ui[data-cjk] .layout-tasks .task-title,
+.gallery-ui[data-cjk] .task-detail h3 {
+  font-family: var(--font-ui);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+  font-weight: 500;
+  font-variation-settings: 'opsz' 24, 'SOFT' 55, 'WONK' 1;
+  color: var(--ink);
+}
+.gallery-ui[data-cjk] :is(.work-meta, .task-meta) { color: var(--muted); }
+
+/* Definition labels and values share one functional text role and first baseline. */
+.gallery-ui[data-cjk] :is(.detail-info, .task-detail) :is(dt, dd) {
+  font-family: var(--font-ui);
+  font-size: var(--type-control);
+  line-height: var(--leading-control);
+  font-weight: var(--weight-functional);
+}
+.gallery-ui[data-cjk] :is(.detail-info, .task-detail) dl > div { align-items: baseline; }
+
+
+
+
+.gallery-ui[data-cjk] :is(button, input, select, summary, label, b, strong, .detail-reason h4, .layout-tool-trigger, .layout-tasks th, .prominent-action, .detail-creator, .layout-select-item, .layout-select-item[data-state=checked]) { font-weight: var(--weight-functional); }
+
+.gallery-ui[data-cjk] input::placeholder { opacity: 1; }
+
+/* Fields and their labels are functional UI, not explanatory body copy. */
+.gallery-ui[data-cjk] :is(.search-field, .layout-login-field) input {
+  font-size: var(--type-control);
+  line-height: var(--leading-control);
+}
+.gallery-ui[data-cjk] .state-view :is(h2, h3) {
+  font-size: var(--type-work);
+  line-height: var(--leading-work);
+}
+.gallery-ui[data-cjk] .detail-id {
+  font-family: var(--font-ui);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.gallery-ui[data-cjk] .confirm-error p {
+  font-size: var(--type-meta);
+  line-height: var(--leading-meta);
+}
+.gallery-ui[data-cjk] .dialog-top h2 { padding-top: 0; }
+.gallery-ui[data-cjk] .favorite-button { top: calc((var(--leading-work) - 44px) / 2); }
+.gallery-ui[data-cjk] :is(.pagination, .asset-navigation) { align-items: baseline; }
+.gallery-ui[data-cjk] .layout-tasks .task-title { display: block; }
+.gallery-ui[data-cjk] .task-status { align-items: baseline; }
+.gallery-ui[data-cjk] .task-status i { align-self: center; }
+
+@media (min-width: 901px) {
+  .gallery-ui[data-cjk] .layout-tasks td { vertical-align: baseline; }
+  .gallery-ui[data-cjk] .layout-tasks .layout-task-check { vertical-align: top; }
+  .gallery-ui[data-cjk] .layout-task-actions .task-actions { margin-top: 0; }
+}
+@media (max-width: 900px) {
+  .gallery-ui[data-cjk] .layout-task-identity,
+  .gallery-ui[data-cjk] .layout-task-status { align-self: baseline; }
+}
+
+
+
+.gallery-ui[data-cjk] .layout-login-access { font-size: var(--type-meta); line-height: var(--leading-meta); }
+.gallery-ui[data-cjk] .layout-content-toolbar .search-field { height: 44px; }
+.gallery-ui[data-cjk] .layout-tool-trigger { min-height: 44px; }
+.gallery-ui[data-cjk] .layout-select-item { min-height: 44px; }
+.gallery-ui[data-cjk] .layout-login-field input { height: 52px; }
+.gallery-ui[data-cjk] .layout-login-password-toggle { width: 44px; height: 44px; top: 4px; right: 4px; }
+
+@media (max-width: 800px) {
+  .gallery-ui[data-cjk] .layout-toolbar-actions { width: 100%; flex-wrap: wrap; justify-content: center; gap: 8px 16px; }
+  .gallery-ui[data-cjk] .layout-toolbar-filters,
+  .gallery-ui[data-cjk] .layout-toolbar-utilities { max-width: 100%; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .gallery-ui[data-cjk] .layout-toolbar-utilities { border-left: 0; margin-left: 0; padding-left: 0; }
+}
+@media (max-width: 540px) {
+  .gallery-ui[data-cjk] .layout-task-tabs { display: grid; grid-template-columns: repeat(2,max-content); gap: 8px 24px; justify-content: center; }
+  .gallery-ui[data-cjk] .layout-task-tabs a { justify-content: center; min-height: 44px; }
+  .gallery-ui[data-cjk] .pagination { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 16px; max-width: 360px; margin-inline: auto; }
+  .gallery-ui[data-cjk] .pagination > span { grid-column: 1 / -1; grid-row: 1; text-align: center; }
+  .gallery-ui[data-cjk] .pagination > button:first-child { grid-column: 1; grid-row: 2; }
+  .gallery-ui[data-cjk] .pagination > button:last-child { grid-column: 2; grid-row: 2; }
+}

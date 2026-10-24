@@ -5,18 +5,9 @@ import { useId } from "react";
 
 import { useT } from "@/lib/i18n";
 
-export type WorksSortValue =
-  | "relevance"
-  | "heat-desc"
-  | "random"
-  | "created-desc"
-  | "created-asc"
-  | "posted-desc"
-  | "posted-asc"
-  | "updated-desc"
-  | "updated-asc"
-  | "title-desc"
-  | "title-asc";
+import type { WorksSortValue } from "@/features/works/types";
+
+export type { WorksSortValue } from "@/features/works/types";
 
 function SortChoice({
   value,
