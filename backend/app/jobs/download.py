@@ -403,6 +403,15 @@ def _process_group_exists(process_group_id: int) -> bool:
         return True
 
 
+def _wait_gallerydl_process(proc: subprocess.Popen, timeout: float) -> bool:
+    """Wait for the gallery-dl leader without delaying an early exit."""
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
 def _stop_gallerydl_process(
     proc: subprocess.Popen,
     *,
@@ -991,7 +1000,8 @@ async def run_download_job(job_id: str):
 
                 now_ts = time.time()
                 time_since_start = now_ts - download_start
-                if now_ts > deadline:
+                remaining = deadline - now_ts
+                if remaining <= 0:
                     timed_out = True
                     logger.warning(
                         "gallery-dl timed out after %ds for job %s",
@@ -1014,7 +1024,8 @@ async def run_download_job(job_id: str):
                     )
                     break
 
-                time.sleep(POLL_INTERVAL)
+                if _wait_gallerydl_process(proc, timeout=min(POLL_INTERVAL, remaining)):
+                    break
 
             interrupted = control_listener.command in ("pause", "cancel")
             if proc.poll() is None:

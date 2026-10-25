@@ -250,7 +250,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
     → 创建 download_job（pending）
       → Worker 取走任务（downloading）
         → Provider.build_gallerydl_config()
-        → subprocess.run(["gallery-dl", "--write-metadata",
+        → subprocess.Popen(["gallery-dl", "--write-metadata",
             "--range", "1-{max_posts}", ...], shell=False)
         → 文件落盘到 DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
         → 任务状态 → downloaded
@@ -261,6 +261,7 @@ auto-gallery 使用 RQ（Redis Queue）做下载与批量导入，并配合一�
 - `--write-metadata`：必需标志——没有它，导入运行器就没有 JSON 元数据可解析。
 - `--range`：限制下载最近 N 篇文章用于增量同步。每个订阅可配置。
 - **调度器**：通过 `TIMEZONE` 环境变量支持时区（默认 UTC）。支持间隔模式（每 N 小时同步）或定时模式（每日指定时间同步）。
+- **完成与卡顿检查**：使用最长 5 秒、且不超过总超时剩余时间的进程等待；gallery-dl 提前退出后立即进入进程组清理和文件归集，等待超时则继续检查进度、暂停／取消和卡顿。超过 `stall_timeout`（默认 120 秒，启动后先保留 30 秒宽限期）无文件进度时终止子进程；重试继续使用自适应超时。
 
 ### 导入流程
 

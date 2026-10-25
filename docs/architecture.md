@@ -310,7 +310,7 @@ Key download details:
 - `--write-metadata`: Required flag — without it, import runner has no JSON metadata to parse.
 - `--range`: Limits download to the most recent N posts for incremental syncs. Configurable per subscription.
 - **Scheduler**: Timezone-aware via the `TIMEZONE` env var (defaults to UTC). Supports interval mode (sync every N hours) or scheduled mode (sync at specific times daily).
-- **Stall detection**: Polling loop checks progress every 4s; kills gallery-dl if no file output for `stall_timeout` seconds (default 120s, after 30s grace period). Adaptive timeout on retries.
+- **Completion and stall detection**: Wait for the gallery-dl process with a timeout of at most 5 seconds, bounded by the remaining overall deadline. An early exit proceeds directly to process-group cleanup and file finalization; a wait timeout resumes the progress, pause/cancel and stall checks. Kill gallery-dl if no file output appears for `stall_timeout` seconds (default 120s, after a 30s grace period). Retries retain adaptive timeouts.
 - **Three-layer timeout**: (1) gallery-dl internal `--retries`/`--abort`, (2) stall detection kills frozen subprocess, (3) overall deadline timeout.
 
 ### Import Flow
