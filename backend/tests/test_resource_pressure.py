@@ -544,6 +544,24 @@ def test_profile_reservation_keeps_absolute_memory_floor():
     assert snapshot["budget"]["profiles"]["video_derive"]["reason"] == "profile_memory_reserve"
 
 
+@pytest.mark.parametrize("available", [int(1.45 * GIB), 4 * GIB])
+def test_work_heat_preserves_maintenance_memory_floor(available):
+    from app.services.resource_pressure import workload_profile_name
+
+    snapshot = ResourcePressureStateMachine(PressureThresholds()).update(
+        _sample(available=available), now=0
+    )
+    profiles = snapshot["budget"]["profiles"]
+    heat, maintenance = profiles["work_heat"], profiles["maintenance"]
+    assert workload_profile_name("work_heat") == workload_profile_name("work-heat") == "work_heat"
+    assert heat["memory_reservation_bytes"] == maintenance["memory_reservation_bytes"] == 256 * 1024 * 1024
+    assert heat["allowed"] is maintenance["allowed"]
+    assert heat["allowed"] is (available == 4 * GIB)
+    assert heat["reason"] == maintenance["reason"]
+    assert heat["token_scope"] == "background"
+    assert heat["slice_seconds"] is None
+
+
 def test_exact_profiles_and_aliases_are_exposed():
     snapshot = ResourcePressureStateMachine(PressureThresholds()).update(_sample(), now=0)
 

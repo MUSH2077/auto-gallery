@@ -124,6 +124,7 @@ def _enqueue_recompute_job(
 ):
     options = {
         "job_id": job_id,
+        "meta": {"resource_descriptor": "work-heat"},
         "job_timeout": 3600,
         "result_ttl": 60 * 60,
         "failure_ttl": 24 * 60 * 60,

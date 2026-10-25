@@ -1021,6 +1021,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                     "video_derive",
                     "search_index",
                     "git_projection",
+                    "work_heat",
                 )),
             ]
         )

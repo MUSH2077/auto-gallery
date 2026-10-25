@@ -89,9 +89,12 @@ RESOURCE_PROFILES: dict[str, ResourceProfile] = {
     # filesystem/DB work rather than the coordinator row count.
     "git_projection": ResourceProfile("git_projection", 128 * MIB, 20.0, 1),
     "maintenance": ResourceProfile("maintenance", 256 * MIB, 20.0, 1),
+    # Retain the former maintenance RAM reservation without its exclusive barrier.
+    "work_heat": ResourceProfile("work_heat", 256 * MIB, None, 1),
 }
 
 RESOURCE_PROFILE_ALIASES = {
+    "work-heat": "work_heat",
     "download": "download_network",
     "downloads": "download_network",
     "import": "import_db",

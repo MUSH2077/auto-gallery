@@ -24,7 +24,7 @@ protected_services=(postgres redis meilisearch migrate)
 resources_only="${VERIFY_RESOURCES_ONLY:-0}"
 
 env_file="${COMPOSE_ENV_FILE:-.env}"
-default_enforced_profiles="download_network,import_db,image_derive,video_derive,search_index,maintenance"
+default_enforced_profiles="download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat"
 expected_enforced_profiles="${VERIFY_EXPECT_ENFORCED_PROFILES-$default_enforced_profiles}"
 
 if [[ -f "$env_file" ]]; then

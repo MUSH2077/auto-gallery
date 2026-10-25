@@ -254,6 +254,67 @@ def test_profile_conflicts_replace_the_single_global_lock(monkeypatch, tmp_path)
     maintenance_lock.release()
 
 
+@pytest.mark.asyncio
+async def test_work_heat_allows_upload_barrier_but_preserves_maintenance_exclusion(monkeypatch, tmp_path):
+    from app.services import heavy_io
+
+    monkeypatch.setenv("HEAVY_IO_LOCK_PATH", str(tmp_path / "heavy-io.lock"))
+    heat = heavy_io.local_lock_for_workload("work_heat")
+    second_heat = heavy_io.local_lock_for_workload("work_heat")
+    maintenance = heavy_io.local_lock_for_workload("maintenance")
+    assert heat.try_acquire() is True
+    try:
+        assert second_heat.try_acquire() is False
+        assert maintenance.try_acquire() is False
+        async with heavy_io.storage_write_barrier():
+            pass
+    finally:
+        heat.release()
+
+    assert maintenance.try_acquire() is True
+    try:
+        assert heat.try_acquire() is False
+        with pytest.raises(heavy_io.HeavyIOUnavailable, match="maintenance_busy"):
+            async with heavy_io.storage_write_barrier():
+                pytest.fail("maintenance must exclude foreground writes")
+    finally:
+        maintenance.release()
+    async with heavy_io.storage_write_barrier():
+        pass
+
+
+def test_work_heat_reservation_enumerates_profile_and_deduplicates_memory():
+    from app.services import heavy_io
+
+    keys = heavy_io.resource_lease_keys("work_heat")
+    assert keys == [heavy_io.RESOURCE_BACKGROUND_TOKEN_KEY, "lock:resource-profile:work-heat"]
+    payload = json.dumps({"token": "heat-token", "profile": "work_heat", "reserved_bytes": 256 * 1024**2})
+    values = dict.fromkeys(keys, payload)
+
+    class Pipeline:
+        def __init__(self):
+            self.commands = []
+
+        def get(self, key):
+            self.commands.append(("get", key))
+
+        def ttl(self, key):
+            self.commands.append(("ttl", key))
+
+        def execute(self):
+            return [values.get(key) if command == "get" else 30 for command, key in self.commands]
+
+    redis = SimpleNamespace(pipeline=lambda **kwargs: Pipeline())
+    summary = heavy_io.collect_active_resource_leases(redis)
+    assert summary["active_count"] == 1
+    assert summary["active"][0]["keys"] == keys
+    assert summary["reserved_bytes"] == 256 * 1024**2
+    assert summary["background_active"] is True
+    assert summary["maintenance_active"] is False
+    values.clear()
+    assert heavy_io.collect_active_resource_leases(redis)["active_count"] == 0
+
+
 def test_late_admission_race_returns_delayed_same_job_retry(monkeypatch):
     from rq import Retry
 

@@ -27,7 +27,7 @@ CORE_ONLY=0
 CANDIDATE_SOURCE_DIGEST=""
 CANDIDATE_BACKEND_IMAGE=""
 CANDIDATE_ADMIN_IMAGE=""
-GOVERNED_PROFILES="download_network,import_db,image_derive,video_derive,search_index,maintenance"
+GOVERNED_PROFILES="download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat"
 BACKGROUND_SERVICES=(worker-download worker-import worker-operations scheduler)
 
 usage() {
@@ -323,7 +323,7 @@ updates = {
     "BUILD_REVISION": os.environ["BUILD_REVISION"],
     "RESOURCE_GOVERNANCE_MODE": "enforce",
     "RESOURCE_GOVERNANCE_MAX_SCALE": "1.0",
-    "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance",
+    "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat",
     "GITLLERY_PROJECTION_MODE": "shadow",
     "DOWNLOAD_CONCURRENCY_CAP": "1",
 }

@@ -1227,6 +1227,29 @@ def test_explicit_descriptor_survives_function_rename_and_preserves_kwargs():
     assert job.kwargs == {"attempt_token": "keep-me", "extra": True}
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_work_heat_owns_whole_job_admission_without_exclusive_maintenance(explicit):
+    job = type("Job", (), {
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "meta": {"resource_descriptor": "work-heat"} if explicit else {},
+        "args": ("manual",),
+    })()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "work_heat"
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is False
+    ResourceAwareWorker._bound_job_slice(job, "work_heat")
+    assert job.args == ("manual",)
+
+
+def test_unclassified_maintenance_keeps_whole_job_exclusive_admission():
+    job = type("Job", (), {"func_name": "app.jobs.backup.run_backup", "meta": {}})()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    assert ResourceAwareWorker._job_workload(job, queue) == "maintenance"
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+
+
 def test_legacy_descriptor_adapter_and_parent_mode_remain_compatible():
     legacy = type("Job", (), {
         "func_name": "old.module.run_search_projection_outbox",

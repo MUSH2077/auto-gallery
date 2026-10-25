@@ -45,7 +45,7 @@ def compose_config(
             "SECRET_KEY": "compose-verification-secret-key-32-bytes",
             "ADMIN_PASSWORD": "compose-verification",
             "RESOURCE_GOVERNANCE_MODE": "enforce",
-            "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance",
+            "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat",
             "RESOURCE_MEMORY_RESERVE_MODE": "auto",
         }
     )

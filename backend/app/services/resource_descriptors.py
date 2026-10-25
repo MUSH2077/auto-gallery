@@ -58,6 +58,8 @@ DESCRIPTORS = {
     "gitllery-projection": ResourceDescriptor("gitllery-projection", "git_projection", "git_projection", True, _git_slice, 1),
     "search-projection": ResourceDescriptor("search-projection", "search_index", "search_index", True, _search_slice, 500),
     "maintenance": ResourceDescriptor("maintenance", "maintenance"),
+    # The parent owns admission for the entire DB-only heat recomputation.
+    "work-heat": ResourceDescriptor("work-heat", "work_heat"),
     "git-sync": ResourceDescriptor("git-sync", "git_projection", "git_projection"),
     "import-maintenance": ResourceDescriptor("import-maintenance", "import_db", "import_db"),
     "search-maintenance": ResourceDescriptor("search-maintenance", "search_index", "search_index"),
@@ -67,6 +69,7 @@ DESCRIPTORS = {
 
 
 LEGACY_FUNCTION_DESCRIPTORS = {
+    "run_work_heat_recompute": "work-heat",
     "run_gitllery_sync_operation": "git-sync",
     "run_curation_backfill_operation": "import-maintenance",
     "run_search_reindex_operation": "search-maintenance",
