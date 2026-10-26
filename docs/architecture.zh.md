@@ -53,6 +53,9 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   部署和搜索 CI 固定使用 Meilisearch 1.54.3，包含上游的内存分配和文档操作释放修复。
   应用投影、持久投递回执与重建流程共同维护索引一致性。已有索引的迁移与回退见
   [搜索服务升级](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)。
+- `models/postgres_search.py` 定义 `search_pg_indexes`、`search_pg_documents`
+  和 `search_pg_tasks`，由 Alembic 安装所需扩展及 GIN 索引。回执与重建记录的
+  后端字段保存命令归属，数据库默认值将旧镜像写入标记为 `meilisearch`。
 - `search_sql_filters.py` 把 SQL 作品投影的适用性与筛选规则从
   SearchService 的执行路径中分离。
 - `search_work_page.py` 持有可复用的作品页资产查询语句，每次请求绑定自己的作品 ID；

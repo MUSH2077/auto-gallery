@@ -14,6 +14,7 @@ class SearchDeliveryReceipt(TimestampMixin, Base):
         Index("uq_search_delivery_active", text("(true)"), unique=True,
               postgresql_where=text("state NOT IN ('complete', 'failed')")),
     )
+    backend: Mapped[str] = mapped_column(String(16), default="meilisearch", server_default="meilisearch")
     rebuild_id: Mapped[UUID | None] = mapped_column()
     continuation: Mapped[dict | None] = mapped_column(JSONB)
     index_uid: Mapped[str] = mapped_column(String(128))

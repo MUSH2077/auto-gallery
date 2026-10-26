@@ -58,6 +58,10 @@ auto-gallery is a layered Docker Compose application that downloads media from m
   durable delivery receipts and rebuilds define index consistency. See
   [search-engine upgrades](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)
   for migrating existing indexes and restoring the previous version.
+- `models/postgres_search.py` defines `search_pg_indexes`, `search_pg_documents`
+  and `search_pg_tasks`. Alembic installs their PostgreSQL extensions and GIN
+  indexes. Receipt/rebuild backend columns preserve command origin; their database
+  default identifies writes from older images as `meilisearch`.
 - `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
   compilation from the SearchService execution path.
 - `search_work_page.py` owns the reusable SQLAlchemy statement for page asset

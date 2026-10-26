@@ -120,6 +120,9 @@ def _provision_main_test_database() -> None:
         tmp_engine = create_async_engine(test_url)
         try:
             async with tmp_engine.begin() as c:
+                from sqlalchemy import text
+                await c.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                await c.execute(text("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch"))
                 await c.run_sync(Base.metadata.create_all)
         finally:
             await tmp_engine.dispose()
