@@ -1,7 +1,8 @@
-"""Prepare, submit, briefly confirm, and version-CAS acknowledge a remote write.
+"""Prepare, submit and version-CAS acknowledge bounded PG search commands.
 
-No HTTP request holds a SQL transaction. Unknown submission outcomes remain
-fenced: Meili lacks idempotency keys, so blindly replaying can reorder writes.
+A document batch and its command record commit together. The durable receipt
+is acknowledged afterwards through the existing lease/marker recovery protocol;
+this is not the separate T20 single-transaction acknowledgement candidate.
 """
 from __future__ import annotations
 
@@ -13,7 +14,11 @@ import time
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import and_, exists, func, or_, select, text, update
+from sqlalchemy import and_, exists, func, or_, select, text, update, cast
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+from app.models import ImportCurationOutbox
+from app.services.search_index_definitions import WORKS_INDEX
 
 from app.config import settings
 from app.database import async_session
@@ -104,24 +109,8 @@ def _exception_diagnostic(exc):
 
 
 async def request(client, method, path, deadline, payload=None):
-    headers = {"Authorization": f"Bearer {settings.meili_master_key}"}
-    kwargs = {"headers": headers}
-    if payload is not None:
-        kwargs["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode()
-        headers["Content-Type"] = "application/json"
-    url = settings.meili_url.rstrip("/") + path
-    if method.upper() in ("GET", "HEAD"):
-        kwargs["timeout"] = min(_SHORT_HTTP_TIMEOUT_SECONDS, remaining(deadline))
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response.json()
-    request_deadline = deadline - _WRITE_COMPLETION_RESERVE_SECONDS
-    request_budget = _write_request_budget(deadline)
-    kwargs["timeout"] = _write_request_timeout(request_budget)
-    async with asyncio.timeout_at(request_deadline):
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response.json()
+    from app.services.postgres_search_store import request as pg_request
+    return await pg_request(client, method, path, deadline, payload)
 
 
 async def _defer_prepared_for_budget(receipt, token, deadline, *, clear_marker=False):
@@ -140,6 +129,8 @@ async def _claim(deadline):
         row = (await db.execute(select(Receipt).where(ACTIVE).with_for_update())).scalar_one_or_none()
         if row is None:
             return None, None
+        from app.services.search_backend import require_backend
+        require_backend(row)
         if row.available_at > now() or (row.lease_until and row.lease_until > now()):
             return row, None
         row.lease_token = token
@@ -164,7 +155,19 @@ async def _prepare(limit, deadline):
             return None
         if (await db.execute(select(exists().where(ACTIVE)))).scalar_one():
             return None
-        ready = and_(Outbox.completed_at.is_(None), Outbox.available_at <= now(), or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()))
+        base_ready = and_(Outbox.completed_at.is_(None), Outbox.available_at <= now(), or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()))
+        # A work upsert is eligible only after its authoritative import curation
+        # intent completes. Non-work indexes and deletes remain independently
+        # drainable; this is a per-work filter, not a global barrier.
+        curation_ready = or_(
+            Outbox.index_uid != WORKS_INDEX,
+            Outbox.action == "delete",
+            ~exists().where(and_(
+                ImportCurationOutbox.work_id == cast(Outbox.entity_id, PG_UUID(as_uuid=True)),
+                ImportCurationOutbox.state != "complete",
+            )),
+        )
+        ready = and_(base_ready, curation_ready)
         head = (await db.execute(select(Outbox).where(ready).order_by(Outbox.available_at, Outbox.updated_at, Outbox.id).limit(1))).scalar_one_or_none()
         if head is None:
             return None
@@ -202,7 +205,7 @@ async def _prepare(limit, deadline):
                 row.last_error = str(exc)[:4000]
             await db.commit()
             raise
-        receipt = Receipt(index_uid=head.index_uid, action=action, versions=[[str(row.id), row.version] for row in selected],
+        receipt = Receipt(backend=settings.search_backend, index_uid=head.index_uid, action=action, versions=[[str(row.id), row.version] for row in selected],
                           payload=payload, state="prepared", lease_token=str(uuid4()), lease_until=now() + timedelta(seconds=30))
         db.add(receipt)
         await db.commit()
@@ -361,9 +364,6 @@ async def _advance(receipt, token, client, deadline):
 
 async def run_delivery_slice(*, limit=500, client=None):
     deadline = time.monotonic() + 20
-    if client is None:
-        async with httpx.AsyncClient() as owned:
-            return await _run(limit, owned, deadline)
     return await _run(limit, client, deadline)
 
 
@@ -415,6 +415,8 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
         if limits is None:
             if receipt:
                 await _save(receipt, token, deadline, lease_until=None)
+            if settings.search_backend == "postgresql" and workload == "search_index":
+                return {**result("deferred"), "resource_deferred": True, "more_likely": False}
             return result("deferred", delay=2)
         local_result = None
         if receipt is None:

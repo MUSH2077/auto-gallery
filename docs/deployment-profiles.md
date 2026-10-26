@@ -1,14 +1,14 @@
 # Deployment Profile · 部署配置
 
 The base `docker-compose.yaml` is a portable project-local profile. PostgreSQL,
-Redis, Meilisearch, and the one-shot migration service retain hard memory, CPU,
+Redis and the one-shot migration service retain hard memory, CPU,
 PID, and no-swap fuses. Application services retain PID/OOM/log protections but
 have no hard memory, swap, or CPU quotas; adaptive host-reserve governance,
 bounded queue concurrency, and per-process budgets keep background work
 cooperative.
 
-基础 `docker-compose.yaml` 是可移植的项目级配置。PostgreSQL、Redis、
-Meilisearch 和一次性迁移服务保留内存、CPU、PID 及禁用 Swap 的硬保险丝。
+基础 `docker-compose.yaml` 是可移植的项目级配置。PostgreSQL、Redis
+和一次性迁移服务保留内存、CPU、PID 及禁用 Swap 的硬保险丝。
 应用服务保留 PID/OOM/日志保护，但没有硬内存、Swap 或 CPU 配额；自适应宿主机
 储备、受限队列并发与进程内部预算使后台工作保持协作。
 
@@ -17,13 +17,54 @@ Ordinary local deployment builds a source-digest candidate. Formal releases use
 Host pressure is recorded, not used as a device-specific deployment veto.
 
 Database migrations run in the one-shot `migrate` service. Backend and workers
-wait for it to complete, while Meilisearch is deliberately not a backend startup
-dependency: an unavailable search index must degrade search, not take down the
-whole application.
+wait for it to complete. PostgreSQL is the only active search backend. An unavailable
+search projection degrades search without replacing the database/Redis readiness policy.
+
+## PostgreSQL search · PostgreSQL 搜索
+
+`SEARCH_BACKEND=postgresql` is the only supported normal runtime. The legacy
+`meilisearch` service is behind the `legacy-search` profile; normal deployment and
+CI do not start it. Its directory and pinned image are retained for old-version
+rollback only. Changing a Compose profile does not stop an already running container:
+`deploy.sh` explicitly stops the old service after the cutover check.
+
+For an existing deployment, pause mutations and scheduled producers, let old
+search receipts/rebuilds and engine tasks finish, and take the normal rollback
+backup before stopping application writers. Do not delete a delivery marker to
+force migration. The migration account must be allowed to install the required PostgreSQL extensions.
+Run `alembic upgrade head` using the new image, then
+`python -m app.services.search_migration --rebuild-if-needed` in the migration
+container with the same database, Redis and application-config mounts. The command
+rejects unfinished records owned by the former backend, creates a bounded rebuild
+when native indexes are missing, and resumes an existing native rebuild. `deploy.sh`
+performs these steps. New workers build from PostgreSQL domain rows; old engine
+files are not imported. Confirm rebuild completion, expected counts, private
+visibility, filters and sorting before reopening writes. `--rebuild` requests an
+explicit full rebuild later; it is not required on every deployment.
+
+Rollback uses the previous image and its saved Compose configuration/data. If no
+new writes were accepted, restore the saved rollback point. If mutations have
+resumed, first pause and drain them, preserve the current backup, and use the old
+version's rebuild workflow before reopening access. Schema downgrade removes only
+the new search tables and backend-owner columns, and retains the shared PostgreSQL
+extensions. Do not run a downgrade with native workers active.
+
+正常运行只支持 `SEARCH_BACKEND=postgresql`。Meilisearch 只留在 `legacy-search`
+配置中供旧版本回退，默认部署与 CI 不启动它；保留旧目录不代表继续常驻旧引擎。
+已有部署先暂停写入和定时生产者，等待旧搜索回执、重建及引擎任务完成，保存回退备份，
+再停止应用写入者。用新镜像执行 `alembic upgrade head`，然后在具有相同数据库、Redis
+和应用配置挂载的迁移容器内执行 `python -m app.services.search_migration --rebuild-if-needed`。
+`deploy.sh` 已包含这些步骤，并明确停止旧搜索容器。未完成的旧后端回执或持久标记会阻止切换，
+应由旧版本正常收尾，不能删标记强行放行。缺少原生索引时从业务表发起有界重建，已有原生重建则继续；
+不复制旧引擎文件。确认重建完成、数量、私人可见性、筛选及排序后再恢复写入。
+
+回退必须使用旧镜像和保存的 Compose 配置及数据；若已接受新写入，先暂停并排空、另存当前备份，
+再按旧版本流程重建并验证搜索后开放访问。降级仅删除新搜索表和后端归属列，保留共用扩展；
+原生消费者仍运行时不得降级。下节仅适用于仍运行旧版本的引擎升级。
 
 ## Meilisearch upgrades · 搜索服务升级
 
-Compose and search integration CI pin Meilisearch **1.54.3** by image digest.
+The inactive legacy Compose profile pins Meilisearch **1.54.3** by image digest.
 This version includes upstream indexing-memory fixes. `MEILI_MAX_INDEXING_MEMORY`
 (default `320Mb`) bounds indexing work, not total process RSS; the container's
 memory, CPU, PID and no-swap limits apply separately.
@@ -51,7 +92,7 @@ When upgrading an existing 1.12 deployment:
 See the [official upgrade guide](https://www.meilisearch.com/docs/resources/migration/updating)
 for other upgrade paths. Index migration is separate from PostgreSQL migrations.
 
-Compose 与搜索集成 CI 按镜像摘要固定为 **Meilisearch 1.54.3**，采用上游索引内存修复。
+旧版本回退配置按镜像摘要固定为 **Meilisearch 1.54.3**，采用上游索引内存修复。
 `MEILI_MAX_INDEXING_MEMORY`（默认 `320Mb`）限制索引工作，不能当作整个进程的
 内存上限；容器的内存、CPU、PID 和禁用 Swap 限制单独生效。
 

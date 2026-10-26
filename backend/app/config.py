@@ -1,4 +1,5 @@
 from urllib.parse import urlparse
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     build_revision: str = "development"
     database_url: str = "postgresql+asyncpg://autogallery:changeme@postgres:5432/autogallery"
     redis_url: str = "redis://:changeme@redis:6379/0"
+    search_backend: Literal["postgresql"] = "postgresql"
     meili_url: str = "http://meilisearch:7700"
     meili_master_key: str = ""
     meili_index_prefix: str = ""

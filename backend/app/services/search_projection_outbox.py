@@ -1,7 +1,7 @@
 """Bounded, durable delivery of database state into search projections.
 
 This module owns only the transactional queue mechanics.  Document assembly and
-Meilisearch I/O stay in :mod:`app.services.search`, which lets the queue be
+Index delivery stays in :mod:`app.services.search_delivery`, which lets the queue be
 claimed without importing the comparatively heavy search SDK in every process.
 """
 

@@ -27,7 +27,12 @@ async def empty_completion(waiting_work, monkeypatch):
     monkeypatch.setattr(coordinator, "wake_pending_outboxes", w.real_wake)
     queue = Queue("operations", connection=w.client)
     registry = ScheduledJobRegistry("operations", connection=w.client)
-    before = set(queue.job_ids) | set(registry.get_job_ids())
+    # A shared queue may already contain work of another kind.
+    unrelated = queue.enqueue("app.jobs.media_derivatives.run_media_derivative_outbox",
+        job_id="empty-recheck-unrelated-"+uuid4().hex)
+    queued_before = set(queue.job_ids)
+    scheduled_before = set(registry.get_job_ids())
+    before = queued_before | scheduled_before
     owner = Job.create("app.jobs.asset_dedup.run_asset_dedup_outbox",
         connection=w.client, origin="operations", id="empty-owner-"+uuid4().hex)
     owner.save()
@@ -35,7 +40,8 @@ async def empty_completion(waiting_work, monkeypatch):
     w.client.set(key, owner.id)
     monkeypatch.setattr("rq.get_current_job", lambda: owner)
     try:
-        yield SimpleNamespace(work=w, queue=queue, registry=registry, owner=owner, key=key, event_ids=event_ids)
+        yield SimpleNamespace(work=w, queue=queue, registry=registry, owner=owner, key=key, event_ids=event_ids,
+            queued_before=queued_before, scheduled_before=scheduled_before)
     finally:
         for job_id in (set(queue.job_ids) | set(registry.get_job_ids())) - before:
             registry.remove(job_id)
@@ -44,6 +50,8 @@ async def empty_completion(waiting_work, monkeypatch):
                 Job.fetch(job_id, connection=w.client).delete()
             except Exception:
                 pass
+        queue.remove(unrelated.id)
+        unrelated.delete()
         w.client.delete(key)
         owner.delete()
         if event_ids:
@@ -83,10 +91,13 @@ async def test_empty_slice_rechecks_after_clear_and_schedules_near_work(empty_co
         "dedup", {"processed":0,"more_likely":False,"resource_deferred":False})
     assert checked
     assert result == {"enqueued":expected,"deferred":0}
-    assert c.queue.count == 0
-    assert len(c.registry.get_job_ids()) == expected
+    assert set(c.queue.job_ids) == c.queued_before
+    scheduled = set(c.registry.get_job_ids())
+    assert c.scheduled_before <= scheduled
+    new_scheduled = scheduled - c.scheduled_before
+    assert len(new_scheduled) == expected
     if expected:
-        assert c.work.client.get(c.key).decode() == c.registry.get_job_ids()[0]
+        assert c.work.client.get(c.key).decode() in new_scheduled
     row = (await c.work.db.execute(select(AssetDedupOutbox.state, AssetDedupOutbox.attempts)
         .where(AssetDedupOutbox.id == identity))).one()
     assert tuple(row) == (state, 0), "Scheduling must not claim or finish the event"
@@ -103,8 +114,10 @@ async def test_future_resource_wait_keeps_scheduled_wake(empty_completion, monke
     c.work.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "dedup", "waiting")
     result = await asyncio.to_thread(coordinator.wake_resource_deferred_outboxes)
     assert result == {"enqueued":1,"deferred":0}
-    assert c.queue.count == 0
-    assert len(c.registry.get_job_ids()) == 1
+    assert set(c.queue.job_ids) == c.queued_before
+    scheduled = set(c.registry.get_job_ids())
+    assert c.scheduled_before <= scheduled
+    assert len(scheduled - c.scheduled_before) == 1
     assert not c.work.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "dedup")
 
 
@@ -127,7 +140,8 @@ async def test_empty_recheck_timeout_preserves_durable_work(empty_completion, mo
     assert time.monotonic() - started < 1
     assert result == {"enqueued":0,"deferred":1}
     assert not c.work.client.get(c.key)
-    assert c.queue.count == c.registry.count == 0
+    assert set(c.queue.job_ids) == c.queued_before
+    assert set(c.registry.get_job_ids()) == c.scheduled_before
     assert await c.work.db.scalar(select(AssetDedupOutbox.state).where(AssetDedupOutbox.id == identity)) == "pending"
 
 

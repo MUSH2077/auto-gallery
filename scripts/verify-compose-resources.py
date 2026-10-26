@@ -16,7 +16,6 @@ MIB = 1024 * 1024
 PROTECTED_SERVICE_NAMES = (
     "postgres",
     "redis",
-    "meilisearch",
     "migrate",
 )
 
@@ -45,6 +44,7 @@ def compose_config(
             "SECRET_KEY": "compose-verification-secret-key-32-bytes",
             "ADMIN_PASSWORD": "compose-verification",
             "RESOURCE_GOVERNANCE_MODE": "enforce",
+            "SEARCH_BACKEND": "postgresql",
             "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat",
             "RESOURCE_MEMORY_RESERVE_MODE": "auto",
         }
@@ -77,7 +77,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def verify_resource_limits(services: dict) -> None:
-    for name in PROTECTED_SERVICE_NAMES:
+    for name in (*PROTECTED_SERVICE_NAMES, *(("meilisearch",) if "meilisearch" in services else ())):
         service = services[name]
         memory = int(service["mem_limit"])
         require(memory >= 64 * MIB, f"{name}: mem_limit is too small")
@@ -375,6 +375,8 @@ def verify_io_override(config: dict) -> None:
         "worker-import": (30, 15),
     }
     for name, (read_mib, write_mib) in expected.items():
+        if name == "meilisearch" and name not in services:
+            continue
         limits = services[name]["blkio_config"]
         read = limits["device_read_bps"][0]
         write = limits["device_write_bps"][0]

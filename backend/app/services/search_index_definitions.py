@@ -10,7 +10,7 @@ def _validate_index_namespace(database_url: str, index_prefix: str) -> str:
     if database_name.endswith("_test") and not index_prefix:
         raise RuntimeError(
             "Test database search isolation failure: MEILI_INDEX_PREFIX must be set "
-            "before a *_test database may access Meilisearch."
+            "before a *_test database may access search indexes."
         )
     return index_prefix
 
@@ -242,6 +242,6 @@ WORK_PROJECTION_VERSION = 5
 WORK_HYDRATION_QUERY_COUNT = 4
 # The 4 MiB payload bound remains authoritative.  A larger identity window
 # amortizes the four indexed hydration scans on high-latency NAS storage; the
-# payload splitter still sends only one bounded Meilisearch write at a time.
+# payload splitter still sends only one bounded PostgreSQL document write at a time.
 WORK_DOCUMENT_BATCH_SIZE = 2_000
 MEILI_DOCUMENT_PAYLOAD_BYTES = 4 * 1024 * 1024

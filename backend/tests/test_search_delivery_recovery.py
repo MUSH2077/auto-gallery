@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app.database import async_session
-from tests.test_search_delivery import delivery, enqueue_delete, ready_receipt, Remote  # noqa: F401
+from tests.test_search_delivery import controlled_search_store, delivery, enqueue_delete, ready_receipt, Remote  # noqa: F401
 from tests.test_search_rebuild_delivery import Meili
 
 

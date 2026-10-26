@@ -71,15 +71,15 @@ dated audits as history, not as an upcoming migration.
 
 ## MEDIUM Severity
 
-### 5. Meilisearch index consistency
+### 5. Search projection consistency
 
-**Risk**: PostgreSQL and the asynchronous Meilisearch projection can drift or
-the projection can lag while Meilisearch is unavailable.
+**Risk**: Domain rows and asynchronous PostgreSQL search documents can drift or lag
+while admission, curation or a database write is pending.
 
 **Mitigation**:
 - PostgreSQL writes and a coalescing projection-outbox intent share one
-  transaction; ordinary imports never wait for Meilisearch.
-- A single bounded consumer applies at most one Meilisearch write task at a
+  transaction; ordinary imports never wait for index delivery.
+- A single bounded consumer applies at most one PostgreSQL document batch at a
   time, with retry/backoff and observable lag.
 - Full rebuilds use versioned staging indexes and keyset batches, then replay
   outbox changes made after the rebuild watermark before an atomic swap.
@@ -302,7 +302,7 @@ As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinter
 | Worker startup orphan reconciliation | #4 | subscription_sync.py -- stale detection |
 | `last_successful_auth` on subscription_source | #C (was #7) | subscription_source model |
 | `auth_healthy` on subscription_source | #C (was #7) | subscription_source model |
-| Admin-triggered Meilisearch re-indexing for v1 | #5 (was #6) | CLAUDE.md -- Risk-Derived Decisions |
+| Admin-triggered search re-indexing for v1 | #5 (was #6) | CLAUDE.md -- Risk-Derived Decisions |
 | Integration smoke test for gallery-dl output format | #2 (was #1) | Test suite |
 | X provider explicitly disabled (placeholder) | #A (was #3) | x.py provider -- can_download=False |
 | pyvips preferred over Pillow | #11 | CLAUDE.md -- Risk-Derived Decisions |
@@ -318,7 +318,7 @@ As the number of providers grows (currently 8: Pixiv, X, Iwara, Danbooru, Pinter
 
 | Path | Exception outcome and durable authority | Regression evidence |
 |---|---|---|
-| Search index gate and Meilisearch (search.py) | A failed consistency check uses the authoritative PostgreSQL result. A Meilisearch error becomes an explicit unavailable response when no safe SQL result exists; the circuit breaker records the failure. A database error only uses a freshly validated Meilisearch result. | Search algorithm, cursor, and index-consistency tests; disposable search benchmark required before rollout. |
+| Search projections (search.py) | Structured lists use authoritative domain rows; text queries use versioned PostgreSQL documents and fail explicitly when unavailable. Current ACLs and per-work curation guard visibility. | Search algorithms, cursors, membership revocation, native rollback and rebuild tests. |
 | Import claim, lease and completion (import_runner.py, import_execution.py) | A failed initial lease check aborts the execution. Renewal failures are logged with the import ID and retried after five seconds; lost ownership suppresses a stale retry. The outer failure path commits a bounded retry intent before queue publication or records a terminal failure. | Import finalization, ownership and recovery tests. |
 | Admin dispatch (operations.py, admin_dispatch_recovery.py) | PostgreSQL selects at most 25 due attempts. A queue publication failure leaves a durable pending intent with retry time and logs the task ID. Compensation commits the task failure before best-effort Redis status and lock cleanup. | Admin operation dispatch and scheduler recovery tests. |
 

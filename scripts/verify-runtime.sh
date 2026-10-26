@@ -4,15 +4,15 @@ set -euo pipefail
 verify_scope="${VERIFY_SCOPE:-full}"
 case "$verify_scope" in
   core)
-    services=(postgres redis meilisearch backend admin-web)
+    services=(postgres redis backend admin-web)
     application_services=(backend admin-web)
     ;;
   import)
-    services=(postgres redis meilisearch backend admin-web worker-import worker-operations)
+    services=(postgres redis backend admin-web worker-import worker-operations)
     application_services=(backend admin-web worker-import worker-operations)
     ;;
   full)
-    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations scheduler)
+    services=(postgres redis backend admin-web worker-download worker-import worker-operations scheduler)
     application_services=(backend admin-web worker-download worker-import worker-operations scheduler)
     ;;
   *)
@@ -20,7 +20,7 @@ case "$verify_scope" in
     exit 2
     ;;
 esac
-protected_services=(postgres redis meilisearch migrate)
+protected_services=(postgres redis migrate)
 resources_only="${VERIFY_RESOURCES_ONLY:-0}"
 
 env_file="${COMPOSE_ENV_FILE:-.env}"

@@ -161,7 +161,7 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-此命令启动全部服务：postgres、redis、meilisearch、一次性 `migrate` 服务、backend、
+此命令启动默认服务：postgres、redis、一次性 `migrate` 服务、backend、
 worker-download、worker-import、worker-operations、scheduler 和 admin-web。backend 与
 各 Worker 会等待 `migrate` 成功完成，不再在每次重启时重复执行迁移。
 
@@ -175,7 +175,7 @@ docker compose ps
 如果仅需启动基础设施服务用于本地开发：
 
 ```bash
-docker compose up -d postgres redis meilisearch
+docker compose up -d postgres redis
 ```
 
 ### 4. 验证
@@ -185,7 +185,7 @@ docker compose up -d postgres redis meilisearch
 curl http://localhost:8818/api/v1/system/health
 
 # 期望响应：
-# {"status":"ok","services":{"postgres":"up","redis":"up","meilisearch":"up"}}
+# {"status":"ok","services":{"postgres":"up","redis":"up","search":"up"}}
 ```
 
 管理后台：`http://<主机IP>:13000`。
@@ -269,6 +269,8 @@ PostgreSQL 可能在后端启动时尚未就绪。Docker Compose 的 `depends_on
 
 确认 Docker 用户（通常 uid 1000）对主机目录有写权限。在 Synology NAS 上可能需要通过 DSM File Station 设置权限。
 
-### Meilisearch master key 不匹配
+### PostgreSQL 搜索迁移
 
-`.env` 中的 `MEILI_MASTER_KEY` 必须与后端使用的密钥一致。如果在 Meilisearch 启动后更改，需删除 `docker/meilisearch/` 数据目录后重启。
+正常运行使用 PostgreSQL 搜索，无需启动 Meilisearch。已有部署请遵循
+[切换和回退步骤](deployment-profiles.md#postgresql-search--postgresql-搜索)，
+新版本验收前保留旧引擎数据，不要通过删除旧目录处理就绪失败。

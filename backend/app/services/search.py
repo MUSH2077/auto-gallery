@@ -2,7 +2,7 @@
 
 Callers supply raw text and a scope to :class:`SearchService`.  The service is
 the single public seam: it parses once, resolves entity identifiers once, then
-dispatches the resulting AST to either the Meilisearch or SQL adapter.
+dispatches the resulting AST to PostgreSQL search documents or domain SQL.
 """
 
 from __future__ import annotations
@@ -29,9 +29,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID, uuid4
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
-from meilisearch_python_sdk import Client as MeiliClient
-from meilisearch_python_sdk.models.search import SearchParams
-from meilisearch_python_sdk.models.settings import MeilisearchSettings
 from sqlalchemy import String, and_, case, cast, exists, func, literal_column, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +108,7 @@ from app.services.search_language import (
     qualifier_catalog,
 )
 from app.services.search_consistency import search_index_consistency
+from app.services.postgres_search_client import PGClient, run_search_call
 from app.services.search_projection_fields import (
     _iso,
     _timestamp,
@@ -196,16 +194,9 @@ from app.services.search_index_definitions import (
     MEILI_DOCUMENT_PAYLOAD_BYTES,
 )
 
-# NAS-backed Meilisearch can spend more than 30 seconds durably committing a
-# control-plane write even when the corresponding task is healthy.  Keep the
-# socket open as long as the task-level deadline so a slow response does not
-# turn a successful create/update into a failed rebuild and cleanup cycle.
+# Retain bounded control and incremental-delivery deadlines across the backend cutover.
 MEILI_WRITE_TIMEOUT_SECONDS = 120
 MEILI_TASK_TIMEOUT_MS = 120_000
-# Incremental writes share the same NAS-backed LMDB as full rebuilds.  A
-# healthy 4 MiB document task can take more than two minutes while Meilisearch
-# compacts or batches adjacent tasks; abandoning it after 30 seconds only
-# resubmits duplicate work and prevents the durable outbox from converging.
 MEILI_INCREMENTAL_TASK_TIMEOUT_MS = 180_000
 MEILI_INCREMENTAL_SLICE_TIMEOUT_MS = 240_000
 INDEX_SETTINGS_CACHE_TTL = 30 * 24 * 60 * 60
@@ -293,8 +284,7 @@ def _can_search_target(target: SearchTarget, permissions: set[str]) -> bool:
         return bool({"library", "curation"} & permissions)
     return required in permissions
 
-class SearchBackendUnavailable(RuntimeError):
-    pass
+from app.services.search_backend import SearchBackendUnavailable
 
 
 class NameAnchorsUnavailable(ValueError):
@@ -384,23 +374,9 @@ class SearchPermissionError(PermissionError):
         self.target = target
 
 
-def _client(*, timeout_seconds: float | None = None) -> MeiliClient:
-    """Create an SDK client whose socket lifetime is actually bounded.
-
-    ``asyncio.wait_for(asyncio.to_thread(...))`` cannot stop a blocking worker
-    thread.  Passing a timeout into the SDK makes the underlying httpx request
-    close first, so repeated Meilisearch stalls cannot accumulate orphaned
-    threads in the backend executor.
-    """
-
-    timeout = timeout_seconds
-    if timeout is None:
-        timeout = MEILI_WRITE_TIMEOUT_SECONDS
-    return MeiliClient(
-        settings.meili_url,
-        settings.meili_master_key,
-        timeout=max(1, int(math.ceil(timeout))),
-    )
+def _client(*, timeout_seconds: float | None = None) -> PGClient:
+    """Return the sole search backend; no remote search process is required."""
+    return PGClient(timeout_seconds=timeout_seconds)
 
 
 def _meili_document_count(index_uid: str) -> int:
@@ -422,7 +398,7 @@ async def _refresh_search_index_checkpoints(index_uids: Iterable[str]) -> None:
         if model is None:
             continue
         try:
-            index_count = await asyncio.to_thread(_meili_document_count, index_uid)
+            index_count = await run_search_call(_meili_document_count, index_uid)
             async with async_session() as checkpoint_db:
                 state = (
                     await checkpoint_db.execute(
@@ -488,7 +464,7 @@ async def _refresh_search_index_checkpoints(index_uids: Iterable[str]) -> None:
 
 
 def _wait_for_task(
-    client: MeiliClient,
+    client: PGClient,
     task: Any,
     *,
     timeout_in_ms: int = 120_000,
@@ -510,7 +486,7 @@ def _settings_digest(config: dict[str, Any]) -> str:
 
 
 def _meili_document_ids_filter(identities: Iterable[str]) -> str:
-    """Build a Meilisearch 1.12-compatible primary-key batch filter."""
+    """Build a primary-key batch expression for indexed search."""
 
     return f"id IN {json.dumps(list(identities), ensure_ascii=False)}"
 
@@ -530,7 +506,7 @@ def _index_not_found(error: Exception) -> bool:
 
 
 def _ensure_indexes(
-    client: MeiliClient,
+    client: PGClient,
     settings_map: dict[str, dict] | None = None,
     *,
     force_settings: bool = False,
@@ -544,7 +520,7 @@ def _ensure_indexes(
         with _settings_hash_lock:
             process_match = process_key in _ensured_settings_hashes
         if process_match and not force_settings:
-            # Normal drains stay entirely off Meilisearch's control plane.
+            # Normal drains avoid repeated index-control queries.
             # A failed document write still surfaces and can clear/recreate the
             # index explicitly; settings do not need a GET on every batch.
             continue
@@ -583,7 +559,7 @@ def _ensure_indexes(
             continue
         _wait_for_task(
             client,
-            client.index(uid).update_settings(MeilisearchSettings.model_validate(config)),
+            client.index(uid).update_settings(config),
             timeout_in_ms=task_timeout_in_ms,
         )
         try:
@@ -613,7 +589,7 @@ def _forget_ensured_settings(index_uids: Iterable[str]) -> None:
         )
 
 
-def _create_staging_index(client: MeiliClient, live_index: str, staging: str) -> None:
+def _create_staging_index(client: PGClient, live_index: str, staging: str) -> None:
     """Create one empty, fully configured staging index."""
 
     _wait_for_task(
@@ -624,14 +600,14 @@ def _create_staging_index(client: MeiliClient, live_index: str, staging: str) ->
     _wait_for_task(
         client,
         client.index(staging).update_settings(
-            MeilisearchSettings.model_validate(INDEX_SETTINGS[live_index])
+            INDEX_SETTINGS[live_index]
         ),
         timeout_in_ms=MEILI_TASK_TIMEOUT_MS,
     )
 
 
 def _write_document_batch(
-    client: MeiliClient,
+    client: PGClient,
     index_uid: str,
     documents: list[dict[str, Any]],
     *,
@@ -692,7 +668,7 @@ def _select_projection_event_slice(
 
 
 def _delete_document_batch(
-    client: MeiliClient,
+    client: PGClient,
     index_uid: str,
     document_ids: Iterable[str],
     *,
@@ -708,7 +684,7 @@ def _delete_document_batch(
     )
 
 
-def _ensure_live_index_for_swap(client: MeiliClient, live_index: str) -> None:
+def _ensure_live_index_for_swap(client: PGClient, live_index: str) -> None:
     """Ensure a swap target exists without running a redundant settings task."""
 
     try:
@@ -732,7 +708,7 @@ def _ensure_live_index_for_swap(client: MeiliClient, live_index: str) -> None:
 
 def _remember_live_settings(
     live_indexes: Iterable[str],
-    client: MeiliClient | None = None,
+    client: PGClient | None = None,
 ) -> None:
     """Record the settings now attached to live UIDs after an atomic swap."""
 
@@ -760,7 +736,7 @@ def _remember_live_settings(
             _ensured_settings_hashes.add((live_index, digest))
 
 
-def _drop_index_best_effort(client: MeiliClient, index_uid: str) -> None:
+def _drop_index_best_effort(client: PGClient, index_uid: str) -> None:
     try:
         _wait_for_task(
             client,
@@ -1543,7 +1519,7 @@ class SearchService(SearchProjection):
                 resolved[key] = await self._resolve_source_url(token.value, token)
         return resolved
 
-    async def _hedged_structured_works_search(
+    async def _structured_works_search(
         self,
         query: SearchQuery,
         resolved: dict[tuple[str, str], Any],
@@ -1554,179 +1530,10 @@ class SearchService(SearchProjection):
         cursor: str | None,
         seed: int | None = None,
     ) -> tuple[dict, dict[str, Any]]:
-        """Race an equivalent first page only after the durable gate passes."""
+        """Execute one authoritative SQL page without racing the same database."""
 
-        db_task = asyncio.create_task(
-            self._search_works_db(
-                query,
-                resolved,
-                offset,
-                limit,
-                force_sfw=force_sfw,
-                cursor=cursor,
-                seed=seed,
-            )
-        )
-        if query.values("sort") == ("random",):
-            return await db_task, {
-                "winner": "postgresql",
-                "hedged": False,
-                "consistency": "authoritative_random_ring",
-                "index_status": "not_eligible",
-                "index_lag": None,
-            }
-        # Cursor and later offset pages must stay on the authoritative keyset
-        # path.  Do not even consult the index gate for those requests.
-        if cursor or offset > 0:
-            return await db_task, {
-                "winner": "postgresql",
-                "hedged": False,
-                "consistency": "authoritative_page",
-                "index_status": "not_eligible",
-                "index_lag": None,
-            }
-
-        gate_task = asyncio.create_task(search_index_consistency(WORKS_INDEX))
-        done, _ = await asyncio.wait({db_task}, timeout=0.075)
-        if done:
-            gate_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await gate_task
-            return await db_task, {
-                "winner": "postgresql",
-                "hedged": False,
-                "consistency": "authoritative",
-                "index_status": "not_needed",
-                "index_lag": None,
-            }
-
-        # A slow consistency check must never delay an already completed
-        # PostgreSQL query.  After the 75 ms threshold, whichever finishes
-        # first decides whether a hedge can still add value.
-        if not gate_task.done():
-            gate_or_db, _ = await asyncio.wait(
-                {db_task, gate_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if db_task in gate_or_db:
-                gate_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await gate_task
-                return await db_task, {
-                    "winner": "postgresql",
-                    "hedged": False,
-                    "consistency": "authoritative",
-                    "index_status": "gate_slower_than_database",
-                    "index_lag": None,
-                }
-        try:
-            gate = await gate_task
-        except Exception:
-            logger.warning("search index consistency gate failed", exc_info=True)
-            return await db_task, {
-                "winner": "postgresql",
-                "hedged": False,
-                "consistency": "gate_unavailable",
-                "index_status": "unverified",
-                "index_lag": None,
-            }
-        if not gate["consistent"]:
-            return await db_task, {
-                "winner": "postgresql",
-                "hedged": False,
-                "consistency": gate,
-                "index_status": gate["status"],
-                "index_lag": gate["generation_lag"],
-            }
-
-        meili_task = asyncio.create_task(
-            self._search_meili(
-                query,
-                ["works"],
-                resolved,
-                offset,
-                limit,
-                force_sfw,
-            )
-        )
-
-        async def validated_meili_result() -> tuple[dict[str, dict] | None, dict[str, Any]]:
-            result = await meili_task
-            try:
-                validation = await search_index_consistency(WORKS_INDEX)
-            except Exception:
-                logger.warning("search index post-race validation failed", exc_info=True)
-                return None, {**gate, "consistent": False, "status": "unverified"}
-            checkpoint_fields = (
-                "database_generation",
-                "indexed_generation",
-                "database_document_count",
-                "index_document_count",
-            )
-            if not validation["consistent"] or any(
-                validation.get(field) != gate.get(field)
-                for field in checkpoint_fields
-            ):
-                return None, validation
-            return result, validation
-
-        done, _ = await asyncio.wait(
-            {db_task, meili_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if meili_task in done:
-            try:
-                meili_result, validation = await validated_meili_result()
-            except SearchBackendUnavailable:
-                return await db_task, {
-                    "winner": "postgresql",
-                    "hedged": True,
-                    "consistency": gate,
-                    "index_status": "fallback",
-                    "index_lag": gate["generation_lag"],
-                }
-            if meili_result is None:
-                return await db_task, {
-                    "winner": "postgresql",
-                    "hedged": True,
-                    "consistency": validation,
-                    "index_status": "changed_during_race",
-                    "index_lag": validation.get("generation_lag"),
-                }
-            db_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await db_task
-            return meili_result["works"], {
-                "winner": "meilisearch",
-                "hedged": True,
-                "consistency": gate,
-                "index_status": gate["status"],
-                "index_lag": gate["generation_lag"],
-            }
-
-        try:
-            db_result = await db_task
-        except Exception as db_error:
-            meili_result, validation = await validated_meili_result()
-            if meili_result is None:
-                raise db_error
-            return meili_result["works"], {
-                "winner": "meilisearch",
-                "hedged": True,
-                "consistency": validation,
-                "index_status": validation["status"],
-                "index_lag": validation["generation_lag"],
-            }
-        meili_task.cancel()
-        with suppress(asyncio.CancelledError, SearchBackendUnavailable):
-            await meili_task
-        return db_result, {
-            "winner": "postgresql",
-            "hedged": True,
-            "consistency": gate,
-            "index_status": gate["status"],
-            "index_lag": gate["generation_lag"],
-        }
+        group = await self._search_works_db(query, resolved, offset, limit, force_sfw=force_sfw, cursor=cursor, seed=seed)
+        return group, {"winner": "postgresql", "hedged": False, "consistency": "authoritative", "index_status": "same_backend", "index_lag": None}
 
     async def search(
         self,
@@ -1912,7 +1719,7 @@ class SearchService(SearchProjection):
                         user_id=user_id,
                     )
         elif not text and targets == ("works",) and self._works_db_compatible(parsed):
-            groups["works"], execution = await self._hedged_structured_works_search(
+            groups["works"], execution = await self._structured_works_search(
                 parsed,
                 resolved,
                 offset,
@@ -1933,11 +1740,8 @@ class SearchService(SearchProjection):
                     user_id=user_id,
                 )
 
-        # Meilisearch 1.12 supports attribute-level typo controls but not the
-        # later ``disableOnNumbers`` setting.  A single numeric reference term
-        # is therefore authoritative in PostgreSQL: an exact stored identity
-        # was handled above, while an unknown number must not degrade into a
-        # one-digit typo match against another creator identity.
+        # Numeric references identify exact stored accounts. Unknown numbers
+        # must not become spelling-tolerant matches for another account.
         numeric_identity_literal = (
             not parsed.qualifiers
             and len(parsed.terms) == 1
@@ -1976,7 +1780,7 @@ class SearchService(SearchProjection):
                 )
             )
             execution.update({
-                "winner": "meilisearch",
+                "winner": settings.search_backend,
                 "consistency": "fulltext_index_required",
                 "index_status": "required",
             })
@@ -1998,7 +1802,7 @@ class SearchService(SearchProjection):
                 user_id=user_id,
             )
 
-        # Alias projection fields exist only to drive Meilisearch relevance
+        # Alias projection fields exist only to drive text relevance
         # and explain which identity matched.  Never expose the raw projection
         # arrays through the public search response.
         for group in groups.values():
@@ -2056,7 +1860,7 @@ class SearchService(SearchProjection):
         seed: int,
         cursor: str | None,
     ) -> dict:
-        """Page the same stable hash ring in Meilisearch for text queries."""
+        """Page the same stable hash ring over search documents for text queries."""
 
         text = _free_text(query)
         base_filter = _compile_meili_filter(
@@ -2187,7 +1991,7 @@ class SearchService(SearchProjection):
             if remaining <= 0:
                 raise TimeoutError
             hits, total = await asyncio.wait_for(
-                asyncio.to_thread(run, remaining),
+                run_search_call(run, remaining, db=self.db),
                 timeout=remaining + 0.1,
             )
             _meili_breaker_success()
@@ -2238,12 +2042,12 @@ class SearchService(SearchProjection):
         except TimeoutError as exc:
             if attempted:
                 _meili_breaker_failure()
-            logger.warning("Meilisearch random search timed out after %.1fs", timeout_seconds)
+            logger.warning("PostgreSQL random search timed out after %.1fs", timeout_seconds)
             raise SearchBackendUnavailable("Search index timed out") from exc
         except Exception as exc:
             if attempted:
                 _meili_breaker_failure()
-            logger.warning("Meilisearch random search failed", exc_info=True)
+            logger.warning("PostgreSQL random search failed", exc_info=True)
             raise SearchBackendUnavailable("Search index is unavailable") from exc
         finally:
             if acquired:
@@ -2360,46 +2164,12 @@ class SearchService(SearchProjection):
             if remaining <= 0:
                 raise TimeoutError
 
-            def _run_searches(socket_timeout: float = remaining) -> list[Any]:
-                from types import SimpleNamespace
-                requests = [(uid, kwargs) for _target, uid, kwargs in prepared]
-                count_positions = {}
-                for position, (_target, uid, kwargs) in enumerate(prepared):
-                    if uid == MEMBERSHIPS_INDEX:
-                        count_positions[position] = len(requests)
-                        count_kwargs = {key: value for key, value in kwargs.items() if key not in {"offset", "limit", "sort"}}
-                        count_kwargs.update(page=1, hits_per_page=1, attributes_to_retrieve=["id"])
-                        requests.append((uid, count_kwargs))
-                multi_search_client = _client(timeout_seconds=socket_timeout)
-                multi_search = getattr(multi_search_client, "multi_search", None)
-                if len(requests) > 1 and callable(multi_search):
-                    results = list(multi_search_client.multi_search([
-                        SearchParams(index_uid=uid, query=text, **kwargs)
-                        for uid, kwargs in requests
-                    ]))
-                else:
-                    client = (
-                        multi_search_client
-                        if len(requests) == 1
-                        else _client(timeout_seconds=max(0.1, socket_timeout / len(requests)))
-                    )
-                    results = [client.index(uid).search(text, **kwargs) for uid, kwargs in requests]
-                if len(results) != len(requests):
-                    raise RuntimeError("Meilisearch returned an incomplete multi-search response")
-                for position, count_position in count_positions.items():
-                    total = getattr(results[count_position], "total_hits", None)
-                    if total is None:
-                        raise RuntimeError("Meilisearch did not return an exact membership count")
-                    results[position] = SimpleNamespace(hits=results[position].hits, estimated_total_hits=int(total))
-                return results[:len(prepared)]
-
-            results = await asyncio.wait_for(
-                asyncio.to_thread(_run_searches),
-                timeout=remaining + 0.1,
-            )
+            from app.services.postgres_search_query import multi_search
+            async with asyncio.timeout(remaining):
+                results = await multi_search(self.db, prepared, text)
             if len(results) != len(prepared):
                 raise RuntimeError(
-                    "Meilisearch returned an incomplete multi-search response"
+                    "PostgreSQL returned an incomplete multi-search response"
                 )
             _meili_breaker_success()
 
@@ -2442,12 +2212,12 @@ class SearchService(SearchProjection):
         except TimeoutError as exc:
             if attempted:
                 _meili_breaker_failure()
-            logger.warning("Meilisearch search timed out after %.1fs", timeout_seconds)
+            logger.warning("PostgreSQL search timed out after %.1fs", timeout_seconds)
             raise SearchBackendUnavailable("Search index timed out") from exc
         except Exception as exc:
             if attempted:
                 _meili_breaker_failure()
-            logger.warning("Meilisearch search failed", exc_info=True)
+            logger.warning("PostgreSQL search failed", exc_info=True)
             raise SearchBackendUnavailable("Search index is unavailable") from exc
         finally:
             if acquired:
@@ -4473,7 +4243,7 @@ class SearchService(SearchProjection):
 
     async def delete_all_works(self) -> None:
         try:
-            await asyncio.to_thread(_delete_all_documents, WORKS_INDEX)
+            await self._rebuild_selected_indexes((WORKS_INDEX,))
         except Exception:
             logger.warning("Failed to clear works search index", exc_info=True)
 
@@ -4574,7 +4344,7 @@ class SearchService(SearchProjection):
             if index_name == WORKS_INDEX:
                 work_ids = tuple(sorted(expected))
             try:
-                actual, indexed_total = await asyncio.to_thread(_read_ids, index_name)
+                actual, indexed_total = await run_search_call(_read_ids, index_name, db=self.db)
             except Exception as exc:
                 raise SearchBackendUnavailable("Search index audit is unavailable") from exc
             stale_set = actual - expected
@@ -4634,7 +4404,7 @@ class SearchService(SearchProjection):
                     for document in expected_documents
                 }
                 try:
-                    actual_hashes = await asyncio.to_thread(_read_hashes, batch_ids)
+                    actual_hashes = await run_search_call(_read_hashes, batch_ids, db=self.db)
                 except Exception as exc:
                     raise SearchBackendUnavailable(
                         "Search field audit is unavailable"
@@ -4686,7 +4456,7 @@ class SearchService(SearchProjection):
                 )
                 docs, _ = _page_results(page)
                 return {doc["id"]: doc.get("projection_hash") for doc in docs}
-            actual = await asyncio.to_thread(read_member_hashes)
+            actual = await run_search_call(read_member_hashes, db=self.db)
             drift = [doc["id"] for doc in expected_docs if actual.get(doc["id"]) != doc["projection_hash"]]
             member_audited += len(expected_docs)
             member_drift_count += len(drift)

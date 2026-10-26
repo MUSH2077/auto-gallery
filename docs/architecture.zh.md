@@ -32,7 +32,7 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  数据层                                          │
-│  PostgreSQL ── Redis ── Meilisearch              │
+│  PostgreSQL ── Redis                            │
 │  ┌──────────┐ ┌──────┐ ┌─────────────┐          │
 │  │ /downloads│ │/lib │ │ /gallerydl  │          │
 │  │           │ │rary │ │ -config     │          │
@@ -42,17 +42,18 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
 
 ## 当前模块边界
 
-- `SearchService` 仍是后端搜索对外接口。`search_language.py` 解析查询，
-  `search_pagination.py` 管理稳定游标和排序，
-  `search_filters.py` 编译 Meilisearch 过滤条件，
-  `search_projection_fields.py` 生成确定性的索引字段。
-  `search_index_definitions.py` 持有索引名称与配置，`search_projection.py`
-  持有文档构建和增量投递、全量重建共用的投影定义；SearchService 保留旧调用兼容入口。
+- `SearchService` 是搜索对外接口。`search_language.py` 解析查询，
+  `search_pagination.py` 管理稳定游标和排序，`search_filters.py` 构造内部筛选表达式，
+  `search_projection_fields.py` 生成索引字段。图库文本搜索由
+  `postgres_search_query.py` 在 PostgreSQL 中执行；`postgres_search_store.py`
+  持有文档、逻辑索引和有界写入，`postgres_search_client.py` 仅为已有同步调用提供异步数据库桥接。
+  正常运行不启动或调用 Meilisearch，`SEARCH_BACKEND` 固定为 `postgresql`。
+  `search_index_definitions.py` 持有索引定义，`search_projection.py` 是增量投递和全量重建
+  共用的文档构建入口。迁移通过 Alembic 创建表及 `pg_trgm`、`fuzzystrmatch` 扩展，
+  请求路径不执行建表。旧回执与重建记录保留后端归属，不能跨后端领取。
+  迁移、重建和回退步骤见[部署配置](deployment-profiles.md#postgresql-search--postgresql-搜索)。
   `subscription_schedule.py` 提供纯日程计算，调度页面和搜索共用
   `scheduler_decisions.py` 的来源资格与凭据阻塞解释。
-  部署和搜索 CI 固定使用 Meilisearch 1.54.3，包含上游的内存分配和文档操作释放修复。
-  应用投影、持久投递回执与重建流程共同维护索引一致性。已有索引的迁移与回退见
-  [搜索服务升级](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)。
 - `models/postgres_search.py` 定义 `search_pg_indexes`、`search_pg_documents`
   和 `search_pg_tasks`，由 Alembic 安装所需扩展及 GIN 索引。回执与重建记录的
   后端字段保存命令归属，数据库默认值将旧镜像写入标记为 `meilisearch`。
@@ -60,7 +61,8 @@ auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒
   SearchService 的执行路径中分离。
 - `search_work_page.py` 持有可复用的作品页资产查询语句，每次请求绑定自己的作品 ID；
   多个来源关联同一资产时只计数一次，按顺序返回的预览 ID 保持每个作品最多 10 个。
-  单索引文本搜索在一次执行中复用同一个 Meilisearch 客户端。
+  文本查询在同一个 PostgreSQL 语句中取得精确总数与分页结果，明确排序后以实体 ID 打破同值；
+  授权仍使用当前数据库中的成员关系和可见性。
 - `api/media.py` 用一次查询取得请求资产、代表资产和最终存储状态，保留原有鉴权、
   签名 URL、ETag/304、隔离文件读取及已清除文件拒绝行为。
 - `import_runner.py` 处理作品微批，`import_execution.py` 管理领取、租约与完成流程。
@@ -432,7 +434,7 @@ Bearer 凭证携带不可复用的用户主键 `uid` 和凭证版本 `cv`；用�
 后端通过 `backend/api_entrypoint.py` 启动，由 Uvicorn 原生 supervisor 管理进程。
 `API_WORKER_CONCURRENCY` 默认 1，允许 1～4。launcher 在导入应用前分配单个 backend 容器的 API 总预算：
 数据库总预算为稳定连接 8 加临时溢出 4，按进程数向下分配（`1 = 8 + 4`、
-`2 = 4 + 2`、`4 = 2 + 1`）；Meilisearch 搜索总并发为 4，按进程向下分配且每进程至少 1。
+`2 = 4 + 2`、`4 = 2 + 1`）；搜索总并发为 4（保留 `MEILI_SEARCH_CONCURRENCY` 配置名），按进程向下分配且每进程至少 1。
 直接使用多进程 Uvicorn 会绕过这套分配，不属于正式部署方式。
 
 `API_THREAD_POOL_SIZE` 默认是 backend 容器总计 16 个阻塞线程名额，按进程数向下分配为 1 = 16、2 = 8、4 = 4。该上限分别应用于 asyncio 默认线程池和 AnyIO 线程 limiter；两者是独立线程池，16 不是两者合计的线程上限。API1 虽然跳过 Redis 租约，仍应用 16 个线程名额。
@@ -505,7 +507,7 @@ NAS 主机路径仅在 `docker-compose.yaml` 中映射。
 ├── docker/                             # 持久化卷
 │   ├── postgres/                       # PostgreSQL 数据
 │   ├── redis/                          # Redis 数据
-│   └── meilisearch/                    # Meilisearch 数据
+│   └── meilisearch/                    # 旧版本回退数据；正常运行不使用
 │
 └── backup/                             # 备份
     ├── db/                             # PostgreSQL 转储
@@ -640,7 +642,7 @@ HTTP purge 从资产资格查询、用量释放到文件删除、提交和结果
 - `POST /clear/{entity}` — 清除指定实体类型的所有记录（`jobs`/`all` 同时清除 `task_runs`）
 - `GET /dedup` / `PUT /dedup` — 去重设置
 - `GET /merge-candidates` — 已废弃的兼容别名，返回待审核图片资产候选；新客户端使用 `/api/v1/admin/dedup/cases`
-- `POST /reindex` — 触发 Meilisearch 全量重建索引
+- `POST /reindex` — 从业务数据触发 PostgreSQL 全量重建索引
 
 ### `/api/v1/creators`
 创作者 CRUD、计数、时间线、重复检测、合并、收藏、来源账号绑定、创作者链接。
@@ -739,7 +741,14 @@ HTTP purge 从资产资格查询、用量释放到文件删除、提交和结果
 - `POST /merge` — 合并两个标签
 
 ### `/api/v1/search`
-统一复合搜索：图库实体由 Meilisearch 执行，运维集合由 SQL 执行。
+
+尚未完成归集的作品上写入会等待，删除和其他实体不会被全局阻塞。资源内存保护、队列优先级、文件锁及定时恢复继续生效。
+搜索文档批次与其 PostgreSQL 命令记录在同一数据库事务中提交，投递回执／outbox 的确认仍使用现有租约与标记恢复协议，
+不与文档写入合并为一个事务。全量重建写入独立存储代次，再原子切换逻辑索引；旧命令记录按有界批次清理，未完成回执引用的记录保留。
+
+统一复合搜索：图库文本查询使用 PostgreSQL 搜索文档，运维集合和结构化作品列表直接查询业务表。
+查询做 NFKC／大小写规范化并把下划线视为词边界；非数字词支持前缀、按词长限制的拼写距离及相邻字母交换，
+纯数字词精确匹配，中文和日文支持片段匹配。这些规则不追求复刻旧引擎的所有模糊命中。
 
 端点包括：
 - `GET /` — 分组搜索作品、创作者、标签、仓库、订阅、任务或调度决策

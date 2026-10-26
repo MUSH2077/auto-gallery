@@ -8,6 +8,7 @@ x-build-metadata: &build-metadata
   BUILD_REVISION: ${BUILD_REVISION:-development}
 
 x-application-env: &application-env
+  SEARCH_BACKEND: postgresql
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
   REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
   MEILI_URL: http://meilisearch:7700
@@ -135,6 +136,7 @@ services:
     logging: *default-logging
 
   meilisearch:
+    profiles: [legacy-search]
     image: getmeili/meilisearch:v1.54.3@sha256:e68913ab7d6f5b159529e472cfd362ce3c741fafd3c127961b2142abbe41b3c9
     environment:
       <<: *build-metadata

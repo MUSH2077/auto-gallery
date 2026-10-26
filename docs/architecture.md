@@ -32,7 +32,7 @@ auto-gallery is a layered Docker Compose application that downloads media from m
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  Data Layer                                      │
-│  PostgreSQL ── Redis ── Meilisearch              │
+│  PostgreSQL ── Redis                            │
 │  ┌──────────┐ ┌──────┐ ┌─────────────┐          │
 │  │ /downloads│ │/lib │ │ /gallerydl  │          │
 │  │           │ │rary │ │ -config     │          │
@@ -42,22 +42,20 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 
 ## Maintained Module Boundaries
 
-- `SearchService` remains the backend search interface.
-  `search_language.py` parses queries; `search_pagination.py` owns stable
-  cursors and sort rules; `search_filters.py` compiles Meilisearch filters;
-  `search_projection_fields.py` builds deterministic index fields.
-  `search_index_definitions.py` owns index identities/settings and
-  `search_projection.py` owns document hydration and the shared projection
-  registry consumed by incremental delivery and rebuild. `SearchService`
-  retains compatibility methods while query execution uses the existing SQL
-  and Meilisearch adapters. `subscription_schedule.py` owns pure calendar and
-  interval policy; scheduler search and the dashboard use `scheduler_decisions.py`
-  for the same source eligibility and credential-blocking interpretation.
-  Deployments and search CI pin Meilisearch 1.54.3, which includes upstream
-  allocation and document-operation cleanup fixes. Application projections,
-  durable delivery receipts and rebuilds define index consistency. See
-  [search-engine upgrades](deployment-profiles.md#meilisearch-upgrades--搜索服务升级)
-  for migrating existing indexes and restoring the previous version.
+- `SearchService` remains the search interface. `search_language.py` parses queries;
+  `search_pagination.py` owns stable cursors and sorting; `search_filters.py` builds
+  internal filter expressions and `search_projection_fields.py` builds index fields.
+  `postgres_search_query.py` executes library text searches in PostgreSQL;
+  `postgres_search_store.py` owns documents, logical indexes and bounded writes;
+  `postgres_search_client.py` bridges existing synchronous callers to async database work.
+  Normal operation neither starts nor calls Meilisearch; `SEARCH_BACKEND` is `postgresql`.
+  `search_index_definitions.py` defines indexes and `search_projection.py` hydrates
+  documents for incremental delivery and full rebuilds. Alembic creates the tables
+  and `pg_trgm`/`fuzzystrmatch` extensions; requests do not run schema DDL.
+  Receipts and rebuilds retain backend ownership and cannot be claimed across backends.
+  See [deployment configuration](deployment-profiles.md#postgresql-search--postgresql-搜索)
+  for cutover, rebuild and rollback. `subscription_schedule.py` owns calendar policy;
+  scheduler search and the dashboard share `scheduler_decisions.py` eligibility rules.
 - `models/postgres_search.py` defines `search_pg_indexes`, `search_pg_documents`
   and `search_pg_tasks`. Alembic installs their PostgreSQL extensions and GIN
   indexes. Receipt/rebuild backend columns preserve command origin; their database
@@ -67,8 +65,8 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 - `search_work_page.py` owns the reusable SQLAlchemy statement for page asset
   hydration. Each request binds its own work IDs; assets shared by several
   source links are counted once, and ordered preview IDs remain bounded to ten
-  per work. Single-index text searches reuse one Meilisearch client for that
-  execution.
+  per work. Text queries obtain exact totals and pages in one PostgreSQL statement,
+  with entity ID as the final sort tie-breaker. Authorization uses current database memberships and visibility.
 - `api/media.py` resolves the requested asset, its representative and the final
   storage state with one query. Authentication, signed URLs, ETag/304 responses,
   quarantined-file handling and purged-file rejection retain their existing
@@ -520,7 +518,7 @@ native Uvicorn worker supervisor. `API_WORKER_CONCURRENCY` defaults to one and
 accepts values from one through four. The launcher divides the total API
 budgets for one backend container before importing the application: the database budget is 8 steady plus
 4 overflow connections in total, divided per process by floor (`1 = 8 + 4`,
-`2 = 4 + 2`, `4 = 2 + 1`), and the total Meilisearch search concurrency is 4,
+`2 = 4 + 2`, `4 = 2 + 1`), and the total search concurrency is 4 (retaining the `MEILI_SEARCH_CONCURRENCY` configuration name),
 divided per process with a minimum of one. Direct multi-worker Uvicorn startup
 bypasses this allocation and is not a supported deployment path.
 
@@ -597,7 +595,7 @@ NAS host paths are mapped in `docker-compose.yaml` only.
 ├── docker/                             # Persistent volumes
 │   ├── postgres/                       # PostgreSQL data
 │   ├── redis/                          # Redis data
-│   └── meilisearch/                    # Meilisearch data
+│   └── meilisearch/                    # Legacy rollback data; inactive in normal operation
 │
 └── backup/                             # Backups
     ├── db/                             # PostgreSQL dumps
@@ -769,7 +767,7 @@ Endpoints include:
 - `POST /clear/{entity}` — clear all records of a given entity type (`jobs`/`all` also clear `task_runs`)
 - `GET /dedup` / `PUT /dedup` — deduplication settings
 - `GET /merge-candidates` — deprecated compatibility alias returning pending asset-reconciliation cases; new clients use `/api/v1/admin/dedup/cases`
-- `POST /reindex` — trigger full Meilisearch reindex
+- `POST /reindex` — trigger a PostgreSQL index rebuild from authoritative rows
 
 ### `/api/v1/creators`
 Creator CRUD, count, timeline, duplicate detection, merge, favorite, source-account binding, creator links.
@@ -868,8 +866,22 @@ Endpoints include:
 - `POST /merge` — merge two tags into one
 
 ### `/api/v1/search`
-Canonical compound search across Meilisearch-backed library entities and
-SQL-backed operational collections.
+
+Work upserts wait
+for their own curation; deletes and other entity indexes are not globally blocked.
+Memory protection, queue priorities, file locks and periodic recovery remain in force.
+A document batch and its PostgreSQL command record commit together. Receipt/outbox
+acknowledgement still uses the existing lease and marker recovery protocol in a
+separate transaction. Full rebuilds populate an independent storage generation and
+atomically swap logical indexes. Command retention is bounded and protects records
+referenced by unfinished receipts.
+
+Canonical compound search uses PostgreSQL search documents for library text and
+business tables for operational collections and structured work lists. Text uses
+NFKC/case normalization and underscore word boundaries; nonnumeric words support
+prefixes, length-bounded spelling distance and adjacent transpositions. Numeric
+tokens match exactly; Chinese/Japanese text supports substring matching. These rules do not
+attempt to reproduce every fuzzy hit of the former engine.
 
 Endpoints include:
 - `GET /` — grouped works, creators, tags, repositories, subscriptions, tasks, or scheduler decisions

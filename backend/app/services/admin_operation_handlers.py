@@ -1203,7 +1203,7 @@ async def _run_gitllery_sync_operation(job_id: str, options: dict) -> dict:
 
 
 def run_search_reindex_operation(job_id: str, options: dict | None = None) -> dict:
-    """Entry point for RQ workers — full Meilisearch reindex (works/creators/tags)."""
+    """Entry point for RQ workers — full PostgreSQL search reindex (works/creators/tags)."""
     # SearchService owns bounded search_index slices and takes maintenance only
     # for the atomic swap.  Wrapping the coordinator in the legacy operation
     # lock would otherwise serialize all 67k documents behind one long lease.

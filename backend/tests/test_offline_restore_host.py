@@ -44,6 +44,11 @@ with log.open("a", encoding="utf-8") as output:
 if os.environ.get("FAKE_COMPOSE_SLEEP") and "stop" in args:
     time.sleep(float(os.environ["FAKE_COMPOSE_SLEEP"]))
 joined = " ".join(args)
+if args == ["config", "--format", "json"]:
+    print(json.dumps({"services": {"backend": {"environment": {
+        "SEARCH_BACKEND": os.environ.get("FAKE_SEARCH_BACKEND", "meilisearch")
+    }}}}))
+    sys.exit(0)
 database_state = os.environ.get("FAKE_DATABASE_STATE")
 mutate_on = os.environ.get("FAKE_MUTATE_PATH_ON")
 if mutate_on and mutate_on in joined:
@@ -327,6 +332,21 @@ def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path)
     assert rolled_back.returncode == 0, rolled_back.stderr
     assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
     assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+
+
+@pytest.mark.parametrize("backend,legacy_service", [("postgresql", False), ("meilisearch", True)])
+def test_restore_and_compensation_start_only_the_selected_search_service(tmp_path, backend, legacy_service):
+    fixture = _fixture(tmp_path)
+    fixture["env"]["FAKE_SEARCH_BACKEND"] = backend
+    result = _run(fixture)
+    assert result.returncode == 0, result.stderr
+    starts = [command for command in _commands(fixture) if "up" in command and "backend" in command]
+    assert starts and all(("meilisearch" in command) == legacy_service for command in starts)
+    fixture["log"].write_text("")
+    result = _run_rollback(fixture)
+    assert result.returncode == 0, result.stderr
+    starts = [command for command in _commands(fixture) if "up" in command and "backend" in command]
+    assert starts and all(("meilisearch" in command) == legacy_service for command in starts)
 
 
 def test_host_rejects_ready_request_from_non_current_task_attempt(tmp_path):

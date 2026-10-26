@@ -1,18 +1,18 @@
-"""Tests for Meilisearch search service — unit tests that verify code structure."""
+"""Unified search behavior and native PostgreSQL projection consistency."""
 
 import inspect
 import os
 from types import SimpleNamespace
 
 import pytest
-from tests.test_search_delivery import delivery  # noqa: F401
+from tests.test_search_delivery import controlled_search_store, delivery  # noqa: F401
 
 
 class TestSearchService:
     def test_module_imports(self):
-        """Search service uses meilisearch_python_sdk."""
-        from app.services.search import SearchService, MeiliClient
-        assert MeiliClient is not None
+        """Search service exposes the native PostgreSQL port."""
+        from app.services.search import SearchService, PGClient
+        assert PGClient is not None
 
     def test_index_settings_defined(self):
         """Index settings are defined for every projection."""
@@ -456,7 +456,7 @@ class TestSearchService:
         monkeypatch.setattr(service, "_exact_creator_aliases_for_value", no_aliases)
         monkeypatch.setattr(service, "_exact_creator_aliases", no_aliases)
         monkeypatch.setattr(service, "_resolve_qualifiers", no_resolutions)
-        monkeypatch.setattr(service, "_hedged_structured_works_search", random_page)
+        monkeypatch.setattr(service, "_structured_works_search", random_page)
 
         generated = await service.search("sort:random", scope="works")
         supplied = await service.search("sort:random", scope="works", seed=17)
@@ -498,27 +498,17 @@ class TestSearchService:
         assert seen["cursor"] is None
 
     @pytest.mark.asyncio
-    async def test_single_index_search_constructs_one_meili_client(self, monkeypatch):
+    async def test_single_index_search_uses_one_native_batch(self, monkeypatch):
         from app.services import search
         from app.services.search import SearchService
         from app.services.search_language import parse_search_query
 
-        class Index:
-            def search(self, _text, **_kwargs):
-                return SimpleNamespace(hits=[], estimated_total_hits=0)
-
-        class Client:
-            def index(self, _uid):
-                return Index()
-
-        created = []
-
-        def make_client(**_kwargs):
-            client = Client()
-            created.append(client)
-            return client
-
-        monkeypatch.setattr(search, "_client", make_client)
+        from app.services import postgres_search_query
+        calls = []
+        async def batch(db, prepared, text):
+            calls.append((db, prepared, text))
+            return [SimpleNamespace(hits=[], estimated_total_hits=0, total_hits=0)]
+        monkeypatch.setattr(postgres_search_query, "multi_search", batch)
         service = SearchService(SimpleNamespace())
         result = await service._search_meili(
             parse_search_query("landscape", "works"),
@@ -530,7 +520,8 @@ class TestSearchService:
         )
 
         assert result["works"]["items"] == []
-        assert len(created) == 1
+        assert len(calls) == 1
+        assert calls[0][0] is service.db
 
     @pytest.mark.asyncio
     async def test_meili_random_page_wraps_ring_and_emits_bound_cursor(self, monkeypatch):
@@ -614,17 +605,12 @@ async def test_reindex_removes_orphans_and_projection_audit_is_clean(delivery):
         _wait_for_task,
     )
 
-    client = _client()
-    try:
-        _ensure_indexes(client)
-    except Exception as exc:
-        pytest.skip(f"Meilisearch unavailable: {exc}")
-
+    from app.services import postgres_search_store as store
+    from app.services.search_index_definitions import INDEX_SETTINGS
+    for uid, config in INDEX_SETTINGS.items():
+        await store._settings(uid, "PATCH", config)
     orphan_id = "00000000-0000-0000-0000-000000000001"
-    _wait_for_task(
-        client,
-        client.index(WORKS_INDEX).add_documents([{"id": orphan_id, "title": "orphan"}]),
-    )
+    await store._write_documents(WORKS_INDEX, [{"id": orphan_id, "title": "orphan"}])
 
     async with async_session() as db:
         service = SearchService(db)

@@ -4,7 +4,7 @@ The counters are process-local and context-scoped.  They add no database
 writes: one structured log record is emitted when a stage ends, while global
 SQLAlchemy hooks merely increment integers when a measured context is active.
 ``asyncio.to_thread`` copies context variables, so libvips/ffmpeg orchestration
-and Meilisearch SDK calls remain attributed to their initiating micro-batch.
+and bounded search calls remain attributed to their initiating micro-batch.
 """
 
 from __future__ import annotations

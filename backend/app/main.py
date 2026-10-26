@@ -601,7 +601,7 @@ app.include_router(create_api_docs_router(app))
 
 
 async def _service_readiness() -> dict[str, str]:
-    services = {"postgres": "unknown", "redis": "unknown", "meilisearch": "unknown"}
+    services = {"postgres": "unknown", "redis": "unknown", "search": "unknown"}
 
     try:
         async with async_session() as session:
@@ -619,15 +619,11 @@ async def _service_readiness() -> dict[str, str]:
         services["redis"] = "down"
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{settings.meili_url.rstrip('/')}/health",
-                headers={"Authorization": f"Bearer {settings.meili_master_key}"},
-                timeout=2,
-            )
-        services["meilisearch"] = "up" if resp.status_code == 200 else "down"
+        from app.services.search_backend import postgres_search_ready
+        async with async_session() as db:
+            services["search"] = "up" if await postgres_search_ready(db) else "down"
     except Exception:
-        services["meilisearch"] = "down"
+        services["search"] = "down"
 
     return services
 
@@ -884,7 +880,7 @@ def _starting_health_snapshot() -> dict:
         "services": {
             "postgres": "unknown",
             "redis": "unknown",
-            "meilisearch": "unknown",
+            "search": "unknown",
         },
         "disk": "unknown",
         "business": {

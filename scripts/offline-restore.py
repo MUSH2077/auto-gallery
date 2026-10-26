@@ -419,6 +419,13 @@ class RestoreRunner:
     def _save_journal(self) -> None:
         atomic_json(self.journal_path, self.journal)
 
+    def foreground_services(self) -> tuple[str, ...]:
+        """Restore old images with their old service; native PG needs no sidecar."""
+        config = json.loads(self.compose("config", "--format", "json").stdout)
+        environment = config["services"]["backend"].get("environment") or {}
+        return tuple(name for name in FOREGROUND
+                     if name != "meilisearch" or environment.get("SEARCH_BACKEND") != "postgresql")
+
     def compose(
         self,
         *args: str,
@@ -1699,7 +1706,7 @@ END
 
     def restart_foreground(self) -> None:
         self.enter("restart_foreground")
-        self.compose("up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND)
+        self.compose("up", "-d", "--wait", "--wait-timeout", "180", *self.foreground_services())
 
     def restart_background(self) -> None:
         self.enter("restart_background")
@@ -1817,7 +1824,7 @@ END
         attempt(
             "foreground",
             lambda: self.compose(
-                "up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND
+                "up", "-d", "--wait", "--wait-timeout", "180", *self.foreground_services()
             ),
         )
         return outcomes

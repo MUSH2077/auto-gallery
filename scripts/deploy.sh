@@ -610,7 +610,7 @@ all_services_ready() {
     local services=("$@")
 
     if [[ ${#services[@]} -eq 0 ]]; then
-        services=(postgres redis meilisearch backend admin-web)
+        services=(postgres redis backend admin-web)
     fi
 
     for service in "${services[@]}"; do
@@ -755,8 +755,14 @@ compose stop -t 120 admin-web backend
 backup_frozen_state
 [[ "$BACKUP_READY" -eq 1 && -f "$ROLLBACK_DIR/snapshot.complete" ]]
 echo -e "${YELLOW}[5/7] Keeping stateful services and replacing application containers...${NC}"
-compose up -d --no-build --wait --wait-timeout 180 postgres redis meilisearch
+compose up -d --no-build --wait --wait-timeout 180 postgres redis
 compose up --force-recreate --no-deps --no-build migrate
+# The backend cutover is a cross-system boundary: unfinished old receipts must
+# be drained by the old version, never silently acknowledged by PG.
+compose run --rm --no-deps backend python -m app.services.search_migration --rebuild-if-needed
+# Profiles do not stop an already-running container from the prior version.
+# Keep its files and rollback definition, but remove its normal resident cost.
+compose stop -t 60 meilisearch
 COMPOSE_PARALLEL_LIMIT=1 compose up -d --force-recreate --no-deps --no-build \
     backend admin-web
 compose stop -t 60 worker-download worker-import worker-operations worker-discovery scheduler >/dev/null 2>&1 || true

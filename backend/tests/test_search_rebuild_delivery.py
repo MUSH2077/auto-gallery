@@ -10,7 +10,7 @@ from app.database import async_session
 from app.models.tag import Tag
 from app.services.search import TAGS_INDEX
 from app.services.search_projection_outbox import request_search_projection
-from tests.test_search_delivery import delivery, ready_receipt  # noqa: F401
+from tests.test_search_delivery import controlled_search_store, delivery, ready_receipt  # noqa: F401
 
 
 class Meili:
@@ -229,7 +229,7 @@ async def test_swap_acknowledges_only_replayed_versions_after_crash(delivery, mo
 
 
 @pytest.mark.asyncio
-async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
+async def test_real_pg_rebuild_finishes_through_delayed_steps(delivery):
     import asyncio
     from app.services import search_rebuild
     from app.config import settings
@@ -240,17 +240,16 @@ async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
     started = await search_rebuild.start_rebuild((TAGS_INDEX,))
     async with httpx.AsyncClient() as client:
         for _ in range(100):
-            await delivery.run_delivery_slice(client=client)
+            await delivery.run_delivery_slice()
             status = await search_rebuild.rebuild_status(started["build_id"])
             if status["status"] != "pending":
                 break
             await ready_receipt()
             await asyncio.sleep(.05)
         assert status["status"] == "ok", status
-        response = await client.get(f"{settings.meili_url}/indexes/{TAGS_INDEX}/documents/{identity}",
-                                    headers={"Authorization": f"Bearer {settings.meili_master_key}"})
-        assert response.status_code == 200
-        assert response.json()["normalized_name"] == f"real-rebuild-{identity}"
+        async with async_session() as db:
+            value = await db.scalar(text("SELECT d.document FROM search_pg_documents d JOIN search_pg_indexes i USING(storage_id) WHERE i.uid=:uid AND d.entity_id=:id"), {"uid":TAGS_INDEX,"id":str(identity)})
+        assert value["normalized_name"] == f"real-rebuild-{identity}"
     async with async_session() as db:
         await db.execute(text("DELETE FROM tags WHERE id=:id"), {"id": identity})
         await db.commit()
@@ -430,7 +429,7 @@ def test_rebuild_prepared_receipt_has_execution_lease():
     from app.models.search_rebuild import SearchRebuild
     from app.services.search_rebuild import _receipt
     from app.services.search_delivery import now
-    receipt = _receipt(SearchRebuild(id=uuid4(), phase="build"), TAGS_INDEX, "upsert", [], {})
+    receipt = _receipt(SearchRebuild(backend="postgresql", id=uuid4(), phase="build"), TAGS_INDEX, "upsert", [], {})
     assert receipt.lease_token
     assert receipt.lease_until is not None
     assert 29 <= (receipt.lease_until - now()).total_seconds() <= 30

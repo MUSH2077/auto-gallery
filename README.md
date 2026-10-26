@@ -29,7 +29,7 @@ curation history, and gallery-dl configuration.
   an observable, independently scheduled repository with jobs, tags, works,
   health, and history.
 - **Original media preservation.** Downloads remain the source of truth while
-  PostgreSQL, thumbnails, and Meilisearch provide a browsable library index.
+  PostgreSQL search documents and thumbnails provide a browsable library index.
 - **Durable operations.** Download, import, recovery, backup, and maintenance
   work run in isolated workers with queue, scheduler, health, and storage
   visibility.
@@ -128,7 +128,7 @@ Sources
       -> import and asset processing
         -> Library Index (metadata + thumbnails)
         -> PostgreSQL canonical data
-        -> Meilisearch full-text index
+        -> PostgreSQL search documents
         -> Next.js admin web
 ```
 

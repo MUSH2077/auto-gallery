@@ -10,7 +10,7 @@ from sqlalchemy import and_, func, literal_column, not_, or_, select
 
 from app.models import (
     Asset, AssetSource, SourceCreator, SubscriptionSource, Tag, Work,
-    WorkCurationState, WorkSource, WorkSourceTag, WorkTag,
+    WorkCurationState, WorkSource, WorkSourceTag, WorkTag, ImportCurationOutbox,
 )
 from app.services.search_filters import (
     _date_bounds, _grouped_qualifiers, _resolved_source_url, _resolved_value,
@@ -87,7 +87,15 @@ def _work_visibility_expressions():
         WorkCurationState.work_id == Work.id,
         WorkCurationState.visibility == literal_column("'trashed'"),
     ).exists()
-    return not_(non_visible), trashed
+    pending_curation = select(ImportCurationOutbox.id).where(
+        ImportCurationOutbox.work_id == Work.id,
+        ImportCurationOutbox.state != "complete",
+    ).exists()
+    # Pending/failed import curation is not yet an authoritative visibility
+    # state. Exclude it from both visible and trashed SQL projections.
+    return and_(not_(non_visible), not_(pending_curation)), and_(
+        trashed, not_(pending_curation)
+    )
 
 
 

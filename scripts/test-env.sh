@@ -240,7 +240,7 @@ seed_snapshot() {
 run_tests_inner() {
   load_state
   [[ -f "$TEST_ROOT/seed.pass" ]] || { echo "Acceptance data has not been seeded" >&2; exit 2; }
-  compose up -d postgres redis meilisearch migrate
+  compose up -d postgres redis migrate
   compose run --rm --no-deps backend ruff check app tests scripts worker_entrypoint.py seed_sync.py
   python3 scripts/check-governance-contracts.py
   compose run --rm --no-deps backend python -m pytest -q

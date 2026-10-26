@@ -382,7 +382,7 @@ async def list_active_operations(user=RequirePermission("system")):
 
 @router.post("/search/reindex", status_code=202)
 async def reindex_search():
-    """Enqueue a full Meilisearch reindex — a whole-library walk that belongs
+    """Enqueue a full PostgreSQL search reindex — a whole-library walk that belongs
     in a worker, not inline in the backend process."""
     from app.services.operations import enqueue_admin_operation
     return await enqueue_admin_operation(

@@ -648,6 +648,13 @@ async def _project(payload: dict[str, Any]) -> UUID | None:
                 dedupe_key=f"import-batch:{payload['batch_key']}",
             )
             commit_id = commit.id
+            # Curation changes SQL list/count visibility. Invalidate the Redis
+            # works-generation cache in this transaction; the existing import
+            # search intent/version remains authoritative for projection.
+            from app.services.search_projection_outbox import mark_works_generation_pending
+            from app.services.outbox_coordinator import mark_outbox_wake_pending
+            mark_works_generation_pending(db)
+            mark_outbox_wake_pending(db, "search")
         for row in rows:
             row.state = "complete"
             row.curation_commit_id = commit_id

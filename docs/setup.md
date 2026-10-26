@@ -183,7 +183,7 @@ HOST_MEILISEARCH=/volume1/auto-gallery/docker/meilisearch
 docker compose up -d
 ```
 
-This starts all services: postgres, redis, meilisearch, the one-shot `migrate`
+This starts all services: postgres, redis, the one-shot `migrate`
 service, backend, worker-download (per-source queues), worker-import (the single
 durable RQ import pipeline), worker-operations, scheduler, and admin-web. The
 backend and workers wait for `migrate` to complete successfully; they do not run
@@ -199,7 +199,7 @@ docker compose ps
 If you need to start only the infrastructure services for local development:
 
 ```bash
-docker compose up -d postgres redis meilisearch
+docker compose up -d postgres redis
 ```
 
 **Tip:** `bash scripts/deploy.sh` builds source-digest candidates and ignores
@@ -216,7 +216,7 @@ bash scripts/debug.sh quick
 curl http://localhost:8818/api/v1/system/health
 
 # Expected response:
-# {"status":"ok","services":{"postgres":"up","redis":"up","meilisearch":"up"}}
+# {"status":"ok","services":{"postgres":"up","redis":"up","search":"up"}}
 ```
 
 Admin web is available at `http://<host-ip>:13000`.
@@ -297,5 +297,8 @@ PostgreSQL may not be ready when backend starts. Docker Compose `depends_on` wit
 ### Permission denied on volumes
 Ensure the Docker user (usually uid 1000) has write access to the host directories. On Synology NAS, you may need to set permissions via the DSM File Station.
 
-### Meilisearch master key mismatch
-The `MEILI_MASTER_KEY` in `.env` must match the `MEILI_MASTER_KEY` used by the backend. If you change it after Meilisearch has started, delete the `docker/meilisearch/` data directory and restart.
+### PostgreSQL search migration
+
+Normal operation uses PostgreSQL search, and does not require a Meilisearch service.
+For an existing installation, follow the [cutover and rollback procedure](deployment-profiles.md#postgresql-search--postgresql-搜索).
+Keep old engine data until the new deployment is accepted; do not delete it to resolve a readiness failure.

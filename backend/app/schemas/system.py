@@ -4,7 +4,7 @@ from pydantic import BaseModel
 class ServiceStatus(BaseModel):
     postgres: str = "unknown"
     redis: str = "unknown"
-    meilisearch: str = "unknown"
+    search: str = "unknown"
 
     model_config = {"from_attributes": True}
 

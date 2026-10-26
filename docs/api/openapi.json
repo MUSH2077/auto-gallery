@@ -19052,7 +19052,7 @@
     },
     "/api/v1/admin/search/reindex": {
       "post": {
-        "description": "Enqueue a full Meilisearch reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
+        "description": "Enqueue a full PostgreSQL search reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
         "operationId": "post_api_v1_admin_search_reindex",
         "responses": {
           "202": {
@@ -32337,7 +32337,7 @@
     },
     "/api/v1/system/reindex-works": {
       "post": {
-        "description": "Queue a full Meilisearch rebuild on the protected import worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
+        "description": "Queue a full PostgreSQL search rebuild on the protected worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
         "operationId": "post_api_v1_system_reindex_works",
         "responses": {
           "202": {

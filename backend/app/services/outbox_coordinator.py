@@ -14,7 +14,8 @@ from time import monotonic
 from redis.exceptions import TimeoutError as RedisTimeoutError, WatchError
 from sqlalchemy.exc import SQLAlchemyError
 from rq import Queue
-from sqlalchemy import and_, case, delete, event, exists, func, literal, or_, select, tuple_, union_all
+from sqlalchemy import and_, cast, case, delete, event, exists, func, literal, or_, select, tuple_, union_all
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
@@ -201,7 +202,18 @@ def _search_ready(now: datetime):
     from app.models.search_rebuild import SearchRebuild
     from app.services.search_delivery import checkpoint_due_condition
     from app.services.search_rebuild import membership_bootstrap_due_condition
+    from app.services.search_index_definitions import WORKS_INDEX
 
+    search_curation_ready = or_(
+        SearchProjectionOutbox.index_uid != WORKS_INDEX,
+        SearchProjectionOutbox.action == "delete",
+        ~exists().where(and_(
+            ImportCurationOutbox.work_id == cast(
+                SearchProjectionOutbox.entity_id, PG_UUID(as_uuid=True)
+            ),
+            ImportCurationOutbox.state != "complete",
+        )),
+    )
     active_delivery = exists().where(
         SearchDeliveryReceipt.state.not_in(("complete", "failed"))
     )
@@ -217,6 +229,7 @@ def _search_ready(now: datetime):
                     SearchProjectionOutbox.lease_until.is_(None),
                     SearchProjectionOutbox.lease_until <= now,
                 ),
+                search_curation_ready,
             ),
         ),
         and_(
@@ -531,14 +544,25 @@ def _next_outbox_deadline_statement(kind: str, now: datetime):
         from app.models.search_delivery_receipt import SearchDeliveryReceipt
         from app.models.search_rebuild import SearchRebuild
         from app.services.search_rebuild import membership_bootstrap_due_condition
+        from app.services.search_index_definitions import WORKS_INDEX
 
+        search_curation_ready = or_(
+            SearchProjectionOutbox.index_uid != WORKS_INDEX,
+            SearchProjectionOutbox.action == "delete",
+            ~exists().where(and_(
+                ImportCurationOutbox.work_id == cast(
+                    SearchProjectionOutbox.entity_id, PG_UUID(as_uuid=True)
+                ),
+                ImportCurationOutbox.state != "complete",
+            )),
+        )
         receipt = SearchDeliveryReceipt
         active_delivery = exists().where(receipt.state.not_in(("complete", "failed")))
         queries = [
             select(func.min(func.greatest(receipt.available_at, receipt.lease_until)).label("due"))
                 .where(receipt.state.not_in(("complete", "failed", "ambiguous"))),
             select(func.min(func.greatest(SearchProjectionOutbox.available_at, SearchProjectionOutbox.lease_until)).label("due"))
-                .where(~active_delivery, SearchProjectionOutbox.completed_at.is_(None)),
+                .where(~active_delivery, SearchProjectionOutbox.completed_at.is_(None), search_curation_ready),
             select(func.min(func.coalesce(SearchIndexState.last_verified_at + timedelta(seconds=30), now)).label("due"))
                 .where(~active_delivery, SearchIndexState.database_generation > SearchIndexState.indexed_generation,
                     ~exists().where(SearchProjectionOutbox.index_uid == SearchIndexState.index_uid,
@@ -1180,6 +1204,12 @@ async def cleanup_completed_outboxes(
         deleted_count = max(0, int(result.rowcount or 0))
         by_outbox[spec.model.__tablename__] = deleted_count
         remaining -= deleted_count
+    if remaining > 0:
+        from app.services.postgres_search_store import cleanup_tasks
+        cleaned = await cleanup_tasks(db, cutoff, limit=remaining)
+        if cleaned:
+            by_outbox["search_pg_tasks"] = cleaned
+        remaining -= cleaned
     deleted = cap - remaining
     if deleted:
         await db.commit()

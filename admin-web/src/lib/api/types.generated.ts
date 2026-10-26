@@ -1189,7 +1189,7 @@ export interface paths {
         put?: never;
         /**
          * Reindex Search
-         * @description Enqueue a full Meilisearch reindex — a whole-library walk that belongs
+         * @description Enqueue a full PostgreSQL search reindex — a whole-library walk that belongs
          *     in a worker, not inline in the backend process.
          */
         post: operations["post_api_v1_admin_search_reindex"];
@@ -4022,7 +4022,7 @@ export interface paths {
         put?: never;
         /**
          * Reindex Works
-         * @description Queue a full Meilisearch rebuild on the protected import worker.
+         * @description Queue a full PostgreSQL search rebuild on the protected worker.
          *
          *     This compatibility endpoint used to run the whole-library scan inside the
          *     backend request process, bypassing the NAS pressure and heavy-I/O gates.

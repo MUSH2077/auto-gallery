@@ -190,7 +190,7 @@ def _queue_stats_unavailable() -> dict:
 
 
 async def _quick_service_health(db: AsyncSession) -> dict:
-    services = {"backend": "up", "postgres": "unknown", "redis": "unknown", "meilisearch": "unknown", "gallery-dl": "unknown"}
+    services = {"backend": "up", "postgres": "unknown", "redis": "unknown", "search": "unknown", "gallery-dl": "unknown"}
     try:
         await db.execute(select(func.now()))
         services["postgres"] = "up"
@@ -202,12 +202,10 @@ async def _quick_service_health(db: AsyncSession) -> dict:
     except Exception:
         services["redis"] = "down"
     try:
-        def _check_meili() -> str:
-            with urllib.request.urlopen(f"{settings.meili_url.rstrip('/')}/health", timeout=2) as response:
-                return "up" if 200 <= response.status < 300 else "down"
-        services["meilisearch"] = await asyncio.to_thread(_check_meili)
+        from app.services.search_backend import postgres_search_ready
+        services["search"] = "up" if await postgres_search_ready(db) else "down"
     except Exception:
-        services["meilisearch"] = "down"
+        services["search"] = "down"
     services["gallery-dl"] = "up" if await asyncio.to_thread(shutil.which, "gallery-dl") else "missing"
     return services
 
@@ -682,7 +680,7 @@ async def clear_failed_jobs():
 
 @tasks_ops_router.post("/system/reindex-works", status_code=202)
 async def reindex_works():
-    """Queue a full Meilisearch rebuild on the protected import worker.
+    """Queue a full PostgreSQL search rebuild on the protected worker.
 
     This compatibility endpoint used to run the whole-library scan inside the
     backend request process, bypassing the NAS pressure and heavy-I/O gates.

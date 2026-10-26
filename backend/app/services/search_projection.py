@@ -12,13 +12,14 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable, Awaitable, Iterable
 from uuid import UUID
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models import (
     Asset, AssetSource, Creator, CreatorAlias, DownloadJob, SourceCreator,
     Subscription, SubscriptionSource, Tag, TaskRun, UserSubscription,
     UserSubscriptionSource, Work, WorkCurationState, WorkSource, WorkSourceTag, WorkTag,
+    ImportCurationOutbox,
 )
 from app.services.search_index_definitions import (
     WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX,
@@ -151,7 +152,10 @@ class SearchProjection:
 
         stmt = select(Work, WorkCurationState.visibility).outerjoin(
             WorkCurationState, WorkCurationState.work_id == Work.id,
-        )
+        ).where(~exists().where(and_(
+            ImportCurationOutbox.work_id == Work.id,
+            ImportCurationOutbox.state != "complete",
+        )))
         if work_ids is not None:
             ids = list(work_ids)
             if not ids:

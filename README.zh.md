@@ -23,7 +23,7 @@ NAS 和 Linux 主机。响应式管理工作台覆盖创作者、来源仓库、
 - **以创作者为中心。** 一个规范创作者可关联多个平台身份和来源仓库。
 - **仓库化同步。** 每个受支持的 gallery-dl 订阅 URL 都是可观测、可独立调度的仓库，
   拥有自己的任务、标签、作品、健康状态与历史。
-- **保留原始媒体。** 下载文件保持为事实来源，PostgreSQL、缩略图与 Meilisearch
+- **保留原始媒体。** 下载文件保持为事实来源，PostgreSQL 搜索文档与缩略图
   共同提供可浏览的媒体库索引。
 - **可靠后台任务。** 下载、导入、恢复、备份和维护在独立 worker 中执行，并提供队列、
   调度、健康和存储可见性。
@@ -113,7 +113,7 @@ Sources
       -> import and asset processing
         -> Library Index (metadata + thumbnails)
         -> PostgreSQL canonical data
-        -> Meilisearch full-text index
+        -> PostgreSQL search documents
         -> Next.js admin web
 ```
 

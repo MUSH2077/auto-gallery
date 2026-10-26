@@ -1,4 +1,4 @@
-"""Persistent consistency gates for PostgreSQL/Meilisearch hedged reads."""
+"""Persistent generation checks for database search projections."""
 
 from __future__ import annotations
 

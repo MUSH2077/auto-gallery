@@ -32,7 +32,7 @@ auto-gallery/
 
 当前 Docker Compose 服务：
 
-- `postgres`、`redis`、`meilisearch`
+- `postgres`、`redis`
 - `backend`
 - `worker-download`、`worker-import`、`worker-operations`、`worker-discovery`
 - `scheduler`
@@ -116,14 +116,14 @@ Compose 的 backend 使用 `backend/api_entrypoint.py`，由 Uvicorn 原生 supe
 ### 技术栈
 
 Python 3.12、FastAPI、SQLAlchemy 2.0 async、Alembic、PostgreSQL 16、
-Redis/RQ、Meilisearch 和 gallery-dl。
+Redis/RQ、PostgreSQL 搜索和 gallery-dl。
 
 ### 本地迭代
 
 先启动数据服务，再从虚拟环境运行 API：
 
 ```bash
-docker compose up -d postgres redis meilisearch
+docker compose up -d postgres redis
 
 cd backend
 python -m venv venv

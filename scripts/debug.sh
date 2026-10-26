@@ -12,7 +12,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONTAINERS=(backend worker-download worker-import worker-operations worker-discovery scheduler admin-web postgres redis meilisearch)
+CONTAINERS=(backend worker-download worker-import worker-operations worker-discovery scheduler admin-web postgres redis)
 OK=0; WARN=0; ERR=0
 
 header(){ echo -e "\n${BOLD}${CYAN}═══ $1 ═══${NC}"; }

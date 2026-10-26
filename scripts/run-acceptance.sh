@@ -67,7 +67,7 @@ performance() {
   load_state
   [[ -f "$TEST_ROOT/functional.pass" ]]
   [[ -s "$TEST_ROOT/reports/work-search-baseline.json" ]]
-  compose up -d postgres redis meilisearch migrate backend worker-import worker-operations
+  compose up -d postgres redis migrate backend worker-import worker-operations
   guardian performance load-soak docker compose --project-directory "$PROJECT_ROOT" -p "$TEST_PROJECT" \
     --env-file "$TEST_ENV" -f docker-compose.yaml -f docker-compose.test.yaml \
     run --rm --no-deps -v "$TEST_ROOT:/acceptance" backend \

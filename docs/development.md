@@ -32,7 +32,7 @@ auto-gallery/
 
 The live Docker Compose services are:
 
-- `postgres`, `redis`, and `meilisearch`
+- `postgres` and `redis`
 - `backend`
 - `worker-download`, `worker-import`, and `worker-operations`
 - `scheduler`
@@ -140,14 +140,14 @@ failures, cancellation and recovery without duplicate submission.
 ### Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2.0 async, Alembic, PostgreSQL 16, Redis/RQ,
-Meilisearch, and gallery-dl.
+PostgreSQL search, and gallery-dl.
 
 ### Local iteration
 
 Start data services, then run the API from a virtual environment:
 
 ```bash
-docker compose up -d postgres redis meilisearch
+docker compose up -d postgres redis
 
 cd backend
 python -m venv venv

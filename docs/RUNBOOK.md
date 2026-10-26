@@ -96,7 +96,7 @@ worker recovery gate.
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `GET /api/v1/system/ready` | No | Readiness: PostgreSQL + writable Redis required; Meilisearch is reported as degraded |
+| `GET /api/v1/system/ready` | No | Readiness: PostgreSQL + writable Redis required; search projection failure is reported as degraded |
 | `GET /api/v1/system/health` | No | Detailed services, disk, resource pressure, Redis, queue and worker health |
 | `GET /api/v1/system/health/disk` | Admin | Disk usage breakdown |
 | `GET /api/v1/system/workbench` | Admin | Full dashboard: queue stats, storage, proxy health |
@@ -124,7 +124,7 @@ docker compose run --rm backend python scripts/backfill_video_assets.py --apply
 |-----------|-------|----------|---------|
 | `postgres` | `pg_isready` | 5s | 5s |
 | `redis` | Redis `SET EX` + `DEL` write probe | 30s | 5s |
-| `meilisearch` | `wget /health` | 10s | 5s |
+| Search projection | PostgreSQL schema and backend ownership check | API readiness | — |
 | `backend` | `curl /api/v1/system/ready` | 30s | 10s |
 | `worker-download` | Supervisor heartbeat + gallery-dl exists | 30s | 10s |
 | `worker-import` | Supervisor heartbeat | 30s | 10s |
@@ -197,7 +197,7 @@ bash scripts/verify-runtime.sh
 
 Backend, workers, scheduler, and admin-web intentionally have no Docker hard
 memory/swap/CPU quota. They retain PID, OOM-score, restart, log, bounded-work,
-and adaptive controller protections. PostgreSQL, Redis, Meilisearch, and
+and adaptive controller protections. PostgreSQL, Redis, and
 `migrate` retain positive CPU/memory limits with container Swap disabled. Do
 not add an application hard quota to mask a leak; capture the health snapshot,
 container OOM/restart counters, and workload before a reviewed restart.

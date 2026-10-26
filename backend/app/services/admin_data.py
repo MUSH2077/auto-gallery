@@ -638,9 +638,9 @@ async def _clear_search_index(db: AsyncSession, entity: str) -> None:
 
         svc = SearchService(db)
         await svc.delete_all_works()
-        logger.info("Cleared Meilisearch indexes after %r clear", entity)
+        logger.info("Queued PostgreSQL search rebuild after %r clear", entity)
     except Exception:
-        logger.warning("Failed to clear Meilisearch after %r clear", entity, exc_info=True)
+        logger.warning("Failed to queue PostgreSQL search rebuild after %r clear", entity, exc_info=True)
 
 
 def _clear_files(paths: list[str]) -> dict:
