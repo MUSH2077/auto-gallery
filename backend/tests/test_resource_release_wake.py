@@ -145,7 +145,7 @@ def test_multiple_release_notifications_keep_one_rq_owner(waiting_work, monkeypa
     from app.services import outbox_coordinator
     monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes", waiting_work.real_wake)
     _defer(waiting_work, "import_projection")
-    queue = Queue("operations", connection=waiting_work.client)
+    queue = Queue("maintenance", connection=waiting_work.client)
     key = "outbox:wakeup:import_projection"
     assert not waiting_work.client.exists(key)
     job_id = None
@@ -191,3 +191,40 @@ def test_failed_release_notification_preserves_completed_job(waiting_work, monke
         raise ConnectionError("release notification unavailable")
     monkeypatch.setattr(outbox_coordinator, "wake_resource_deferred_outboxes", failed_notify)
     assert worker.execute_job(job, worker.queues[0]) == "domain-completed"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("curation_pending", [True, False])
+async def test_import_recovery_checks_the_pending_phase_lane(waiting_work, curation_pending):
+    import asyncio
+    import json
+    from sqlalchemy import select
+    from app.models import ImportCurationOutbox
+    from app.services import heavy_io, outbox_coordinator
+
+    w = waiting_work
+    state = "pending" if curation_pending else "complete"
+    due = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await w.db.execute(update(ImportCurationOutbox).values(
+        state=state, available_at=due, metadata_state="pending", metadata_available_at=due))
+    await w.db.commit()
+    w.published.clear()
+    _defer(w, "import_projection")
+    background = heavy_io.LocalHeavyIOLock(w.root.with_name("lane-background.lock"))
+    assert background.try_acquire()
+    token = heavy_io.RESOURCE_BACKGROUND_TOKEN_KEY
+    assert w.client.set(token, json.dumps({"owner":"phase-recovery-test", "workload":"image_derive",
+        "reserved_bytes":32 * 1024 ** 2}), nx=True)
+    try:
+        result = await asyncio.to_thread(outbox_coordinator.wake_resource_deferred_outboxes)
+        assert result["enqueued"] == int(curation_pending)
+        assert w.client.exists(token), "Recovery must preserve the active background reservation"
+        assert await w.db.scalar(select(ImportCurationOutbox.state)) == state
+        if curation_pending:
+            assert w.published[-1] == {"import_projection": 1}
+        else:
+            assert not w.published
+    finally:
+        w.client.delete(token)
+        background.release()

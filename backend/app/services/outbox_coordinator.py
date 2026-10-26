@@ -618,6 +618,24 @@ def _wake_after_empty_slice(kind: str) -> dict[str, int]:
     return {"enqueued": 0, "deferred": 0}
 
 
+async def _curation_projection_ready() -> bool:
+    """Inspect the database phase without opening the supervisor's shared pool."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    current = datetime.now(timezone.utc)
+    eligible = or_(
+        and_(ImportCurationOutbox.state.in_(("pending", "failed")), ImportCurationOutbox.available_at <= current),
+        and_(ImportCurationOutbox.state == "processing", ImportCurationOutbox.lease_expires_at < current),
+    )
+    engine = create_async_engine(settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options())
+    try:
+        async with AsyncSession(engine) as db:
+            return bool(await db.scalar(select(exists().where(eligible))))
+    finally:
+        await engine.dispose()
+
+
 async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[str]:
     """Check current admission without claiming work or opening parent pools."""
     from app.services.heavy_io import (
@@ -633,6 +651,7 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
     leases = collect_active_resource_leases(redis_client=redis_client)
     if leases.get("error"):
         return set()
+    curation_ready = "import_projection" in kinds and await _curation_projection_ready()
     reserved = int(leases.get("reserved_bytes") or 0)
     media_profiles = {"image_derive", "video_derive"}
     if "media" in kinds:
@@ -676,7 +695,7 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
                 if reserved + requested > capacity:
                     continue
             if kind != "media":
-                lock = local_lock_for_workload(profile, lane="background" if kind == "import_projection" else None)
+                lock = local_lock_for_workload(profile, lane=("ingest" if curation_ready else "background") if kind == "import_projection" else None)
                 if lock is not None:
                     try:
                         if not lock.try_acquire():
@@ -731,7 +750,7 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
                 return {"enqueued": 0, "deferred": 0}
             tokens = {(k.decode() if isinstance(k, bytes) else k): v for k, v in deferred.items()}
             kinds = set(tokens) & set(_SPECS)
-            if not kinds or redis.exists("lock:resource-budget:background", "lock:heavy-io") or read_marker():
+            if not kinds or redis.exists("lock:heavy-io") or read_marker() or (not ("import_projection" in kinds) and redis.exists("lock:resource-budget:background")):
                 return {"enqueued": 0, "deferred": 0}
             remaining = deadline - monotonic()
             if remaining <= 0:
@@ -1256,7 +1275,10 @@ def wake_pending_outboxes(
     duplicate queue during a long resource pause.
     """
     redis = get_redis()
-    queue = _AtomicOutboxQueue(name="operations", connection=redis)
+    queues = {
+        "operations": _AtomicOutboxQueue(name="operations", connection=redis),
+        "maintenance": _AtomicOutboxQueue(name="maintenance", connection=redis),
+    }
     enqueued = 0
     deferred = 0
     wake_slots = []
@@ -1282,6 +1304,7 @@ def wake_pending_outboxes(
             slots = range(limit)
         wake_slots.extend((kind, slot) for slot in slots)
     for kind, slot in wake_slots:
+        queue = queues["maintenance" if kind in ("import_projection", "search") else "operations"]
         wake_key = _wake_key(kind, slot)
         job_id = f"outbox-{kind}-{slot}-{time.time_ns()}"
         function, args = _SPECS[kind]

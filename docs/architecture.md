@@ -867,7 +867,10 @@ Endpoints include:
 
 ### `/api/v1/search`
 
-Work upserts wait
+Post-import curation and search coordination use the existing `maintenance` consumer;
+media and deduplication remain on `operations`. Curation first obtains import-database
+admission, commits domain curation and releases admission before waking search.
+File-metadata work then obtains background admission separately. Work upserts wait
 for their own curation; deletes and other entity indexes are not globally blocked.
 Memory protection, queue priorities, file locks and periodic recovery remain in force.
 A document batch and its PostgreSQL command record commit together. Receipt/outbox

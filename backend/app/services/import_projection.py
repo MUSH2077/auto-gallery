@@ -706,6 +706,8 @@ async def process_import_projection_outbox(
     *,
     limit: int = 25,
     max_seconds: float = 20.0,
+    projection_part: str = "all",
+    preferred_metadata_ids=None,
 ) -> dict[str, int | bool]:
     batches = 0
     works = 0
@@ -713,7 +715,10 @@ async def process_import_projection_outbox(
     metadata_batches = 0
     metadata_processed = 0
     metadata_failed = 0
+    if projection_part not in {"all", "curation", "metadata"}:
+        raise ValueError("Unknown import projection phase")
     claimed_units = 0
+    claimed_ids = []
     found_empty = False
     started = monotonic()
     bounded_limit = max(1, limit)
@@ -723,10 +728,11 @@ async def process_import_projection_outbox(
         and monotonic() - started < bounded_seconds
     ):
         remaining = min(25, bounded_limit - claimed_units)
-        payload = await _claim_batch(remaining)
+        payload = await _claim_batch(remaining) if projection_part != "metadata" else None
         metadata_payload: dict[str, Any] | None = None
         if payload is not None:
             claimed_units += len(payload["ids"])
+            claimed_ids.extend(payload["ids"])
             try:
                 await _project(payload)
             except ImportProjectionClaimLost:
@@ -749,12 +755,15 @@ async def process_import_projection_outbox(
             # Prefer the same works so a fresh import normally closes both
             # projections in one bounded coordinator slice.  Curation is
             # already committed here; a metadata failure cannot recreate it.
-            metadata_payload = await _claim_metadata_batch(
+            metadata_payload = (await _claim_metadata_batch(
                 len(payload["ids"]),
                 preferred_ids=payload["ids"],
-            )
+            )) if projection_part != "curation" else None
         else:
-            metadata_payload = await _claim_metadata_batch(remaining)
+            if projection_part == "curation":
+                found_empty = True
+                break
+            metadata_payload = await _claim_metadata_batch(remaining, preferred_ids=preferred_metadata_ids)
             if metadata_payload is None:
                 found_empty = True
                 break
@@ -783,6 +792,7 @@ async def process_import_projection_outbox(
     )
     return {
         "claimed": claimed_units,
+        "claimed_ids": claimed_ids,
         "batches": batches,
         "processed": works,
         "failed": failed,
