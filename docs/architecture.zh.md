@@ -4,6 +4,12 @@
 
 auto-gallery 是一个分层的 Docker Compose 应用，从多个来源下载媒体，将元数据导入规范的 PostgreSQL 数据库，并通过 FastAPI 后端和 Next.js 管理界面提供服务。
 
+## 后端镜像边界
+
+同一Dockerfile提供构建阶段、生产镜像和测试镜像。编译工具及libvips头文件用于构建pyvips的API扩展和Gitllery安装包，生产阶段只保留运行产物与运行库；测试目标在同一运行层补充开发依赖。正常Compose选择`production`，API、迁移、各worker及性能测量均使用该镜像。
+
+生产锁显式保留pHash／SSIM所需NumPy；ImageHash／SciPy／PyWavelets作为测试参考，pytest／Ruff／类型及覆盖率工具归开发锁。旧Meilisearch SDK已移除，迁移归属字段仍保留。运行所需libvips及图片编解码、FFmpeg、PostgreSQL16客户端、curl与证书继续提供。候选构建直接使用同一Dockerfile目标，依赖改动须在真实生产镜像验收，避免沿用旧基底依赖掩盖缺失组件。
+
 ## 分层图
 
 ```

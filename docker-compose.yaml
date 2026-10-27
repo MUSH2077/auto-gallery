@@ -193,6 +193,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: production
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         BUILD_REVISION: ${BUILD_REVISION:-development}

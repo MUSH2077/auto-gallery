@@ -4,6 +4,12 @@
 
 auto-gallery is a layered Docker Compose application that downloads media from multiple sources, imports metadata into a canonical PostgreSQL database, and serves it through a FastAPI backend and Next.js admin interface.
 
+## Backend Image Boundaries
+
+One Dockerfile provides a build stage, a production image and a test image. Build tools and libvips headers compile pyvips in API mode and package Gitllery; only runtime wheels and libraries enter production. The test target adds development dependencies on the same runtime layer. Normal Compose builds select `production`; API, migrations, workers and performance measurements use that image.
+
+The production lock retains NumPy for pHash/SSIM. ImageHash/SciPy/PyWavelets are test references, and pytest/Ruff/type/coverage tooling stays in the development lock. The retired Meilisearch SDK is absent; migration ownership fields remain. Runtime libvips/image codecs, FFmpeg, PostgreSQL 16 client tools, curl and certificates remain available. Candidate builds use these same Dockerfile targets, so dependency changes are tested in the resulting production image rather than hidden by an older base image.
+
 ## Layer Diagram
 
 ```

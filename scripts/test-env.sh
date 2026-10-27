@@ -57,6 +57,15 @@ compose() {
     --env-file "$TEST_ENV" -f "$BASE_COMPOSE" -f "$TEST_COMPOSE" "$@"
 }
 
+compose_test() {
+  local test_image
+  test_image="$(awk -F= '$1=="BACKEND_TEST_IMAGE" {print $2}' "$TEST_ENV")"
+  : "${test_image:?This acceptance run has no test image; run scripts/test-env.sh build}"
+  BACKEND_IMAGE="$test_image" compose run --rm --no-deps --no-build \
+    --volume "$PROJECT_ROOT:/workspace:ro" --workdir /workspace/backend \
+    --env PYTHONPATH=/workspace/backend backend "$@"
+}
+
 guardian_args() {
   printf '%s\n' --project "$TEST_PROJECT" --report "$TEST_ROOT/reports/guardian.jsonl"
   printf '%s\n' --policy build-functional
@@ -99,6 +108,7 @@ TEST_RUN_ID=$TEST_RUN_ID
 TEST_ROOT=$TEST_ROOT
 TEST_FIXTURES=$TEST_ROOT/fixtures
 BACKEND_IMAGE=auto-gallery-backend:candidate-$SOURCE_DIGEST
+BACKEND_TEST_IMAGE=auto-gallery-backend:test-$SOURCE_DIGEST
 ADMIN_IMAGE=auto-gallery-admin-web:candidate-$SOURCE_DIGEST
 POSTGRES_DB=autogallery
 POSTGRES_USER=autogallery
@@ -150,12 +160,10 @@ build_candidate() {
     fi
   done
   new_run
-  local backend_base="${BACKEND_CANDIDATE_BASE_IMAGE:-auto-gallery-backend:latest}"
-  docker image inspect "$backend_base" --format '{{.Id}}' >"$TEST_ROOT/backend-base-image-id.txt"
-  echo "Building immutable backend candidate $SOURCE_DIGEST"
-  guarded_logged backend-build scripts/build-thin-backend-candidate.sh \
-    "$backend_base" "auto-gallery-backend:candidate-$SOURCE_DIGEST" \
-    "$PROJECT_ROOT/backend" "$SOURCE_DIGEST" "$TEST_PROJECT"
+  echo "Building production and test backend targets $SOURCE_DIGEST"
+  guarded_logged backend-build scripts/build-backend-candidate.sh \
+    "$PROJECT_ROOT/backend" "auto-gallery-backend:candidate-$SOURCE_DIGEST" \
+    "auto-gallery-backend:test-$SOURCE_DIGEST" "$SOURCE_DIGEST" "$TEST_PROJECT"
   echo "Running frontend build and static checks in a no-swap bounded builder"
   guarded_logged frontend-build scripts/build-thin-admin-candidate.sh \
     "$PROJECT_ROOT/admin-web" "$SOURCE_DIGEST" "$TEST_PROJECT" \
@@ -241,9 +249,9 @@ run_tests_inner() {
   load_state
   [[ -f "$TEST_ROOT/seed.pass" ]] || { echo "Acceptance data has not been seeded" >&2; exit 2; }
   compose up -d postgres redis migrate
-  compose run --rm --no-deps backend ruff check app tests scripts worker_entrypoint.py seed_sync.py
+  compose_test ruff check app tests scripts worker_entrypoint.py seed_sync.py
   python3 scripts/check-governance-contracts.py
-  compose run --rm --no-deps backend python -m pytest -q
+  compose_test python -m pytest -q
   compose run --rm --no-deps backend python scripts/export_api_contracts.py --check
   compose up -d backend worker-download worker-import worker-operations worker-discovery scheduler admin-web provider-stub
   local attempt

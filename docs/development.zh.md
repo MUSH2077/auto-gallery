@@ -128,7 +128,7 @@ docker compose up -d postgres redis
 cd backend
 python -m venv venv
 source venv/bin/activate
-python -m pip install --require-hashes -r requirements.txt
+python -m pip install --require-hashes -r requirements-dev.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -140,12 +140,13 @@ Compose 映射的后端地址为 `http://localhost:8818`；本地 Uvicorn 默认
 容器路径最容易复现：
 
 ```bash
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  python -m pytest
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  ruff check app tests
+docker build --target test -t auto-gallery-backend:test ./backend
+BACKEND_IMAGE=auto-gallery-backend:test docker compose run --rm --no-deps \
+  --volume "$PWD:/workspace:ro" --workdir /workspace/backend \
+  --env PYTHONPATH=/workspace/backend backend python -m pytest
+BACKEND_IMAGE=auto-gallery-backend:test docker compose run --rm --no-deps \
+  --volume "$PWD:/workspace:ro" --workdir /workspace/backend \
+  --env PYTHONPATH=/workspace/backend backend ruff check app tests
 ```
 
 单文件测试可在 `pytest` 后追加路径。本地虚拟环境使用相同的 Python 命令，但不需要
@@ -153,15 +154,18 @@ docker compose run --rm -T --volume "$PWD/backend:/app" \
 
 ### 依赖
 
-`backend/requirements.txt` 由 `requirements.in` 通过 pip-tools 生成。
-gallery-dl 等 Provider 敏感依赖必须固定版本。
+`requirements.in`／`requirements.txt`只包含生产依赖；`requirements-dev.in`／`requirements-dev.txt`包含同版本生产依赖及pytest、Ruff、类型／覆盖率工具和pHash参考算法。`requirements-build.in`／`requirements-build.txt`只供构建pyvips原生API扩展及Gitllery安装包使用。NumPy是生产直接依赖；ImageHash／SciPy／PyWavelets只保留在开发环境，旧搜索SDK已移除。gallery-dl等Provider敏感依赖继续固定版本。
+
+本地开发安装开发锁；正常Compose构建默认选择`production`，测试使用同一Dockerfile的`test`目标。验收入口`scripts/build-backend-candidate.sh`构建生产与测试目标，不从旧镜像只替换源码。真实服务和性能测量使用生产目标。
 
 ```bash
 cd backend
 python -m pip install pip-tools
-pip-compile --allow-unsafe --generate-hashes \
-  --no-emit-index-url --no-strip-extras \
-  --output-file requirements.txt requirements.in
+for scope in '' '-dev' '-build'; do
+  pip-compile --allow-unsafe --generate-hashes \
+    --no-emit-index-url --no-strip-extras \
+    --output-file "requirements${scope}.txt" "requirements${scope}.in"
+done
 ```
 
 升级依赖后运行 Provider 测试和 Docker Compose smoke 路径。

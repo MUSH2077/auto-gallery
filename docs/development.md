@@ -152,7 +152,7 @@ docker compose up -d postgres redis
 cd backend
 python -m venv venv
 source venv/bin/activate
-python -m pip install --require-hashes -r requirements.txt
+python -m pip install --require-hashes -r requirements-dev.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -164,12 +164,13 @@ Uvicorn process uses `http://localhost:8000`.
 The container path is the most reproducible:
 
 ```bash
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  python -m pytest
-docker compose run --rm -T --volume "$PWD/backend:/app" \
-  -e PYTHONDONTWRITEBYTECODE=1 backend \
-  ruff check app tests
+docker build --target test -t auto-gallery-backend:test ./backend
+BACKEND_IMAGE=auto-gallery-backend:test docker compose run --rm --no-deps \
+  --volume "$PWD:/workspace:ro" --workdir /workspace/backend \
+  --env PYTHONPATH=/workspace/backend backend python -m pytest
+BACKEND_IMAGE=auto-gallery-backend:test docker compose run --rm --no-deps \
+  --volume "$PWD:/workspace:ro" --workdir /workspace/backend \
+  --env PYTHONPATH=/workspace/backend backend ruff check app tests
 ```
 
 For one test file, append its path after `pytest`. Local virtualenv runs use the
@@ -177,15 +178,18 @@ same commands without `docker compose run ... backend`.
 
 ### Dependencies
 
-`backend/requirements.txt` is generated from `requirements.in` with pip-tools.
-Keep provider-sensitive packages such as gallery-dl pinned.
+`requirements.in` / `requirements.txt` contain production dependencies. `requirements-dev.in` / `requirements-dev.txt` include the same production versions plus pytest, Ruff, typing/coverage tools and the pHash reference implementation. `requirements-build.in` / `requirements-build.txt` are only for compiling the pyvips native API extension and packaging Gitllery. NumPy is a direct production dependency; ImageHash/SciPy/PyWavelets remain development-only, and the retired search SDK is removed. Provider-sensitive packages such as gallery-dl stay pinned.
+
+Install the development lock for local development. Normal Compose builds select `production`; tests use the `test` target in the same Dockerfile. `scripts/build-backend-candidate.sh` builds both targets instead of layering source onto old dependencies. Services and performance measurements use the production target.
 
 ```bash
 cd backend
 python -m pip install pip-tools
-pip-compile --allow-unsafe --generate-hashes \
-  --no-emit-index-url --no-strip-extras \
-  --output-file requirements.txt requirements.in
+for scope in '' '-dev' '-build'; do
+  pip-compile --allow-unsafe --generate-hashes \
+    --no-emit-index-url --no-strip-extras \
+    --output-file "requirements${scope}.txt" "requirements${scope}.in"
+done
 ```
 
 Run provider tests and the Docker Compose smoke path after dependency updates.
