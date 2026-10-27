@@ -10,8 +10,9 @@ FROM deps AS builder
 ARG CACHEBUST=1
 COPY admin-web/ .
 # The generated client contract is checked against the repository's canonical
-# OpenAPI document. The root build context is intentional and remains small
-# through the repository .dockerignore.
+# OpenAPI document. The root build context stays small through the
+# Dockerfile-specific ignore rules; frontend prototypes, test artifacts, and local worktrees never
+# enter the builder.
 COPY docs/api/openapi.json /docs/api/openapi.json
 ARG ADMIN_BUILD_NODE_HEAP_MB=640
 ARG NEXT_PUBLIC_WS_URL
@@ -24,6 +25,15 @@ ENV NEXT_PUBLIC_SOURCE_CODE_URL=$NEXT_PUBLIC_SOURCE_CODE_URL
 # Next compilation and TypeScript checking deliberately run in different
 # processes. This avoids adding both peaks inside the bounded BuildKit cgroup.
 RUN npm run build
+
+# Next's standalone tracer conservatively keeps the optional image-optimizer
+# native packages even with images.unoptimized and outputFileTracingExcludes.
+# Gallery media is served by the backend and the frontend has no next/image
+# consumer, so remove only these generated runtime copies. The complete npm
+# dependency tree remains in the builder for compilation and checks.
+RUN rm -rf \
+      /app/.next/standalone/node_modules/sharp \
+      /app/.next/standalone/node_modules/@img
 
 FROM builder AS checks
 RUN npm run check:i18n && \

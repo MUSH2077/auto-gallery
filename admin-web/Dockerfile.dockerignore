@@ -1,0 +1,21 @@
+# Only frontend sources and the API contract enter this build context.
+**
+!admin-web/
+!admin-web/**
+!docs/
+!docs/api/
+!docs/api/openapi.json
+
+admin-web/node_modules/
+admin-web/.next/
+admin-web/.turbo/
+admin-web/coverage/
+admin-web/**/test-results/
+admin-web/**/playwright-report/
+admin-web/**/.playwright-artifacts/
+admin-web/**/*.tsbuildinfo
+admin-web/**/*.trace
+admin-web/.env
+admin-web/.env.*
+admin-web/**/*.log
+admin-web/**/*.md

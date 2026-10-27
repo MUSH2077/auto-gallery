@@ -2,6 +2,18 @@ const backendOrigin = (process.env.BACKEND_INTERNAL_URL || 'http://backend:8000'
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Gallery media is served by the backend's ticketed /media route. The
+  // frontend does not use next/image, so do not ship the unused optimizer in
+  // the standalone runtime.
+  images: {
+    unoptimized: true,
+  },
+  outputFileTracingExcludes: {
+    '/*': [
+      './node_modules/sharp/**/*',
+      './node_modules/@img/**/*',
+    ],
+  },
   // The bounded Docker build runs `tsc --noEmit` in a separate, mandatory
   // stage after Next has generated its route types. Keeping the switch
   // environment-scoped means ordinary `next build` calls still use Next's
