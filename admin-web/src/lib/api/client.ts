@@ -75,7 +75,8 @@ export function clearAuthOn401(requestSessionMarker: string | null) {
   if (typeof window === "undefined" || csrfToken() !== requestSessionMarker) return;
   try { sessionStorage.removeItem("danbooru_batch_job"); } catch {}
   if (window.location.pathname.startsWith("/admin/login")) return;
-  window.location.replace("/admin/login");
+  const destination = window.location.pathname + window.location.search + window.location.hash;
+  window.location.replace("/admin/login?redirect=" + encodeURIComponent(destination));
 }
 
 export function uploadWithProgress<T>(

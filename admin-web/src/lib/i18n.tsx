@@ -73,7 +73,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const setLang = useCallback((nextLang: Lang) => {
     try { localStorage.setItem(STORAGE_KEY, nextLang); } catch {}
-    pushPreferences({ lang: nextLang });
+    pushPreferences();
     void load(nextLang);
   }, [load]);
 

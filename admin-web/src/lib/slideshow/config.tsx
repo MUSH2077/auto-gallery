@@ -94,7 +94,7 @@ export function SlideshowConfigProvider({ children }: { children: ReactNode }) {
     setConfig((previous) => {
       const next = sanitizeSlideshowConfig({ ...previous, ...patch });
       try { localStorage.setItem(SLIDESHOW_STORAGE_KEY, JSON.stringify(next)); } catch {}
-      pushPreferences({ slideshow: next });
+      pushPreferences();
       return next;
     });
   }, []);

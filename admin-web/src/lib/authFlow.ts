@@ -21,12 +21,15 @@ export interface AuthUser {
   username: string;
   display_name: string | null;
   must_change_password: boolean;
+  is_admin?: boolean;
+  permissions?: string[];
   preferences?: Record<string, unknown> | null;
 }
 
 export function clearLegacyToken(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("ag_token");
+  // Legacy storage cleanup must not block cookie-based sessions.
+  try { localStorage.removeItem("ag_token"); } catch {}
   document.cookie = "ag_token=; path=/; max-age=0";
 }
 

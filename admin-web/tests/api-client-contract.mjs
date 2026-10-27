@@ -6,7 +6,7 @@ import { ApiError, apiErrorFromData, assertBackupArchiveResponse, request, reque
 function installBrowserToken() {
   const removed = [];
   const redirects = [];
-  globalThis.window = { location: { pathname: "/admin/settings/backup", replace(path) { redirects.push(path); } } };
+  globalThis.window = { location: { pathname: "/admin/settings/backup", search: "", hash: "", replace(path) { redirects.push(path); } } };
   globalThis.document = { cookie: "ag_csrf=csrf-fixture" };
   globalThis.localStorage = {
     getItem() { return null; },
@@ -107,7 +107,7 @@ test("protected structured 401 clears auth and retains the rich rejection", asyn
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(browser.removed.includes("session:danbooru_batch_job"));
-  assert.deepEqual(browser.redirects, ["/admin/login"]);
+  assert.deepEqual(browser.redirects, ["/admin/login?redirect=%2Fadmin%2Fsettings%2Fbackup"]);
   assert.equal(received.get("authorization"), null);
 });
 
@@ -293,7 +293,7 @@ test("requestBlob shares session/header/error handling and preserves response me
     return true;
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(browser.redirects, ["/admin/login"]);
+  assert.deepEqual(browser.redirects, ["/admin/login?redirect=%2Fadmin%2Fsettings%2Fbackup"]);
 
   installBrowserToken();
   globalThis.fetch = async () => new Response("proxy unavailable", { status: 503 });
@@ -327,4 +327,17 @@ test("backup archive validation accepts only the backend gzip media type", async
   }
   const archive = { blob: bytes, contentType: "Application/GZip; charset=binary", contentDisposition: "attachment; filename=safe.tar.gz" };
   assert.equal(await assertBackupArchiveResponse(archive), archive);
+});
+
+
+test("expired-session redirects retain the current query and fragment", async () => {
+  const browser = installBrowserToken();
+  window.location.pathname = "/admin/jobs";
+  window.location.search = "?scope=attention&task=one";
+  window.location.hash = "#details";
+  globalThis.fetch = async () => new Response(JSON.stringify({detail:"Expired"}), { status:401 });
+  await assert.rejects(request("/api/v1/tasks/one"));
+  const target = new URL(browser.redirects[0], "http://localhost");
+  assert.equal(target.pathname, "/admin/login");
+  assert.equal(target.searchParams.get("redirect"), "/admin/jobs?scope=attention&task=one#details");
 });

@@ -12,11 +12,12 @@ import { Globe2, Monitor, Moon, Sun } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 import { pushPreferences } from "@/lib/preferencesSync";
+import { DEFAULT_THEME, THEME_STORAGE_KEY, type Theme } from "@/lib/themePreference";
 
-export type Theme = "light" | "dark" | "system";
+export type { Theme } from "@/lib/themePreference";
 type ResolvedTheme = "light" | "dark";
 
-export const STORAGE_KEY = "auto-gallery-theme";
+export const STORAGE_KEY = THEME_STORAGE_KEY;
 export const LEGACY_PALETTE_KEY = "auto-gallery-palette";
 
 interface ThemeContextType {
@@ -26,7 +27,7 @@ interface ThemeContextType {
 }
 
 const ThemeContext = createContext<ThemeContextType>({
-  theme: "system",
+  theme: DEFAULT_THEME,
   resolved: "light",
   setTheme: () => {},
 });
@@ -46,8 +47,9 @@ function resolveTheme(theme: Theme): ResolvedTheme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system");
+  const [theme, setThemeState] = useState<Theme>(DEFAULT_THEME);
   const [resolved, setResolved] = useState<ResolvedTheme>("light");
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
     try {
@@ -59,17 +61,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(LEGACY_PALETTE_KEY);
       document.documentElement.removeAttribute("data-theme");
     } catch {}
+    setInitialized(true);
   }, []);
 
   const applyTheme = useCallback((nextTheme: Theme) => {
     const nextResolved = resolveTheme(nextTheme);
     setResolved(nextResolved);
     document.documentElement.classList.toggle("dark", nextResolved === "dark");
+    document.documentElement.style.colorScheme = nextResolved;
   }, []);
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [applyTheme, theme]);
+    if (initialized) applyTheme(theme);
+  }, [applyTheme, theme, initialized]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -84,7 +88,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemeState(nextTheme);
     try { localStorage.setItem(STORAGE_KEY, nextTheme); } catch {}
     applyTheme(nextTheme);
-    pushPreferences({ theme: nextTheme });
+    pushPreferences();
   }, [applyTheme]);
 
   return (
@@ -132,7 +136,7 @@ export function LangToggle() {
       aria-label={label}
     >
       <Globe2 className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden />
-      <span className="absolute -bottom-0.5 -right-0.5 rounded bg-surface px-0.5 text-[8px] font-bold leading-3 text-muted" aria-hidden>
+      <span className="absolute -bottom-0.5 -right-0.5 rounded bg-surface px-0.5 text-sm font-bold leading-4 text-muted" aria-hidden>
         {lang === "zh" ? "EN" : "中"}
       </span>
     </button>

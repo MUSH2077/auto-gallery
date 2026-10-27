@@ -6,13 +6,13 @@
  *
  * Deliberately does NOT import from theme.tsx / i18n.tsx / appearance.tsx —
  * those modules import `pushPreferences` from here, so importing back would
- * create a circular dependency. The storage key constants below are
- * duplicated (not re-exported) from those modules for that reason; keep them
- * in sync if a key ever changes.
+ * create a circular dependency. Theme defaults come from a dependency-free
+ * module; the other storage keys below stay in sync with their providers.
  */
 import { api } from "@/lib/api";
+import { DEFAULT_THEME, THEME_STORAGE_KEY } from "@/lib/themePreference";
 
-const THEME_KEY = "auto-gallery-theme";
+const THEME_KEY = THEME_STORAGE_KEY;
 const LANG_KEY = "auto-gallery-lang";
 const APPEARANCE_KEY = "auto-gallery-appearance-v1";
 const SLIDESHOW_KEY = "auto-gallery-slideshow-v1";
@@ -27,38 +27,38 @@ let timer: ReturnType<typeof setTimeout> | null = null;
  * the debounce timer fires, localStorage IS the full merged picture. Read it
  * fresh here rather than threading a merged object through every caller.
  */
-function readFullPreferencesFromLocalStorage(): Record<string, unknown> {
+function readFullPreferencesFromLocalStorage(): Record<string, unknown> | null {
   try {
     const appearanceRaw = localStorage.getItem(APPEARANCE_KEY);
     const slideshowRaw = localStorage.getItem(SLIDESHOW_KEY);
     return {
-      theme: localStorage.getItem(THEME_KEY) || "system",
+      theme: localStorage.getItem(THEME_KEY) || DEFAULT_THEME,
       lang: localStorage.getItem(LANG_KEY) || "zh",
       appearance: appearanceRaw ? JSON.parse(appearanceRaw) : {},
       slideshow: slideshowRaw ? JSON.parse(slideshowRaw) : {},
     };
   } catch {
-    return {};
+    return null;
   }
 }
 
 /**
  * Schedule a debounced (800ms, shared/coalesced across all preference setters)
- * write-through to the server. `partial` documents what just changed for
- * callers/readability; the payload actually sent is always the full merged
- * object (see readFullPreferencesFromLocalStorage).
+ * write-through of the full merged local preference object to the server.
  *
  * No-ops while unauthenticated (no session CSRF cookie) — this keeps
  * the login page (which also has theme/lang toggles) localStorage-only,
  * per spec, instead of firing a doomed 401 request.
  */
-export function pushPreferences(_partial?: Record<string, unknown>) {
+export function pushPreferences() {
   if (typeof window === "undefined") return;
   if (!csrfToken()) return;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    api.updateMyPreferences(readFullPreferencesFromLocalStorage()).catch(() => {
+    const preferences = readFullPreferencesFromLocalStorage();
+    if (!preferences) return;
+    api.updateMyPreferences(preferences).catch(() => {
       // Best-effort: localStorage already holds the value for this session;
       // a failed server sync just means other devices won't see it yet.
     });

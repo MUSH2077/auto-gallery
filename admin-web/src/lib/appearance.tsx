@@ -33,7 +33,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   workPreviewDelayMs: 250,
   workPreviewSize: "large",
   workPreviewWheelSensitivity: "normal",
-  worksViewMode: "grid",
+  worksViewMode: "masonry",
   workCardSize: "medium",
   workCardShowCheckbox: true,
   workCardShowAi: true,
@@ -98,7 +98,7 @@ export function readAppearanceSettings(): AppearanceSettings {
 function writeAppearanceSettings(settings: AppearanceSettings) {
   window.localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(settings));
   window.dispatchEvent(new CustomEvent<AppearanceSettings>(APPEARANCE_EVENT, { detail: settings }));
-  pushPreferences({ appearance: settings });
+  pushPreferences();
 }
 
 export function useAppearanceSettings() {
@@ -113,7 +113,7 @@ export function useAppearanceSettings() {
     const applyCurrent = () => apply(readAppearanceSettings());
     const onCustom = (event: Event) => {
       const detail = (event as CustomEvent<AppearanceSettings>).detail;
-      apply(sanitizeAppearanceSettings(detail));
+      apply(detail);
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === APPEARANCE_STORAGE_KEY || event.key === LEGACY_WORK_PREVIEW_KEY) applyCurrent();
