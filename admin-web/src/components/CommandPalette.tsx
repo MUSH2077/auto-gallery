@@ -22,9 +22,11 @@ type PaletteItem = AdminNavLink & { displayLabel: string; searchTarget?: boolean
 export default function CommandPalette({
   open,
   onClose,
+  returnFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
+  returnFocusRef?: { readonly current: HTMLElement | null };
 }) {
   const t = useT();
   const pathname = usePathname();
@@ -35,7 +37,18 @@ export default function CommandPalette({
   const { has, isAdmin } = usePermissions();
   const { mounted, closing } = usePresence(open);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!mounted || !dialogRef.current) return;
+    const dialog = dialogRef.current;
+    const previous = returnFocusRef?.current || document.activeElement as HTMLElement | null;
+    dialog.showModal();
+    inputRef.current?.focus();
+    return () => {
+      dialog.close();
+      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
+    };
+  }, [mounted, returnFocusRef]);
   useDialogFocus(open && mounted, dialogRef, onClose);
   const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
   const [query, setQuery] = useState("");
@@ -97,7 +110,8 @@ export default function CommandPalette({
   if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-start justify-center px-3 pt-[12vh]" role="presentation">
+    <dialog ref={dialogRef} className="command-palette" aria-label={t("search.title")}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}>
       <button
         type="button"
         tabIndex={-1}
@@ -106,11 +120,6 @@ export default function CommandPalette({
         aria-label={t("common.close")}
       />
       <div
-        ref={dialogRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("search.title")}
         onKeyDownCapture={(event) => {
           if (event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
           if (event.key === "Escape") {
@@ -152,7 +161,7 @@ export default function CommandPalette({
             aria-expanded={items.length > 0}
             aria-activedescendant={items[activeIndex] ? `admin-command-${activeIndex}` : undefined}
           />
-          <kbd className="rounded border border-border bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">ESC</kbd>
+          <kbd className="rounded border border-border bg-subtle px-1.5 py-0.5 font-mono text-sm text-muted">ESC</kbd>
         </div>
         <div id="admin-command-results" role="listbox" className="max-h-[min(60vh,420px)] overflow-y-auto p-2">
           {items.length === 0 && (
@@ -181,17 +190,17 @@ export default function CommandPalette({
               }`}
             >
               <span className="min-w-0 flex-1 truncate font-medium">{item.displayLabel}</span>
-              {!item.searchTarget && <span className="hidden truncate font-mono text-[10px] text-placeholder sm:block">{item.href}</span>}
+              {!item.searchTarget && <span className="hidden truncate font-mono text-sm text-placeholder sm:block">{item.href}</span>}
               <ArrowRight className="h-4 w-4 shrink-0" strokeWidth={1.8} aria-hidden />
             </Link>
           ))}
         </div>
-        <div className="flex items-center gap-3 border-t border-border bg-subtle px-4 py-2 text-[10px] text-muted">
+        <div className="flex items-center gap-3 border-t border-border bg-subtle px-4 py-2 text-sm text-muted">
           <span>↑↓ {t("common.select")}</span>
           <span>↵ {t("common.open")}</span>
           <span className="ml-auto">Ctrl/⌘ K</span>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

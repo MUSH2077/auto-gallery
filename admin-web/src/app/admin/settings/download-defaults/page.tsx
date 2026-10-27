@@ -2,7 +2,10 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, DownloadDefaults } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useT } from "@/lib/i18n";
 import { parseOptionalFiniteNumber } from "@/lib/task-actions";
 
@@ -207,16 +210,12 @@ function DownloadDefaultsContent() {
                   </>
                 ) : null}
               </div>
-              <select
-                aria-label={t("dldefaults.concurrency")}
-                value={current.download_concurrency ?? 3}
-                onChange={(e) => setNum("download_concurrency", parseInt(e.target.value) || 3)}
-                className="input w-20 px-2 py-1 text-center font-mono"
-              >
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
+              <ToolbarSelect
+                label={t("dldefaults.concurrency")}
+                value={String(current.download_concurrency ?? 3)}
+                options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }))}
+                onValueChange={(next) => setNum("download_concurrency", parseInt(next, 10) || 3)}
+              />
             </div>
 
             <div className="flex items-center justify-between py-3 border-b border-border">

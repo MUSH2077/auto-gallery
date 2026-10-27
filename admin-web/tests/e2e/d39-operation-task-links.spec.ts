@@ -1,6 +1,7 @@
 import { expect, test, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 
 test.describe.configure({ timeout: 150_000 });
+test.use({ actionTimeout: 10_000 });
 
 const TASK_ID = "11111111-1111-4111-8111-111111111111";
 const RQ_JOB_ID = `admin-${TASK_ID}-attempt-1`;
@@ -35,7 +36,7 @@ async function openFixture(
 ) {
   const context = await browser.newContext();
   await context.routeWebSocket("**/api/v1/ws*", (webSocket) => webSocket.close({ code: 1000, reason: "fixture" }));
-  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname, path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");
@@ -64,7 +65,7 @@ async function openFixture(
       });
     }
     if (url.pathname === "/api/v1/tasks" && method === "GET") return json(route, { total: 0, items: [] });
-    if (url.pathname === "/api/v1/system/workbench" && method === "GET") return json(route, { updated_at: "2026-09-13T00:00:00Z", queue: {}, scheduler: {}, storage: {}, health: {}, attention: {}, recent: {} });
+    if (url.pathname === "/api/v1/system/workbench" && method === "GET") return json(route, { updated_at: "2026-09-13T00:00:00Z", queue: { default: 0, scheduled: 0, failed: 0, active_download_count: 0, active_import_count: 0, failed_download_count: 0, failed_import_count: 0, stale_download_count: 0, stale_import_count: 0, stale_count: 0 }, scheduler: { enabled: true, mode: "interval", timezone: "UTC", scan_interval_minutes: 60 }, storage: {}, health: {}, attention: {}, recent: {} });
     if (url.pathname === "/api/v1/system/scheduler-decisions" && method === "GET") return json(route, { total: 0, items: [], summary: { blocked_count: 0 } });
     if (url.pathname === "/api/v1/operations/overview" && method === "GET") return json(route, { summary: { attention: 0 }, items: [] });
     if (url.pathname === "/api/v1/search/assist" && method === "POST") return json(route, { query: "", canonical_query: "", parsed: { tokens: [] }, suggestions: [] });
@@ -74,6 +75,18 @@ async function openFixture(
   const page = await context.newPage();
   await page.goto(pathname);
   return { context, page, taskDetailIds, unhandled };
+}
+
+async function clickAccountLink(page: Page, href: string) {
+  const account = page.locator(".gallery-account");
+  if (!(await account.locator("summary").isVisible())) return;
+  await account.locator("summary").click();
+  await account.locator("a[href='" + href + "']").click();
+}
+
+async function openAccountMenu(page: Page) {
+  const account = page.locator(".gallery-account");
+  await account.locator("summary").click({ force: true });
 }
 
 async function expectCanonicalTask(page: Page, taskDetailIds: string[]) {
@@ -120,7 +133,7 @@ for (const action of dataActions) {
       // A page-level confirmation timer used to add another request after 1s.
       await opened.page.waitForTimeout(1500);
       expect(operationPollIds).toEqual([TASK_ID]);
-      await opened.page.getByRole("button", { name: "Task detail", exact: true }).click();
+      await opened.page.getByRole("link", { name: "Task detail", exact: true }).click();
       await expectCanonicalTask(opened.page, opened.taskDetailIds);
       expect(new Set(operationPollIds)).toEqual(new Set([TASK_ID]));
       expect(opened.unhandled).toEqual([]);
@@ -222,22 +235,23 @@ for (const entry of ["row", "drawer", "batch", "late-response"] as const) {
     try {
       await opened.page.getByRole("button", { name: "Import", exact: true }).click();
       await expect(opened.page.locator('[data-admin-operation="admin-disk-import"]')).toContainText(entry === "late-response" ? "Attempt 1 running" : "Attempt 1 failed");
-      await opened.page.getByRole("button", { name: "Task detail", exact: true }).click();
-      const drawer = opened.page.locator('aside[aria-label="Task detail"]');
+      await opened.page.getByRole("link", { name: "Task detail", exact: true }).click();
+      const drawer = opened.page.getByRole("dialog").filter({ hasText: "Cross-entry retry" });
       await expect(drawer).toContainText("Cross-entry retry");
       if (entry === "drawer") await drawer.getByRole("button", { name: "Retry", exact: true }).click();
-      await drawer.getByRole("button", { name: "Close", exact: true }).click();
+      await drawer.locator(".dialog-top button").click();
       await expect(drawer).not.toBeVisible();
       if (entry === "late-response") await expect.poll(() => !!oldResponse, { timeout: 15_000 }).toBe(true);
       if (entry === "row" || entry === "late-response") await opened.page.locator("#main-content").getByRole("button", { name: "Retry", exact: true }).click();
       if (entry === "batch") {
-        await opened.page.getByRole("button", { name: "Batch actions", exact: true }).click();
+        await opened.page.getByRole("button", { name: "Select tasks", exact: true }).click();
         await opened.page.getByRole("checkbox", { name: /11111111/ }).check();
-        await opened.page.getByRole("combobox", { name: "Batch action" }).selectOption("retry");
-        await opened.page.getByRole("button", { name: "Apply", exact: true }).click();
+        await opened.page.getByRole("combobox", { name: "Batch action" }).click(); await opened.page.getByRole("option", { name: /Retry/i }).click();
+        await opened.page.getByRole("button", { name: "Apply batch action", exact: true }).click();
+        await opened.page.getByRole("button", { name: "Confirm action", exact: true }).click();
       }
       await expect.poll(() => retries).toBe(1);
-      await opened.page.locator('a[href="/admin/data-mgmt"]').first().click();
+      await clickAccountLink(opened.page, "/admin/data-mgmt");
       const status = opened.page.locator('[data-admin-operation="admin-disk-import"]');
       await expect(status).toContainText("Attempt 2 running");
       if (oldResponse) await (oldResponse as Route).fulfill({ json: { task_id: TASK_ID, status: "failed", error: "Late attempt 1" } }).catch(() => {});
@@ -251,7 +265,7 @@ for (const entry of ["row", "drawer", "batch", "late-response"] as const) {
       await expect.poll(() => opened.page.evaluate(() => sessionStorage.getItem("admin_operation_job"))).toBeNull();
       const completedReads = infoReads;
       await opened.page.locator('a[href="/admin/jobs"]').first().click();
-      await opened.page.locator('a[href="/admin/data-mgmt"]').first().click();
+      await clickAccountLink(opened.page, "/admin/data-mgmt");
       await expect(status).toContainText(/complete/i);
       await opened.page.waitForTimeout(500);
       expect(infoReads).toBeLessThanOrEqual(completedReads + 1);
@@ -343,11 +357,12 @@ test("a restored operation learns its canonical task before the notification ent
     }, { jobId: RQ_JOB_ID });
   });
   try {
+    await openAccountMenu(opened.page);
     await opened.page.getByRole("button", { name: "Notifications", exact: true }).click();
     const entry = opened.page.getByText("Restored disk import", { exact: true });
     await expect(entry).toBeVisible();
     await expect(opened.page.getByText("done", { exact: true })).toBeVisible();
-    await entry.click();
+    await entry.locator("xpath=ancestor::a[1]").click({ force: true });
     await expectCanonicalTask(opened.page, opened.taskDetailIds);
     expect(opened.unhandled).toEqual([]);
   } finally {
@@ -369,13 +384,14 @@ test("a retained legacy operation without a task UUID never builds a Jobs task l
     });
   });
   try {
+    await openAccountMenu(opened.page);
     await opened.page.getByRole("button", { name: "Notifications", exact: true }).click();
     const entry = opened.page.getByText("Legacy disk import", { exact: true });
     await expect(entry).toBeVisible();
     await expect(opened.page.getByText("done", { exact: true })).toBeVisible();
     await expect(entry.locator("xpath=ancestor::div[contains(@class,'border-b')][1]")).not.toHaveClass(/cursor-pointer/);
     const before = opened.page.url();
-    await entry.click();
+    await entry.locator("xpath=ancestor::div[contains(@class,'border-b')][1]").dispatchEvent("click");
     await opened.page.waitForTimeout(250);
     expect(opened.page.url()).toBe(before);
     expect(opened.taskDetailIds).toEqual([]);

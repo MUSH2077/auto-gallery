@@ -1,4 +1,11 @@
 import { expect, test, type BrowserContext, type Page, type Route } from "@playwright/test";
+import {mkdir,writeFile} from "node:fs/promises";
+
+async function captureDiscovery(page:Page,label:string){
+ const dir=process.env.GALLERY_EVIDENCE_DIR;if(!dir)return;await mkdir(dir,{recursive:true});const previous=page.viewportSize(),measurements=[];
+ for(const width of [1440,390,320]){await page.setViewportSize({width,height:900});await page.evaluate(()=>document.fonts.ready);await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);await expect(page.locator(".business-heading h1")).toBeVisible();const state=await page.evaluate(()=>{const h=document.querySelector<HTMLElement>(".business-heading h1")!,rect=h.getBoundingClientRect();return {overflow:document.documentElement.scrollWidth>innerWidth+1,headingCenter:Math.abs(rect.x+rect.width/2-innerWidth/2),font:getComputedStyle(h).fontFamily,size:getComputedStyle(h).fontSize};});expect(state.headingCenter).toBeLessThanOrEqual(10);measurements.push({width,...state});await page.screenshot({path:dir+"/"+label+"-"+width+".png",fullPage:false});}
+ await writeFile(dir+"/"+label+"-measurements.json",JSON.stringify(measurements,null,2));if(previous)await page.setViewportSize(previous);
+}
 
 const host = new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname;
 const now = "2026-08-28T08:00:00Z";
@@ -113,6 +120,13 @@ type FixtureOptions = {
 
 async function json(route: Route, value: unknown, status = 200) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(value) });
+}
+
+async function chooseToolbar(page: Page, label: string, value: string) {
+  const labels: Record<string, string> = { "": "All", high: "High", medium: "Medium", low: "Low", dismissed: "Ignored", matched: "Matched", unmatched: "Unmatched", conflict: "Conflict", pending: "Pending" };
+  if (label === "Minimum confidence") labels.medium = "High + medium";
+  await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole("option", { name: labels[value] || value, exact: true }).click();
 }
 
 async function installFixtures(context: BrowserContext, options: FixtureOptions = {}) {
@@ -416,7 +430,7 @@ test("connects Pixiv, saves collections and never re-renders the refresh token",
   await page.getByRole("checkbox", { name: "Private follows" }).check();
   await page.getByLabel("Scan interval (hours)").fill("6");
   await page.getByLabel("Automatic import").check();
-  await page.getByLabel("Minimum confidence").selectOption("medium");
+  await chooseToolbar(page, "Minimum confidence", "medium");
   await page.getByLabel("Maximum imports per scan").fill("50");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByText("Settings saved")).toBeVisible();
@@ -519,10 +533,10 @@ test("scans, filters, imports without immediate sync, dismisses and restores vis
   await page.getByRole("button", { name: "Scan Pixiv" }).click();
   await expect(page.getByText("Scan complete")).toBeVisible();
 
-  await page.getByLabel("Confidence filter").selectOption("medium");
+  await chooseToolbar(page, "Confidence filter", "medium");
   await expect(page.getByRole("table").getByText("Artist two")).toBeVisible();
   await expect(page.getByRole("table").getByText("Artist one")).toHaveCount(0);
-  await page.getByLabel("Confidence filter").selectOption("");
+  await chooseToolbar(page, "Confidence filter", "");
 
   await page.getByRole("table").getByRole("checkbox", { name: "Select Artist one" }).check();
   await page.getByRole("button", { name: "Import selected" }).click();
@@ -533,7 +547,7 @@ test("scans, filters, imports without immediate sync, dismisses and restores vis
 
   await page.getByRole("table").getByRole("checkbox", { name: "Select Artist two" }).check();
   await page.getByRole("button", { name: "Ignore selected" }).click();
-  await page.getByLabel("Status filter", { exact: true }).selectOption("dismissed");
+  await chooseToolbar(page, "Status filter", "dismissed");
   await expect(page.getByRole("table").getByText("Artist two")).toBeVisible();
   await page.getByRole("table").getByRole("button", { name: "Restore Artist two" }).click();
   expect(mutations.some((item) => item.body.action === "dismiss")).toBe(true);
@@ -634,7 +648,7 @@ test("clears selection and makes placeholder rows inert while a server filter ch
   await table.getByRole("checkbox", { name: "Select Artist stale-high" }).check();
   await expect(page.getByText("1 selected")).toBeVisible();
 
-  await page.getByLabel("Confidence filter").selectOption("medium");
+  await chooseToolbar(page, "Confidence filter", "medium");
   await expect(page.getByText("1 selected")).toHaveCount(0);
   await expect(table).toHaveAttribute("aria-busy", "true");
   await expect(table.getByRole("button", { name: "Import Artist stale-high" })).toBeDisabled();
@@ -664,7 +678,7 @@ test("filters local matches before server pagination and keeps conflict independ
 
   await page.getByRole("table").getByRole("checkbox", { name: "Select Artist local-page-0" }).check();
   await expect(page.getByText("1 selected")).toBeVisible();
-  await page.getByLabel("Local match filter").selectOption("matched");
+  await chooseToolbar(page, "Local match filter", "matched");
   await expect(page.getByText("1 selected")).toHaveCount(0);
   await expect(page.getByRole("table").getByText("Artist local-page-25")).toBeVisible();
   await expect(page.getByRole("table").getByText("Artist local-page-26")).toBeVisible();
@@ -678,13 +692,13 @@ test("filters local matches before server pagination and keeps conflict independ
   await expect(page.getByRole("navigation", { name: "Pagination" })).toHaveCount(0);
   expect(candidateRequests.at(-1)?.searchParams.get("local_match")).toBe("true");
 
-  await page.getByLabel("Local match filter").selectOption("unmatched");
+  await chooseToolbar(page, "Local match filter", "unmatched");
   await expect(page.getByRole("table").getByText("Artist local-page-0")).toBeVisible();
   await expect(page.getByRole("table").getByText("Artist local-page-25")).toHaveCount(0);
   await expect(page.getByText("Total: 25")).toBeVisible();
   expect(candidateRequests.at(-1)?.searchParams.get("local_match")).toBe("false");
 
-  await page.getByLabel("Local match filter").selectOption("conflict");
+  await chooseToolbar(page, "Local match filter", "conflict");
   await expect(page.getByRole("table").getByText("Artist local-page-conflict")).toBeVisible();
   await expect(page.getByText("Total: 1")).toBeVisible();
   expect(candidateRequests.at(-1)?.searchParams.get("state")).toBe("conflict");
@@ -768,26 +782,27 @@ test("switches users in one session without flashing or reusing private discover
   await expect(page.getByRole("table").getByText("Private Artist A")).toBeVisible();
   expect(await privateQueryCacheText(page)).toContain("private_account_a");
 
-  await page.getByRole("button", { name: "User menu" }).click();
-  await page.getByRole("menuitem", { name: "Sign Out" }).click();
-  await expect(page.getByTestId("login-hero")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Sign In" })).toBeVisible();
-  await page.getByLabel("Username").fill("discovery-viewer-b");
-  await page.getByLabel("Password", { exact: true }).fill("fixture-password");
-  await page.getByRole("button", { name: "Sign In" }).click();
-  await expect(page.getByRole("button", { name: "User menu" })).toHaveAttribute("title", "Discovery Viewer B");
+  await page.locator(".gallery-account > summary").click();
+  await page.getByRole("button", { name: "Sign Out", exact: true }).click();
+  await expect(page.locator("#layout-login-username")).toBeVisible();
+  await expect(page.locator("#layout-login-title")).toHaveText("Sign in");
+  await page.locator("#layout-login-username").fill("discovery-viewer-b");
+  await page.locator("#layout-login-password").fill("fixture-password");
+  await page.locator("button[type=submit]").click();
+  await expect(page.locator(".gallery-account-menu p")).toHaveText("Discovery Viewer B");
 
   await page.evaluate(() => {
     const target = window as typeof window & { __privateDiscoveryLeaks?: string[] };
     target.__privateDiscoveryLeaks = [];
     new MutationObserver(() => {
-      const isUserB = document.querySelector('button[aria-label="User menu"]')?.getAttribute("title") === "Discovery Viewer B";
+      const isUserB = document.querySelector(".gallery-account-menu p")?.textContent?.trim() === "Discovery Viewer B";
       const body = document.body.textContent || "";
       if (isUserB && (body.includes("private_account_a") || body.includes("Private Artist A"))) {
         target.__privateDiscoveryLeaks?.push(body);
       }
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   });
+  await page.locator(".gallery-account > summary").click();
   await page.getByRole("link", { name: "Remote Discovery" }).click();
 
   await expect(page.getByText("You do not have access to this discovery data.").first()).toBeVisible();
@@ -1018,6 +1033,9 @@ test("opens the enriched Pixiv creator page and restores URL, selection and pagi
   await expect(page.getByText("@pixez_artist · Pixiv ID: remote-detail")).toBeVisible();
   await expect(page.locator('img[src="https://images.example/header-detail.svg"]')).toBeVisible();
   await expect(page.getByText("2 loaded")).toBeVisible();
+  const following=await page.locator(".gallery-discovery-profile-identity").getByText("Following",{exact:true}).boundingBox();expect(following!.height).toBeLessThanOrEqual(44);
+  await expect(page.getByRole("button",{name:"Illustration",exact:true})).toHaveCSS("color","rgb(255, 255, 255)");
+  await captureDiscovery(page,"remote-detail");
 
   const sensitive = page.getByRole("article").filter({ hasText: "Sensitive Ugoira" });
   await expect(sensitive.getByRole("button", { name: "Import this work" })).toBeDisabled();
@@ -1108,7 +1126,7 @@ test("filters tentative evidence and warns before a manual import", async ({ con
   });
   await page.goto("/admin/discovery");
 
-  await page.getByLabel("Evidence status filter").selectOption("pending");
+  await chooseToolbar(page, "Evidence status filter", "pending");
   const pendingRow = page.getByRole("table").getByRole("row").filter({ hasText: "Artist pending" });
   await expect(pendingRow).toContainText("Medium · Tentative");
   await expect(pendingRow).toContainText("Pending");
@@ -1208,5 +1226,5 @@ test("keeps the account and candidate workbench usable on mobile", async ({ cont
   await expect(page.locator("article").filter({ hasText: "Artist mobile" }).getByText("Artist mobile")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: "/tmp/auto-gallery-remote-discovery-mobile.png", fullPage: true });
+  await captureDiscovery(page,"remote-workbench");
 });

@@ -12,7 +12,8 @@ import { usePermissions } from "@/lib/usePermissions";
 import { useDebounce } from "@/lib/useDebounce";
 import { formatBytes } from "@/lib/format";
 import { usePresence, useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, SectionPanel, Banner, EmptyState, PermissionGuard, SmartSearchInput } from "@/components";
+import { SectionPanel, Banner, EmptyState, SmartSearchInput } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useToast } from "@/components/Toast";
 
 // Mirrors ManualUploadService.ALLOWED_EXTENSIONS (backend/app/services/manual_upload.py).
@@ -281,7 +282,7 @@ function UploadPageContent() {
           toast.success({
             title: t("upload.upload_accepted"),
             message: t("dashboard.file_count", { count: toUpload.length }),
-            action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?tab=${result.import_job_id ? "imports" : "downloads"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
+            action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?records=${result.import_job_id ? "import" : "download"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
           });
         } catch (e) {
           const err = e as ApiError;
@@ -311,7 +312,7 @@ function UploadPageContent() {
         toast.success({
           title: t("upload.upload_accepted"),
           message: row.file.name,
-          action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?tab=${result.import_job_id ? "imports" : "downloads"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
+          action: canReadTasks ? { label: t("upload.track_import"), onClick: () => router.push(`/admin/jobs?records=${result.import_job_id ? "import" : "download"}&${result.import_job_id ? `import_job=${result.import_job_id}` : `job=${result.download_job_id}`}`) } : undefined,
         });
       } catch (e) {
         const err = e as ApiError;
@@ -338,8 +339,7 @@ function UploadPageContent() {
   }
 
   return (
-    <PageShell>
-      <PageHeader title={t("upload.title")} description={t("upload.description")} />
+    <BusinessPage title={t("upload.title")} description={t("upload.description")} className="gallery-upload-page">
 
       <div data-page-primary-content>
       {me.data && (
@@ -435,7 +435,7 @@ function UploadPageContent() {
                   {r.status === "uploading" && <MiniProgressBar pct={r.progress} />}
                   <StatusPill status={r.status} />
                   {r.status === "accepted" && canReadTasks && (r.importJobId || r.downloadJobId) && (
-                    <Link href={`/admin/jobs?tab=${r.importJobId ? "imports" : "downloads"}&${r.importJobId ? `import_job=${r.importJobId}` : `job=${r.downloadJobId}`}`} className="shrink-0 text-xs text-accent hover:underline">
+                    <Link href={`/admin/jobs?records=${r.importJobId ? "import" : "download"}&${r.importJobId ? `import_job=${r.importJobId}` : `job=${r.downloadJobId}`}`} className="shrink-0 text-xs text-accent hover:underline">
                       {t("upload.track_import")}
                     </Link>
                   )}
@@ -463,7 +463,7 @@ function UploadPageContent() {
         </div>
       </div>
       </div>
-    </PageShell>
+    </BusinessPage>
   );
 }
 

@@ -33,15 +33,17 @@ export default function StorageColonnade({
   formatValue,
   worksLabel,
   repositoriesLabel,
+  themeScope,
 }: {
   groups: StorageColonnadeGroup[];
   formatValue: (value: number) => string;
+  themeScope?: string;
   worksLabel: string;
   repositoriesLabel: string;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
-  const theme = useChartTheme();
+  const theme = useChartTheme(themeScope);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const maximum = useMemo(
     () => groups.reduce((current, group) => Math.max(current, group.value), 0),

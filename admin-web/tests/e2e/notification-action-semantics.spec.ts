@@ -57,7 +57,7 @@ test("task filter excludes account events at the server and every task kind open
     if (url.pathname === "/api/v1/auth/ws-ticket") return json(route, { detail: "fixture websocket unavailable" }, 503);
     if (url.pathname === "/api/v1/tasks") {
       taskRequests.push(url.search);
-      if (url.searchParams.get("include_account") === "true") {
+      if (url.searchParams.has("include_account") && url.searchParams.get("kind") !== "account") {
         return json(route, { total: 1, items: [task("cccccccc-cccc-4ccc-8ccc-cccccccccccc", "account", "Account event")] });
       }
       return json(route, {
@@ -75,7 +75,7 @@ test("task filter excludes account events at the server and every task kind open
   try {
     await page.goto("/admin/notifications");
     await expect(page.getByText("Account event", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Tasks", exact: true }).click();
+    await page.getByRole("tab", { name: "Tasks", exact: true }).click();
     await expect(page.getByText("Integrity scan", { exact: true })).toBeVisible();
     expect(taskRequests.some((search) => !new URLSearchParams(search).has("include_account"))).toBe(true);
 
@@ -109,7 +109,7 @@ test("account filter can load the next server page", async ({ browser }) => {
   const page = await context.newPage();
   try {
     await page.goto("/admin/notifications");
-    await page.getByRole("button", { name: "Account", exact: true }).click();
+    await page.getByRole("tab", { name: "Account", exact: true }).click();
     await expect(page.getByText("Account event 1", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Load more", exact: true }).click();
     await expect(page.getByText("Account event 51", { exact: true })).toBeVisible();
@@ -139,6 +139,7 @@ test("notification bell opens an administrator task from the durable feed", asyn
   const page = await context.newPage();
   try {
     await page.goto("/admin/profile");
+    await page.locator(".gallery-account > summary").click();
     await page.getByRole("button", { name: "Notifications", exact: true }).click();
     await page.getByText("Bell integrity scan", { exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/jobs\\?tab=admin&task=${ADMIN_TASK_ID}$`));

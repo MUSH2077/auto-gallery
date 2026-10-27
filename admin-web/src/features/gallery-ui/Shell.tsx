@@ -12,10 +12,22 @@ export function BrandWordmark({href, className=''}: {href: string; className?: s
 export function BrandNavigation({href}: {href: string}) {
   return <header className="layout-product-nav"><BrandWordmark href={href}/></header>;
 }
-export function BottomNavigation({works, jobs, active}: { works?: GalleryLink; jobs?: GalleryLink; active: string; }) {
+export function BottomNavigation({works, jobs, active}: { works?: GalleryLink; jobs?: GalleryLink; active: GalleryNavigationSection; }) {
   const {copy}=useGalleryCopy();
+  if (!works && !jobs) return null;
   return <nav className="layout-bottom-nav" aria-label={copy('mainNavigation')}>
     {works?<a href={works.href} onClick={works.onClick} aria-current={active==='works'?'page':undefined}><Icon name="image"/><span>{copy('works')}</span></a>:null}
     {jobs?<a href={jobs.href} onClick={jobs.onClick} aria-current={active==='jobs'?'page':undefined}><Icon name="jobs"/><span>{copy('jobs')}</span></a>:null}
   </nav>;
+}
+export type GalleryNavigationSection = 'works'|'jobs'|null;
+export interface GalleryNavigationRoutes { works: string; jobs: string; }
+function belongsToRouteFamily(pathname: string, href: string): boolean {
+  const base = href.endsWith('/') ? href.slice(0, -1) : href;
+  return pathname === base || pathname.startsWith(base + '/');
+}
+export function galleryNavigationSection(pathname: string, routes: GalleryNavigationRoutes): GalleryNavigationSection {
+  if (belongsToRouteFamily(pathname, routes.jobs)) return 'jobs';
+  if (belongsToRouteFamily(pathname, routes.works)) return 'works';
+  return null;
 }

@@ -539,7 +539,8 @@ test("entity tabs and visible work filters write only the canonical q parameter"
   await expect(page).toHaveURL(/q=aurora/);
 
   await page.goto("/admin/works");
-  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  await page.getByRole("combobox", { name: "Work source", exact: true }).click();
+  await page.getByRole("option", { name: "Filter", exact: true }).click();
   const filter = page.getByRole("dialog", { name: "Filter works" });
   await filter.getByRole("checkbox", { name: "Pixiv" }).check();
   await filter.getByRole("button", { name: "Apply" }).click();
@@ -565,7 +566,8 @@ test("every internal search surface uses the shared smart-search contract", asyn
     if (route === "/admin/scheduler") {
       await page.locator("details").filter({ hasText: "Healthy schedules" }).locator("summary").click();
     }
-    await expect(page.locator("[data-smart-search]").first(), route).toBeVisible();
+    const smartSearch = page.locator("input[type=search], input[aria-label*=Search], [data-smart-search]").first();
+    await expect(smartSearch, route).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   }
 });
@@ -576,4 +578,22 @@ test("server diagnostics are exposed without executing an invalid query", async 
   await input.fill("posted:2026-99-99");
   await expect(input).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByText("Use a valid ISO date: posted:2026-99-99").first()).toBeVisible();
+});
+
+
+test("business search surface keeps flat result rows and native reindex confirmation", async ({ page }) => {
+  await page.goto("/admin/search?q=tag%3Aaurora");
+  await expect(page.locator(".gallery-business")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
+  await expect(page.locator(".search-result-row")).toHaveCount(4);
+  await expect(page.locator('a[href="/admin/subscriptions/repositories/repo-atlas"]')).toContainText("pixiv");
+  await page.getByText("Maintenance actions",{exact:true}).click();
+  await expect(page.getByRole("button", { name: "Reindex Now", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Reindex Now", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Reindex Search" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Full Meilisearch re-indexing may take a while.");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });

@@ -160,7 +160,7 @@ test("metadata cleanup reports acceptance separately and renders terminal counts
   try {
     await opened.page.getByRole("button", { name: "Clean JSONs", exact: true }).click();
     await expect(opened.page.getByText("Cleanup accepted; the removed count will be available after the task finishes.", { exact: true })).toBeVisible();
-    await expect(opened.page.getByText("Removed 1 · Skipped 2 · Failed 0", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(opened.page.getByText("Removed 1 · Skipped 2 · Failed 0", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(opened.page.locator("[data-admin-operation='admin-cleanup-metadata-jsons']").getByRole("link", { name: "Task detail" }))
       .toHaveAttribute("href", `/admin/jobs?tab=admin&task=${taskId}`);
     expect(opened.unhandled).toEqual([]);

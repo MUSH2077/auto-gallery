@@ -8,6 +8,7 @@ import { usePermissions } from "@/lib/usePermissions";
 import { useToast } from "./Toast";
 import ErrorState from "./ErrorState";
 import { DirectVideoPlayer } from "./MediaAssetRenderer";
+import { Modal } from "@/features/gallery-ui/Modal";
 
 const NEEDS_RETRY_STATUS = ["needs", "retry"].join("_");
 
@@ -111,7 +112,6 @@ export default function DownloadConflictDialog({
   const toast = useToast();
   const qc = useQueryClient();
   const { isAdmin } = usePermissions();
-  const dialogRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [decisions, setDecisions] = useState<Record<string, DownloadConflictWinner>>({});
   const conflicts = useQuery({
@@ -119,16 +119,6 @@ export default function DownloadConflictDialog({
     queryFn: () => api.getDownloadConflicts(taskId),
     enabled: open && !existingResolution,
   });
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    dialogRef.current?.focus();
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, open]);
 
   useEffect(() => {
     if (!conflicts.data?.items) return;
@@ -180,18 +170,15 @@ export default function DownloadConflictDialog({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/60 p-3 sm:p-6" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t("jobs.conflict.title")} className="max-h-[94vh] w-full max-w-7xl overflow-y-auto rounded-lg border border-border bg-canvas shadow-2xl">
+    <Modal title={t("jobs.conflict.title")} onClose={onClose} sheet>
         <header className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-canvas/95 px-4 py-3 backdrop-blur">
           <div>
-            <h2 className="font-semibold">{t("jobs.conflict.title")}</h2>
             <p className="mt-1 max-w-3xl text-xs text-muted">{t("jobs.conflict.desc")}</p>
           </div>
           <div className="flex items-center gap-2">
             <button type="button" className="btn-ghost text-xs" onClick={() => setZoom(Math.max(0.25, zoom - 0.25))} aria-label={t("jobs.conflict.zoom_out")}>−</button>
             <span className="w-14 text-center font-mono text-xs">{Math.round(zoom * 100)}%</span>
             <button type="button" className="btn-ghost text-xs" onClick={() => setZoom(Math.min(4, zoom + 0.25))} aria-label={t("jobs.conflict.zoom_in")}>+</button>
-            <button type="button" className="btn-ghost" onClick={onClose}>{t("common.close")}</button>
           </div>
         </header>
 
@@ -242,7 +229,6 @@ export default function DownloadConflictDialog({
             </button>
           </footer>
         ) : null}
-      </div>
-    </div>
+    </Modal>
   );
 }

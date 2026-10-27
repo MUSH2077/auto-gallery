@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import type { WorkAsset } from "@/lib/api/endpoints/works";
 import { useT } from "@/lib/i18n";
 import { resolveMediaKind } from "@/lib/media";
-import { motionTokens, usePresence } from "@/lib/motion";
+import { motionTokens } from "@/lib/motion";
 import { useSlideshowConfig } from "@/lib/slideshow/config";
 
 export interface SlideItem {
@@ -82,15 +82,13 @@ function PauseIcon() {
   return <Pause className="h-5 w-5" fill="currentColor" aria-hidden="true" />;
 }
 
-export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
+export default function SlideshowPlayer({ items, startIndex, onClose }: {
   items: SlideItem[];
   startIndex: number;
-  open: boolean;
   onClose: () => void;
 }) {
   const t = useT();
   const { config } = useSlideshowConfig();
-  const { mounted, closing } = usePresence(open, motionTokens.duration.base);
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const [index, setIndex] = useState(startIndex);
   const [paused, setPaused] = useState(false);
@@ -171,7 +169,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
   }, [config.slideLoop, navigateTo, total]);
 
   useEffect(() => {
-    if (!open || !items[startIndex]) return;
+    if (!items[startIndex]) return;
     requestSequence.current += 1;
     setIndex(startIndex);
     setPaused(false);
@@ -181,13 +179,13 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
     setControlsVisible(true);
     void navigateTo(startIndex);
     armControls();
-  }, [armControls, items, navigateTo, open, startIndex]);
+  }, [armControls, items, navigateTo, startIndex]);
 
   useEffect(() => {
-    if (!open || paused || loading || total <= 1) return;
+    if (paused || loading || total <= 1) return;
     const timer = setTimeout(stepNext, config.slideDwellMs);
     return () => clearTimeout(timer);
-  }, [config.slideDwellMs, index, loading, open, paused, stepNext, total]);
+  }, [config.slideDwellMs, index, loading, paused, stepNext, total]);
 
   const stepNextRef = useRef(stepNext);
   const stepPrevRef = useRef(stepPrev);
@@ -196,7 +194,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
 
   useEffect(() => {
     const element = containerEl;
-    if (!open || !element) return;
+    if (!element) return;
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     element.focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -231,7 +229,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
       document.removeEventListener("keydown", onKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [armControls, containerEl, open]);
+  }, [armControls, containerEl]);
 
   useEffect(() => () => {
     requestSequence.current += 1;
@@ -239,7 +237,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
     if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
   }, []);
 
-  if (!mounted || total === 0) return null;
+  if (total === 0) return null;
 
   const current = items[index];
   const kenBurns = config.slideTransition === "kenburns";
@@ -268,7 +266,7 @@ export default function SlideshowPlayer({ items, startIndex, open, onClose }: {
         if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
         if (deltaX < 0) stepNext(); else stepPrev();
       }}
-      className={`fixed inset-0 z-[60] bg-black outline-none ${closing ? "overlay-backdrop-exit" : "overlay-backdrop"}`}
+      className="fixed inset-0 z-[60] bg-black outline-none overlay-backdrop"
     >
       <div data-testid="slideshow-stage" className="relative h-full w-full overflow-hidden">
         {currentVisual ? (

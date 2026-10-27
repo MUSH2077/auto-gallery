@@ -36,14 +36,16 @@ export default function TickDonut({
   data,
   otherLabel,
   formatValue,
+  themeScope,
 }: {
   data: ChartDatum[];
   otherLabel: string;
   formatValue: (value: number) => string;
+  themeScope?: string;
 }) {
   const t = useT();
   const fmt = useI18nFormat();
-  const theme = useChartTheme();
+  const theme = useChartTheme(themeScope);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);

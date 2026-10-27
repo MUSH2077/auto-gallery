@@ -1,11 +1,10 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useRef, useState, FormEvent } from "react";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { authChangePassword } from "@/lib/api";
-import PageHeader from "@/components/PageHeader";
-import PageShell from "@/components/PageShell";
+import { BusinessPage } from "@/features/gallery-ui/BusinessPage";
 import Banner from "@/components/Banner";
 
 export default function ProfilePage() {
@@ -16,19 +15,24 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (submitting.current) return;
+    setError("");
 
     if (newPassword.length < 6) {
-      toast.error(t("auth.password_too_short"));
+      setError(t("auth.password_too_short"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error(t("auth.password_mismatch"));
+      setError(t("auth.password_mismatch"));
       return;
     }
 
+    submitting.current = true;
     setLoading(true);
     try {
       await authChangePassword(currentPassword, newPassword);
@@ -38,19 +42,19 @@ export default function ProfilePage() {
       setNewPassword("");
       setConfirmPassword("");
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : t("auth.change_password_failed"));
+      setError(err instanceof Error ? err.message : t("auth.change_password_failed"));
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   }
 
   return (
-    <PageShell>
-      <PageHeader title={t("auth.profile")} />
+    <BusinessPage className="gallery-profile-page" title={t("auth.profile")}>
 
-      <div className="max-w-xl">
+      <div className="account-content">
         {/* User Info */}
-        <div className="card p-5 mb-6">
+        <div className="account-section">
           <h2 className="text-sm font-medium text-muted mb-3">{t("auth.account_info")}</h2>
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-accent-subtle flex items-center justify-center text-accent font-bold text-lg">
@@ -64,14 +68,14 @@ export default function ProfilePage() {
         </div>
 
         {/* Change Password */}
-        <div className="card p-5">
+        <div className="account-section">
           {user?.must_change_password && (
             <Banner tone="warning" title={t("auth.force_change_title")} className="mb-4">
               {t("auth.force_change_message")}
             </Banner>
           )}
           <h2 className="text-sm font-medium text-muted mb-4">{t("auth.change_password")}</h2>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={loading} aria-describedby={error ? "profile-password-error" : undefined}>
             <div>
               <label htmlFor="current-password" className="block text-sm font-medium text-fg mb-1">
                 {t("auth.current_password")}
@@ -80,6 +84,7 @@ export default function ProfilePage() {
                 type="password"
                 id="current-password"
                 autoComplete="current-password"
+                disabled={loading}
                 required
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
@@ -94,6 +99,8 @@ export default function ProfilePage() {
                 type="password"
                 id="new-password"
                 autoComplete="new-password"
+                minLength={6}
+                disabled={loading}
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -108,6 +115,8 @@ export default function ProfilePage() {
                 type="password"
                 id="confirm-password"
                 autoComplete="new-password"
+                minLength={6}
+                disabled={loading}
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -115,6 +124,7 @@ export default function ProfilePage() {
               />
             </div>
 
+            {error && <p id="profile-password-error" role="alert" className="text-danger">{error}</p>}
             <button
               type="submit"
               disabled={loading}
@@ -125,6 +135,6 @@ export default function ProfilePage() {
           </form>
         </div>
       </div>
-    </PageShell>
+    </BusinessPage>
   );
 }

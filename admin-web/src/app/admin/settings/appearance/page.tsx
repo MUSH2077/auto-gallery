@@ -1,6 +1,6 @@
 "use client";
 
-import { PageHeader, PageShell } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
 import {
   type WorkPreviewDelayMs,
   type WorkPreviewSize,

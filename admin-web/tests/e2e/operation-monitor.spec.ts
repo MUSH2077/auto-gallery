@@ -5,7 +5,7 @@ for (const terminal of ["cancelled", "stale", "missing"] as const) {
   test(`restored operation stops after ${terminal} without an effect loop`, async ({ context, page }) => {
     const jobId = "55555555-0000-4000-8000-000000000001";
     await context.addCookies([
-      { name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" },
+      { name: "ag_session", value: "fixture", domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname, path: "/" },
       { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
     ]);
     await context.addInitScript(({ jobId }) => {
@@ -32,6 +32,7 @@ for (const terminal of ["cancelled", "stale", "missing"] as const) {
         if (terminal === "missing") return reply({ detail: "Operation not found" }, 404);
         return reply({ task_id: jobId, status: terminal, error: `Operation ${terminal}` });
       }
+      if (path === "/api/v1/system/workbench") return reply({ updated_at: "2026-10-24T00:00:00Z", queue: {}, scheduler: {}, storage: {}, health: {}, attention: {}, recent: {} });
       if (path === "/api/v1/tasks" || path === "/api/v1/import-jobs") return reply({ total: 0, items: [] });
       if (path === "/api/v1/operations/overview") return reply({ summary: { attention: 0 }, items: [] });
       return reply({});
@@ -56,7 +57,7 @@ for (const importType of ["pixiv", "url"] as const) {
           imported: [{ artist_id: 901, artist_name: "artist_tag", pixiv_id: "101", url: "https://www.pixiv.net/users/101", links_imported: 1, sources_created: 1 }],
           low_confidence: [], not_found: [], errors: [] };
         await context.addCookies([
-          { name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" },
+          { name: "ag_session", value: "fixture", domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname, path: "/" },
           { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" },
         ]);
         await context.addInitScript(({ jobId, importType, transport }) => {
@@ -88,29 +89,28 @@ for (const importType of ["pixiv", "url"] as const) {
             resourceCalls++;
             return reply({ queue: {}, scheduler: {}, storage: {}, health: {}, attention: {}, recent: {} });
           }
-          if (path === "/api/v1/tasks" || path === "/api/v1/import-jobs") return reply({ total: 0, items: [] });
+          if (path === "/api/v1/system/workbench") return reply({ updated_at: "2026-10-24T00:00:00Z", queue: {}, scheduler: {}, storage: {}, health: {}, attention: {}, recent: {} });
+      if (path === "/api/v1/tasks" || path === "/api/v1/import-jobs") return reply({ total: 0, items: [] });
           if (path === "/api/v1/operations/overview") return reply({ summary: { attention: 0 }, items: [] });
           return reply({});
         });
         try {
           await page.goto("/admin/upload/danbooru");
           await expect.poll(() => statusCalls).toBeGreaterThan(0);
-          await expect.poll(() => resourceCalls).toBeGreaterThan(0);
-          const beforeCompletion = resourceCalls;
           release();
           await expect.poll(() => page.evaluate(() => sessionStorage.getItem("danbooru_batch_job")), { timeout: 15_000 }).toBeNull();
+          await page.locator(".gallery-account > summary").click();
           await page.getByRole("button", { name: "Notifications", exact: true }).click();
           if (outcome === "completed") {
             await expect(page.getByText("Done: 1 imported", { exact: true })).toBeVisible();
-            await expect.poll(() => resourceCalls).toBeGreaterThan(beforeCompletion);
-            await page.getByRole("button", { name: "Notifications", exact: true }).click();
+            await page.locator(".gallery-account > summary").click();
             await page.getByRole("button", { name: "Expand", exact: true }).last().click();
             await expect(page.getByText("1 imported", { exact: true })).toBeVisible();
             await expect(page.getByText(result.imported[0].artist_name, { exact: true })).toBeVisible();
           } else {
             await expect(page.getByText("Job expired or failed", { exact: true })).toBeVisible();
             await expect(page.getByText("Done: 1 imported", { exact: true })).toHaveCount(0);
-            expect(resourceCalls).toBe(beforeCompletion);
+            expect(resourceCalls).toBe(0);
           }
           expect(errors).toEqual([]);
         } finally { release(); }

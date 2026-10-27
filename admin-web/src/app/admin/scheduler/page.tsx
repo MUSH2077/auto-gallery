@@ -7,15 +7,14 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   EmptyState,
   ErrorState,
-  PageHeader,
-  PageShell,
   Pagination,
-  PermissionGuard,
   RowActionMenu,
   SmartSearchInput,
   SourceBadge,
   StatusBadge,
 } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useToast } from "@/components/Toast";
 import { adminRoutes } from "@/lib/adminRoutes";
 import {
@@ -646,8 +645,7 @@ function SchedulerContent() {
   const batchActive = !!batchIntent?.taskId && !schedulerBatchSettled(batchTask.data);
 
   return (
-    <PageShell>
-        <PageHeader title={t("scheduler.title")} description={t("scheduler.compact_desc")} />
+    <BusinessPage title={t("scheduler.title")} description={t("scheduler.compact_desc")} className="gallery-scheduler-page">
 
         {intentLoaded && batchIntent && (
           <SchedulerBatchStatus
@@ -744,12 +742,17 @@ function SchedulerContent() {
           <div className="border-t border-border">
             <div className="sticky top-0 z-10 flex flex-col gap-2 border-b border-border bg-surface/95 p-3 backdrop-blur sm:flex-row">
               <SmartSearchInput value={search} onChange={(value) => updateParams({ q: value || null, page: null })} scope="scheduler" className="w-full sm:max-w-lg" placeholder={t("scheduler.search_placeholder")} />
-              <select className="select min-h-11 text-xs" value={stateFilter} onChange={(event) => updateParams({ state: event.target.value === "all" ? null : event.target.value, page: null })} aria-label={t("scheduler.filter_all")}>
-                <option value="all">{t("scheduler.filter_all")}</option>
-                <option value="due">{t("scheduler.filter_due")}</option>
-                <option value="manual">{t("scheduler.filter_manual")}</option>
-                <option value="disabled">{t("scheduler.filter_disabled")}</option>
-              </select>
+              <ToolbarSelect
+                label={t("scheduler.filter_all")}
+                value={stateFilter === "all" ? "" : stateFilter}
+                onValueChange={(value) => updateParams({ state: value || null, page: null })}
+                options={[
+                  { value: "", label: t("scheduler.filter_all") },
+                  { value: "due", label: t("scheduler.filter_due") },
+                  { value: "manual", label: t("scheduler.filter_manual") },
+                  { value: "disabled", label: t("scheduler.filter_disabled") },
+                ]}
+              />
             </div>
             {plans.isLoading && <div className="h-24 animate-pulse bg-subtle" />}
             {plans.error && <div className="p-3"><ErrorState message={(plans.error as Error).message} onRetry={() => plans.refetch()} /></div>}
@@ -758,7 +761,7 @@ function SchedulerContent() {
             <Pagination page={page} pageSize={PLAN_PAGE_SIZE} total={plans.data?.total || 0} onPageChange={(next) => updateParams({ page: next === 1 ? null : String(next) })} />
           </div>
         </details>
-    </PageShell>
+    </BusinessPage>
   );
 }
 

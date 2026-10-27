@@ -5,7 +5,9 @@ import { Suspense, useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CurationCommit, queryKeys } from "@/lib/api";
-import { ConfirmDialog, EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard, WorkMediaThumbnail } from "@/components";
+import { EmptyState, ErrorState, WorkMediaThumbnail } from "@/components";
+import { BusinessPage, BusinessConfirm, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useT } from "@/lib/i18n";
 import { useStaggeredEntrance } from "@/lib/motion";
@@ -258,8 +260,8 @@ function CurationContent() {
   };
 
   return (
-    <PageShell>
-      <PageHeader title={t("curation.title")} description={t("curation.desc")} />
+    <BusinessPage title={t("curation.title")} description={t("curation.desc")} className="gallery-governance-page gallery-curation-page">
+
       {notice && (
         <div
           role="status"
@@ -275,16 +277,8 @@ function CurationContent() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {filters.map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => updateParams({ trigger: key || null })}
-            className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle"}`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="governance-toolbar">
+        <ToolbarSelect label={t("curation.filtered_by")} value={trigger} options={filters.map(([value,label]) => ({value,label}))} onValueChange={(value) => updateParams({trigger:value || null})} />
         <button
           onClick={() => updateParams({ include_baseline: includeBaseline ? "false" : null })}
           className={`rounded-md border px-3 py-1.5 text-xs font-medium ${includeBaseline ? "border-border bg-white hover:bg-subtle dark:border-border dark:bg-surface dark:hover:bg-subtle" : "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent"}`}
@@ -295,7 +289,7 @@ function CurationContent() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className="space-y-4">
-          {commits.isLoading && <div className="h-48 rounded-md border border-border bg-white dark:border-border dark:bg-surface" />}
+          {commits.isLoading && <div role="status" aria-label={t("common.loading")} className="animate-pulse h-48 rounded-md border border-border bg-white dark:border-border dark:bg-surface" />}
           {commits.error && <ErrorState message={(commits.error as Error).message} onRetry={() => commits.refetch()} />}
           {commits.data && commits.data.items.length === 0 && <EmptyState title={t("curation.empty_title")} description={t("curation.empty_desc")} />}
           {commitItems.map((commit, index) => {
@@ -398,7 +392,7 @@ function CurationContent() {
         </aside>
       </div>
       {revertTarget && (
-        <ConfirmDialog
+        <BusinessConfirm
           open
           title={t("curation.revert_confirm_title")}
           message={t("curation.revert_confirm", { message: revertTarget.message })}
@@ -409,7 +403,7 @@ function CurationContent() {
         />
       )}
       {purgeSelection && (
-        <ConfirmDialog
+        <BusinessConfirm
           open
           title={t("curation.purge_confirm_title")}
           message={t("curation.purge_confirm", { count: purgeSelection.length })}
@@ -419,16 +413,16 @@ function CurationContent() {
           error={(purge.error as Error | null)?.message}
         />
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
 
 export default function CurationPage() {
   return (
-    <PermissionGuard module="curation">
+    <BusinessPermissionGuard module="curation">
       <Suspense>
         <CurationContent />
       </Suspense>
-    </PermissionGuard>
+    </BusinessPermissionGuard>
   );
 }

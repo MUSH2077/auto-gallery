@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useStaggeredEntrance } from "@/lib/motion";
-import { PageHeader, PageShell, EmptyState, ErrorState, ConfirmDialog, Modal, EntityList, EntityRow, RowActionMenu, PermissionGuard } from "@/components";
+import { EmptyState, ErrorState, EntityList, EntityRow, RowActionMenu } from "@/components";
+import { BusinessPage, BusinessModal, BusinessConfirm, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat, userModuleLabel } from "@/lib/i18n-format";
@@ -29,31 +30,31 @@ function CreateForm({ isPending, error, modules, onSubmit, onClose }: {
   };
 
   return (
-    <div className="space-y-4">
+    <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!isPending) onSubmit({ username: username.trim(), password, display_name: displayName.trim() || undefined, is_admin: isAdmin, permissions: isAdmin ? [] : permissions }); }}>
       <div>
-        <label className="block text-sm font-medium mb-1">{t("users.username_label")}</label>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} className="input w-full" placeholder={t("users.username_placeholder")} />
+        <label htmlFor="create-username" className="block text-sm font-medium mb-1">{t("users.username_label")}</label>
+        <input id="create-username" autoComplete="username" required disabled={isPending} value={username} onChange={(e) => setUsername(e.target.value)} className="input w-full" placeholder={t("users.username_placeholder")} />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">{t("users.password_label")}</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="input w-full" placeholder={t("users.password_placeholder")} />
+        <label htmlFor="create-password" className="block text-sm font-medium mb-1">{t("users.password_label")}</label>
+        <input id="create-password" type="password" autoComplete="new-password" required minLength={6} disabled={isPending} value={password} onChange={(e) => setPassword(e.target.value)} className="input w-full" placeholder={t("users.password_placeholder")} />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">{t("users.display_name_label")}</label>
-        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" />
+        <label htmlFor="create-display-name" className="block text-sm font-medium mb-1">{t("users.display_name_label")}</label>
+        <input id="create-display-name" autoComplete="nickname" disabled={isPending} value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" />
       </div>
       <label className="flex items-center gap-2 text-sm font-medium">
-        <input type="checkbox" className="rounded" checked={isAdmin}
+        <input type="checkbox" className="rounded" disabled={isPending} checked={isAdmin}
           onChange={(e) => { setIsAdmin(e.target.checked); if (e.target.checked) setPermissions([]); }} />
         {t("users.is_admin_label")}
       </label>
       <div>
         <div className="mb-1 text-sm font-medium">{t("users.permissions_label")}</div>
         {isAdmin && <p className="mb-2 text-xs text-muted">{t("users.permissions_disabled_admin_hint")}</p>}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="account-permissions grid grid-cols-2 gap-2">
           {Object.keys(modules).map((key) => (
             <label key={key} className={`flex items-center gap-2 text-sm ${isAdmin ? "opacity-50" : ""}`}>
-              <input type="checkbox" className="rounded" disabled={isAdmin}
+              <input type="checkbox" className="rounded" disabled={isAdmin || isPending}
                 checked={permissions.includes(key)} onChange={() => togglePermission(key)} />
                     {userModuleLabel(t, key)}
             </label>
@@ -61,16 +62,16 @@ function CreateForm({ isPending, error, modules, onSubmit, onClose }: {
         </div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="btn-ghost">{t("users.cancel")}</button>
+        <button type="button" onClick={onClose} className="btn-ghost">{t("users.cancel")}</button>
         <button
-          onClick={() => onSubmit({ username, password, display_name: displayName || undefined, is_admin: isAdmin, permissions: isAdmin ? [] : permissions })}
-          disabled={!username || !password || isPending}
+          type="submit"
+          disabled={!username.trim() || password.length < 6 || isPending}
           className="btn-primary">
           {isPending ? t("users.creating") : t("users.create")}
         </button>
       </div>
-      {error && <p className="text-sm text-danger dark:text-danger">{error.message}</p>}
-    </div>
+      {error && <p role="alert" className="text-sm text-danger dark:text-danger">{error.message}</p>}
+    </form>
   );
 }
 
@@ -111,10 +112,7 @@ function UsersContent() {
   });
 
   return (
-    <PageShell>
-      <PageHeader title={t("users.title")} description={t("users.count", { count: users.data?.length ?? 0 })}>
-        <button onClick={() => setShowCreate(true)} className="btn-primary">{t("users.new")}</button>
-      </PageHeader>
+    <BusinessPage className="gallery-users-page" title={t("users.title")} description={users.isSuccess ? t("users.count", { count: users.data.length }) : undefined} actions={<button onClick={() => { create.reset(); setShowCreate(true); }} className="btn-primary">{t("users.new")}</button>}>
 
       {users.isLoading && <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>}
       {users.error && <ErrorState message={(users.error as Error).message} onRetry={() => users.refetch()} />}
@@ -166,18 +164,18 @@ function UsersContent() {
         </EntityList>
       )}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("users.new_user_title")}>
+      <BusinessModal open={showCreate} onClose={() => setShowCreate(false)} title={t("users.new_user_title")}>
         <CreateForm isPending={create.isPending} error={create.error as Error | null} modules={me.data?.modules || {}}
           onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
-      </Modal>
+      </BusinessModal>
       {deleteId !== null && (
-        <ConfirmDialog open title={t("users.delete_title")} message={t("users.delete_msg")}
+        <BusinessConfirm open title={t("users.delete_title")} message={t("users.delete_msg")}
           onConfirm={() => del.mutate(deleteId)} onCancel={() => setDeleteId(null)} isPending={del.isPending} error={(del.error as Error)?.message} />
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
 
 export default function UsersPage() {
-  return <PermissionGuard adminOnly><UsersContent /></PermissionGuard>;
+  return <BusinessPermissionGuard adminOnly><UsersContent /></BusinessPermissionGuard>;
 }

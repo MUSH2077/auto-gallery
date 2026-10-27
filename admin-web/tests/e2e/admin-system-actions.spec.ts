@@ -21,7 +21,7 @@ const json = (route: Route, body: unknown, status = 200) => route.fulfill({ stat
 
 async function installFixture(context: BrowserContext, me: Principal, handler: (route: Route, path: string) => Promise<boolean>) {
   const unhandled: string[] = [];
-  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname, path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => { localStorage.setItem("ag_token", "fixture"); localStorage.setItem("auto-gallery-lang", "en"); });
   await context.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -111,15 +111,16 @@ test("reindex rejection retains confirmation and suppresses duplicates before su
   await page.goto("/admin/settings");
   await page.getByRole("button", { name: "Reindex Now" }).click();
   const dialog = page.getByRole("dialog", { name: "Reindex Search" });
-  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => reindexCalls).toBe(1);
-  await expect(dialog.getByRole("button", { name: "Processing..." })).toBeDisabled();
-  await dialog.getByRole("button", { name: "Processing..." }).click({ force: true });
+  await expect(dialog.getByRole("button", { name: "Confirm", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("status")).toContainText("The request was submitted; closing this window will not interrupt the server command.");
+  await dialog.getByRole("button", { name: "Confirm", exact: true }).click({ force: true });
   expect(reindexCalls).toBe(1);
   releaseFailure();
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("alert")).toContainText("search reindex queue unavailable");
-  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => reindexCalls).toBe(2);
   await expect(dialog).toBeHidden();
   await expect(page.getByText("Search reindex started.", { exact: true })).toBeVisible();

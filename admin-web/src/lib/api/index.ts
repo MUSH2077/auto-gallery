@@ -649,12 +649,7 @@ export const api = {
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
-  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<{
-    issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
-    db_stats: Record<string, number>;
-    checked_at: string;
-    message?: string;
-  }>>("/api/v1/admin/integrity-check/latest"),
+  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<T.IntegrityResult>>("/api/v1/admin/integrity-check/latest"),
   clearEntity: (entity: T.ClearEntity, confirmation: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, {
       method: "POST",
@@ -1097,31 +1092,6 @@ export const queryKeys = {
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-
-export interface AuthTokenResponse {
-  access_token: string;
-  token_type: string;
-  must_change_password: boolean;
-}
-
-export interface AuthUser {
-  id: number;
-  username: string;
-  display_name: string | null;
-  is_active: boolean;
-  must_change_password: boolean;
-}
-
-export async function authLogin(username: string, password: string): Promise<AuthTokenResponse> {
-  return request<AuthTokenResponse>("/api/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  });
-}
-
-export async function authMe(): Promise<AuthUser> {
-  return request<AuthUser>("/api/v1/auth/me");
-}
 
 export async function authChangePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean; must_change_password: boolean }> {
   return request<{ ok: boolean; must_change_password: boolean }>("/api/v1/auth/browser/change-password", {

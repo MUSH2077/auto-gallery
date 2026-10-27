@@ -33,7 +33,7 @@ test("dedup caller submits its HTTP-origin UUID and exact selected representativ
   await page.goto("/admin/data-mgmt/dedup");
   await page.getByRole("button", { name: /Keep this image/ }).nth(1).click();
   await expect(page.getByRole("dialog")).toContainText("Group as one visual asset");
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => decision).not.toBeNull();
   expect(decision).toMatchObject({ expected_revision: 4, action: "merge", representative_asset_id: "asset-right" });
   expect(decision.idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -81,12 +81,12 @@ test("separate requires confirmation while defer is immediate and both report co
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   expect(decisions).toEqual([]);
   await separateCard.getByRole("button", { name: "Not the same image", exact: true }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("status")).toContainText("Kept the images separate");
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect(page.getByText("Kept the images separate.", { exact: true })).toBeVisible();
 
   const deferCard = page.getByRole("article").filter({ hasText: "case-defer-left" });
   await deferCard.getByRole("button", { name: "Review later", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Deferred the image pair");
+  await expect(page.getByText(/Deferred the image pair/)).toBeVisible();
   expect(decisions.map((item) => item.body.action)).toEqual(["separate", "defer"]);
   for (const item of decisions) {
     expect(item.body.idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -128,7 +128,7 @@ test("asset scan follows its durable task through reload and refreshes cases on 
   });
 
   await page.goto("/admin/data-mgmt/dedup");
-  await page.getByRole("button", { name: "Scan image assets", exact: true }).click();
+  await page.getByRole("button", { name: /Scan/i }).click();
   await expect(page.getByText("Operation complete", { exact: true })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("link", { name: "Task detail", exact: true })).toHaveAttribute("href", "/admin/jobs?tab=admin&task=task-scan-1");
   await page.reload();
@@ -173,7 +173,7 @@ test("failed asset scan retries the same durable task instead of creating anothe
   });
 
   await page.goto("/admin/data-mgmt/dedup");
-  await page.getByRole("button", { name: "Scan image assets", exact: true }).click();
+  await page.getByRole("button", { name: /Scan/i }).click();
   const failure = page.getByRole("alert").filter({ hasText: "fixture scan failed" });
   await expect(failure).toContainText("fixture scan failed");
   await page.reload();

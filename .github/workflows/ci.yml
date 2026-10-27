@@ -290,7 +290,7 @@ jobs:
         working-directory: admin-web
         # Include Node tests and source contracts; standalone browser scripts
         # and helpers do not follow these patterns.
-        run: node --loader ./tests/typescript-loader.mjs --test tests/*.test.mjs tests/*-contract.mjs tests/*.contract.mjs tests/job-tree.mjs tests/jobs-route.mjs tests/test-task-actions.mjs
+        run: node --loader ./tests/typescript-loader.mjs --test tests/*.test.mjs tests/*-contract.mjs tests/*.contract.mjs tests/job-tree.mjs tests/test-task-actions.mjs
       - name: Build admin web
         working-directory: admin-web
         run: npm run build
@@ -302,8 +302,31 @@ jobs:
         env:
           PLAYWRIGHT_MANAGE_SERVER: "1"
           PLAYWRIGHT_SERVER_MODE: "production"
+        # Legacy shell/dashboard suites have only their obsolete sidebar/topbar tests removed;
+        # the remaining business assertions stay in the CI browser set.
         run: >-
           npx playwright test
+          tests/e2e/gallery-navigation.spec.ts
+          tests/e2e/gallery-dashboard-business.spec.ts
+          tests/e2e/gallery-library-business.spec.ts
+          tests/e2e/gallery-job-links.spec.ts
+          tests/e2e/creators-business.spec.ts
+          tests/e2e/gallery-account-business.spec.ts
+          tests/e2e/gallery-governance-business.spec.ts
+          tests/e2e/gallery-maintenance-business.spec.ts
+          tests/e2e/gallery-operations-business.spec.ts
+          tests/e2e/gallery-records-business.spec.ts
+          tests/e2e/gallery-repository-business.spec.ts
+          tests/e2e/remote-discovery.spec.ts
+          tests/e2e/gallery-subscriptions-business.spec.ts
+          tests/e2e/gallery-theme.spec.ts
+          tests/e2e/login-session.spec.ts
+          tests/e2e/gallery-upload-business.spec.ts
+          tests/e2e/manual-upload.spec.ts
+          tests/e2e/row-action-menu-mobile.spec.ts
+          tests/e2e/permission-action-boundaries.spec.ts
+          tests/e2e/settings-gallery-business.spec.ts
+          tests/e2e/tags-business.spec.ts
           tests/e2e/admin-shell.spec.ts
           tests/e2e/dashboard.spec.ts
           tests/e2e/search.spec.ts
@@ -311,6 +334,7 @@ jobs:
           tests/e2e/reference-lists.spec.ts
           tests/e2e/i18n-runtime.spec.ts
           tests/e2e/media-playback.spec.ts
+          tests/e2e/scheduler-actions.spec.ts
           tests/e2e/operation-monitor.spec.ts
           tests/e2e/d39-operation-task-links.spec.ts
           tests/e2e/d37-guard-and-data-action.spec.ts

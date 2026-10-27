@@ -1,0 +1,131 @@
+.gallery-settings-page .card,
+.gallery-settings-page .card-interactive {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.gallery-settings-page .card-interactive {
+  display: block;
+  border-top: 1px solid var(--line);
+  padding: 20px 0;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.gallery-settings-page .card-interactive:hover {
+  background: var(--subtle);
+}
+
+.gallery-settings-page .section-title {
+  color: var(--ink);
+  font-family: var(--font-content);
+  font-size: var(--type-work);
+  line-height: var(--leading-work);
+  font-weight: 600;
+}
+
+.gallery-settings-page .input,
+.gallery-settings-page select,
+.gallery-settings-page textarea {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.gallery-settings-page .table-shell,
+.gallery-settings-page [role="log"] {
+  border-color: var(--line);
+  background: transparent;
+}
+
+.gallery-settings-page .business-heading + * {
+  margin-top: 8px;
+}
+
+.gallery-settings-page .gallery-settings-select .layout-tool-trigger {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.gallery-settings-page .gallery-settings-select {
+  min-width: 0;
+}
+
+.gallery-settings-page .settings-page-header {
+  margin-bottom: 32px;
+}
+
+.gallery-settings-page .settings-breadcrumb {
+  justify-content: center;
+  margin-bottom: 8px;
+  color: var(--ink);
+  font-size: var(--type-meta);
+  line-height: var(--leading-meta);
+}
+
+.gallery-settings-page .settings-page-header [data-page-context-nav] {
+  margin-top: 20px;
+}
+
+.gallery-settings-page .gallerydl-tabs {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.gallery-settings-page .gallerydl-tab {
+  flex: 0 0 auto;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.gallery-settings-page [role="tabpanel"] {
+  min-width: 0;
+}
+
+.gallery-settings-page .gallerydl-naming-table {
+  max-width: 100%;
+}
+
+.gallery-settings-page .gallerydl-naming-table table {
+  min-width: 600px;
+}
+
+@media (max-width: 700px) {
+  .gallery-settings-page :is(.grid.grid-cols-2,.grid.grid-cols-3) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .gallery-settings-page .card {
+    min-width: 0;
+  }
+
+  .gallery-settings-page :is(input, textarea, select) {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+.gallery-settings-page .segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.gallery-settings-page .segment {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.gallery-settings-page .gallerydl-tab[aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.gallery-ui .gallery-settings-page .bg-primary.text-on-primary {color:var(--on-accent);}

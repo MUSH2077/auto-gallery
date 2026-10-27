@@ -2,21 +2,18 @@
 import { useState, useMemo, useEffect, useCallback, useRef, useId, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import PageHeader from "@/components/PageHeader";
 import PageSection from "@/components/PageSection";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
-import HierarchyDeletionDialog from "@/components/HierarchyDeletionDialog";
-import Modal from "@/components/Modal";
-import FilterBar from "@/components/FilterBar";
+import HierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
+import {ToolbarSelect} from "@/features/gallery-ui/Controls";
 import SelectionBar from "@/components/SelectionBar";
-import PageShell from "@/components/PageShell";
-import PermissionGuard from "@/components/PermissionGuard";
+import { BusinessDangerZone, BusinessModal, BusinessPage } from "@/features/gallery-ui/BusinessPage";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { EntityRow } from "@/components/EntityList";
 import RowActionMenu from "@/components/RowActionMenu";
 import { SmartSearchInput, useSearchBatchComposer } from "@/components/SmartSearchInput";
 import CompactSelectionCheckbox from "@/components/CompactSelectionCheckbox";
-import ReferenceSortControl from "@/components/ReferenceSortControl";
 import ReferenceNameRail, { ReferenceListLayout } from "@/components/ReferenceNameRail";
 import VirtualReferenceList, {
   type VirtualReferenceListHandle,
@@ -31,7 +28,6 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { Star } from "lucide-react";
-import DomainDangerZone from "@/components/DomainDangerZone";
 import {
   legacyPageInitialIndex,
   referenceNameAnchorsAvailable,
@@ -105,8 +101,8 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
       </div>
       <div><label htmlFor={`${formId}-description`} className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea id={`${formId}-description`} aria-describedby={errorDescription} value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
-        <button onClick={submit} disabled={!name || isPending}
+        <button type="button" onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
+        <button type="button" onClick={submit} disabled={!name || isPending}
           className="btn-primary">
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
@@ -347,19 +343,21 @@ function CreatorsContent() {
   const someLoadedSelected = creatorItems.some((creator) => selected.has(creator.id));
 
   return (
-    <PageShell>
-      <PageHeader
-        title={t("creators.title")}
-        description={t("creators.count").replace("{count}", String(listState.total))}
-        secondaryActions={
+    <BusinessPage
+      title={t("creators.title")}
+      description={t("creators.count").replace("{count}", String(listState.total))}
+      className="gallery-creators-page"
+      actions={(
+        <>
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
-        }
-        primaryAction={canCurate ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button> : undefined}
-      />
+          {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
+        </>
+      )}
+    >
 
       {/* Toolbar */}
       <div data-page-primary-content>
-      <FilterBar>
+      <div className="business-toolbar" role="group" aria-label={t("creators.title")}>
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
@@ -368,29 +366,11 @@ function CreatorsContent() {
           placeholder={t("creators.search")}
           ariaLabel={t("creators.search")}
           showTokens={false}
-          className="w-full sm:w-72"
+          className="business-search"
         />
-        <div className="segmented-control max-w-full flex-wrap">
-          {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => handleFilterChange(f.key)}
-              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <ReferenceSortControl
-          value={sort}
-          labels={{
-            group: t("reference_list.sort_group"),
-            name: t("reference_list.sort_name"),
-            created: t("reference_list.sort_created"),
-            updated: t("reference_list.sort_updated"),
-            ascending: t("reference_list.ascending"),
-            descending: t("reference_list.descending"),
-          }}
-          onChange={handleSortChange}
-        />
-      </FilterBar>
+        <ToolbarSelect label={t("works.filter_button")} value={filter} onValueChange={value=>handleFilterChange(value as FilterMode)} options={FILTERS.map(f=>({value:f.key,label:f.label}))}/>
+        <ToolbarSelect label={t("reference_list.sort_group")} value={sort.field+"-"+sort.direction} onValueChange={handleSortChange} options={(["name","created","updated"] as const).flatMap(field=>(["asc","desc"] as const).map(direction=>({value:field+"-"+direction,label:t("reference_list.sort_"+field)+" · "+t(direction==="asc"?"reference_list.ascending":"reference_list.descending")})))}/>
+      </div>
       </div>
 
       <PageSection>
@@ -425,7 +405,7 @@ function CreatorsContent() {
       )}
 
       <ReferenceListLayout
-        rail={anchorsAvailable && Array.isArray(anchors.data?.items) ? (
+        rail={anchorsAvailable && anchors.data ? (
           <ReferenceNameRail
             items={anchors.data.items}
             ariaLabel={t("reference_list.anchors_label")}
@@ -495,13 +475,13 @@ function CreatorsContent() {
               <div className="entity-main">
                 <div className="entity-title-line">
                   <span className="entity-title">{c.display_name || c.name}</span>
-                  {c.display_name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
+                  {c.display_name && c.display_name!==c.name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
                   <span
                     className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.is_active ? "bg-success" : "bg-border"}`}
                     title={c.is_active ? t("creators.filter_active") : t("creators.filter_inactive")}
                   />
-                  {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
-                  {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success">{t("creators.sub_badge")}</span>}
+                  {c.danbooru_artist_id && <span className="rounded-full border border-accent/40 bg-subtle px-2 py-0.5 font-mono text-accent">D#{String(c.danbooru_artist_id)}</span>}
+                  {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-sm text-success">{t("creators.sub_badge")}</span>}
                 </div>
                 {c.description && <p className="entity-supporting">{c.description}</p>}
                 <MatchedIdentityBadge identity={c.matched_identity} />
@@ -516,7 +496,7 @@ function CreatorsContent() {
                   <button
                     type="button"
                     onClick={() => toggleFavorite.mutate(c.id)}
-                    className={`btn-icon text-lg ${c.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
+                    className={`btn-icon text-lg ${c.is_favorite ? "text-danger" : "text-muted hover:text-danger"}`}
                     title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                     aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
                   >
@@ -554,11 +534,11 @@ function CreatorsContent() {
       </ReferenceListLayout>
       </PageSection>
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
+      <BusinessModal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
-      </Modal>
+      </BusinessModal>
       {deleteId && (
-        <HierarchyDeletionDialog
+        <HierarchyDeletion
           open
           title={isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
           confirmationPhrase={creatorItems.find((creator) => creator.id === deleteId)?.display_name || creatorItems.find((creator) => creator.id === deleteId)?.name || deleteId}
@@ -573,7 +553,7 @@ function CreatorsContent() {
         />
       )}
       {confirmBatchDel && (
-        <HierarchyDeletionDialog
+        <HierarchyDeletion
           open
           title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
           confirmationPhrase={String(selected.size)}
@@ -587,12 +567,12 @@ function CreatorsContent() {
           error={(batchDel.error as Error)?.message || (batchDeletionPreview.error as Error)?.message}
         />
       )}
-      <DomainDangerZone
+      <BusinessDangerZone
         entity="creators"
         title={t("datamgmt.danger_clear_creators")}
         description={t("datamgmt.danger_clear_creators_desc")}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }
 

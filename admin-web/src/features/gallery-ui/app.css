@@ -1,6 +1,18 @@
 @import './gallery-ui.css';
 @import './latin-fonts.css';
 @import './typography.css';
+@import './enhancements.css';
+@import './business.css';
+@import '../../app/admin/profile/account.css';
+@import '../../app/admin/data-mgmt/governance.css';
+@import '../../app/admin/operations.css';
+@import '../../app/admin/settings/settings.css';
+@import '../../app/admin/subscriptions/repositories/repositories.css';
+@import '../../app/admin/subscriptions/subscriptions.css';
+@import '../../app/admin/upload/upload.css';
+@import '../../app/admin/creators/creators.css';
+@import '../../app/admin/tags/tags.css';
+@import '../../app/admin/discovery/discovery.css';
 
 html:has(.gallery-app) {scrollbar-gutter:stable;scroll-padding-bottom:calc(112px + env(safe-area-inset-bottom,0px));}
 @supports (scrollbar-gutter:stable) {
@@ -60,3 +72,17 @@ html.dark .gallery-app .favorite-button:focus-visible { outline-color: #e68088; 
 .gallery-app .work-masonry .ratio-portrait .work-picture > a > span > div {aspect-ratio:4/5;}
 .gallery-app .work-masonry .ratio-square .work-picture > a > span > div {aspect-ratio:1;}
 .gallery-app .detail-media-viewer > button {display:block;min-height:0;height:auto;padding:0;}
+
+.gallery-app .gallery-notification-time { color: var(--ink); opacity: 1; }
+
+
+/* Native top-layer membership keeps the palette usable over another modal. */
+.gallery-app .command-palette {position:fixed;inset:0;margin:0;width:100%;height:100dvh;max-width:none;max-height:none;padding:12vh 12px 0;border:0;background:transparent;overflow:hidden;color:inherit;font:inherit;}
+.gallery-app .command-palette[open] {display:flex;align-items:flex-start;justify-content:center;}
+.gallery-app .command-palette:not([open]) {display:none;}
+.gallery-app .command-palette::backdrop {background:transparent;}
+
+/* Shared search fields use a single visible focus container. */
+.gallery-app [data-smart-search] input {border:0;border-radius:0;background:transparent;box-shadow:none;min-height:42px;padding:8px 0;}
+.gallery-app [data-smart-search] input:focus-visible {outline:none;}
+.gallery-app [data-smart-search]:has(input:focus-visible)>div:first-child {outline:2px solid var(--accent);outline-offset:2px;box-shadow:none;}

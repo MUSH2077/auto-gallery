@@ -48,6 +48,7 @@ async function createWebSocketTicket(): Promise<string | null> {
     credentials: "same-origin",
     headers: { "X-CSRF-Token": csrfToken() || "" },
   });
+  if (res.status >= 500) throw new Error("WebSocket ticket temporarily unavailable");
   if (!res.ok) return null;
   const body = await res.json().catch(() => null);
   return typeof body?.ticket === "string" ? body.ticket : null;
@@ -82,19 +83,8 @@ export function useJobWebSocket(options?: UseWsOptions) {
       return;
     }
 
-    if (!ticket) {
-      void createWebSocketTicket().then((nextTicket) => {
-        if (nextTicket && !intentionalCloseRef.current) connect(nextTicket);
-        else setStatus("polling");
-      }).catch(() => setStatus("polling"));
-      return;
-    }
-    const wsUrl = resolveWebSocketUrl(ticket);
-    if (!wsUrl) return;
-
     const generation = ++connectGenerationRef.current;
     intentionalCloseRef.current = false;
-    setStatus("connecting");
 
     const scheduleReconnect = () => {
       if (intentionalCloseRef.current || generation !== connectGenerationRef.current) return;
@@ -106,6 +96,18 @@ export function useJobWebSocket(options?: UseWsOptions) {
         connect();
       }, RECONNECT_DELAY_MS);
     };
+
+    if (!ticket) {
+      void createWebSocketTicket().then((nextTicket) => {
+        if (intentionalCloseRef.current || generation !== connectGenerationRef.current) return;
+        if (nextTicket) connect(nextTicket);
+        else setStatus("polling");
+      }).catch(scheduleReconnect);
+      return;
+    }
+    const wsUrl = resolveWebSocketUrl(ticket);
+    if (!wsUrl) return;
+    setStatus("connecting");
 
     try {
       const ws = new WebSocket(wsUrl);

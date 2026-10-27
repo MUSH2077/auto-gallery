@@ -3,7 +3,10 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { api, queryKeys } from "@/lib/api";
-import { EmptyState, ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
+import { EmptyState, ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useT } from "@/lib/i18n";
 import { POLL_ACTIVE_MS } from "@/lib/polling";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -46,26 +49,30 @@ function SystemLogsContent() {
       </PageHeader>
 
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-md border border-border bg-surface p-3">
-        <label className="grid gap-1 text-xs font-medium text-muted">
-          {t("logs.level")}
-          <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)}
-          className="input min-h-11 min-w-36 text-sm">
-          <option value="">{t("logs.all_levels")}</option>
-          {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
-        </label>
+        <div className="gallery-settings-select min-w-36">
+          <span className="mb-1 block text-xs font-medium text-muted">{t("logs.level")}</span>
+          <ToolbarSelect
+            label={t("logs.level")}
+            value={levelFilter}
+            options={[{ value: "", label: t("logs.all_levels") }, ...["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((l) => ({ value: l, label: l }))]}
+            onValueChange={setLevelFilter}
+          />
+        </div>
         <label className="grid gap-1 text-xs font-medium text-muted">
           {t("logs.source")}
           <input value={nameFilter} onChange={(e) => setNameFilter(e.target.value)}
             placeholder={t("logs.filter_name")}
             className="input min-h-11 w-56 text-sm" />
         </label>
-        <label className="grid gap-1 text-xs font-medium text-muted">
-          {t("logs.limit")}
-          <select value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="input min-h-11 min-w-28 text-sm">
-            {[100, 200, 500].map((value) => <option key={value} value={value}>{fmt.number(value)}</option>)}
-          </select>
-        </label>
+        <div className="gallery-settings-select min-w-28">
+          <span className="mb-1 block text-xs font-medium text-muted">{t("logs.limit")}</span>
+          <ToolbarSelect
+            label={t("logs.limit")}
+            value={String(limit)}
+            options={[100, 200, 500].map((value) => ({ value: String(value), label: fmt.number(value) }))}
+            onValueChange={(next) => setLimit(Number(next))}
+          />
+        </div>
         <label className="flex min-h-11 cursor-pointer items-center gap-2 px-2 text-sm text-muted">
           <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="h-5 w-5 rounded" />
           {t("logs.auto_refresh")}
@@ -83,7 +90,7 @@ function SystemLogsContent() {
       {logs.data && (
         logs.data.entries.length === 0
         ? <EmptyState title={t("logs.no_entries")} description={t("logs.no_entries_desc")} />
-        : <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-subtle p-4 font-mono text-xs leading-relaxed" role="log" aria-label={t("logs.title")}>
+        : <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-subtle p-4 font-mono text-xs leading-relaxed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" tabIndex={0} role="log" aria-label={t("logs.title")}>
           {logs.data.entries.map((e, i) => (
             <div key={`${e.ts}-${i}`} className="grid min-w-[680px] grid-cols-[8rem_4rem_9rem_minmax(0,1fr)] gap-3 rounded px-1 py-1 hover:bg-surface">
               <time className="shrink-0 text-muted" dateTime={e.ts}>{fmt.time(e.ts)}</time>

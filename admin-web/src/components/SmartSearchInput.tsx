@@ -146,6 +146,7 @@ export interface SmartSearchInputProps extends Pick<AriaAttributes, "aria-contro
   onSubmit?: (canonicalQuery: string) => void;
   keyboardNavigation?: boolean;
   showSuggestions?: boolean;
+  parseWhenUnfocused?: boolean;
 }
 
 export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputProps>(function SmartSearchInput({
@@ -166,6 +167,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   onSubmit,
   keyboardNavigation = true,
   showSuggestions = true,
+  parseWhenUnfocused = false,
   "aria-controls": ariaControls,
   "aria-expanded": ariaExpanded,
   "aria-activedescendant": ariaActiveDescendant,
@@ -187,7 +189,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
       scope,
       limit: 10,
     }),
-    enabled: focused,
+    enabled: focused || (parseWhenUnfocused && Boolean(deferredValue.trim())),
     staleTime: 15_000,
     placeholderData: (previous) => previous,
   });

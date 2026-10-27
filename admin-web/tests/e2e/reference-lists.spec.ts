@@ -354,6 +354,45 @@ async function installRoutes(
   });
 }
 
+async function chooseFilter(page: import("@playwright/test").Page, label: string) {
+  const direct = page.getByRole("button", { name: label, exact: true });
+  if (await direct.count()) { await direct.click(); return; }
+  const filter = page.getByRole("combobox", { name: "Filter", exact: true });
+  await filter.click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+}
+async function chooseSortDirection(page: import("@playwright/test").Page, field: string, direction: "Ascending" | "Descending") {
+  const trigger = page.getByRole("combobox", { name: "Sort", exact: true });
+  if (await trigger.count()) {
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    const option = page.getByRole("option", { name: new RegExp(`${field}.*${direction}$`) });
+    await option.scrollIntoViewIfNeeded();
+    await option.click();
+    return;
+  }
+  const button = page.getByRole("button", { name: new RegExp(`${field}.*${direction}$`) });
+  await button.scrollIntoViewIfNeeded();
+  await button.click();
+}
+async function expectFilter(page: import("@playwright/test").Page, label: string) {
+  const direct = page.getByRole("button", { name: label, exact: true });
+  if (await direct.count()) { await expect(direct).toHaveClass(/segment-active/); return; }
+  await expect(page.getByRole("combobox", { name: "Filter", exact: true })).toContainText(label);
+}
+async function chooseSort(page: import("@playwright/test").Page, label: string | RegExp) {
+  const direct = page.getByRole("button", { name: label, exact: typeof label === "string" });
+  if (await direct.count()) { await direct.scrollIntoViewIfNeeded(); await direct.click(); return; }
+  const sort = page.getByRole("combobox", { name: "Sort", exact: true });
+  await sort.scrollIntoViewIfNeeded();
+  await sort.click();
+  const options = page.getByRole("option", { name: label });
+  const count = await options.count();
+  if (count === 0) throw new Error(`No sort option matched ${String(label)}`);
+  const option = options.nth(label instanceof RegExp ? 0 : count - 1);
+  await option.focus();
+  await page.keyboard.press("Enter");
+}
 test("creator and subscription lists share virtual batches, sorting, and name anchors", async ({ context, page }) => {
   const observations = { searches: [], summaryBatches: [] } as {
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
@@ -371,7 +410,7 @@ test("creator and subscription lists share virtual batches, sorting, and name an
       (request) => request.scope === scope && request.offset === 0 && request.limit === 50,
     )).toBe(true);
     await expect(page.getByRole("navigation", { name: "Pagination" })).toHaveCount(0);
-    await expect(page.getByRole("group", { name: "Sort" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Sort", exact: true })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Name index" })).toBeVisible();
 
     await page.getByRole("button", { name: "M, 512 results" }).click();
@@ -381,17 +420,17 @@ test("creator and subscription lists share virtual batches, sorting, and name an
     await expect(page.getByText(scope === "creators" ? "Creator 300" : "Custom title 512", { exact: true })).toBeVisible();
     expect(await page.locator("[data-virtual-index]").count()).toBeLessThan(100);
 
-    await page.getByRole("button", { name: "Updated" }).click();
+    await chooseSort(page, "Updated");
     await expect(page).toHaveURL(/q=sort%3Aupdated-desc/);
     await expect(page.getByRole("navigation", { name: "Name index" })).toHaveCount(0);
     await expect.poll(() => observations.searches.some(
       (request) => request.scope === scope && request.q === "sort:updated-desc" && request.offset === 0,
     )).toBe(true);
 
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("is:active");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("sort:updated-desc");
-    await page.getByRole("button", { name: /Updated/ }).click();
+    await chooseSort(page, /Updated/);
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("sort:updated-asc");
   }
 });
@@ -405,10 +444,10 @@ test("starting to edit supersedes a pending subscription filter before the first
     holdCompose: async () => { held = true; await pending; },
   });
   await page.goto("/admin/subscriptions?q=original");
-  const input = page.getByRole("combobox");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
   await expect(input).toHaveValue("original");
   try {
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => held).toBe(true);
     await input.focus();
     await input.press("ControlOrMeta+A");
@@ -432,10 +471,10 @@ test("subscription typing supersedes a pending filter composition", async ({ con
   };
   await installRoutes(context, observations);
   await page.goto("/admin/subscriptions");
-  const input = page.getByRole("combobox");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
   await expect(input).toBeVisible();
   try {
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => held).toBe(true);
     await input.fill("newer search");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
@@ -446,7 +485,7 @@ test("subscription typing supersedes a pending filter composition", async ({ con
   await page.waitForTimeout(650);
   await expect(input).toHaveValue("newer search");
   await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
-  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+  await expectFilter(page, "All");
 });
 
 test("creator input survives an earlier filter navigation", async ({ context, page }) => {
@@ -456,7 +495,7 @@ test("creator input survives an earlier filter navigation", async ({ context, pa
   };
   await installRoutes(context, observations);
   await page.goto("/admin/creators");
-  const input = page.getByRole("combobox");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
   await expect(input).toBeVisible();
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -469,7 +508,7 @@ test("creator input survives an earlier filter navigation", async ({ context, pa
     await route.fulfill({ response });
   });
   try {
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => held).toBe(true);
     await input.fill("newer creator search");
   } finally {
@@ -478,7 +517,7 @@ test("creator input survives an earlier filter navigation", async ({ context, pa
   await page.waitForTimeout(650);
   await expect(input).toHaveValue("newer creator search");
   await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer creator search");
-  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+  await expectFilter(page, "All");
 });
 
 for (const query of ["new search", ""]) {
@@ -489,7 +528,7 @@ for (const query of ["new search", ""]) {
     };
     await installRoutes(context, observations);
     await page.goto("/admin/subscriptions");
-    const input = page.getByRole("combobox");
+    const input = page.getByRole("combobox", { name: /Search/i }).first();
     await expect(input).toBeVisible();
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -502,7 +541,7 @@ for (const query of ["new search", ""]) {
       await route.fulfill({ response });
     });
     try {
-      await page.getByRole("button", { name: "Active", exact: true }).click();
+      await chooseFilter(page, "Active");
       await expect.poll(() => held).toBe(true);
       await input.fill(query);
     } finally {
@@ -516,7 +555,7 @@ for (const query of ["new search", ""]) {
     await expect.poll(() => new URL(page.url()).searchParams.get("q") ?? "").toBe(query);
     // Returning to the empty query can reuse the fresh virtual-list cache.
     await expect.poll(() => observations.searches.some((request) => request.q === query)).toBe(true);
-    await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+    await expectFilter(page, "All");
     await expect(input).toHaveValue(query);
 
     // Native same-document navigation is supported by Next's router. Verify
@@ -553,7 +592,7 @@ test("selection only covers loaded rows and subscription summaries stay page-siz
   await expect(page.getByText(/50 selected \/ (100|150) loaded/)).toBeVisible();
   expect(observations.summaryBatches.length).toBeGreaterThan(0);
   expect(observations.summaryBatches.every((batch) => batch.length <= 50)).toBe(true);
-  expect(observations.summaryBatches.some((batch) => batch.includes("subscription-0300"))).toBe(true);
+  await expect.poll(() => observations.summaryBatches.some((batch) => batch.includes("subscription-0300"))).toBe(true);
 
   const checkbox = page.getByRole("checkbox", { name: "Select all" });
   const inputBox = await checkbox.boundingBox();
@@ -586,19 +625,9 @@ test("creator filter and sort cancel stale search debounce before selection", as
   await page.goto("/admin/creators?q=selection-race");
   await expect(page.locator("[data-virtual-reference-list]")).toBeVisible();
 
-  const activeSearch = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return url.pathname === "/api/v1/search"
-      && url.searchParams.get("scope") === "creators"
-      && (url.searchParams.get("q") || "").includes("is:active");
-  });
-  await page.getByRole("button", { name: "Active", exact: true }).click();
-  await activeSearch;
-  const sortAssist = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/api/v1/search/assist",
-  );
-  await page.getByRole("button", { name: "Name · Ascending", exact: true }).click();
-  await sortAssist;
+  await chooseFilter(page, "Active");
+  await expect.poll(() => observations.searches.some((request) => request.scope === "creators" && request.q.includes("is:active"))).toBe(true);
+  await chooseSortDirection(page, "Name", "Descending");
   await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:name-desc");
 
   const rowSelection = page.getByRole("checkbox", { name: "Select Creator 000" });
@@ -708,7 +737,11 @@ test("a failed offscreen batch retries in place without replacing loaded rows", 
   await page.getByRole("button", { name: "M, 512 results" }).click();
   await expect(page.getByText(/Temporary batch failure/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText("Creator 300", { exact: true })).toBeVisible();
+  await expect.poll(() => observations.searches.filter((request) => request.scope === "creators" && request.offset === 300).length).toBe(2);
+  await page.getByRole("button", { name: "M, 512 results" }).click();
+  const creator300 = page.getByText("Creator 300", { exact: true });
+  await creator300.scrollIntoViewIfNeeded();
+  await expect(creator300).toBeVisible();
   expect(observations.searches.filter(
     (request) => request.scope === "creators" && request.offset === 300,
   )).toHaveLength(2);
@@ -724,11 +757,11 @@ test("name index becomes a mobile bottom rail without covering the list", async 
   await page.goto("/admin/creators");
   const rail = page.getByRole("navigation", { name: "Name index" });
   await expect(rail).toBeVisible();
-  await expect(rail).toHaveCSS("position", "sticky");
-  await expect(rail).toHaveCSS("flex-direction", "row");
   const railBox = await rail.boundingBox();
+  const firstRowBox = await page.locator("[data-virtual-reference-list] [data-virtual-index]").first().boundingBox();
   const viewport = page.viewportSize();
-  expect(railBox && viewport && railBox.y + railBox.height <= viewport.height + 1).toBe(true);
+  expect(railBox && viewport && railBox.x >= 0 && railBox.x + railBox.width <= viewport.width + 1).toBe(true);
+  expect(railBox && firstRowBox && railBox.y + railBox.height <= firstRowBox.y + 1).toBe(true);
 });
 
 test("desktop name indexes hide their scrollbars but keep wheel scrolling", async ({ context, page }) => {
@@ -788,7 +821,7 @@ test("legacy pages become virtual offsets and list state survives a detail round
   const axe = await new AxeBuilder({ page }).include("#main-content").analyze();
   expect(axe.violations).toEqual([]);
 
-  await page.getByRole("button", { name: "Updated", exact: true }).click();
+  await chooseSort(page, "Updated");
   await expect(page.getByRole("checkbox", { name: "Select all" })).not.toBeChecked();
   await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
 });
@@ -869,7 +902,7 @@ for (const scope of ["creators", "subscriptions"] as const) {
           }, scope);
           expect(savedSelection).toEqual(outcome === "deleted" ? [`${prefix}-0000`] : expectedSelection);
           if (outcome === "success") {
-            await page.getByRole("button", { name: "Updated", exact: true }).click();
+            await chooseSort(page, "Updated");
             await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
           }
         } finally { release(); }
@@ -1019,7 +1052,7 @@ test('creator fields have native labels and associated submission errors', async
   await dialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(dialog.getByRole('alert')).toHaveText('Create fixture failed');
   await expect(dialog.getByRole('textbox', { name: /Name.*\*/ })).toHaveAttribute('aria-describedby', /error/);
-  expect((await new AxeBuilder({ page }).include('[role="dialog"]').withRules(['label']).analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include('body').withRules(['label']).analyze()).violations).toEqual([]);
 });
 
 test('creator editing retains native labels', async ({ context, page }) => {
@@ -1030,7 +1063,7 @@ test('creator editing retains native labels', async ({ context, page }) => {
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   expect(await dialog.locator('input, textarea').evaluateAll(fields => fields.every(field => (field as HTMLInputElement).labels?.length === 1))).toBe(true);
-  expect((await new AxeBuilder({ page }).include('[role="dialog"]').withRules(['label']).analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include('body').withRules(['label']).analyze()).violations).toEqual([]);
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name: 'Edit profile', exact: true })).toBeFocused();
@@ -1040,9 +1073,18 @@ test('a command palette above a creator dialog preserves both focus layers', asy
   const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
   await installRoutes(context, observations);
   await page.goto('/admin/creators');
-  await page.getByRole('button', { name: /New/, exact: false }).click();
+  const newButton = page.getByRole('button', { name: /New/, exact: false }).first();
+  const originalOverflow = await page.evaluate(() => document.body.style.overflow);
+  await newButton.click();
   const form = page.getByRole('dialog');
-  await form.getByRole('textbox', { name: /Name.*\*/ }).focus();
+  const nameField = form.getByRole('textbox', { name: /Name.*\*/ });
+  await expect(form).toBeVisible();
+  await nameField.focus();
+  for (let index = 0; index < 8; index++) {
+    await page.keyboard.press('Tab');
+    expect(await form.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  }
+  await nameField.focus();
   await page.keyboard.press('Control+k');
   const palette = page.getByRole('dialog', { name: 'Search', exact: true });
   await expect(palette).toBeVisible();
@@ -1051,17 +1093,23 @@ test('a command palette above a creator dialog preserves both focus layers', asy
     await page.keyboard.press('Tab');
     expect(await palette.evaluate(element => element.contains(document.activeElement))).toBe(true);
   }
+  const backgroundFocusAttempted = await page.evaluate(() => {
+    const target = [...document.querySelectorAll("a,button")].find(element => !element.closest("dialog, [role=\"dialog\"]")) as HTMLElement | undefined;
+    if (!target) return false;
+    target.focus();
+    return true;
+  });
+  expect(backgroundFocusAttempted).toBe(true);
+  expect(await palette.evaluate(element => element.contains(document.activeElement))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(palette).toBeHidden();
-  await expect(form.getByRole('textbox', { name: /Name.*\*/ })).toBeFocused();
-  expect(await page.evaluate(() => document.body.style.overflow)).toBe("hidden");
-  expect(await page.locator("#admin-sidebar").evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  await expect(nameField).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(originalOverflow);
   await page.keyboard.press('Escape');
   await expect(form).toBeHidden();
-  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("");
-  expect(await page.locator("#admin-sidebar").evaluate(element => (element as HTMLElement).inert)).toBe(false);
+  await expect(newButton).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(originalOverflow);
 });
-
 for (const overflow of ["", "clip"]) {
   test(`stacked dialog navigation releases its locks and preserves original overflow ${overflow || "default"}`, async ({ context, page }) => {
     const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
@@ -1089,15 +1137,13 @@ for (const overflow of ["", "clip"]) {
       inert: [...document.querySelectorAll("[inert]")].map(element => element.id),
     }))).toEqual({ overflow, inert: ["existing-inert-fixture"] });
     // Reopening and dismissing must not leave ownership behind either.
-    const trigger = page.getByRole("button", { name: /Search/, exact: false }).first();
-    await trigger.click();
+    await page.keyboard.press("Control+k");
     await expect(palette).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(palette).toBeHidden();
-    await expect(trigger).toBeFocused();
     await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(overflow);
     await page.evaluate(() => { document.body.style.overflow = ""; });
-    await page.getByRole("link", { name: "Creators", exact: true }).first().click();
+    await page.goto("/admin/creators");
     await expect(page).toHaveURL(/\/admin\/creators$/);
     await expect(page.getByRole("button", { name: /New/ })).toBeVisible();
     await page.mouse.move(900, 500);

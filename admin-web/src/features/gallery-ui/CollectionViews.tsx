@@ -12,7 +12,7 @@ export function WorksView({heading, scopes, toolbar, selection, children, pagina
   const {copy}=useGalleryCopy();
   return <section className="layout-works" aria-labelledby="layout-page-title"><h1 className="sr-only" id="layout-page-title">{heading}</h1><div className="layout-workspace-tools"><ScopeTabs items={scopes}/><div className="layout-content-toolbar" role="group" aria-label={copy('workTools')}>{toolbar}</div></div>{selection}{children}{pagination}</section>;
 }
-export function WorkCollection({mode, children}: {mode: WorksViewMode; children: ReactNode}) { return <div className={'work-collection work-'+mode} data-works-layout={mode}>{children}</div>; }
+export function WorkCollection({mode, children, size}: {mode: WorksViewMode; children: ReactNode;size?:"small"|"medium"|"large"}) { return <div className={'work-collection work-'+mode} data-works-layout={mode} data-card-size={size}>{children}</div>; }
 export function JobsView({scopes, toolbar, selection, failures, children}: { scopes: ScopeLink[]; toolbar: ReactNode; selection?: ReactNode; failures?: ReactNode; children: ReactNode; }) {
   const {copy}=useGalleryCopy();
   return <section className="layout-jobs" aria-labelledby="layout-page-title"><h1 className="sr-only" id="layout-page-title">{copy('jobsHeading')}</h1><div className="layout-workspace-tools"><ScopeTabs items={scopes} jobs/><div className="layout-content-toolbar" role="group" aria-label={copy('taskTools')}>{toolbar}</div></div>{selection}{failures}{children}</section>;

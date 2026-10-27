@@ -58,9 +58,9 @@ const TOKEN_NAMES: Record<string, string> = {
   danger: "--ag-danger",
 };
 
-function readTheme(fallback: Record<string, RgbColor>): Record<string, RgbColor> {
+function readTheme(fallback: Record<string, RgbColor>, scope?: string): Record<string, RgbColor> {
   if (typeof window === "undefined") return fallback;
-  const style = window.getComputedStyle(document.documentElement);
+  const style = window.getComputedStyle((scope && document.querySelector(scope)) || document.documentElement);
   return Object.fromEntries(
     Object.entries(TOKEN_NAMES).map(([key, token]) => [
       key,
@@ -69,15 +69,15 @@ function readTheme(fallback: Record<string, RgbColor>): Record<string, RgbColor>
   );
 }
 
-export function useChartTheme(): ChartTheme {
+export function useChartTheme(scope?: string): ChartTheme {
   const { resolved } = useTheme();
   const fallback = resolved === "dark" ? FALLBACK_DARK : FALLBACK_LIGHT;
   const [palette, setPalette] = useState<Record<string, RgbColor>>(() => fallback);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setPalette(readTheme(fallback)));
+    const frame = window.requestAnimationFrame(() => setPalette(readTheme(fallback, scope)));
     return () => window.cancelAnimationFrame(frame);
-  }, [resolved]);
+  }, [resolved, scope]);
 
   return useMemo(() => {
     const semantic = (key: string) => rgbCss(palette[key] || fallback[key]);

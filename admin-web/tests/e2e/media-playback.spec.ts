@@ -261,6 +261,80 @@ async function installMediaRoutes(
   });
 }
 
+
+for (const order of ["assets-first", "work-first", "cached-assets"] as const) {
+  test("detail wheel paging survives " + order + " loading and reopening", async ({ context, page }) => {
+    const calls: string[] = [];
+    await installMediaRoutes(context, calls);
+    const images = [
+      IMAGE_ASSET,
+      { ...IMAGE_ASSET, id: "asset-image-two", file_name: "second-still.webp" },
+      { ...IMAGE_ASSET, id: "asset-image-three", file_name: "third-still.webp" },
+    ];
+    let releaseWork!: () => void;
+    let releaseAssets!: () => void;
+    const workReady = new Promise<void>(resolve => { releaseWork = resolve; });
+    const assetsReady = new Promise<void>(resolve => { releaseAssets = resolve; });
+    await context.route("**/api/v1/works/video-work", async route => {
+      await workReady;
+      await route.fulfill({ json: { ...WORK, asset_count: images.length } });
+    });
+    await context.route("**/api/v1/works/video-work/assets", async route => {
+      await assetsReady;
+      await route.fulfill({ json: images });
+    });
+    const assetsResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/v1/works/video-work/assets");
+    const detail = page.getByRole("dialog");
+    try {
+      if (order === "cached-assets") {
+        releaseAssets();
+        await page.goto("/admin/works");
+        const card = page.locator('[data-work-id="video-work"]');
+        await card.hover();
+        await expect(page.locator(".popover").filter({ hasText: WORK.title })).toBeVisible();
+        await assetsResponse;
+        await card.locator("h2 a").click();
+        await expect(detail.getByRole("status")).toBeVisible();
+        await page.evaluate(() => new Promise<void>(resolve =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        releaseWork();
+      } else {
+        await page.goto("/admin/works/video-work");
+        await expect(detail).toBeVisible();
+        if (order === "assets-first") {
+          releaseAssets();
+          await assetsResponse;
+          await page.evaluate(() => new Promise<void>(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          releaseWork();
+        } else {
+          releaseWork();
+          await expect(detail.locator(".detail-media-viewer")).toBeVisible();
+          releaseAssets();
+        }
+      }
+
+      const viewer = detail.locator(".detail-media-viewer");
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+      await viewer.dispatchEvent("wheel", { deltaY: 150 });
+      await expect(viewer.locator(".asset-navigation")).toContainText("2 / 3");
+      await viewer.getByRole("button", { name: "Previous image", exact: true }).click();
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+
+      await page.keyboard.press("Escape");
+      await expect(detail).toHaveCount(0);
+      await page.locator('[data-work-id="video-work"] h2 a').click();
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+      await viewer.dispatchEvent("wheel", { deltaY: 150 });
+      await expect(viewer.locator(".asset-navigation")).toContainText("2 / 3");
+    } finally {
+      releaseWork();
+      releaseAssets();
+    }
+  });
+}
+
 test("video remains poster-only until click and switching assets unloads playback", async ({ context, page }) => {
   const calls: string[] = [];
   const consoleErrors: string[] = [];
@@ -275,7 +349,7 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(page.locator("video")).toHaveCount(0);
   await expect.poll(() => calls.some((call) => call.includes("playback-ticket"))).toBe(false);
 
-  const videoCard = page.locator("article").filter({ hasText: WORK.title }).first();
+  const videoCard = page.locator(`[data-work-id="${WORK.id}"]`).first();
   await videoCard.hover();
   const preview = page.locator(".popover").filter({ hasText: WORK.title });
   await expect(preview).toBeVisible();
@@ -291,7 +365,7 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
 
   await page.goto("/admin/works/video-work");
-  await expect(page.getByRole("heading", { level: 1, name: "Synthetic motion study" })).toBeVisible();
+  await expect(page.getByRole("dialog").filter({ hasText: "Synthetic motion study" })).toBeVisible();
   const video = page.locator("video");
   await expect(video).toHaveCount(1);
   await expect(video).not.toHaveAttribute("src");
@@ -309,12 +383,44 @@ test("video remains poster-only until click and switching assets unloads playbac
   await page.screenshot({ path: "/tmp/auto-gallery-media-playing.png", fullPage: false });
 
   const releasedVideo = await video.elementHandle();
+  await page.locator("details.detail-more-information > summary").click();
+  await page.locator("details.detail-more-information details.detail-extra-group > summary").filter({ hasText: "Pages (2)" }).click();
   await page.getByTitle("generated-still.webp").click();
   await expect(page.locator("video")).toHaveCount(0);
   await expect.poll(() => releasedVideo!.evaluate(element => (element as HTMLVideoElement).paused && !element.getAttribute("src"))).toBe(true);
   expect(consoleErrors, calls.join("\n")).toEqual([]);
 });
 
+test("work preview wheel sensitivity keeps card and overlay pages synchronized", async ({ context, page }) => {
+  const calls: string[] = [];
+  await installMediaRoutes(context, calls);
+  await page.goto("/admin/works");
+  const card = page.locator(`[data-work-id="${WORK.id}"]`).first();
+  await card.hover();
+  const preview = page.locator(".popover").filter({ hasText: WORK.title });
+  await expect(preview).toBeVisible();
+  await page.mouse.move((await card.boundingBox())!.x + 30, (await card.boundingBox())!.y + 30);
+  await page.mouse.wheel(0, 50);
+  await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
+  await card.dispatchEvent("wheel", { deltaY: 200, ctrlKey: true });
+  await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
+  await card.dispatchEvent("wheel", { deltaY: 20 });
+  await expect(preview.getByText("2 / 2", { exact: true })).toBeVisible();
+  await page.goto("/admin/works");
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("button", { name: "Display settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Wheel paging", exact: true }).click();
+  await page.getByRole("option", { name: "Relaxed", exact: true }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  const relaxedCard = page.locator(`[data-work-id="${WORK.id}"]`).first();
+  await relaxedCard.hover();
+  const relaxedPreview = page.locator(".popover").filter({ hasText: WORK.title });
+  await expect(relaxedPreview).toBeVisible();
+  await relaxedCard.dispatchEvent("wheel", { deltaY: 100 });
+  await expect(relaxedPreview.getByText("1 / 2", { exact: true })).toBeVisible();
+  await relaxedCard.dispatchEvent("wheel", { deltaY: 30 });
+  await expect(relaxedPreview.getByText("2 / 2", { exact: true })).toBeVisible();
+});
 test("mobile video player is keyboard reachable without horizontal overflow", async ({ context, page }) => {
   const calls: string[] = [];
   await installMediaRoutes(context, calls);
@@ -337,7 +443,9 @@ test("slideshow retries the exact failed thumbnail and keeps a complete foregrou
   await installMediaRoutes(context, calls, { failFirstImageAsset: true });
   await page.goto("/admin/works");
 
-  await page.getByRole("button", { name: "Slideshow" }).click();
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("button", { name: "Display settings", exact: true }).click();
+  await page.getByRole("button", { name: "Slideshow", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Slideshow" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("slideshow-stage")).toBeVisible();

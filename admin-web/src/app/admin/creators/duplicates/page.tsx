@@ -3,12 +3,10 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { motionConfig, motionTokens, useStaggeredEntrance } from "@/lib/motion";
-import ConfirmDialog from "@/components/ConfirmDialog";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
-import PageHeader from "@/components/PageHeader";
-import PageShell from "@/components/PageShell";
-import PermissionGuard from "@/components/PermissionGuard";
+import { BusinessConfirm, BusinessPage } from "@/features/gallery-ui/BusinessPage";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
@@ -105,8 +103,11 @@ function CreatorDuplicatesContent() {
   };
 
   return (
-    <PageShell>
-      <PageHeader title={t("duplicates.title")} description={t("duplicates.desc")} />
+    <BusinessPage
+      title={t("duplicates.title")}
+      description={t("duplicates.desc")}
+      className="gallery-creators-page gallery-creators-duplicates"
+    >
 
       <div className="mb-6 rounded-md border border-warning-subtle bg-warning-subtle p-4 text-sm text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">
         <strong>{t("duplicates.warning")}</strong> {t("duplicates.warning_detail")}
@@ -153,11 +154,11 @@ function CreatorDuplicatesContent() {
                 <div className="flex-1 min-w-0">
                   <button
                     onClick={() => router.push(`/admin/creators/${cid}`)}
-                    className="text-sm font-medium text-blue-600 hover:underline truncate block"
+                    className="text-sm font-medium text-accent hover:underline truncate block"
                   >
                     {group.creator_names[i] || cid.slice(0, 8)}
                   </button>
-                  <span className="font-mono text-xs text-muted">{cid.slice(0, 8)}...</span>
+                  <span className="font-mono text-xs text-muted">{cid.slice(0, 8)}…</span>
                 </div>
                 <span className="shrink-0 text-xs text-muted">
                   {cid === displayedTargetId ? t("duplicates.keep_target") : t("duplicates.merge_into")}
@@ -174,7 +175,7 @@ function CreatorDuplicatesContent() {
         <div className="fixed right-0 bottom-0 left-0 z-30 flex items-center justify-between border-t border-border bg-white p-4 shadow-lg dark:border-border dark:bg-surface">
           <div>
             <span className="text-sm font-medium">
-              {t("duplicates.target")} <span className="text-blue-600">{selection.targetName}</span>
+              {t("duplicates.target")} <span className="text-accent">{selection.targetName}</span>
             </span>
             <span className="ml-4 text-sm text-muted">
               {t("duplicates.source_selected").replace("{count}", String(selection.sources.size))}: {[...selection.sources.values()].join(", ")}
@@ -207,7 +208,7 @@ function CreatorDuplicatesContent() {
       )}
 
       {confirmMerge && (
-        <ConfirmDialog
+        <BusinessConfirm
           open
           title={t("duplicates.merge_title")}
           message={`${t("duplicates.merge_msg").replace("{count}", String(selection?.sources.size || 0))} ${selection?.targetName || ""} ← ${[...(selection?.sources.values() || [])].join(", ")}`}
@@ -219,9 +220,9 @@ function CreatorDuplicatesContent() {
           {mergeFailures.length > 0 && <div role="alert" className="mb-3 text-sm text-danger">
             {mergeFailures.map((failure) => <p key={failure.id}>{failure.name}: {failure.reason}</p>)}
           </div>}
-        </ConfirmDialog>
+        </BusinessConfirm>
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
 

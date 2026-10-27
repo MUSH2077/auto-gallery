@@ -2,7 +2,10 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults, DownloadDefaults } from "@/lib/api";
-import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
+import { CalendarScheduleEditor, defaultCalendarRule, ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { parseOptionalFiniteNumber } from "@/lib/task-actions";
@@ -74,14 +77,15 @@ function SchedulerDefaultsContent() {
             <div className="flex items-center justify-between">
               <div><span className="font-medium">{t("subdefaults.schedule_mode")}</span>
                 <p className="text-xs text-muted mt-1">{t("subdefaults.schedule_mode.desc")}</p></div>
-              <select aria-label={t("subdefaults.schedule_mode")} value={sub.schedule_mode || "interval"} onChange={(e) => {
-                const mode = e.target.value as SubscriptionDefaults["schedule_mode"];
-                if (subLocal) setSubLocal({ ...subLocal, schedule_mode: mode, schedule_rule: mode === "calendar" ? (subLocal.schedule_rule || defaultCalendarRule()) : null });
-              }}
-                className="select px-2 py-1">
-                <option value="interval">{t("subdefaults.interval")}</option>
-                <option value="calendar">{t("subdefaults.calendar")}</option>
-              </select>
+              <ToolbarSelect
+                label={t("subdefaults.schedule_mode")}
+                value={sub.schedule_mode || "interval"}
+                options={[{ value: "interval", label: t("subdefaults.interval") }, { value: "calendar", label: t("subdefaults.calendar") }]}
+                onValueChange={(next) => {
+                  const mode = next as SubscriptionDefaults["schedule_mode"];
+                  if (subLocal) setSubLocal({ ...subLocal, schedule_mode: mode, schedule_rule: mode === "calendar" ? (subLocal.schedule_rule || defaultCalendarRule()) : null });
+                }}
+              />
             </div>
 
             {sub.schedule_mode === "interval" ? (
@@ -93,16 +97,18 @@ function SchedulerDefaultsContent() {
                   className="input w-20 px-2 py-1 text-center font-mono" />
               </div>
             ) : (
-              <CalendarScheduleEditor value={sub.schedule_rule} onChange={(rule) => setSub("schedule_rule", rule)} />
+              <CalendarScheduleEditor presentation="gallery" value={sub.schedule_rule} onChange={(rule) => setSub("schedule_rule", rule)} />
             )}
 
             <div className="flex items-center justify-between">
               <div><span className="font-medium">{t("subdefaults.timezone")}</span>
                 <p className="text-xs text-muted mt-1">{t("subdefaults.timezone.desc")}</p></div>
-              <select aria-label={t("subdefaults.timezone")} value={sub.timezone || "UTC"} onChange={(e) => setSub("timezone", e.target.value)}
-                className="select px-2 py-1">
-                {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
-              </select>
+              <ToolbarSelect
+                label={t("subdefaults.timezone")}
+                value={sub.timezone || "UTC"}
+                options={TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
+                onValueChange={(next) => setSub("timezone", next)}
+              />
             </div>
 
             <div className="flex items-center justify-between">

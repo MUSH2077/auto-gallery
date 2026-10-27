@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import ConfirmDialog from "@/components/ConfirmDialog";
+import {BusinessPage, BusinessConfirm as ConfirmDialog} from "@/features/gallery-ui/BusinessPage";
 import ErrorState from "@/components/ErrorState";
-import PageShell from "@/components/PageShell";
+import {BusinessPermissionGuard as PermissionGuard} from "@/features/gallery-ui/BusinessPage";
 import { useToast } from "@/components/Toast";
 import {
   ActivityPanel,
@@ -20,22 +20,11 @@ import { usePermissions } from "@/lib/usePermissions";
 import { secureRandomUuid } from "@/lib/random";
 import { actionErrorReason, clearRepeatSyncIntent, createRepeatSyncIntent, readRepeatSyncIntent, repeatSyncConflict, storeRepeatSyncIntent, validateRepeatSyncAcceptance } from "@/lib/task-actions";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-5" aria-hidden>
-      <div className="h-56 animate-pulse rounded-lg border border-border bg-surface md:h-64 xl:h-28" />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,.95fr)]">
-        <div className="h-[26rem] animate-pulse rounded-lg border border-border bg-surface" />
-        <div className="h-[26rem] animate-pulse rounded-lg border border-border bg-surface" />
-      </div>
-      <div className="h-28 animate-pulse rounded-lg border border-border bg-surface" />
-    </div>
-  );
-}
+function DashboardSkeleton() {const t=useT();return <p className="state-view" role="status">{t("common.loading")}</p>;}
 
-export default function Dashboard() {
+function DashboardContent() {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -44,6 +33,10 @@ export default function Dashboard() {
   const [repeatConflictState, setRepeatConflictState] = useState<ReturnType<typeof repeatSyncConflict> | null>(null);
   const { has, user } = usePermissions();
   const canRetry = has("tasks");
+  const repeatSequence=useRef(0),active=useRef(true);
+  useEffect(()=>{active.current=true;return()=>{active.current=false;repeatSequence.current++;};},[]);
+  const retryLocks=useRef(new Set<string>());
+  const [retryKeys,setRetryKeys]=useState(new Set<string>());
 
   const workbench = useQuery({
     queryKey: queryKeys.workbench,
@@ -74,11 +67,11 @@ export default function Dashboard() {
       }
       return activity;
     },
-    onSuccess: async () => {
-      const data = await api.refreshWorkbench();
-      queryClient.setQueryData(queryKeys.workbench, data);
+    onSuccess: () => {
+      void queryClient.invalidateQueries({queryKey:queryKeys.workbench});
       toast.success(t("dashboard.retry_started"));
     },
+    onSettled: (_data,_error,activity) => {retryLocks.current.delete(activity.key);setRetryKeys(new Set(retryLocks.current));},
     onError: (error: Error) => {
       toast.error({
         title: t("dashboard.retry_failed"),
@@ -89,9 +82,7 @@ export default function Dashboard() {
 
   const retryAll = useMutation({
     mutationFn: api.retryAllFailedJobs,
-    onSuccess: async (result) => {
-      const data = await api.refreshWorkbench();
-      queryClient.setQueryData(queryKeys.workbench, data);
+    onSuccess: (result) => {
       if (result.failed > 0) {
         toast.warning({ message: `${t("jobs.batch_result", { succeeded: result.succeeded, failed: result.failed })}: ${result.errors.map((entry) => `${entry.id.slice(0, 8)} ${actionErrorReason(entry.error)}`).join("; ")}` });
       } else {
@@ -112,7 +103,7 @@ export default function Dashboard() {
   });
 
   const repeatOne = useMutation({
-    mutationFn: async (activity: DashboardActivity) => {
+    mutationFn: async (activity: DashboardActivity & {intentToken:number}) => {
       if (activity.kind !== "download") throw new Error(t("jobs.repeat_identity_invalid"));
       if (!user?.id) throw new Error(t("jobs.repeat_original_unavailable"));
       const intent = readRepeatSyncIntent(user.id, activity.id) || createRepeatSyncIntent(user.id, activity.id, activity.title, secureRandomUuid);
@@ -121,29 +112,31 @@ export default function Dashboard() {
       clearRepeatSyncIntent(intent);
       return accepted;
     },
-    onSuccess: (accepted) => {
+    onSuccess: (accepted,activity) => {
+      void queryClient.invalidateQueries({queryKey:queryKeys.workbench});
+      if(!active.current||activity.intentToken!==repeatSequence.current)return;
       setRepeatActivity(null);
       setRepeatConflictState(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.workbench });
       router.push(`/admin/jobs?tab=downloads&job=${encodeURIComponent(accepted.job_id)}`);
     },
-    onError: (error) => setRepeatConflictState(repeatSyncConflict(error)),
+    onError: (error,activity) => {if(active.current&&activity.intentToken===repeatSequence.current)setRepeatConflictState(repeatSyncConflict(error));},
   });
 
   if (workbench.error && !workbench.data) {
     return (
-      <PageShell>
+      <BusinessPage title={t("dashboard.title")}>
         <ErrorState
           message={(workbench.error as Error).message}
           onRetry={() => workbench.refetch()}
         />
-      </PageShell>
+      </BusinessPage>
     );
   }
 
   return (
-    <PageShell>
-      <h1 className="sr-only">{t("dashboard.title")}</h1>
+    <BusinessPage title={t("dashboard.title")}>
+
 
       {!workbench.data ? (
         <DashboardSkeleton />
@@ -155,14 +148,14 @@ export default function Dashboard() {
             onRefresh={() => refresh.mutate()}
           />
 
-          <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,.95fr)]">
+          <div className="business-dashboard-main">
             <RecentWorksPanel data={workbench.data} />
             <ActivityPanel
               data={workbench.data}
               canRetry={canRetry}
-              retryingKey={retryOne.variables?.key}
-              onRetry={(activity) => retryOne.mutate(activity)}
-              onRepeat={setRepeatActivity}
+              retryingKeys={retryKeys}
+              onRetry={activity => {if(retryLocks.current.has(activity.key))return;retryLocks.current.add(activity.key);setRetryKeys(new Set(retryLocks.current));retryOne.mutate(activity);}}
+              onRepeat={activity=>{repeatSequence.current++;repeatOne.reset();setRepeatConflictState(null);setRepeatActivity(activity);}}
             />
           </div>
 
@@ -185,12 +178,10 @@ export default function Dashboard() {
               open
               title={t("jobs.repeat_sync_title")}
               message={t("jobs.repeat_sync_confirm")}
-              onConfirm={() => repeatOne.mutate(repeatActivity)}
+              onConfirm={() => repeatOne.mutate({...repeatActivity,intentToken:repeatSequence.current})}
               onCancel={() => {
-                if (!repeatOne.isPending) {
-                  repeatOne.reset();
-                  setRepeatActivity(null);
-                }
+                repeatSequence.current++;
+                setRepeatActivity(null);
               }}
               isPending={repeatOne.isPending}
               error={repeatOne.error ? actionErrorReason(repeatOne.error) : undefined}
@@ -204,6 +195,8 @@ export default function Dashboard() {
           )}
         </div>
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
+
+export default function Dashboard(){return <PermissionGuard module="system"><DashboardContent/></PermissionGuard>;}

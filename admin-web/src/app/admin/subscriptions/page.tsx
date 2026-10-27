@@ -5,11 +5,14 @@ import { useT, type TFunction } from "@/lib/i18n";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type SearchQualifierToken, type SearchResponse, type SubscriptionSearchHit, type SubscriptionSummary } from "@/lib/api";
-import { PageHeader, PageSection, EmptyState, ErrorState, HierarchyDeletionDialog, Modal, StatusBadge, FilterBar, SelectionBar, PageShell, PermissionGuard, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceSortControl, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
+import { PageSection, EmptyState, ErrorState, StatusBadge, SelectionBar, EntityRow, RowActionMenu, SmartSearchInput, useSearchBatchComposer, CompactSelectionCheckbox, ReferenceNameRail, ReferenceListLayout, VirtualReferenceList, MatchedIdentityBadge, type VirtualReferenceListHandle, type VirtualReferenceListState, type VirtualReferencePage } from "@/components";
+import { BusinessPage, BusinessModal, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
+import BusinessHierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
 import { useNotifications } from "@/components/NotificationCenter";
 import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
-import DomainDangerZone from "@/components/DomainDangerZone";
+import { BusinessDangerZone as DomainDangerZone } from "@/features/gallery-ui/BusinessPage";
 import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
 import {
   legacyPageInitialIndex,
@@ -55,7 +58,7 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   const t = useT();
   return (
     <div className="space-y-4">
-      <PaginatedCreatorSelect
+      <PaginatedCreatorSelect presentation="gallery"
         id="new-subscription-creator"
         label={t("subscriptions.creator_label")}
         value={creatorId}
@@ -242,7 +245,7 @@ function SubscriptionsContent() {
       if (data.status === "error" || data.status === "partial_error") {
         toast.warning({
           title: t("subscriptions.sync_partial_failed"),
-          message: (data as any).message || t("subscriptions.sync_partial_failed_desc"),
+          message: data.message || t("subscriptions.sync_partial_failed_desc"),
         });
       } else if (data.job_ids.length === 0) {
         toast.warning({ message: t("subscriptions.sync_no_jobs") });
@@ -287,7 +290,15 @@ function SubscriptionsContent() {
 
   const batchSync = useMutation({
     mutationFn: (params: { ids: string[]; enable: boolean }) => api.batchToggleSyncSubscriptions(params.ids, params.enable),
-    onSuccess: () => { setSelected(new Set()); refreshSubscriptionViews(); toast.success({ message: t("notification.updated") }); },
+    onSuccess: (result) => {
+      const failed = result.results.filter(item => item.status !== "updated");
+      const updatedIds = new Set(result.results.filter(item => item.status === "updated").map(item => item.id));
+      setSelected(current => new Set([...current].filter(id => !updatedIds.has(id))));
+      refreshSubscriptionViews();
+      if (failed.length) toast.warning({message:t("jobs.batch_result",{succeeded:result.results.length-failed.length,failed:failed.length})+": "+failed.map(item=>item.error || item.status).join("; ")});
+      else toast.success({message:t("notification.updated")});
+    },
+    onError: (error:Error) => toast.error({message:error.message}),
   });
 
   const toggleSelect = (id: string) => {
@@ -342,16 +353,12 @@ function SubscriptionsContent() {
   const someLoadedSelected = subscriptionItems.some((subscription) => selected.has(subscription.id));
 
   return (
-    <PageShell>
-      <PageHeader
-        title={t("subscriptions.title")}
-        description={t("subscriptions.count").replace("{count}", String(listState.total))}
-        primaryAction={<button onClick={() => setShowCreate(true)} className="btn-primary">{t("subscriptions.new")}</button>}
-      />
+    <BusinessPage className="gallery-subscriptions-page" title={t("subscriptions.title")} description={t("subscriptions.count").replace("{count}", String(listState.total))} actions={<button onClick={() => setShowCreate(true)} className="button primary">{t("subscriptions.new")}</button>}>
+
 
       {/* Toolbar */}
       <div data-page-primary-content>
-      <FilterBar>
+      <div className="business-toolbar">
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
@@ -362,27 +369,9 @@ function SubscriptionsContent() {
           showTokens={false}
           className="w-full sm:w-72"
         />
-        <div className="segmented-control max-w-full flex-wrap">
-          {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => handleFilterChange(f.key)}
-              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <ReferenceSortControl
-          value={sort}
-          labels={{
-            group: t("reference_list.sort_group"),
-            name: t("reference_list.sort_name"),
-            created: t("reference_list.sort_created"),
-            updated: t("reference_list.sort_updated"),
-            ascending: t("reference_list.ascending"),
-            descending: t("reference_list.descending"),
-          }}
-          onChange={handleSortChange}
-        />
-      </FilterBar>
+        <ToolbarSelect label={t("works.filter_button")} value={filter} options={FILTERS.map(({key,label})=>({value:key,label}))} onValueChange={(value) => handleFilterChange((value || "all") as FilterMode)} />
+        <ToolbarSelect label={t("reference_list.sort_group")} value={sort.field+"-"+sort.direction} onValueChange={handleSortChange} options={(["name","created","updated"] as const).flatMap(field=>(["asc","desc"] as const).map(direction=>({value:field+"-"+direction,label:t("reference_list.sort_"+field)+" · "+t(direction==="asc"?"reference_list.ascending":"reference_list.descending")})))}/>
+      </div>
       </div>
 
       <PageSection>
@@ -419,7 +408,7 @@ function SubscriptionsContent() {
       )}
 
       <ReferenceListLayout
-        rail={anchorsAvailable && Array.isArray(anchors.data?.items) ? (
+        rail={anchorsAvailable && anchors.data ? (
           <ReferenceNameRail
             items={anchors.data.items}
             ariaLabel={t("reference_list.anchors_label")}
@@ -577,11 +566,11 @@ function SubscriptionsContent() {
       </ReferenceListLayout>
       </PageSection>
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>
+      <BusinessModal open={showCreate} onClose={() => setShowCreate(false)} title={t("subscriptions.new_sub_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
-      </Modal>
+      </BusinessModal>
       {deleteId && (
-        <HierarchyDeletionDialog
+        <BusinessHierarchyDeletion
           open
           title={t("subscriptions.remove_title")}
           message={t("subscriptions.remove_message")}
@@ -597,7 +586,7 @@ function SubscriptionsContent() {
         />
       )}
       {confirmBatchDel && (
-        <HierarchyDeletionDialog
+        <BusinessHierarchyDeletion
           open
           title={t("subscriptions.remove_title")}
           message={t("subscriptions.remove_message")}
@@ -617,16 +606,16 @@ function SubscriptionsContent() {
         title={t("datamgmt.danger_clear_subs")}
         description={t("datamgmt.danger_clear_subs_desc")}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }
 
 export default function SubscriptionsPage() {
   return (
-    <PermissionGuard module="subscriptions">
+    <BusinessPermissionGuard module="subscriptions">
       <Suspense>
         <SubscriptionsContent />
       </Suspense>
-    </PermissionGuard>
+    </BusinessPermissionGuard>
   );
 }

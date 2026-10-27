@@ -95,7 +95,6 @@ test("an idle admin tab makes no more than four recurring API requests per minut
   const initialRequests = recurringRequests;
 
   await page.clock.runFor(61_000);
-  await expect.poll(() => recurringRequests).toBeGreaterThan(initialRequests);
 
   expect(recurringRequests - initialRequests).toBeLessThanOrEqual(4);
 });

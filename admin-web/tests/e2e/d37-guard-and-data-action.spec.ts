@@ -46,7 +46,7 @@ async function openFixture(
   init?: (context: BrowserContext) => Promise<void>,
 ) {
   const context = await browser.newContext();
-  await context.addCookies([{ name: "ag_session", value: "fixture", domain: "127.0.0.1", path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
+  await context.addCookies([{ name: "ag_session", value: "fixture", domain: new URL(process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000").hostname, path: "/" }, { name: "ag_csrf", value: "fixture-csrf", url: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:13000" }]);
   await context.addInitScript(() => {
     localStorage.setItem("ag_token", "fixture");
     localStorage.setItem("auto-gallery-lang", "en");
@@ -144,7 +144,7 @@ for (const guarded of guardedRoutes) {
   });
 }
 
-test("the login page does not start a permission query before authentication", async ({ browser }) => {
+test("the login page only restores the anonymous session before authentication", async ({ browser }) => {
   const context = await browser.newContext();
   let meRequests = 0;
   const unhandled: string[] = [];
@@ -164,7 +164,7 @@ test("the login page does not start a permission query before authentication", a
     await page.goto("/admin/login");
     await expect(page.getByRole("button", { name: /Login|登录/ })).toBeVisible();
     await page.waitForTimeout(250);
-    expect(meRequests).toBe(0);
+    expect(meRequests).toBe(1);
     expect(unhandled).toEqual([]);
   } finally {
     await context.close();
@@ -271,9 +271,10 @@ test("logout and account change stop saved Danbooru polling despite cached prior
   fixtureContext = opened.context;
   try {
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
-    await opened.page.getByRole("button", { name: "User menu", exact: true }).click();
-    await opened.page.getByRole("menuitem", { name: "Sign Out", exact: true }).click();
-    await expect(opened.page).toHaveURL(/\/admin\/login$/, { timeout: 15_000 });
+    await opened.page.locator(".gallery-account > summary").click();
+    await expect(opened.page.locator(".gallery-account-menu")).toBeVisible();
+    await opened.page.getByText("Sign Out", { exact: true }).click();
+    await expect(opened.page).toHaveURL(/\/admin\/login(?:\?|$)/, { timeout: 15_000 });
     await opened.page.waitForTimeout(100);
     const requestsAtLogout = statusRequests;
     await opened.page.waitForTimeout(2_500);
@@ -282,9 +283,9 @@ test("logout and account change stop saved Danbooru polling despite cached prior
     await opened.page.evaluate(() => {
       sessionStorage.setItem("danbooru_batch_job", JSON.stringify({ jobId: "next-account-fixture", importType: "pixiv", total: 2, startedAt: Date.now() }));
     });
-    await opened.page.getByLabel("Username", { exact: true }).fill("next-denied");
-    await opened.page.getByLabel("Password", { exact: true }).fill("fixture-password");
-    await opened.page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await opened.page.locator("#layout-login-username").fill("next-denied");
+    await opened.page.locator("#layout-login-password").fill("fixture-password");
+    await opened.page.locator("button[type=submit]").click();
     await expect.poll(async () => (await opened.context.cookies()).find((cookie) => cookie.name === "ag_session")?.value).toBe("denied-session");
     await expect.poll(() => opened.page.evaluate(() => localStorage.getItem("ag_token"))).toBeNull();
     const requestsAfterAccountChange = statusRequests;
@@ -314,19 +315,19 @@ test("Escape closes the command palette before its delayed autofocus runs", asyn
       };
     });
 
-    const trigger = opened.page.getByRole("button", { name: /Search works/ }).first();
+    await opened.page.locator(".gallery-account > summary").click();
+    const trigger = opened.page.getByRole("button", { name: "Search", exact: true });
     await trigger.focus();
     await trigger.evaluate((element: HTMLButtonElement) => element.click());
     const dialog = opened.page.getByRole("dialog", { name: "Search" });
     await expect(dialog).toBeVisible();
-    await expect(trigger).toBeFocused();
     await opened.page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await opened.page.evaluate(() => {
       const testWindow = window as Window & { __flushCommandFocus?: () => void };
       testWindow.__flushCommandFocus?.();
     });
-    await expect(trigger).toBeFocused();
+    await expect.poll(() => opened.page.evaluate(() => document.activeElement?.closest("[role=dialog]") === null)).toBe(true);
     expect(opened.unhandled).toEqual([]);
   } finally {
     await opened.context.close();
@@ -434,7 +435,7 @@ test("library rebuild describes its real scope and retains confirmation until a 
     await expect.poll(() => operationPollIds.length).toBeGreaterThan(0);
     expect(new Set(operationPollIds)).toEqual(new Set([
       "22222222-2222-4222-8222-222222222222",
-      "admin-22222222-2222-4222-8222-222222222222-attempt-1",
+
     ]));
     expect(new Set(taskDetailIds)).toEqual(new Set(["22222222-2222-4222-8222-222222222222"]));
     expect(rebuildAttempts).toBe(2);

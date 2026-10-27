@@ -1940,3 +1940,41 @@ export type ImportFromDiskRequest = Omit<
   // openapi-typescript currently marks a defaulted boolean as required.
   reset_ledger?: components["schemas"]["ImportFromDiskRequest"]["reset_ledger"];
 };
+
+
+export interface WorkSourceData {
+  id: string;
+  source: string;
+  source_work_id?: string | null;
+  source_url?: string | null;
+  title?: string | null;
+  description?: string | null;
+  posted_at?: string | null;
+  raw_metadata?: Record<string, unknown> | null;
+}
+
+export interface IntegrityIssueItem {
+  id?: string;
+  path?: string;
+  file_name?: string;
+  name?: string;
+  file_count?: number;
+  asset_id?: string;
+  source?: string;
+  source_work_id?: string;
+}
+
+export interface IntegrityIssue {
+  type: string;
+  severity: string;
+  count: number;
+  description: string;
+  items: IntegrityIssueItem[];
+}
+
+export interface IntegrityResult {
+  issues: IntegrityIssue[];
+  db_stats: Record<string, number>;
+  checked_at: string;
+  message?: string;
+}

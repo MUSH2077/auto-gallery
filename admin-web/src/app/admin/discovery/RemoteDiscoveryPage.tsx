@@ -4,7 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
-import { ErrorState, PageHeader, PageShell, TableSkeleton, useToast } from "@/components";
+import { ErrorState, TableSkeleton, useToast } from "@/components";
+import { BusinessPage } from "@/features/gallery-ui/BusinessPage";
 import { ApiError, api, queryKeys, type RemoteAccountRead } from "@/lib/api";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { useAuth } from "@/lib/auth";
@@ -137,8 +138,7 @@ export default function RemoteDiscoveryPage() {
       .map((account) => account.id));
   }, [accounts.data, providers.data?.sources]);
   return (
-    <PageShell className="max-w-[96rem]">
-      <PageHeader title={t("discovery.title")} description={t("discovery.desc")} />
+    <BusinessPage title={t("discovery.title")} description={t("discovery.desc")} className="gallery-discovery">
       {accounts.isLoading || providers.isLoading ? <TableSkeleton rows={3} /> : null}
       {accountError ? (
         <ErrorState
@@ -172,6 +172,6 @@ export default function RemoteDiscoveryPage() {
         enabled={!privateAccessError}
         onPrivateAccessError={handlePrivateAccessError}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }

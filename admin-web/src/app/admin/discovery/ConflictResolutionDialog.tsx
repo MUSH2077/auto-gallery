@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Search } from "lucide-react";
 
-import { Modal } from "@/components";
+import { BusinessModal } from "@/features/gallery-ui/BusinessPage";
 import { api, queryKeys, type DiscoveryCandidate } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useDebounce } from "@/lib/useDebounce";
@@ -58,7 +58,7 @@ export default function ConflictResolutionDialog({
   const canSubmit = mode === "existing" ? !!creatorId : !!creatorName.trim();
 
   return (
-    <Modal open={open} onClose={onClose} title={t("discovery.resolve_title")}>
+    <BusinessModal open={open} onClose={onClose} title={t("discovery.resolve_title")}>
       <div className="space-y-4">
         <p className="text-sm leading-5 text-muted">{t("discovery.resolve_desc", { name: displayName })}</p>
         <fieldset className="grid gap-2 sm:grid-cols-2">
@@ -134,6 +134,6 @@ export default function ConflictResolutionDialog({
           </button>
         </div>
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }

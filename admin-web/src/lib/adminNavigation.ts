@@ -34,9 +34,7 @@ export interface AdminNavLink {
   labelKey: string;
   icon: AdminIconName;
   context: AdminNavContext;
-  sidebarOwner?: string;
   keywords?: string[];
-  primary?: boolean;
   adminOnly?: boolean;
   topbarOnly?: boolean;
 }
@@ -83,35 +81,31 @@ const link = (
   labelKey: string,
   icon: AdminIconName,
   context: AdminNavContext,
-  options: Pick<AdminNavLink, "sidebarOwner" | "keywords" | "primary" | "adminOnly" | "topbarOnly"> = {},
+  options: Pick<AdminNavLink, "keywords" | "adminOnly" | "topbarOnly"> = {},
 ): AdminNavLink => ({ href, labelKey, icon, context, ...options });
 
 export const ADMIN_NAV_LINKS: AdminNavLink[] = [
-  link(adminRoutes.dashboard, "nav.dashboard", "home", "overview", { primary: true, keywords: ["overview", "home", "概览"] }),
-  link(adminRoutes.works, "nav.works", "image", "library", { primary: true, keywords: ["gallery", "images", "图库"] }),
-  link(adminRoutes.tags, "nav.tags", "tag", "library", { primary: true, keywords: ["labels", "标签"] }),
-  link(adminRoutes.upload, "nav.upload", "upload", "ingestion", { primary: true, keywords: ["import files", "上传"] }),
-  link(adminRoutes.danbooru, "nav.danbooru", "code", "ingestion", { primary: true, keywords: ["reference", "mapping"] }),
-  link(adminRoutes.creators, "nav.creators", "person", "source-management", { primary: true, keywords: ["artists", "作者"] }),
-  link(adminRoutes.subscriptions, "nav.subscriptions", "inbox", "source-management", { primary: true, keywords: ["repositories", "repos", "订阅", "仓库"] }),
-  link(adminRoutes.discovery, "nav.discovery", "radar", "source-management", { primary: true, keywords: ["remote follows", "discovery", "远端", "关注发现"] }),
+  link(adminRoutes.dashboard, "nav.dashboard", "home", "overview", { keywords: ["overview", "home", "概览"] }),
+  link(adminRoutes.works, "nav.works", "image", "library", { keywords: ["gallery", "images", "图库"] }),
+  link(adminRoutes.tags, "nav.tags", "tag", "library", { keywords: ["labels", "标签"] }),
+  link(adminRoutes.upload, "nav.upload", "upload", "ingestion", { keywords: ["import files", "上传"] }),
+  link(adminRoutes.danbooru, "nav.danbooru", "code", "ingestion", { keywords: ["reference", "mapping"] }),
+  link(adminRoutes.creators, "nav.creators", "person", "source-management", { keywords: ["artists", "作者"] }),
+  link(adminRoutes.subscriptions, "nav.subscriptions", "inbox", "source-management", { keywords: ["repositories", "repos", "订阅", "仓库"] }),
+  link(adminRoutes.discovery, "nav.discovery", "radar", "source-management", { keywords: ["remote follows", "discovery", "远端", "关注发现"] }),
   link(adminRoutes.jobs, "nav.jobs", "clock", "operations", {
-    primary: true,
     keywords: ["tasks", "queue", "imports", "任务", "队列", "导入任务"],
   }),
   link(adminRoutes.scheduler, "nav.scheduler", "calendar", "operations", {
-    primary: true,
     keywords: ["schedule", "sync", "调度", "同步"],
   }),
-  link(adminRoutes.dataManagement, "nav.datamgmt", "database", "governance", { primary: true, keywords: ["storage", "governance", "数据", "存储"] }),
+  link(adminRoutes.dataManagement, "nav.datamgmt", "database", "governance", { keywords: ["storage", "governance", "数据", "存储"] }),
   link(adminRoutes.system, "nav.system", "pulse", "governance", {
-    primary: true,
     keywords: ["health", "status", "source", "provider", "健康", "数据源"],
   }),
-  link(adminRoutes.settings, "nav.settings", "gear", "settings", { primary: true, keywords: ["config", "preferences", "配置"] }),
+  link(adminRoutes.settings, "nav.settings", "gear", "settings", { keywords: ["config", "preferences", "配置"] }),
 
   link(adminRoutes.search, "nav.search", "image", "library", {
-    sidebarOwner: adminRoutes.works,
     keywords: ["find", "搜索"],
   }),
   link(adminRoutes.notifications, "notifications.title", "bell", "notifications", {
@@ -119,15 +113,12 @@ export const ADMIN_NAV_LINKS: AdminNavLink[] = [
     topbarOnly: true,
   }),
   link(adminRoutes.curation, "nav.curation", "branch", "governance", {
-    sidebarOwner: adminRoutes.dataManagement,
     keywords: ["history", "策展"],
   }),
   link(adminRoutes.dedup, "nav.dedup", "copy", "governance", {
-    sidebarOwner: adminRoutes.dataManagement,
     keywords: ["duplicates", "merge", "candidate", "查重", "合并候选"],
   }),
   link(adminRoutes.users, "nav.users", "people", "settings", {
-    sidebarOwner: adminRoutes.settings,
     adminOnly: true,
     keywords: ["accounts", "权限", "用户"],
   }),
@@ -142,8 +133,6 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   { labelKey: "nav.operations", links: [byHref(adminRoutes.jobs), byHref(adminRoutes.scheduler)] },
   { labelKey: "nav.admin", links: [byHref(adminRoutes.dataManagement), byHref(adminRoutes.system), byHref(adminRoutes.settings)] },
 ];
-
-export const ADMIN_USERS_LINK = byHref(adminRoutes.users);
 
 /**
  * Secondary governance destinations which are not independently present in
@@ -169,17 +158,7 @@ export function findAdminNavLink(pathname: string): AdminNavLink | null {
       best = item;
     }
   }
-  // Settings detail routes intentionally inherit the settings context.
-  if (!best && pathname.startsWith(`${adminRoutes.settings}/`)) return byHref(adminRoutes.settings);
   return best;
-}
-
-/** Unique primary-sidebar owner for the current route, if it has one. */
-export function findAdminSidebarHref(pathname: string): string | null {
-  const current = findAdminNavLink(pathname);
-  if (!current) return null;
-  if (current.primary) return current.href;
-  return current.sidebarOwner || null;
 }
 
 /** Longest-prefix navigation match used by the top bar and page hierarchy. */

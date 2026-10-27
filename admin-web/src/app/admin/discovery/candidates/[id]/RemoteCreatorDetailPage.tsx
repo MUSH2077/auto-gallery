@@ -22,8 +22,9 @@ import {
   Users,
 } from "lucide-react";
 
-import { ErrorState, PageShell, StatusBadge, useToast } from "@/components";
+import { ErrorState, StatusBadge, useToast } from "@/components";
 import { Breadcrumb } from "@/components/Breadcrumb";
+import { BusinessPage } from "@/features/gallery-ui/BusinessPage";
 import {
   ApiError,
   api,
@@ -211,18 +212,18 @@ export default function RemoteCreatorDetailPage() {
 
   if (detail.isLoading) {
     return (
-      <PageShell className="max-w-[96rem]">
+      <BusinessPage title={t("discovery.creator_details")} className="gallery-discovery gallery-discovery-detail">
         <div className="flex min-h-[28rem] items-center justify-center gap-2 text-sm text-muted" role="status">
           <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />
           {t("discovery.creator_details_loading")}
         </div>
-      </PageShell>
+      </BusinessPage>
     );
   }
 
   if (!detail.data || !profile || !candidate) {
     return (
-      <PageShell className="max-w-[96rem]">
+      <BusinessPage className="gallery-discovery gallery-discovery-detail">
         <Breadcrumb items={[
           { label: t("discovery.title"), href: returnPath },
           { label: t("discovery.creator_details") },
@@ -233,7 +234,7 @@ export default function RemoteCreatorDetailPage() {
             : t("discovery.creator_details_failed")}
           onRetry={() => detail.refetch()}
         />
-      </PageShell>
+      </BusinessPage>
     );
   }
 
@@ -243,100 +244,29 @@ export default function RemoteCreatorDetailPage() {
   const localCreatorId = localIds.length === 1 ? localIds[0] : null;
 
   return (
-    <PageShell className="max-w-[96rem]">
-      <Breadcrumb items={[
-        { label: t("discovery.title"), href: returnPath },
-        { label: name },
-      ]} />
-      <Link href={returnPath} className="btn-ghost mb-3 inline-flex">
-        <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-        {t("discovery.back_to_workbench")}
-      </Link>
-
-      <header className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-accent/30 via-subtle to-accent-subtle shadow-sm">
-        <div className="absolute inset-0">
-          {profile.header_image_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={profile.header_image_url}
-              alt=""
-              loading="eager"
-              decoding="async"
-              className="h-full w-full object-cover"
-            />
-          ) : null}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-black/10" />
+    <BusinessPage
+      title={name}
+      description={`${profile.username ? `@${profile.username} · ` : ""}${t("discovery.pixiv_id", { id: profile.source_creator_id })}`}
+      className="gallery-discovery gallery-discovery-detail"
+      actions={(
+        <div className="flex flex-wrap justify-center gap-2">
+          <a href={profile.profile_url} target="_blank" rel="noreferrer" className="button">{t("discovery.open_pixiv_profile")}<ExternalLink aria-hidden="true" className="h-4 w-4" /></a>
+          {localCreatorId ? <Link href={adminRoutes.creator(localCreatorId)} className="button">{t("discovery.open_local_creator")}</Link> : null}
+          {candidate.state === "pending" ? <button type="button" className="button primary" disabled={candidateAction.isPending} onClick={() => candidateAction.mutate("import")}><ArrowDownToLine aria-hidden="true" className="h-4 w-4" />{t("discovery.import_creator")}</button> : null}
+          {candidate.state === "conflict" ? <button type="button" className="button primary" onClick={() => setResolveOpen(true)}><CircleAlert aria-hidden="true" className="h-4 w-4" />{t("discovery.resolve_conflict")}</button> : null}
+          {candidate.state === "dismissed" ? <button type="button" className="button primary" disabled={candidateAction.isPending} onClick={() => candidateAction.mutate("restore")}><RotateCcw aria-hidden="true" className="h-4 w-4" />{t("discovery.restore")}</button> : null}
         </div>
-        <div className="relative flex min-h-80 flex-col justify-end px-5 pb-6 pt-24 sm:px-8">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-end">
-            {avatar ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={avatar}
-                alt={t("discovery.avatar_alt", { name })}
-                loading="eager"
-                decoding="async"
-                className="h-28 w-28 shrink-0 rounded-2xl border-4 border-white/85 bg-subtle object-cover shadow-xl"
-              />
-            ) : (
-              <span className="flex h-28 w-28 shrink-0 items-center justify-center rounded-2xl border-4 border-white/85 bg-subtle text-muted shadow-xl">
-                <UserRound aria-hidden="true" className="h-12 w-12" />
-              </span>
-            )}
-            <div className="min-w-0 flex-1 text-white">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="break-words text-3xl font-bold tracking-tight sm:text-4xl">{name}</h1>
-                <StatusBadge
-                  status={profile.is_followed ? "up" : "unknown"}
-                  label={t(profile.is_followed
-                    ? "discovery.pixiv_following"
-                    : "discovery.pixiv_not_following")}
-                />
-              </div>
-              <p className="mt-1 text-sm text-white/75">
-                {profile.username ? `@${profile.username} · ` : ""}
-                {t("discovery.pixiv_id", { id: profile.source_creator_id })}
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Statistic label={t("discovery.work_type_illust")} value={count(profile, "illust", "illusts")} />
-                <Statistic label={t("discovery.work_type_manga")} value={count(profile, "manga")} />
-                <Statistic label={t("discovery.work_type_novel")} value={count(profile, "novel", "novels")} />
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <a href={profile.profile_url} target="_blank" rel="noreferrer" className="btn-ghost border-white/25 bg-black/30 text-white hover:bg-black/45">
-                {t("discovery.open_pixiv_profile")}
-                <ExternalLink aria-hidden="true" className="h-4 w-4" />
-              </a>
-              {localCreatorId ? (
-                <Link href={adminRoutes.creator(localCreatorId)} className="btn-ghost border-white/25 bg-black/30 text-white hover:bg-black/45">
-                  {t("discovery.open_local_creator")}
-                </Link>
-              ) : null}
-              {candidate.state === "pending" ? (
-                <button type="button" className="btn-primary" disabled={candidateAction.isPending} onClick={() => candidateAction.mutate("import")}>
-                  <ArrowDownToLine aria-hidden="true" className="h-4 w-4" />
-                  {t("discovery.import_creator")}
-                </button>
-              ) : null}
-              {candidate.state === "conflict" ? (
-                <button type="button" className="btn-primary" onClick={() => setResolveOpen(true)}>
-                  <CircleAlert aria-hidden="true" className="h-4 w-4" />
-                  {t("discovery.resolve_conflict")}
-                </button>
-              ) : null}
-              {candidate.state === "dismissed" ? (
-                <button type="button" className="btn-primary" disabled={candidateAction.isPending} onClick={() => candidateAction.mutate("restore")}>
-                  <RotateCcw aria-hidden="true" className="h-4 w-4" />
-                  {t("discovery.restore")}
-                </button>
-              ) : null}
-            </div>
-          </div>
+      )}
+    >
+      <Link href={returnPath} className="button mb-5 inline-flex"><ArrowLeft aria-hidden="true" className="h-4 w-4" />{t("discovery.back_to_workbench")}</Link>
+      <div className="gallery-discovery-profile-media">
+        {profile.header_image_url ? <img src={profile.header_image_url} alt="" loading="eager" decoding="async" /> : null}
+        <div className="gallery-discovery-profile-identity">
+          {avatar ? <img src={avatar} alt={t("discovery.avatar_alt", { name })} loading="eager" decoding="async" /> : <span className="gallery-discovery-profile-avatar"><UserRound aria-hidden="true" className="h-8 w-8" /></span>}
+          <StatusBadge status={profile.is_followed ? "up" : "unknown"} label={t(profile.is_followed ? "discovery.pixiv_following" : "discovery.pixiv_not_following")} />
         </div>
-      </header>
-
-      <div className="mt-5 grid gap-4 md:grid-cols-3">
+      </div>
+      <div className="gallery-discovery-profile-stats mt-5 grid gap-4 md:grid-cols-3">
         <div className="rounded-xl border border-border bg-surface p-4">
           <div className="flex items-center gap-2 text-sm font-medium text-fg">
             <Users aria-hidden="true" className="h-4 w-4 text-accent" />
@@ -453,6 +383,6 @@ export default function RemoteCreatorDetailPage() {
         }}
         onResolve={(value) => resolve.mutate(value)}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }

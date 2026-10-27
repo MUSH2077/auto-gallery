@@ -62,11 +62,16 @@ test("sign-in restores the protected page URL including filters", async ({ page 
   await page.goto(target);
   await expect(page).toHaveURL(/\/admin\/login\?/);
   expect(new URL(page.url()).searchParams.get("redirect")).toBe(target);
-  await page.context().unroute("**/api/v1/**");
-  await mockSession(page);
-  await page.route("**/api/v1/auth/browser/login", route => reply(route, { ok: true }));
-  await page.locator("#username").fill("review");
-  await page.locator("#password").fill("test-password");
+  let signedIn = false;
+  await page.route("**/api/v1/auth/me", route =>
+    reply(route, signedIn ? principal : { detail: "Session unavailable" }, signedIn ? 200 : 401));
+  await page.route("**/api/v1/auth/browser/login", async route => {
+    await page.context().addCookies([{ name: "ag_session", value: "session-fixture", url: page.url() }]);
+    signedIn = true;
+    return reply(route, { ok: true });
+  });
+  await page.getByLabel("Username", { exact: true }).fill("review");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
   await page.locator('button[type="submit"]').click();
   await expect(page).toHaveURL(new RegExp("/admin/works\\?q=review$"));
 });
@@ -74,11 +79,16 @@ test("sign-in restores the protected page URL including filters", async ({ page 
 test("sign-in keeps password change ahead of the return target", async ({ page }) => {
   await mockSession(page, 401);
   await page.goto("/admin/login?redirect=%2Fadmin%2Fworks");
-  await page.context().unroute("**/api/v1/**");
-  await mockSession(page, 200, { ...principal, must_change_password: true });
-  await page.route("**/api/v1/auth/browser/login", route => reply(route, { ok: true }));
-  await page.locator("#username").fill("review");
-  await page.locator("#password").fill("test-password");
+  let signedIn = false;
+  await page.route("**/api/v1/auth/me", route =>
+    reply(route, signedIn ? { ...principal, must_change_password: true } : { detail: "Session unavailable" }, signedIn ? 200 : 401));
+  await page.route("**/api/v1/auth/browser/login", async route => {
+    await page.context().addCookies([{ name: "ag_session", value: "session-fixture", url: page.url() }]);
+    signedIn = true;
+    return reply(route, { ok: true });
+  });
+  await page.getByLabel("Username", { exact: true }).fill("review");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
   await page.locator('button[type="submit"]').click();
   await expect(page).toHaveURL(/\/admin\/profile(?:\?|$)/);
 });
@@ -94,8 +104,8 @@ test("sign-in prevents duplicate submission and recovers from service failure", 
     await pending;
     return reply(route, { detail: "Service unavailable" }, 503);
   });
-  await page.locator("#username").fill("review");
-  await page.locator("#password").fill("test-password");
+  await page.getByLabel("Username", { exact: true }).fill("review");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
   await page.locator('button[type="submit"]').click();
   await expect(page.locator('button[type="submit"]')).toBeDisabled();
   await page.locator("form").evaluate(form => { (form as HTMLFormElement).requestSubmit(); (form as HTMLFormElement).requestSubmit(); });
@@ -103,6 +113,33 @@ test("sign-in prevents duplicate submission and recovers from service failure", 
   finish();
   await expect(page.locator('p[role="alert"]')).toHaveText(/Sign-in service is temporarily unavailable/);
   await expect(page.locator('p[role="alert"]')).toBeFocused();
-  await expect(page.locator("#username")).toHaveValue("review");
+  await expect(page.getByLabel("Username", { exact: true })).toHaveValue("review");
   await expect(page.locator('button[type="submit"]')).toBeEnabled();
+});
+
+
+test("sign-in survives legacy-token storage SecurityError", async ({ page }) => {
+  await page.addInitScript(() => {
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function (key: string) {
+      if (key === "ag_token") throw new DOMException("Storage disabled", "SecurityError");
+      removeItem.call(this, key);
+    };
+  });
+  await mockSession(page, 401);
+  const target = "/admin/works?storage=disabled";
+  await page.goto(target);
+  await expect(page).toHaveURL(/\/admin\/login\?/);
+  let signedIn = false;
+  await page.route("**/api/v1/auth/me", route =>
+    reply(route, signedIn ? principal : { detail: "Session unavailable" }, signedIn ? 200 : 401));
+  await page.route("**/api/v1/auth/browser/login", async route => {
+    await page.context().addCookies([{ name: "ag_session", value: "session-fixture", url: page.url() }]);
+    signedIn = true;
+    return reply(route, { ok: true });
+  });
+  await page.getByLabel("Username", { exact: true }).fill("review");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
+  await page.locator('button[type="submit"]').click();
+  await expect(page).toHaveURL(/\/admin\/works\?storage=disabled$/);
 });

@@ -2,17 +2,17 @@
 
 import { Suspense } from "react";
 
-import { PageHeader, PageShell, PermissionGuard, TableSkeleton } from "@/components";
+import { TableSkeleton } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useT } from "@/lib/i18n";
 import RemoteDiscoveryPage from "./RemoteDiscoveryPage";
 
 function DiscoveryFallback() {
   const t = useT();
   return (
-    <PageShell>
-      <PageHeader title={t("discovery.title")} description={t("discovery.desc")} />
+    <BusinessPage title={t("discovery.title")} description={t("discovery.desc")} className="gallery-discovery">
       <TableSkeleton rows={6} />
-    </PageShell>
+    </BusinessPage>
   );
 }
 

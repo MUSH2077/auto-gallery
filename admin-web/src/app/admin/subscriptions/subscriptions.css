@@ -1,0 +1,45 @@
+.gallery-ui .gallery-subscriptions-page { max-width: 1216px; margin: 0 auto; color: var(--ink); }
+.gallery-ui .gallery-subscriptions-page .business-heading { text-align: center; }
+.gallery-ui .gallery-subscriptions-page .business-heading-actions { justify-content: center; }
+.gallery-ui .gallery-subscriptions-page .business-toolbar,
+.gallery-ui .gallery-subscriptions-page > [data-page-primary-content] > .filter-bar,
+.gallery-ui .gallery-subscriptions-page .filter-bar { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:12px; margin: 0 auto 24px; }
+.gallery-ui .gallery-subscriptions-page .segmented-control { display:flex; flex-wrap:wrap; gap:6px; border:0; background:transparent; }
+.gallery-ui .gallery-subscriptions-page .segment { min-height:42px; padding:9px 12px; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); font-size:var(--type-control); font-weight:600; }
+.gallery-ui .gallery-subscriptions-page .segment-active { border-color:var(--accent); background:var(--subtle); color:var(--accent); }
+.gallery-ui .gallery-subscriptions-page .entity-list { border:0; border-radius:0; background:transparent; box-shadow:none; }
+.gallery-ui .gallery-subscriptions-page .entity-row { border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; box-shadow:none; }
+.gallery-ui .gallery-subscriptions-page .entity-row:hover { background:var(--subtle); }
+.gallery-ui .gallery-subscriptions-page .entity-supporting,
+.gallery-ui .gallery-subscriptions-page .entity-meta { font-size:var(--type-control); line-height:var(--leading-control); }
+.gallery-ui .gallery-subscriptions-page .entity-title { font-family:var(--font-content); font-size:var(--type-work); font-weight:600; }
+.gallery-ui .gallery-subscriptions-page .entity-actions { display:flex; align-items:center; gap:8px; }
+.gallery-ui .gallery-subscriptions-page .entity-actions .btn-primary { min-height:40px; }
+.gallery-ui .gallery-subscription-detail .card { border:0; border-top:1px solid var(--line); border-radius:0; background:transparent; box-shadow:none; }
+.gallery-ui .gallery-subscription-detail .card + .card { margin-top:20px; }
+.gallery-ui .gallery-subscription-detail .grid { gap:28px; }
+.gallery-ui .gallery-subscription-detail .text-xs,
+.gallery-ui .gallery-subscription-detail .text-sm { font-size:var(--type-control); line-height:var(--leading-control); }
+.gallery-ui .gallery-subscription-detail .font-mono { font-family:var(--font-ui); }
+.gallery-ui .gallery-subscription-detail select,
+.gallery-ui .gallery-subscription-detail input:not([type=checkbox]):not([type=radio]),
+.gallery-ui .gallery-subscription-detail textarea { min-height:44px; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); }
+.gallery-ui .gallery-subscription-detail .business-modal select,
+.gallery-ui .gallery-subscription-detail .business-modal input:not([type=checkbox]):not([type=radio]) { width:100%; }
+.gallery-ui .gallery-subscriptions-page button,
+.gallery-ui .gallery-subscriptions-page select,
+.gallery-ui .gallery-subscriptions-page input { font-weight:600; }
+.gallery-ui .gallery-subscriptions-page :is(button,a,input,select,textarea):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media (max-width: 640px) {
+  .gallery-ui .gallery-subscriptions-page .business-heading { padding-inline:8px; }
+  .gallery-ui .gallery-subscriptions-page .segmented-control { justify-content:center; }
+  .gallery-ui .gallery-subscriptions-page .entity-row { align-items:flex-start; padding:12px 0; }
+  .gallery-ui .gallery-subscriptions-page .entity-actions { width:100%; justify-content:flex-end; }
+  .gallery-ui .gallery-subscription-detail .grid { grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gallery-ui .gallery-subscriptions-page * { transition-duration:.01ms; scroll-behavior:auto; }
+}
+
+
+@media(max-width:600px){.gallery-ui .gallery-subscriptions-page .reference-list-layout{display:flex;flex-direction:column-reverse;gap:12px;}.gallery-ui .gallery-subscriptions-page .reference-name-rail{position:static;display:flex;flex-wrap:wrap;justify-content:center;inset:auto;gap:4px;padding:8px 0;border:0;border-radius:0;background:transparent;box-shadow:none;}}

@@ -1,14 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, CreatorLink as CreatorLinkType } from "@/lib/api";
-import ConfirmDialog from "@/components/ConfirmDialog";
-import Modal from "@/components/Modal";
-import PageHeader from "@/components/PageHeader";
-import PageShell from "@/components/PageShell";
-import PermissionGuard from "@/components/PermissionGuard";
+import { BusinessConfirm, BusinessModal, BusinessPage } from "@/features/gallery-ui/BusinessPage";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import SourceBadge from "@/components/SourceBadge";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import StatusBadge from "@/components/StatusBadge";
 import { useT } from "@/lib/i18n";
 import { adminRoutes } from "@/lib/adminRoutes";
@@ -18,6 +16,7 @@ type SetupFailure = { link: CreatorLinkType; subscriptionId?: string; stage: "su
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
   const t = useT();
+  const formId = useId();
   const [url, setUrl] = useState(""); const [linkType, setLinkType] = useState("website"); const [source, setSource] = useState(""); const [confidence, setConfidence] = useState(1.0);
   const qc = useQueryClient();
   const create = useMutation({
@@ -27,15 +26,20 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
-        <div><label className="block text-sm font-medium mb-1">{t("mapping.link_type_label")}</label>
-          <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
-            <option value="website">{t("mapping.type_website")}</option><option value="pixiv">{t("mapping.type_pixiv_profile")}</option><option value="x">{t("mapping.type_x_profile")}</option><option value="iwara">{t("mapping.type_iwara_profile")}</option><option value="danbooru">{t("mapping.type_danbooru_artist")}</option><option value="other">{t("mapping.type_other")}</option>
-          </select>
+        <div><span className="block text-sm font-medium mb-1">{t("mapping.link_type_label")}</span>
+          <ToolbarSelect label={t("mapping.link_type_label")} value={linkType} onValueChange={setLinkType} options={[
+            { value: "website", label: t("mapping.type_website") },
+            { value: "pixiv", label: t("mapping.type_pixiv_profile") },
+            { value: "x", label: t("mapping.type_x_profile") },
+            { value: "iwara", label: t("mapping.type_iwara_profile") },
+            { value: "danbooru", label: t("mapping.type_danbooru_artist") },
+            { value: "other", label: t("mapping.type_other") },
+          ]} />
         </div>
-        <div><label className="block text-sm font-medium mb-1">{t("mapping.source_platform_label")}</label><input value={source} onChange={(e) => setSource(e.target.value)} className="input w-full" placeholder={t("creator_detail.source_placeholder")} /></div>
+        <div><label htmlFor={`${formId}-source`} className="block text-sm font-medium mb-1">{t("mapping.source_platform_label")}</label><input id={`${formId}-source`} value={source} onChange={(e) => setSource(e.target.value)} className="input w-full" placeholder={t("creator_detail.source_placeholder")} /></div>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("mapping.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
-      <div><label className="block text-sm font-medium mb-1">{t("mapping.confidence_field")} ({confidence.toFixed(1)})</label><input type="range" min="0" max="1" step="0.1" value={confidence} onChange={(e) => setConfidence(parseFloat(e.target.value))} className="w-full" /><div className="flex justify-between text-xs text-muted"><span>{t("mapping.confidence_suggested")}</span><span>{t("mapping.confidence_verified")}</span></div></div>
+      <div><label htmlFor={`${formId}-url`} className="block text-sm font-medium mb-1">{t("mapping.url_label")}</label><input id={`${formId}-url`} value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
+      <div><label htmlFor={`${formId}-confidence`} className="block text-sm font-medium mb-1">{t("mapping.confidence_field")} ({confidence.toFixed(1)})</label><input id={`${formId}-confidence`} type="range" min="0" max="1" step="0.1" value={confidence} onChange={(e) => setConfidence(parseFloat(e.target.value))} className="w-full" /><div className="flex justify-between text-xs text-muted"><span>{t("mapping.confidence_suggested")}</span><span>{t("mapping.confidence_verified")}</span></div></div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("mapping.cancel")}</button>
         <button onClick={() => create.mutate()} disabled={!url || create.isPending} className="btn-primary">{create.isPending ? t("mapping.adding") : t("mapping.add_link_btn")}</button>
@@ -148,16 +152,20 @@ function MappingContent() {
   const verified = links.data?.filter((l: CreatorLinkType) => l.is_verified) || [];
   const suggested = links.data?.filter((l: CreatorLinkType) => !l.is_verified) || [];
 
-  if (creator.isLoading) return <PageShell><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></PageShell>;
+  if (creator.isLoading) return <BusinessPage><div className="animate-pulse"><div className="mb-4 h-8 w-1/4 rounded-md bg-subtle dark:bg-subtle" /><div className="h-32 rounded-md bg-subtle dark:bg-subtle" /></div></BusinessPage>;
 
   return (
-    <PageShell>
-      <PageHeader title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")} description={t("mapping.desc")}>
-        <div className="flex gap-2">
-          <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>
-          {canCurate && <button onClick={() => setShowAdd(true)} className="btn-primary">{t("mapping.add_link")}</button>}
-        </div>
-      </PageHeader>
+      <BusinessPage
+        title={t("mapping.title").replace("{name}", creator.data?.display_name || creator.data?.name || "Creator")}
+        description={t("mapping.desc")}
+        className="gallery-creators-page gallery-creator-mapping"
+        actions={(
+          <>
+            <button onClick={() => router.push(`/admin/creators/${id}`)} className="btn-ghost">{t("mapping.back_to_creator")}</button>
+            {canCurate && <button onClick={() => setShowAdd(true)} className="btn-primary">{t("mapping.add_link")}</button>}
+          </>
+        )}
+      >
 
       <div className="mb-6 rounded-md border border-accent-subtle bg-accent-subtle p-4 text-sm text-accent dark:border-accent/30 dark:bg-accent/15 dark:text-accent">
         {t("mapping.info_banner")}
@@ -205,7 +213,7 @@ function MappingContent() {
                 <span className="badge border-warning-subtle bg-warning-subtle text-warning dark:border-warning/30 dark:bg-warning/15 dark:text-warning">{l.link_type}</span>
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline truncate max-w-sm">{l.url}</a>
                 {l.source && <SourceBadge source={l.source} />}
-                <span className={`text-xs ${l.confidence >= 0.7 ? "text-success" : l.confidence >= 0.4 ? "text-warning" : "text-danger"}`}>{t("mapping.confidence_label")} {l.confidence.toFixed(1)}</span>
+                <span className={`text-sm ${l.confidence >= 0.7 ? "text-success" : l.confidence >= 0.4 ? "text-warning" : "text-danger"}`}>{t("mapping.confidence_label")} {l.confidence.toFixed(1)}</span>
               </div>
               {canCurate && (
                 <div className="text-right">
@@ -236,10 +244,10 @@ function MappingContent() {
         </div>
       </section>
 
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title={t("mapping.add_link_title")}><AddLinkForm creatorId={id} onClose={() => setShowAdd(false)} /></Modal>
-      {dialog?.action === "verify" && <ConfirmDialog open title={t("mapping.approve_title")} message={t("mapping.approve_msg")} onConfirm={() => verifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={verifyLink.isPending} error={(verifyLink.error as Error)?.message} />}
-      {dialog?.action === "unverify" && <ConfirmDialog open title={t("mapping.unverify_title")} message={t("mapping.unverify_msg")} onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={unverifyLink.isPending} error={(unverifyLink.error as Error)?.message} />}
-    </PageShell>
+      <BusinessModal open={showAdd} onClose={() => setShowAdd(false)} title={t("mapping.add_link_title")}><AddLinkForm creatorId={id} onClose={() => setShowAdd(false)} /></BusinessModal>
+      {dialog?.action === "verify" && <BusinessConfirm open title={t("mapping.approve_title")} message={t("mapping.approve_msg")} onConfirm={() => verifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={verifyLink.isPending} error={(verifyLink.error as Error)?.message} />}
+      {dialog?.action === "unverify" && <BusinessConfirm open title={t("mapping.unverify_title")} message={t("mapping.unverify_msg")} onConfirm={() => unverifyLink.mutate(dialog.linkId)} onCancel={() => setDialog(null)} isPending={unverifyLink.isPending} error={(unverifyLink.error as Error)?.message} />}
+    </BusinessPage>
   );
 }
 

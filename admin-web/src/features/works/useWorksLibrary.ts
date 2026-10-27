@@ -7,7 +7,6 @@ import { useT } from '@/lib/i18n';
 import { api, queryKeys, type WorkListItem, type SearchQualifierToken, type SearchResponse } from '@/lib/api';
 import type { WorkAsset } from '@/lib/api/endpoints/works';
 import { useAppearanceSettings } from '@/lib/appearance';
-import { useStaggeredEntrance } from '@/lib/motion';
 import { useSearchBatchComposer, useSearchComposer, type SearchComposeRequest } from '@/components/SmartSearchInput';
 import type { SlideItem } from '@/components/SlideshowPlayer';
 import { useSlideshow } from '@/lib/useSlideshow';
@@ -265,21 +264,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     ) return;
     updateParams({ seed: null }, false);
   }, [currentSort, inputVal, search, seed, worksQuery.data?.canonical_query, worksQuery.isPlaceholderData]);
-  const sortSummary = currentSort === "heat-desc"
-    ? t("works.sort_heat")
-    : currentSort === "random"
-      ? t("works.sort_random")
-      : currentSort === "relevance"
-        ? t("works.sort_relevance")
-        : currentSort.startsWith("posted")
-          ? t("works.sort_posted")
-          : currentSort.startsWith("updated")
-            ? t("works.sort_updated")
-            : currentSort.startsWith("title")
-              ? t("works.sort_title")
-              : t("works.sort_imported");
-  const displaySummary = `${t(`works.view_${viewMode}_plain`)} · ${t(`works.card_size_${appearance.workCardSize}`)}`;
-
   const applyFilterDraft = (next: WorksFilterValue, close: () => void) => {
     const operations: SearchComposeRequest[] = [
       { key: "is", value: next.visibility === "trashed" ? "trashed" : null, operation: "replace-group", replace_values: ["visible", "trashed"] },
@@ -315,7 +299,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     .map((w) => ({ assetId: w.thumbnail_asset_id, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
   const workItems = works.data?.items || [];
-  const workEntrance = useStaggeredEntrance(workItems.map((work) => work.id));
 
   const previewAssets = useQuery({
     queryKey: ["works", preview?.work.id, "assets"],
@@ -367,14 +350,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
   }, [appearance.workCardShowCheckbox, selectedWorkIds.size, t, toast]);
 
 
-  const restoreWork = useMutation({
-    mutationFn: (id: string) => api.batchCurateWorks([id], "restore", "restored from trash"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.works.all });
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-    },
-  });
-
   const purgeWork = useMutation({
     mutationFn: (id: string) => api.purgeWorks([id], "Purge one trashed work"),
     onSuccess: () => {
@@ -420,14 +395,61 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
       return new Set([...prev, ...pageWorkIds]);
     });
   };
-  const moveSelectedToTrash = () => {
-    if (queryTransitioning) return;
-    const ids = [...selectedWorkIds];
-    if (!ids.length) return;
-    if (window.confirm(t("works.batch_trash_confirm", { count: ids.length }))) batchTrash.mutate(ids);
+
+
+
+  return {
+    appearance,
+    applyFilterDraft,
+    batchComposer,
+    batchTrash,
+    canCurate,
+    cancelClosePreview,
+    clearSearch,
+    composer,
+    curationVisibility,
+    currentSort,
+    derivativeProgress,
+    filterValue,
+    has,
+    inputVal,
+    isAdmin,
+    isComposing,
+    isFavoriteFilter,
+    page,
+    pageAllSelected,
+    pathname,
+    preview,
+    previewAssetIds,
+    previewAssets,
+    previewEnabled,
+    purgeWork,
+    qc,
+    queryTransitioning,
+    router,
+    scheduleClosePreview,
+    search,
+    selectSort,
+    selectedCount,
+    selectedWorkIds,
+    setInputVal,
+    setIsComposing,
+    setPreview,
+    setSelectedWorkIds,
+    slideItems,
+    slideshow,
+    sourceFilter,
+    sp,
+    t,
+    toggleSelectPage,
+    toggleSelectWork,
+    updateDisplayAppearance,
+    updateParams,
+    updateSettings,
+    viewMode,
+    wheelThreshold,
+    workItems,
+    works,
   };
-
-
- return { t, router, qc, sp, pathname, isAdmin, has, canCurate, toast, appearance, updateSettings, selectedWorkIds, setSelectedWorkIds, preview, setPreview, closePreviewTimer, previewEnabled, wheelThreshold, search, requestedPage, page, requestedSeed, seed, legacyView, viewMode, limit, navigationParamsRef, inputVal, setInputVal, isComposing, setIsComposing, updateParams, setSearchQuery, clearSearch, scheduleClosePreview, cancelClosePreview, worksQueryKey, worksQuery, works, derivativeProgress, qualifierTokens, qualifierValues, sourceFilter, creatorFilter, isValues, nsfwFilter, isFavoriteFilter, aiFilter, curationVisibility, explicitSortValue, activeFilterCount, composer, batchComposer, sourceFilters, mediaFilters, filterValue, parsedHasText, knownSorts, defaultSort, currentSort, sortSummary, displaySummary, applyFilterDraft, selectSort, updateDisplayAppearance, filters, queryTransitioning, slideshow, slideItems, workItems, workEntrance, previewAssets, previewAssetIds, restoreWork, purgeWork, batchTrash, pageWorkIds, selectedCount, pageAllSelected, toggleSelectWork, toggleSelectPage, moveSelectedToTrash };
 }
 export type WorksLibrary = ReturnType<typeof useWorksLibrary>;

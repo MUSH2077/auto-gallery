@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DedupSettings, queryKeys } from "@/lib/api";
-import { ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 

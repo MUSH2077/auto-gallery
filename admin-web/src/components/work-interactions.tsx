@@ -136,6 +136,7 @@ export function WorkPreviewOverlay({
   onMouseLeave,
   onWheelPage,
   onRefreshAssets,
+  wheelThreshold = 0,
 }: {
   anchor: DOMRect | null;
   title?: string | null;
@@ -153,6 +154,7 @@ export function WorkPreviewOverlay({
   onMouseLeave: () => void;
   onWheelPage: (delta: number) => void;
   onRefreshAssets?: () => void;
+  wheelThreshold?: number;
 }) {
   const t = useT();
   const [naturalRatio, setNaturalRatio] = useState<number | null>(null);
@@ -181,13 +183,17 @@ export function WorkPreviewOverlay({
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !canPage) return;
+    let accumulated = 0;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      onWheelPage(event.deltaY > 0 ? 1 : -1);
+      accumulated += event.deltaY;
+      if (Math.abs(accumulated) < wheelThreshold) return;
+      onWheelPage(accumulated > 0 ? 1 : -1);
+      accumulated = 0;
     };
     overlay.addEventListener("wheel", onWheel, { passive: false });
     return () => overlay.removeEventListener("wheel", onWheel);
-  }, [canPage, onWheelPage]);
+  }, [canPage, onWheelPage, wheelThreshold]);
 
   return (
     <div

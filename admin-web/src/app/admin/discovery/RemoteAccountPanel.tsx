@@ -4,7 +4,9 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, FlaskConical, KeyRound, Radar, Settings2, ShieldCheck, Trash2 } from "lucide-react";
 
-import { ConfirmDialog, ErrorState, Modal, SectionPanel, StatusBadge, useToast } from "@/components";
+import { ErrorState, SectionPanel, StatusBadge, useToast } from "@/components";
+import { BusinessConfirm, BusinessModal } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import {
   api,
   queryKeys,
@@ -159,7 +161,7 @@ function CredentialsDialog({
       : t("discovery.x_cookie_label");
 
   return (
-    <Modal
+    <BusinessModal
       open={open}
       onClose={closeDialog}
       title={t(reconnecting ? "discovery.reconnect_title" : "discovery.connect_title", { provider })}
@@ -170,18 +172,12 @@ function CredentialsDialog({
             <label htmlFor={methodId} className="mb-1.5 block text-sm font-medium text-fg">
               {t("discovery.x_auth_method")}
             </label>
-            <select
-              id={methodId}
-              className="select w-full"
+            <ToolbarSelect
+              label={t("discovery.x_auth_method")}
               value={xMethod}
-              onChange={(event) => {
-                setCredential("");
-                setXMethod(event.target.value as "oauth2" | "cookie");
-              }}
-            >
-              <option value="oauth2">{t("discovery.x_oauth")}</option>
-              <option value="cookie">{t("discovery.x_cookie")}</option>
-            </select>
+              options={[{ value: "oauth2", label: t("discovery.x_oauth") }, { value: "cookie", label: t("discovery.x_cookie") }]}
+              onValueChange={(value) => { setCredential(""); setXMethod(value as "oauth2" | "cookie"); }}
+            />
           </div>
         ) : null}
 
@@ -230,7 +226,7 @@ function CredentialsDialog({
           </div>
         ) : null}
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }
 
@@ -327,7 +323,7 @@ function AccountSettingsDialog({
 
   const provider = providerLabel(t, account.source);
   return (
-    <Modal open={open} onClose={onClose} title={t("discovery.settings_title", { provider })}>
+    <BusinessModal open={open} onClose={onClose} title={t("discovery.settings_title", { provider })}>
       <div className="space-y-5">
         {supportsCollectionSelectors ? <fieldset>
           <legend className="mb-2 text-sm font-medium text-fg">{t("discovery.collections")}</legend>
@@ -368,11 +364,12 @@ function AccountSettingsDialog({
           </label>
           <label className="text-sm font-medium text-fg">
             <span className="mb-1.5 block">{t("discovery.minimum_confidence")}</span>
-            <select className="select w-full" value={threshold} onChange={(event) => setThreshold(event.target.value as typeof threshold)}>
-              <option value="high">{t("discovery.confidence_high_only")}</option>
-              <option value="medium">{t("discovery.confidence_high_medium")}</option>
-              <option value="low">{t("discovery.confidence_all")}</option>
-            </select>
+            <ToolbarSelect
+              label={t("discovery.minimum_confidence")}
+              value={threshold}
+              options={[{ value: "high", label: t("discovery.confidence_high_only") }, { value: "medium", label: t("discovery.confidence_high_medium") }, { value: "low", label: t("discovery.confidence_all") }]}
+              onValueChange={(value) => setThreshold(value as typeof threshold)}
+            />
           </label>
           <label className="flex min-h-11 cursor-pointer items-center gap-2 self-end rounded-md border border-border px-3 text-sm font-medium text-fg">
             <input type="checkbox" className="rounded" checked={autoImport} disabled={!autoImportAvailable} onChange={(event) => setAutoImport(event.target.checked)} />
@@ -392,7 +389,7 @@ function AccountSettingsDialog({
           </button>
         </div>
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }
 
@@ -453,7 +450,7 @@ function XDownloadAuthDialog({
   });
   const pending = save.isPending || clear.isPending;
   return (
-    <Modal open onClose={onClose} title={t("discovery.download_auth_title")}>
+    <BusinessModal open onClose={onClose} title={t("discovery.download_auth_title")}>
       <p className="text-sm leading-5 text-muted">{t("discovery.download_auth_help")}</p>
       <label htmlFor={fieldId} className="mt-4 block text-sm font-medium text-fg">
         <span className="mb-1.5 block">{t("discovery.x_cookie_label")}</span>
@@ -467,7 +464,7 @@ function XDownloadAuthDialog({
           <button type="button" className="btn-primary" disabled={pending || !cookie.trim()} onClick={() => save.mutate()}>{t("discovery.download_auth_save")}</button>
         </div>
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }
 
@@ -792,7 +789,7 @@ export default function RemoteAccountPanel({
           onClose={() => setDialog(null)}
         />
       ) : null}
-      <ConfirmDialog
+      <BusinessConfirm
         open={!!deleteAccount}
         title={t("discovery.delete_title", { provider: deleteAccount ? providerLabel(t, deleteAccount.source) : "" })}
         message={t("discovery.delete_message")}

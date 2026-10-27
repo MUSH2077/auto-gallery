@@ -2,7 +2,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, SubscriptionDefaults } from "@/lib/api";
-import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
+import { CalendarScheduleEditor, defaultCalendarRule, ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useT } from "@/lib/i18n";
 
 function SubscriptionDefaultsContent() {
@@ -74,18 +77,15 @@ function SubscriptionDefaultsContent() {
                 <span className="font-medium">{t("subdefaults.schedule_mode")}</span>
                 <p className="text-xs text-muted mt-1">{t("subdefaults.schedule_mode.desc")}</p>
               </div>
-              <select
-                aria-label={t("subdefaults.schedule_mode")}
+              <ToolbarSelect
+                label={t("subdefaults.schedule_mode")}
                 value={current.schedule_mode || "interval"}
-                onChange={(e) => {
-                  const mode = e.target.value as SubscriptionDefaults["schedule_mode"];
+                options={[{ value: "interval", label: t("subdefaults.interval") }, { value: "calendar", label: t("subdefaults.calendar") }]}
+                onValueChange={(next) => {
+                  const mode = next as SubscriptionDefaults["schedule_mode"];
                   setLocal({ ...current, schedule_mode: mode, schedule_rule: mode === "calendar" ? (current.schedule_rule || defaultCalendarRule()) : null });
                 }}
-                className="select px-2 py-1"
-              >
-                <option value="interval">{t("subdefaults.interval")}</option>
-                <option value="calendar">{t("subdefaults.calendar")}</option>
-              </select>
+              />
             </div>
 
             {current.schedule_mode === "interval" ? (
@@ -102,7 +102,7 @@ function SubscriptionDefaultsContent() {
                 />
               </div>
             ) : (
-              <div className="py-3 border-b border-border"><CalendarScheduleEditor value={current.schedule_rule} onChange={(rule) => setLocal({ ...current, schedule_rule: rule })} /></div>
+              <div className="py-3 border-b border-border"><CalendarScheduleEditor presentation="gallery" value={current.schedule_rule} onChange={(rule) => setLocal({ ...current, schedule_rule: rule })} /></div>
             )}
 
             <div className="flex items-center justify-between py-3 border-b border-border">
@@ -110,16 +110,15 @@ function SubscriptionDefaultsContent() {
                 <span className="font-medium">{t("subdefaults.timezone")}</span>
                 <p className="text-xs text-muted mt-1">{t("subdefaults.timezone.desc")}</p>
               </div>
-              <select value={current.timezone || "UTC"} onChange={(e) => setLocal({ ...current, timezone: e.target.value })}
-                aria-label={t("subdefaults.timezone")}
-                className="select px-2 py-1">
-                {["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
+              <ToolbarSelect
+                label={t("subdefaults.timezone")}
+                value={current.timezone || "UTC"}
+                options={["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Singapore", "Asia/Kolkata",
                   "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
                   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-                  "America/Sao_Paulo", "Australia/Sydney", "Pacific/Auckland"].map(tz => (
-                  <option key={tz} value={tz}>{tz}</option>
-                ))}
-              </select>
+                  "America/Sao_Paulo", "Australia/Sydney", "Pacific/Auckland"].map((tz) => ({ value: tz, label: tz }))}
+                onValueChange={(next) => setLocal({ ...current, timezone: next })}
+              />
             </div>
 
             <h4 className="font-medium text-fg border-b border-border pb-2 pt-2">{t("subdefaults.scheduler")}</h4>

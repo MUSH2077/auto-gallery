@@ -1,7 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { PageHeader, PageShell, PermissionGuard } from "@/components";
+import { } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useSlideshowConfig, type SlideshowConfig } from "@/lib/slideshow/config";
 import { useT } from "@/lib/i18n";
 
