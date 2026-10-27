@@ -31,8 +31,10 @@ def test_credential_failure_never_reads_db_or_returns_fallback(monkeypatch):
 
 
 def test_db_read_failure_retains_fallback(monkeypatch):
-    from app import database
-    monkeypatch.setattr(database, "async_session", Mock(side_effect=OSError("database unavailable")))
+    import asyncpg
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(asyncpg, "connect", AsyncMock(side_effect=OSError("database unavailable")))
     assert startup._db_download_concurrency() is None
 
 
@@ -132,29 +134,80 @@ def test_download_supervisor_runs_real_helper_without_loading_orm(invalid_storag
     assert json.loads(result.stdout)["workers"] == (0 if invalid_storage else 2)
 
 
-def test_database_timeout_cancels_query_and_disposes_engine(monkeypatch, capsys):
+def test_database_timeout_cancels_query_and_closes_connection(monkeypatch, capsys):
     import asyncio
+    import asyncpg
     from unittest.mock import AsyncMock
-    from app import database
-    from app.services import settings as settings_service
 
     cancelled = []
-    class Session:
-        async def __aenter__(self):
-            return self
-        async def __aexit__(self, *args):
-            return False
-    async def blocked(_db):
+    async def blocked(*_args):
         try:
             await asyncio.sleep(60)
         finally:
             cancelled.append(True)
-    dispose = AsyncMock()
+    connection = SimpleNamespace(fetchval=blocked, close=AsyncMock())
     monkeypatch.setattr(startup, "DB_READ_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(database, "async_session", Session)
-    monkeypatch.setattr(database, "engine", SimpleNamespace(dispose=dispose))
-    monkeypatch.setattr(settings_service, "get_download_defaults", blocked)
+    monkeypatch.setattr(asyncpg, "connect", AsyncMock(return_value=connection))
     assert startup._db_download_concurrency() is None
     assert cancelled == [True]
-    dispose.assert_awaited_once()
+    connection.close.assert_awaited_once_with(timeout=0.01)
     assert "TimeoutError" in capsys.readouterr().err
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("value,expected", [
+    (None, 3), ({}, 3), ([], 3), ({"download_concurrency": 4}, 4),
+    ({"download_concurrency": "2"}, 2), ({"download_concurrency": None}, None),
+    ({"download_concurrency": "bad"}, None), ({"download_concurrency": 0}, 0),
+])
+def test_startup_reads_real_postgres_and_preserves_missing_setting_default(value, expected):
+    import asyncio
+    import asyncpg
+    from app.config import settings
+
+    url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    assert url.split("?", 1)[0].endswith("_test")
+    async def replace_setting(new_value, *, delete=False):
+        connection = await asyncpg.connect(url)
+        try:
+            previous = await connection.fetchval(
+                "SELECT value FROM system_settings WHERE key = 'download_defaults'"
+            )
+            if delete:
+                await connection.execute("DELETE FROM system_settings WHERE key = 'download_defaults'")
+            else:
+                await connection.execute(
+                    "INSERT INTO system_settings(key,value) VALUES ('download_defaults',$1::jsonb) "
+                    "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", new_value,
+                )
+            return previous
+        finally:
+            await connection.close()
+    previous = asyncio.run(replace_setting(json.dumps(value), delete=value is None))
+    try:
+        assert startup._db_download_concurrency() == expected
+    finally:
+        asyncio.run(replace_setting(previous, delete=previous is None))
+
+
+def test_first_startup_helper_reads_postgres_without_orm_imports():
+    import os
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import importlib.abc,json,sys
+        class RejectOrm(importlib.abc.MetaPathFinder):
+            def find_spec(self,name,*args):
+                if any(name==prefix or name.startswith(prefix+'.') for prefix in
+                       ('sqlalchemy','app.models','app.database','app.services.settings')):
+                    raise AssertionError(name)
+        sys.meta_path.insert(0,RejectOrm())
+        from app.services.download_startup import resolve_startup
+        print(json.dumps(resolve_startup('2')))
+    """)
+    result = subprocess.run([sys.executable, "-c", code], env=os.environ.copy(),
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["effective"] >= 1
+    assert "DB concurrency read failed" not in result.stderr

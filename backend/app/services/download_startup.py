@@ -10,18 +10,30 @@ DB_READ_TIMEOUT_SECONDS = 5
 
 
 def _db_download_concurrency():
-    """Keep the existing best-effort DB read, with a bounded boot-time wait."""
+    """Read the startup setting without loading the ORM into this helper."""
     try:
-        from app.database import async_session, engine
-        from app.services.settings import get_download_defaults
+        import asyncpg
+
+        from app.config import settings
+        from app.services.download_concurrency import DEFAULT_DOWNLOAD_CONCURRENCY
 
         async def query():
+            connection = await asyncpg.connect(
+                settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1),
+                timeout=DB_READ_TIMEOUT_SECONDS,
+            )
             try:
-                async with async_session() as db:
-                    defaults = await get_download_defaults(db)
-                    return defaults.get("download_concurrency")
+                value = await connection.fetchval(
+                    "SELECT value FROM system_settings WHERE key = $1", "download_defaults"
+                )
             finally:
-                await engine.dispose()
+                await connection.close(timeout=DB_READ_TIMEOUT_SECONDS)
+            defaults = json.loads(value) if isinstance(value, str) else value
+            if not isinstance(defaults, dict):
+                defaults = {}
+            # A missing setting uses the stored-settings default; a failed
+            # read returns None below so the existing CLI fallback can apply.
+            return int(defaults.get("download_concurrency", DEFAULT_DOWNLOAD_CONCURRENCY))
 
         async def bounded():
             return await asyncio.wait_for(query(), timeout=DB_READ_TIMEOUT_SECONDS)
