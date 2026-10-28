@@ -332,6 +332,16 @@ persisted for background processing; import completion does not synchronously
 generate every thumbnail. Files remain in DOWNLOAD_ROOT, while metadata and
 derivatives live in LIBRARY_ROOT. JSON cleanup follows successful import.
 
+Import may attempt a first-card preview outside SQL transactions. For the first
+actual image preview in each import job, `resource_reservation_busy` permits one
+resource-event wait with a 50 ms budget followed by a full admission retry. The wait
+holds no SQL transaction, heavy-resource permit or file lock; pressure,
+maintenance, task control and ownership checks still apply on retry. Other
+rejections, including hard memory pressure, and videos or later works receive no
+extra wait. An unsuccessful attempt retains the durable media request for
+background completion, without adding a queue or consumer. More inline previews
+increase transient CPU and memory demand during import.
+
 Creator refresh collects subscriptions and repositories with one LEFT JOIN and combines identity and normalized-URL work dependencies with UNION; subscriptions without repositories remain in scope. Membership fanout combines subscription, creator and repository conditions, using UUID array parameters and 500-row keyset pages so overlapping members discovered through those scopes are enqueued once per action. Independent requests still advance outbox versions, deletes retain precedence, and dependencies captured before creator deletion still refresh surviving works and delete reference documents.
 
 Bulk import writes media, import-curation and search outbox rows in the same

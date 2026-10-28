@@ -547,6 +547,7 @@ async def _import_resource_slice(
     *,
     source_identity: str | None = None,
     wait_for_capacity: bool = True,
+    retry_once_on_busy: bool = False,
     control: ControlListener | None = None,
 ):
     """Yield a bounded ingest slice without duty-cycle delay on its critical path."""
@@ -584,8 +585,12 @@ async def _import_resource_slice(
                 await candidate.aclose()
                 await _set_import_resource_state(owner, "waiting", error.reason, workload=workload)
                 if not wait_for_capacity:
-                    break
-                await _wait_for_resource_event(workload, 2.0, task_id=task_id)
+                    if not retry_once_on_busy or error.reason != "resource_reservation_busy":
+                        break
+                    retry_once_on_busy = False
+                await _wait_for_resource_event(
+                    workload, 2.0 if wait_for_capacity else 0.05, task_id=task_id,
+                )
             else:
                 stack = candidate
     if stack is None:
@@ -709,6 +714,7 @@ async def _prepare_work_media(
     source_work_id: str,
     *,
     derive_primary: bool = True,
+    asset_files: list[Path] | None = None,
 ) -> dict[str, Any]:
     """Perform filesystem inspection and the first-card derive outside SQL."""
 
@@ -719,7 +725,8 @@ async def _prepare_work_media(
     dir_name = provider.get_creator_directory_name(first_raw)
     dir_name = dir_name.replace("/", "_").replace("\\", "_").strip()
     display_name = sc_data.get("display_name") or dir_name
-    asset_files = media_files_for_group(items, source_work_id)
+    if asset_files is None:
+        asset_files = media_files_for_group(items, source_work_id)
     if not asset_files:
         raise ValueError("no media assets found")
 
@@ -1985,6 +1992,7 @@ async def run_import_job(import_job_id: str):
             "existing": int(existing_result["unchanged"]),
         }
         _process_started = monotonic()
+        preview_retry_available = True
         pending_batches = deque(_prepared_work_batches(prepared))
         accounted_existing = set(existing_prepared) - set(
             existing_result["failures"]
@@ -2137,6 +2145,18 @@ async def run_import_job(import_job_id: str):
                                     media_workload = _prepared_media_workload(
                                         prepared_work
                                     )
+                                    asset_files = media_files_for_group(
+                                        prepared_work["items"], source_work_id,
+                                    )
+                                    retry_preview = (
+                                        preview_retry_available
+                                        and bool(asset_files)
+                                        and can_generate_thumbnail(asset_files[0].suffix)
+                                    )
+                                    if retry_preview:
+                                        # Retry short first-card contention once;
+                                        # later works keep the non-waiting path.
+                                        preview_retry_available = False
                                     async with _import_resource_slice(
                                         media_workload,
                                         execution_owner,
@@ -2144,6 +2164,7 @@ async def run_import_job(import_job_id: str):
                                             f"{provider.source_name}:{source_work_id}"
                                         ),
                                         wait_for_capacity=False,
+                                        retry_once_on_busy=retry_preview,
                                     ) as media_limits:
                                         # Resource admission may wait; the batch
                                         # heartbeat keeps ownership durable and
@@ -2157,6 +2178,7 @@ async def run_import_job(import_job_id: str):
                                             prepared_work,
                                             source_work_id,
                                             derive_primary=media_limits is not None,
+                                            asset_files=asset_files,
                                         )
                                         if batch_lease.owns(source_work_id):
                                             media_ready.append(media_work)
