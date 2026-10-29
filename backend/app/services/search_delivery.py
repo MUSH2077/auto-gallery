@@ -1,8 +1,8 @@
-"""Prepare, submit and version-CAS acknowledge bounded PG search commands.
+"""Prepare and deliver bounded search commands with version-CAS acknowledgement.
 
-A document batch and its command record commit together. The durable receipt
-is acknowledged afterwards through the existing lease/marker recovery protocol;
-this is not the separate T20 single-transaction acknowledgement candidate.
+PostgreSQL document upserts/deletes use a short database permit and commit the
+document write, compatibility task, receipt and outbox acknowledgement together.
+Settings, rebuilds, swaps and remote backends retain the existing path.
 """
 from __future__ import annotations
 
@@ -212,6 +212,112 @@ async def _prepare(limit, deadline):
         return receipt
 
 
+async def uses_database_permit(db, receipt=None, *, lock_index=False):
+    """Return whether one ordinary PG batch may use the atomic DB path."""
+    if settings.search_backend != "postgresql":
+        return False
+    from app.services import search_rebuild
+    from app.services.search_index_definitions import INDEX_SETTINGS
+    from app.services.postgres_search_store import INDEX_TABLE
+
+    if receipt is not None:
+        if (
+            receipt.backend != "postgresql"
+            or receipt.state != "prepared"
+            or receipt.rebuild_id
+            or receipt.action not in ("upsert", "delete")
+            or receipt.phase not in ("settings", "documents")
+        ):
+            return False
+        index_uid = receipt.index_uid
+    else:
+        ready = and_(
+            Outbox.completed_at.is_(None),
+            Outbox.available_at <= now(),
+            or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()),
+            or_(
+                Outbox.index_uid != WORKS_INDEX,
+                Outbox.action == "delete",
+                ~exists().where(and_(
+                    ImportCurationOutbox.work_id == cast(Outbox.entity_id, PG_UUID(as_uuid=True)),
+                    ImportCurationOutbox.state != "complete",
+                )),
+            ),
+        )
+        head = (await db.execute(
+            select(Outbox.index_uid, Outbox.action)
+            .where(ready)
+            .order_by(Outbox.available_at, Outbox.updated_at, Outbox.id)
+            .limit(1)
+        )).first()
+        if head is None or head.action not in ("upsert", "delete"):
+            return False
+        index_uid = head.index_uid
+
+    if await db.scalar(select(exists().where(search_rebuild.ACTIVE_BUILD))):
+        return False
+    if await db.scalar(select(search_rebuild.membership_bootstrap_due_condition())):
+        return False
+    suffix = " FOR UPDATE" if lock_index else ""
+    row = (await db.execute(
+        text(f"SELECT settings FROM {INDEX_TABLE} WHERE uid=:uid{suffix}"),
+        {"uid": index_uid},
+    )).first()
+    return bool(
+        row
+        and index_uid in INDEX_SETTINGS
+        and _contains_settings(dict(row.settings or {}), INDEX_SETTINGS[index_uid])
+    )
+
+
+async def _apply_database_receipt(receipt, token, deadline):
+    """Write documents, task history and CAS acknowledgements in one commit."""
+    from app.services import postgres_search_store as store
+
+    async with session(deadline) as db:
+        row = (await db.execute(
+            select(Receipt)
+            .where(Receipt.id == receipt.id, Receipt.lease_token == token)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if row is None:
+            raise RuntimeError("Search receipt execution lease lost")
+        if not await uses_database_permit(db, row, lock_index=True):
+            row.lease_until = None
+            await db.commit()
+            return result("deferred", delay=2)
+        if row.write_available_at and row.write_available_at > now():
+            row.lease_until = None
+            await db.commit()
+            return result("deferred", delay=(row.write_available_at - now()).total_seconds())
+        if row.lease_until is None or row.lease_until <= now():
+            raise RuntimeError("Search receipt execution lease expired")
+        if row.action == "upsert":
+            task = await store._write_documents_in_session(db, row.index_uid, row.payload)
+        else:
+            task = await store._delete_documents_in_session(db, row.index_uid, row.payload)
+        versions = list(row.versions)
+        if versions:
+            condition = or_(False, *(
+                and_(Outbox.id == UUID(identity), Outbox.version == version)
+                for identity, version in versions
+            ))
+            await db.execute(update(Outbox).where(condition).values(
+                completed_at=func.now(), lease_until=None, last_error=None,
+            ))
+        row.task_uid = int(task["taskUid"])
+        row.phase = "documents"
+        row.payload = []
+        row.state = "complete"
+        row.last_error = None
+        row.lease_until = None
+        row.lease_token = None
+        await db.commit()
+    return result(
+        "ok", claimed=len(versions), processed=len(versions), action=receipt.action,
+    )
+
+
 async def _finalize(receipt, token, deadline, *, error=None):
     async with session(deadline) as db:
         row = (await db.execute(select(Receipt).where(Receipt.id == receipt.id, Receipt.lease_token == token).with_for_update())).scalar_one()
@@ -407,7 +513,16 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
             await _save(receipt, token, deadline, lease_until=None)
         return result("deferred", delay=(write_after - now()).total_seconds())
     from app.services import search_rebuild
-    workload = "maintenance" if receipt and receipt.action == "swap" else await search_rebuild.active_workload(deadline)
+    pg_permit = False
+    if settings.search_backend == "postgresql":
+        async with session(deadline) as db:
+            pg_permit = await uses_database_permit(db, receipt)
+    workload = (
+        "pg_search_db"
+        if pg_permit
+        else "maintenance" if receipt and receipt.action == "swap"
+        else await search_rebuild.active_workload(deadline)
+    )
     cooldown = {}
     async with adaptive_resource_slice(workload, "search-delivery", max_work_units=limit,
                                       max_slice_seconds=remaining(deadline), cooldown_result=cooldown,
@@ -431,6 +546,14 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
                 receipt = next_item or await _prepare(min(limit, limits.work_units), deadline)
         if local_result is not None:
             outcome = local_result
+        elif pg_permit:
+            prepared = receipt or await _prepare(min(limit, limits.work_units), deadline)
+            if prepared is None:
+                outcome = await _checkpoint(client, deadline)
+            else:
+                outcome = await _apply_database_receipt(
+                    prepared, token or prepared.lease_token, deadline
+                )
         elif receipt is None:
             outcome = await _checkpoint(client, deadline)
         else:

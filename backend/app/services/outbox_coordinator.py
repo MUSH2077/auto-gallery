@@ -636,6 +636,28 @@ async def _curation_projection_ready() -> bool:
         await engine.dispose()
 
 
+async def _search_recovery_profile() -> str:
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt as Receipt
+    from app.services.search_delivery import uses_database_permit
+
+    engine = create_async_engine(
+        settings.database_url,
+        poolclass=NullPool,
+        connect_args=_recovery_sql_options(),
+    )
+    try:
+        async with AsyncSession(engine) as db:
+            receipt = (await db.execute(
+                select(Receipt).where(Receipt.state.not_in(("complete", "failed")))
+            )).scalar_one_or_none()
+            return "pg_search_db" if await uses_database_permit(db, receipt) else "search_index"
+    finally:
+        await engine.dispose()
+
+
 async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[str]:
     """Check current admission without claiming work or opening parent pools."""
     from app.services.heavy_io import (
@@ -652,6 +674,7 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
     if leases.get("error"):
         return set()
     curation_ready = "import_projection" in kinds and await _curation_projection_ready()
+    search_profile = await _search_recovery_profile() if "search" in kinds else None
     reserved = int(leases.get("reserved_bytes") or 0)
     media_profiles = {"image_derive", "video_derive"}
     if "media" in kinds:
@@ -679,7 +702,9 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
     admitted = set()
     for kind in kinds:
         descriptor = descriptor_by_name(_RESOURCE_DESCRIPTORS[kind])
-        profiles = media_profiles if kind == "media" else {descriptor.profile}
+        profiles = media_profiles if kind == "media" else {
+            search_profile if kind == "search" else descriptor.profile
+        }
         for profile in profiles:
             if not background_turn_available(redis_client):
                 continue
@@ -750,7 +775,7 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
                 return {"enqueued": 0, "deferred": 0}
             tokens = {(k.decode() if isinstance(k, bytes) else k): v for k, v in deferred.items()}
             kinds = set(tokens) & set(_SPECS)
-            if not kinds or redis.exists("lock:heavy-io") or read_marker() or (not ("import_projection" in kinds) and redis.exists("lock:resource-budget:background")):
+            if not kinds or redis.exists("lock:heavy-io") or read_marker() or (not ({"import_projection", "search"} & kinds) and redis.exists("lock:resource-budget:background")):
                 return {"enqueued": 0, "deferred": 0}
             remaining = deadline - monotonic()
             if remaining <= 0:

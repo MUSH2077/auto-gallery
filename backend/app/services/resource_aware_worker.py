@@ -919,7 +919,7 @@ class ResourceAwareWorker(Worker):
                 peeked_job, peeked_queue = self._peek_heterogeneous_head()
                 if peeked_job is not None and peeked_queue is not None:
                     peeked_workload = self._job_workload(peeked_job, peeked_queue)
-                    if self._internal_slice_workload(peeked_job) != "search_index":
+                    if self._internal_slice_workload(peeked_job) not in ("search_index", "pg_search_db"):
                         self._wait_until_pressure_allows_dequeue(
                             interval,
                             workload=peeked_workload,
@@ -1022,7 +1022,7 @@ class ResourceAwareWorker(Worker):
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
-        if self._internal_slice_workload(job) == "search_index":
+        if self._internal_slice_workload(job) in ("search_index", "pg_search_db"):
             # A remote poll releases an already reserved workload even under
             # pressure. The child applies heavy admission only for new writes.
             self._active_profile_snapshot = {}

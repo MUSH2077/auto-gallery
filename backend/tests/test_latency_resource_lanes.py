@@ -193,3 +193,70 @@ async def test_import_does_not_add_duty_cycle_sleep_after_two_seconds_of_work(mo
     async with import_runner._import_resource_slice("import_db", "test-owner"):
         clock[0] = 2.0
     assert slept == [], f"import added unnecessary idle time: {slept}"
+
+@pytest.mark.asyncio
+async def test_pg_search_and_image_background_share_ram_floor_and_single_writer(lane_redis):
+    image = lease(lane_redis, "image_derive", "image-background", 256, capacity=400)
+    pg = lease(lane_redis, "pg_search_db", "pg-search", 192, capacity=400)
+    duplicate = lease(lane_redis, "pg_search_db", "pg-search-duplicate", 192, capacity=400)
+    try:
+        assert await image.try_acquire()
+        assert not await pg.try_acquire()
+        assert pg.denial_reason == "resource_reservation_capacity"
+
+        await image.release()
+        assert await pg.try_acquire()
+        assert not await duplicate.try_acquire()
+        assert duplicate.denial_reason == "resource_reservation_busy"
+
+        await pg.release()
+        assert await pg.try_acquire()
+        assert not await image.try_acquire()
+        assert image.denial_reason == "resource_reservation_capacity"
+    finally:
+        await duplicate.release()
+        await image.release()
+        await pg.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", ["search_index", "pg_search_db"])
+async def test_ready_imports_take_priority_and_unresolved_remote_marker_still_blocks_pg(lane_redis, profile):
+    lane_redis.rpush("rq:queue:imports", "ready-import")
+    background = lease(lane_redis, profile, "background-search", 200)
+    owner = "legacy-remote-marker"
+    from app.services.remote_search_flight import clear_marker, create_marker
+
+    try:
+        assert not await background.try_acquire()
+        assert background.denial_reason == "background_yield_to_ingest"
+        lane_redis.set("resource:lanes:last-background", str(lane_redis.time()[0] - 61))
+        assert await background.try_acquire()
+        await background.release()
+
+        create_marker(owner, "search_index")
+        pg = lease(lane_redis, "pg_search_db", "pg-marker-blocked", 192)
+        try:
+            assert not await pg.try_acquire()
+            assert pg.denial_reason == "remote_search_in_flight"
+        finally:
+            await pg.release()
+    finally:
+        clear_marker(owner)
+        await background.release()
+
+
+def test_pg_local_lock_remains_exclusive_with_maintenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEAVY_IO_LOCK_PATH", str(tmp_path / "maintenance.lock"))
+    pg = heavy_io.local_lock_for_workload("pg_search_db")
+    maintenance = heavy_io.local_lock_for_workload("backup")
+    try:
+        assert pg.try_acquire()
+        assert not maintenance.try_acquire()
+
+        pg.release()
+        assert maintenance.try_acquire()
+        assert not pg.try_acquire()
+    finally:
+        maintenance.release()
+        pg.release()

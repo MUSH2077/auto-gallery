@@ -121,6 +121,7 @@ if marker_payload ~= "" then
   local remote = cjson.decode(marker_payload)
   if remote["profile"] == "maintenance"
     or KEYS[1] == "lock:resource-budget:background"
+    or KEYS[1] == "lock:resource-budget:pg-search-db"
     or string.find(KEYS[1], "^lock:resource%-budget:media:")
     or KEYS[1] == "lock:heavy-io" then
     return -4

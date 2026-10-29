@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -152,3 +152,219 @@ async def test_cancelled_sdk_query_stops_before_session_is_released(pgdb, monkey
     await pgdb.rollback()
     assert await pgdb.scalar(text("SELECT 1"))==1
     assert not await pgdb.scalar(text("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND query='SELECT pg_sleep(10)' AND state='active'"))
+
+
+@pytest.mark.parametrize("action", ["upsert", "delete"])
+async def test_atomic_delivery_commits_pg_task_receipt_and_outbox(pgdb, monkeypatch, action):
+    from contextlib import asynccontextmanager
+    from sqlalchemy import false
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import search_delivery as delivery
+    from app.services import search_rebuild
+
+    @asynccontextmanager
+    async def opened_session():
+        yield pgdb
+
+    monkeypatch.setattr(delivery, "async_session", opened_session)
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+    if action == "delete":
+        await store._write_documents(WORKS_INDEX, [document("atomic-one", "before")])
+    token = "t20-test-token"
+    before_tasks = await pgdb.scalar(text("SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"), {"uid": WORKS_INDEX})
+    outbox = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id="atomic-one", action=action, version=7,
+    )
+    receipt = SearchDeliveryReceipt(
+        backend="postgresql", index_uid=WORKS_INDEX, action=action,
+        versions=[], payload=([document("atomic-one", "atomic")] if action == "upsert" else ["atomic-one"]), state="prepared",
+        phase="documents", lease_token=token,
+        lease_until=datetime.now(timezone.utc) + timedelta(seconds=30),
+    )
+    pgdb.add_all([outbox, receipt])
+    await pgdb.flush()
+    receipt.versions = [[str(outbox.id), outbox.version]]
+    await pgdb.commit()
+
+    result = await delivery._apply_database_receipt(
+        receipt, token, time.monotonic() + 10,
+    )
+    assert result["status"] == "ok"
+    await pgdb.rollback()
+    refreshed = await pgdb.get(SearchDeliveryReceipt, receipt.id)
+    pending_completed_at = await pgdb.scalar(
+        select(SearchProjectionOutbox.completed_at).where(
+            SearchProjectionOutbox.id == outbox.id
+        )
+    )
+    assert refreshed.state == "complete"
+    assert pending_completed_at is not None
+    assert await pgdb.scalar(text(
+        "SELECT document->>'title' FROM search_pg_documents WHERE entity_id='atomic-one'"
+    )) == ("atomic" if action == "upsert" else None)
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"
+    ), {"uid": WORKS_INDEX}) == before_tasks + 1
+
+
+async def _seed_atomic_receipt(pgdb, *, token, lease_until, version=7):
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    outbox = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=f"atomic-{token}", action="upsert", version=version,
+    )
+    receipt = SearchDeliveryReceipt(
+        backend="postgresql", index_uid=WORKS_INDEX, action="upsert",
+        versions=[], payload=[document(f"atomic-{token}", "atomic")], state="prepared",
+        phase="documents", lease_token=token, lease_until=lease_until,
+    )
+    pgdb.add_all([outbox, receipt])
+    await pgdb.flush()
+    receipt.versions = [[str(outbox.id), outbox.version]]
+    receipt_id, outbox_id = receipt.id, outbox.id
+    await pgdb.commit()
+    return receipt_id, outbox_id
+
+
+async def test_atomic_delivery_rolls_back_document_and_task_on_precommit_error(pgdb, monkeypatch):
+    from types import SimpleNamespace
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlalchemy import false
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import postgres_search_store as store
+    from app.services import search_delivery as delivery
+    from app.services import search_rebuild
+
+    token = "atomic-rollback"
+    before_tasks = await pgdb.scalar(text("SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"), {"uid": WORKS_INDEX})
+    receipt_id, outbox_id = await _seed_atomic_receipt(
+        pgdb, token=token, lease_until=datetime.now(timezone.utc) + timedelta(seconds=30)
+    )
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+    monkeypatch.setattr(
+        delivery, "async_session", async_sessionmaker(pgdb.bind, expire_on_commit=False)
+    )
+
+    async def fail_task(*args, **kwargs):
+        raise RuntimeError("task history failure")
+
+    monkeypatch.setattr(store, "_task", fail_task)
+    with pytest.raises(RuntimeError, match="task history failure"):
+        await delivery._apply_database_receipt(
+            SimpleNamespace(id=receipt_id, action="upsert"), token, time.monotonic() + 10
+        )
+    await pgdb.rollback()
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"
+    ), {"id": f"atomic-{token}"}) == 0
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"
+    ), {"uid": WORKS_INDEX}) == before_tasks
+    assert await pgdb.scalar(
+        select(SearchDeliveryReceipt.state).where(SearchDeliveryReceipt.id == receipt_id)
+    ) == "prepared"
+    assert await pgdb.scalar(
+        select(SearchProjectionOutbox.completed_at).where(SearchProjectionOutbox.id == outbox_id)
+    ) is None
+
+
+async def test_atomic_delivery_does_not_ack_newer_outbox_version(pgdb, monkeypatch):
+    from types import SimpleNamespace
+    from sqlalchemy import false
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import search_delivery as delivery
+    from app.services import search_rebuild
+
+    token = "atomic-cas"
+    receipt_id, outbox_id = await _seed_atomic_receipt(
+        pgdb, token=token, lease_until=datetime.now(timezone.utc) + timedelta(seconds=30)
+    )
+    outbox = await pgdb.get(SearchProjectionOutbox, outbox_id)
+    outbox.version = 8
+    await pgdb.commit()
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+
+    result = await delivery._apply_database_receipt(
+        SimpleNamespace(id=receipt_id, action="upsert"), token, time.monotonic() + 10
+    )
+    assert result["status"] == "ok"
+    await pgdb.rollback()
+    version, completed_at = (await pgdb.execute(
+        select(SearchProjectionOutbox.version, SearchProjectionOutbox.completed_at).where(
+            SearchProjectionOutbox.id == outbox_id
+        )
+    )).one()
+    assert version == 8 and completed_at is None
+    assert await pgdb.scalar(
+        select(SearchDeliveryReceipt.state).where(SearchDeliveryReceipt.id == receipt_id)
+    ) == "complete"
+
+
+async def test_atomic_delivery_rejects_expired_execution_lease(pgdb, monkeypatch):
+    from types import SimpleNamespace
+    from sqlalchemy import false
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import search_delivery as delivery
+    from app.services import search_rebuild
+
+    token = "atomic-expired"
+    receipt_id, outbox_id = await _seed_atomic_receipt(
+        pgdb, token=token, lease_until=datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+
+    with pytest.raises(RuntimeError, match="lease expired"):
+        await delivery._apply_database_receipt(
+            SimpleNamespace(id=receipt_id, action="upsert"), token, time.monotonic() + 10
+        )
+    await pgdb.rollback()
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
+        SearchDeliveryReceipt.id == receipt_id
+    )) == "prepared"
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == outbox_id
+    )) is None
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"
+    ), {"id": f"atomic-{token}"}) == 0
+
+
+async def test_atomic_delivery_permit_recheck_defers_before_remote_advance(pgdb, monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlalchemy import select
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.services import heavy_io
+    from app.services import search_delivery as delivery
+
+    token = "atomic-recheck"
+    receipt_id, _ = await _seed_atomic_receipt(
+        pgdb, token=token, lease_until=datetime.now(timezone.utc) + timedelta(seconds=30)
+    )
+    factory = async_sessionmaker(pgdb.bind, expire_on_commit=False)
+    monkeypatch.setattr(delivery, "async_session", factory)
+    monkeypatch.setattr(
+        delivery, "uses_database_permit", AsyncMock(side_effect=[True, False])
+    )
+
+    @asynccontextmanager
+    async def capacity(*args, **kwargs):
+        yield SimpleNamespace(work_units=kwargs["max_work_units"])
+
+    monkeypatch.setattr(heavy_io, "adaptive_resource_slice", capacity)
+    outcome = await delivery._admitted(
+        1, None, time.monotonic() + 10,
+        SimpleNamespace(id=receipt_id, action="upsert"), token,
+    )
+    assert outcome["status"] == "deferred"
+    await pgdb.rollback()
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
+        SearchDeliveryReceipt.id == receipt_id
+    )) == "prepared"

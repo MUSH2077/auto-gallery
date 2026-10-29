@@ -403,6 +403,21 @@ Visual fingerprints use a pure-NumPy real-FFT implementation of the DCT-II on a 
 
 ### Search and Asset Deduplication Completion
 
+Ordinary PostgreSQL document updates use a separate `pg_search_db` permit with
+192 MiB reserved in the shared RAM budget. Single-writer exclusion, import
+priority, maintenance/file barriers and unfinished remote-task protection still
+apply. When resources allow, database writes can run alongside image processing
+and deduplication without holding their background file-processing permit. Only
+ordinary upsert/delete batches with ready index settings, no active rebuild and
+no pending membership bootstrap use this path.
+
+Document changes, the successful task record, receipt completion and version-matched
+outbox `(id, version)` acknowledgement commit in one short transaction. Failure
+rolls back all of them; an older batch cannot acknowledge a newer outbox version.
+Eligibility and the execution lease are rechecked inside the transaction. Changed
+eligibility releases the lease and defers reclassification to a new admission.
+Rebuilds, settings changes and other deliveries retain the staged path below.
+
 After delivery receives a remote taskUid, it persists the task identity in the
 remote resource marker and commits a pending SQL receipt before confirmation.
 It then gives the task at most 250 ms to finish, with 50 ms between status

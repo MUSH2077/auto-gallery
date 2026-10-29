@@ -56,7 +56,7 @@ DESCRIPTORS = {
     "asset-dedup-outbox": ResourceDescriptor("asset-dedup-outbox", "image_derive", "image_derive", True, lambda a, u, s: _fixed(a, 1, s)),
     "import-projection": ResourceDescriptor("import-projection", "import_db", "import_db", True, _import_slice, 25),
     "gitllery-projection": ResourceDescriptor("gitllery-projection", "git_projection", "git_projection", True, _git_slice, 1),
-    "search-projection": ResourceDescriptor("search-projection", "search_index", "search_index", True, _search_slice, 500),
+    "search-projection": ResourceDescriptor("search-projection", "pg_search_db", "pg_search_db", True, _search_slice, 500),
     "maintenance": ResourceDescriptor("maintenance", "maintenance"),
     # The parent owns admission for the entire DB-only heat recomputation.
     "work-heat": ResourceDescriptor("work-heat", "work_heat"),

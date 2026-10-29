@@ -37,6 +37,7 @@ HEAVY_IO_LOCK_KEY = "lock:heavy-io"
 RESOURCE_NETWORK_TOKEN_KEY = "lock:resource-budget:network"
 RESOURCE_DISK_TOKEN_KEY = "lock:resource-budget:disk"
 RESOURCE_BACKGROUND_TOKEN_KEY = "lock:resource-budget:background"
+RESOURCE_PG_SEARCH_TOKEN_KEY = "lock:resource-budget:pg-search-db"
 MEDIA_RESERVATION_KEYS = tuple(
     f"lock:resource-budget:media:{slot}"
     for slot in range(MAX_MEDIA_WORKER_CONCURRENCY)
@@ -50,6 +51,7 @@ RESOURCE_RESERVATION_KEYS = (
     RESOURCE_NETWORK_TOKEN_KEY,
     RESOURCE_DISK_TOKEN_KEY,
     RESOURCE_BACKGROUND_TOKEN_KEY,
+    RESOURCE_PG_SEARCH_TOKEN_KEY,
     "lock:resource-budget:remote-search",
     *MEDIA_RESERVATION_KEYS,
     *DOWNLOAD_RESERVATION_KEYS,
@@ -141,6 +143,7 @@ if total + requested > capacity then
 end
 local background_now = nil
 if KEYS[1] == "lock:resource-budget:background"
+  or KEYS[1] == "lock:resource-budget:pg-search-db"
   or string.find(KEYS[1], "^lock:resource%-budget:media:") then
   background_now = tonumber(redis.call("time")[1])
   local ingest_ready = redis.call("exists", "lock:resource-budget:disk") == 1
@@ -313,6 +316,8 @@ def resource_budget_token_key(workload: str, *, lane: str | None = None) -> str 
         return HEAVY_IO_LOCK_KEY
     if profile == "download_network":
         return RESOURCE_NETWORK_TOKEN_KEY
+    if profile == "pg_search_db":
+        return RESOURCE_PG_SEARCH_TOKEN_KEY
     if lane == "ingest" or (lane is None and profile == "import_db"):
         return RESOURCE_DISK_TOKEN_KEY
     return RESOURCE_BACKGROUND_TOKEN_KEY
@@ -410,7 +415,9 @@ def local_lock_for_workload(
         locks.append(
             LocalHeavyIOLock(_local_lock_path().with_name(f"source-{digest}.lock"))
         )
-    return LocalResourceLocks(locks, remote_exclusive=token == RESOURCE_BACKGROUND_TOKEN_KEY)
+    return LocalResourceLocks(
+        locks, remote_exclusive=token in (RESOURCE_BACKGROUND_TOKEN_KEY, RESOURCE_PG_SEARCH_TOKEN_KEY)
+    )
 
 
 def local_source_lock(source_identity: str) -> "LocalResourceLocks":
@@ -856,7 +863,7 @@ class RenewableRedisLease:
             from app.services.remote_search_flight import reconcile_reservation, reserve_memory
 
             marker = await asyncio.to_thread(reconcile_reservation, self.redis)
-            if marker and (marker.get("profile") == "maintenance" or HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys):
+            if marker and (marker.get("profile") == "maintenance" or HEAVY_IO_LOCK_KEY in self.keys or RESOURCE_BACKGROUND_TOKEN_KEY in self.keys or RESOURCE_PG_SEARCH_TOKEN_KEY in self.keys):
                 self.denial_reason = "remote_search_in_flight"
                 return False
             for key in self.keys:
@@ -1012,6 +1019,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                 RESOURCE_NETWORK_TOKEN_KEY,
                 RESOURCE_DISK_TOKEN_KEY,
                 RESOURCE_BACKGROUND_TOKEN_KEY,
+                RESOURCE_PG_SEARCH_TOKEN_KEY,
                 *MEDIA_RESERVATION_KEYS,
                 *DOWNLOAD_RESERVATION_KEYS,
                 "lock:resource-budget:remote-search",
@@ -1020,6 +1028,7 @@ def collect_active_resource_leases(redis_client=None) -> dict[str, Any]:
                     "image_derive",
                     "video_derive",
                     "search_index",
+                    "pg_search_db",
                     "git_projection",
                     "work_heat",
                 )),
