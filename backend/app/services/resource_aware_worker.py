@@ -40,6 +40,11 @@ from app.services.resource_pressure import (
     workload_profile_name,
 )
 from app.services.resource_descriptors import descriptor_for_job
+from app.services.download_resource_wait import (
+    clear_marker as clear_download_resource_marker,
+    register_after_retry_for_registry,
+    is_download_queue,
+)
 
 REDIS_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 REDIS_CONNECTION_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
@@ -1170,8 +1175,30 @@ class ResourceAwareWorker(Worker):
             )
             return local_lock, lease, owner
 
+    def handle_job_retry(self, job, queue, retry, started_job_registry, execution):
+        """Let RQ persist the retry, then mark only resource-deferred downloads."""
+
+        result = super().handle_job_retry(
+            job, queue, retry, started_job_registry, execution
+        )
+        if is_download_queue(str(getattr(queue, "name", ""))):
+            clear_download_resource_marker(self.connection, job)
+            register_after_retry_for_registry(
+                self.connection,
+                job,
+                retry,
+                registry=queue.scheduled_job_registry,
+                queue_name=str(queue.name),
+            )
+        return result
+
     def execute_job(self, job, queue):
         """Select and hold only the concrete job's profile for one slice."""
+
+        if is_download_queue(str(getattr(queue, "name", ""))):
+            # A marker is advisory and must not survive a new execution or a
+            # normal platform/business retry.
+            clear_download_resource_marker(self.connection, job)
 
         if not self._is_heavy_queue(queue):
             return super().execute_job(job, queue)

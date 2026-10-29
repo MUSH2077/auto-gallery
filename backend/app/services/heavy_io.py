@@ -1916,7 +1916,12 @@ def _rq_owner(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     return str(value)
 
 
-def _defer_current_rq_job(unavailable: HeavyIOUnavailable):
+def _defer_current_rq_job(
+    unavailable: HeavyIOUnavailable,
+    *,
+    workload: str | None = None,
+    source_identity: str | None = None,
+):
     """Defer only fallback RQ execution that bypassed the dedicated worker gate."""
 
     try:
@@ -1935,10 +1940,17 @@ def _defer_current_rq_job(unavailable: HeavyIOUnavailable):
                 job.id,
                 unavailable.reason,
             )
-            # Download children can yield on a busy slot or shared archive.
-            # Keep the delayed retry authoritative; release hints never bypass
-            # its availability time or resource admission.
-            return Retry(max=1_000_000, interval=int(DEFAULT_REQUEUE_SECONDS))
+            # The timer remains the fallback. Only explicitly marked download
+            # resource waits may be advanced, with admission checked again.
+            retry = Retry(max=1_000_000, interval=int(DEFAULT_REQUEUE_SECONDS))
+            if workload is not None:
+                from app.services.download_resource_wait import attach_resource_retry_context
+
+                attach_resource_retry_context(
+                    retry, workload=workload, reason=unavailable.reason,
+                    source_identity=source_identity,
+                )
+            return retry
     except ImportError:
         pass
     raise unavailable
@@ -1957,7 +1969,7 @@ def heavy_io_sync_job(workload: str) -> Callable[[F], F]:
                     async with heavy_io_slot(workload, owner):
                         return await asyncio.to_thread(func, *args, **kwargs)
                 except HeavyIOUnavailable as unavailable:
-                    return _defer_current_rq_job(unavailable)
+                    return _defer_current_rq_job(unavailable, workload=workload)
 
             return asyncio.run(guarded())
 
@@ -1983,7 +1995,7 @@ async def run_heavy_io_operation(
         ):
             return await operation_factory()
     except HeavyIOUnavailable as unavailable:
-        return _defer_current_rq_job(unavailable)
+        return _defer_current_rq_job(unavailable, workload=workload)
 
 
 def heavy_io_async_job(
@@ -2004,7 +2016,7 @@ def heavy_io_async_job(
                     if inspect.isawaitable(source_identity):
                         source_identity = await source_identity
                 except HeavyIOUnavailable as unavailable:
-                    return _defer_current_rq_job(unavailable)
+                    return _defer_current_rq_job(unavailable, workload=workload)
             # Import ingestion is a control/transaction stage now; expensive
             # curation, media, search and Git work is drained by bounded outbox
             # jobs.  Holding import_db across the whole legacy runner would
@@ -2023,7 +2035,9 @@ def heavy_io_async_job(
                 ):
                     return await func(*args, **kwargs)
             except HeavyIOUnavailable as unavailable:
-                return _defer_current_rq_job(unavailable)
+                return _defer_current_rq_job(
+                    unavailable, workload=workload, source_identity=source_identity
+                )
 
         return wrapped  # type: ignore[return-value]
 

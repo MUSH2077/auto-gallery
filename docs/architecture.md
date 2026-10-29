@@ -462,6 +462,8 @@ Heat recomputation stays on the `maintenance` queue but carries a `work-heat` de
 
 Resource-aware workers use `ResourceAwareScheduler` for due-task promotion. It delegates promotion and locking to RQ, then sends a best-effort hint through the existing queue work channel for each due queue. Worker timeout checks remain the recovery path when a hint is lost, and queue records remain authoritative. Remote-task confirmation/backoff, resource admission and completion recovery retain their existing rules.
 
+Downloads deferred before platform execution by a busy archive, download slot, maintenance barrier or insufficient memory retain the ordinary 10-second RQ Retry with explicit resource-wait context. Only after RQ commits its scheduled state, retry count and execution cleanup does the worker register an independent field in the same job hash, bound to that retry and its original score.
+
 ### Background Outbox Recovery
 
 An empty queue and a resource-denied task are different outcomes. Media and
