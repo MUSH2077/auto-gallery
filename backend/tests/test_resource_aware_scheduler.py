@@ -203,6 +203,72 @@ def test_initial_registry_prepare_failure_falls_back_to_rq(monkeypatch):
     assert promoted == [True]
 
 
+def test_download_registry_promotes_resource_waits_before_rq(monkeypatch):
+    """The download-only wake path must still leave queue promotion to RQ."""
+
+    registry = FakeRegistry("downloads:danbooru", [])
+    scheduler = _scheduler([registry], acquired_locks={"downloads:danbooru"})
+    calls = []
+
+    from app.services import download_resource_wait
+    monkeypatch.setattr(
+        download_resource_wait,
+        "promote_resource_waits",
+        lambda connection, registries: calls.append((connection, registries)),
+    )
+    monkeypatch.setattr(
+        scheduler_module.RQScheduler,
+        "enqueue_scheduled_jobs",
+        lambda _self: calls.append("rq") or "accepted",
+    )
+    monkeypatch.setattr(scheduler_module, "notify_queue_worker", lambda *args: None)
+
+    assert scheduler.enqueue_scheduled_jobs() == "accepted"
+    assert calls[0][1] == [registry]
+    assert calls[-1] == "rq"
+
+
+def test_non_download_registry_skips_resource_wait_promotion(monkeypatch):
+    registry = FakeRegistry("imports", [])
+    scheduler = _scheduler([registry], acquired_locks={"imports"})
+    calls = []
+
+    from app.services import download_resource_wait
+    monkeypatch.setattr(
+        download_resource_wait,
+        "promote_resource_waits",
+        lambda *args: calls.append("resource"),
+    )
+    monkeypatch.setattr(
+        scheduler_module.RQScheduler,
+        "enqueue_scheduled_jobs",
+        lambda _self: calls.append("rq") or "accepted",
+    )
+
+    assert scheduler.enqueue_scheduled_jobs() == "accepted"
+    assert calls == ["rq"]
+
+
+def test_resource_wait_promotion_failure_does_not_change_non_download_contract(monkeypatch):
+    """A broken optional wake check must not replace normal RQ promotion."""
+
+    registry = FakeRegistry("imports", [])
+    scheduler = _scheduler([registry], acquired_locks={"imports"})
+    promoted = []
+    monkeypatch.setattr(
+        scheduler_module.RQScheduler,
+        "enqueue_scheduled_jobs",
+        lambda _self: promoted.append(True) or "accepted",
+    )
+
+    # The optional helper is not called for ordinary queues; RQ remains the
+    # only promotion path even when its optional symbol is unavailable.
+    from app.services import download_resource_wait
+    monkeypatch.delattr(download_resource_wait, "promote_resource_waits", raising=False)
+    assert scheduler.enqueue_scheduled_jobs() == "accepted"
+    assert promoted == [True]
+
+
 def _scheduled_counter(counter_key, fail_first=False):
     import redis
     connection=redis.Redis.from_url(os.environ['REDIS_URL'])
@@ -281,3 +347,69 @@ def test_preloaded_worker_promotes_retries_and_recovers_scheduler(tmp_path):
         connection.delete(counter,retry_counter)
         connection.close()
     assert process.returncode==0,log_path.read_text()[-2500:]
+
+
+
+def test_non_download_scheduler_uses_original_rq_work(monkeypatch):
+    scheduler = _scheduler(acquired_locks={"imports"})
+    scheduler._queue_names = {"imports"}
+    called = []
+    monkeypatch.setattr(
+        scheduler_module.RQScheduler,
+        "work",
+        lambda _self: called.append("rq"),
+    )
+    scheduler.work()
+    assert called == ["rq"]
+
+
+def test_download_scheduler_notification_disconnect_returns_to_interval(monkeypatch):
+    from redis.exceptions import ConnectionError
+
+    class PubSub:
+        def __init__(self):
+            self.closed = False
+
+        def subscribe(self, channel):
+            self.channel = channel
+
+        def get_message(self, timeout):
+            raise ConnectionError("subscriber disconnected")
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        def __init__(self):
+            self.pubsub_instance = PubSub()
+
+        def pubsub(self, **kwargs):
+            return self.pubsub_instance
+
+    scheduler = _scheduler(acquired_locks={"downloads:danbooru"})
+    scheduler._queue_names = {"downloads:danbooru"}
+    scheduler.interval = 0.01
+    scheduler._stop_requested = False
+    connection = Connection()
+    scheduler._connection = connection
+    calls = []
+    monkeypatch.setattr(scheduler, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(scheduler, "register_birth", lambda: None)
+    monkeypatch.setattr(scheduler, "enqueue_scheduled_jobs", lambda: calls.append("enqueue"))
+    monkeypatch.setattr(scheduler, "heartbeat", lambda: calls.append("heartbeat"))
+
+    def stop():
+        calls.append("stop")
+        scheduler._stop_requested = True
+
+    monkeypatch.setattr(scheduler, "stop", stop)
+    sleeps = []
+    def sleep(value):
+        sleeps.append(value)
+        scheduler._stop_requested = True
+    monkeypatch.setattr(scheduler_module.time, "sleep", sleep)
+    scheduler.work()
+
+    assert calls == ["enqueue", "heartbeat", "stop"]
+    assert sleeps == [scheduler.interval]
+    assert connection.pubsub_instance.closed

@@ -348,3 +348,30 @@ async def test_private_terminal_projection_and_receipt_roll_back_together(indexe
         assert after == before
         assert (await db.execute(select(RepositorySyncReceipt).where(
             RepositorySyncReceipt.source_download_job_id == job_id))).scalar_one_or_none() is None
+
+
+@pytest.mark.parametrize("state", ["cancelled", "paused", "complete", "failed", "deleted", "newer-attempt"])
+async def test_awakened_delivery_cannot_claim_stopped_or_replaced_download(domain, state):
+    from app.database import async_session
+    from app.models import DownloadJob
+    from app.services.download_lifecycle import claim_download
+    from app.services.tasks import TaskService
+
+    async with async_session() as db:
+        job = await db.get(DownloadJob, domain)
+        task = await TaskService(db).ensure_download_task(job)
+        task.rq_job_id = "current-delivery"
+        if state == "deleted":
+            await db.delete(job)
+        elif state != "newer-attempt":
+            job.status = state
+        await db.commit()
+    async with async_session() as db:
+        delivery = "old-delivery" if state == "newer-attempt" else "current-delivery"
+        assert await claim_download(db, domain, delivery) is None
+        await db.commit()
+        job = await db.get(DownloadJob, domain)
+        if state == "deleted":
+            assert job is None
+        else:
+            assert job.status == ("enqueued" if state == "newer-attempt" else state)
