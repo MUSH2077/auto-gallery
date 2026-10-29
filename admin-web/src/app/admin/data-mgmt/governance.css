@@ -9,7 +9,6 @@
 .gallery-ui .gallery-governance-page :is(select,input:not([type=checkbox]):not([type=radio]),textarea) { min-height:44px; border-color:var(--line); border-radius:4px; background:var(--surface); color:var(--ink); font-family:var(--font-ui); font-size:var(--type-control); font-weight:600; }
 .gallery-ui .gallery-governance-page :is(button,a,input,select,textarea,summary):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .gallery-ui .gallery-governance-page :is(.text-xs,.text-sm,.text-\[10px\],.text-\[11px\]) { font-size:var(--type-meta); line-height:var(--leading-meta); }
-.gallery-ui .gallery-governance-page .font-mono { font-family:var(--font-ui); font-variant-numeric:tabular-nums; }
 .gallery-ui .gallery-governance-page :is(.rounded-lg,.rounded-xl,.rounded-md) { border-radius:4px; }
 .gallery-ui .gallery-governance-page :is(.border-border,.border-white\/10,.border-white\/20) { border-color:var(--line); }
 .gallery-ui .gallery-governance-page :is(.shadow-sm,.shadow-md,.shadow-lg) { box-shadow:none; }

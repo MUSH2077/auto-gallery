@@ -20,7 +20,6 @@
 .gallery-ui .gallery-subscription-detail .grid { gap:28px; }
 .gallery-ui .gallery-subscription-detail .text-xs,
 .gallery-ui .gallery-subscription-detail .text-sm { font-size:var(--type-control); line-height:var(--leading-control); }
-.gallery-ui .gallery-subscription-detail .font-mono { font-family:var(--font-ui); }
 .gallery-ui .gallery-subscription-detail select,
 .gallery-ui .gallery-subscription-detail input:not([type=checkbox]):not([type=radio]),
 .gallery-ui .gallery-subscription-detail textarea { min-height:44px; border:1px solid var(--line); border-radius:4px; background:var(--surface); color:var(--ink); }

@@ -51,7 +51,8 @@ const config: Config = {
       fontFamily: {
         // GitHub's system stack — part of the Primer alignment.
         sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Noto Sans", "Helvetica", "Arial", "sans-serif", "Apple Color Emoji", "Segoe UI Emoji"],
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        // Legacy technical-text utilities use the approved functional font.
+        mono: ["var(--font-ui)"],
       },
       fontSize: {
         "fluid-lg": ["clamp(1.05rem, 0.98rem + 0.4vw, 1.25rem)", { lineHeight: "1.4" }],

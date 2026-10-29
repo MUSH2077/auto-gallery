@@ -682,7 +682,6 @@
 
 .gallery-ui .detail-sheet:not(:has(.task-detail)) .dialog-top h2 { font-family: var(--font-content); font-optical-sizing: auto; font-synthesis: none; }
 
-.gallery-ui .detail-id { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 
 .gallery-ui :is(time, .layout-scope-count, .layout-task-tabs a span, .task-progress, .layout-task-progress, .pagination, .asset-count, .asset-navigation) { font-variant-numeric: lining-nums tabular-nums; }
 

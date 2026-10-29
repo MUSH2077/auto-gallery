@@ -53,7 +53,6 @@
 .gallery-ui .business-dashboard-services dl>div {display:flex;gap:14px;}
 @media(max-width:600px){.gallery-ui .business-dashboard-status dl{grid-template-columns:repeat(2,minmax(0,1fr));}.gallery-ui .business-dashboard-status dl>div:last-child{grid-column:1/-1;}.gallery-ui .business-dashboard-works{grid-template-columns:1fr;gap:24px;}.gallery-ui .business-dashboard-attention{align-items:flex-start;flex-direction:column;}.gallery-ui .business-dashboard-outcome{justify-items:start;}.gallery-ui .business-dashboard-activity>div:first-child{flex-basis:100%;}}
 
-.gallery-ui .gallery-business .font-mono {font-family:var(--font-ui);font-variant-numeric:lining-nums tabular-nums;}
 
 .gallery-ui .gallery-business .btn-icon {width:44px;min-width:44px;padding:10px;flex:none;}
 .gallery-ui .gallery-business .btn-icon svg {width:20px;height:20px;flex:none;}

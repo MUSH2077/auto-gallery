@@ -80,3 +80,27 @@ test("the selected theme is applied before client hydration", async ({ context }
     } finally { await page.close(); }
   }
 });
+
+
+test("task technical content shares the approved local typography without a fifth font", async ({ page, context }) => {
+  const externalFonts: string[] = [];
+  page.on("request", request => {
+    if (request.url().includes("JetBrains")) externalFonts.push(request.url());
+  });
+  await account(context, { lang: "en", theme: "light" });
+  await context.route("**/api/v1/tasks/font-task", route => json(route, {
+    id: "font-task", title: "Typography check", kind: "download", status: "failed",
+    created_at: "2026-10-28T00:00:00Z", available_actions: [],
+    progress_current: 12, progress_total: 34,
+  }));
+  await page.goto("/admin/jobs?task=font-task");
+  const detail = page.getByRole("dialog", { name: "Task detail", exact: true });
+  await detail.getByText("Technical details", { exact: true }).click();
+  const code = detail.locator("pre");
+  await expect(code).toBeVisible();
+  await expect(code).toHaveCSS("font-family", /Fraunces.*LXGW WenKai/);
+  await expect(detail.locator(".detail-id")).toHaveCSS("font-family", /Fraunces.*LXGW WenKai/);
+  expect(externalFonts).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(detail).toHaveCount(0);
+});

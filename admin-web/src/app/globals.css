@@ -1,6 +1,3 @@
-/* Fonts via Chinese mirror (fonts.googleapis.com blocked in mainland China) */
-@import url('https://fonts.loli.net/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-
 @import "tailwindcss";
 @config "../../tailwind.config.ts";
 
@@ -41,7 +38,8 @@
     @apply antialiased min-h-screen;
   }
   h1, h2, h3 { font-family: inherit; }
-  code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
+  code, pre { font-family: inherit; }
+  .font-mono { font-variant-numeric: lining-nums tabular-nums; }
 }
 
 

@@ -43,7 +43,10 @@ ink; spacing, size and placement provide hierarchy instead of low contrast.
 
 Keep the Italianno wordmark independent of content typography. English and
 numbers use Fraunces; Chinese content headings use Noto Serif SC and functional
-UI uses LXGW WenKai. Keep the local font assets and their licenses together.
+UI uses LXGW WenKai. Identifiers, numeric values, and code use the same
+functional font stack; the legacy font-mono utility retains lining and tabular
+figures without loading another typeface. Keep the local font assets and their
+licenses together.
 
 | Role | Size / line height |
 |---|---|
