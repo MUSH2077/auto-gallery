@@ -1436,3 +1436,233 @@ def test_download_drain_control_channel_is_subscribed_for_waiting_download_worke
         "resource:work:download_network",
         DOWNLOAD_DRAIN_CHANNEL,
     }
+
+
+
+def test_work_heat_profile_admission_parks_without_waiting(monkeypatch):
+    from app.services import work_heat_queue
+    from app.services.resource_aware_worker import _WorkHeatDeferred
+
+    worker = _bare_worker()
+    worker._raise_if_shutdown_requested = lambda: None
+    calls = []
+    worker._wait_until_pressure_allows_dequeue = lambda *args, **kwargs: (
+        calls.append(kwargs) or {
+            "active_profile": {"allowed": False, "reason": "background_yield_to_ingest"},
+        }
+    )
+    job = type("Job", (), {
+        "id": "heat-resource-wait",
+        "key": "rq:job:heat-resource-wait",
+        "created_at": "2026-10-29T00:00:00Z",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "args": ("manual",),
+        "meta": {},
+        "save_meta": lambda self: None,
+    })()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    parked = []
+    monkeypatch.setattr(
+        work_heat_queue,
+        "defer_work_heat_for_resources",
+        lambda actual_job, actual_queue, **kwargs: parked.append(
+            (actual_job, actual_queue, kwargs)
+        ) or True,
+    )
+
+    with pytest.raises(_WorkHeatDeferred):
+        worker._profile_admission(job, "work_heat", queue)
+
+    assert calls == [{
+        "workload": "work_heat",
+        "job": job,
+        "owner": "heat-resource-wait",
+        "hard_only": False,
+        "wait_for_permit": False,
+    }]
+    assert parked == [(job, queue, {"reason": "background_yield_to_ingest"})]
+
+
+def test_work_heat_head_does_not_wait_for_pressure(monkeypatch):
+    worker = _bare_worker()
+    worker.queues = []
+    queue = type("Queue", (), {"name": "maintenance", "key": "rq:queue:maintenance"})()
+    job = type("Job", (), {
+        "id": "heat-head",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "meta": {"resource_descriptor": "work-heat"},
+        "args": ("manual",),
+    })()
+    queue.get_jobs = lambda offset=0, length=1: [job]
+    worker.queues = [queue]
+    worker.heartbeat = lambda *_args, **_kwargs: None
+    worker.set_state = lambda *_args, **_kwargs: None
+    worker._heavy_queues_have_jobs = lambda: True
+    worker._wait_for_control_event = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(ResourceAwareWorker, "should_run_maintenance_tasks", False)
+    monkeypatch.setattr(
+        ResourceAwareWorker,
+        "_workload_profile",
+        lambda self: "light",
+    )
+    monkeypatch.setattr(
+        Worker,
+        "dequeue_job_and_maintain_ttl",
+        lambda self, timeout, max_idle_time=None: (job, queue),
+    )
+    def fail_if_wait(*args, **kwargs):
+        raise AssertionError("work_heat head must not block before dequeue")
+    worker._wait_until_pressure_allows_dequeue = fail_if_wait
+
+    assert worker.dequeue_job_and_maintain_ttl(1, None) == (job, queue)
+
+
+
+def test_work_heat_park_failure_does_not_silently_drop_claim(monkeypatch):
+    from app.services import work_heat_queue
+
+    worker = _bare_worker()
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._wait_until_pressure_allows_dequeue = lambda *args, **kwargs: {
+        "active_profile": {"allowed": False, "reason": "background_yield_to_ingest"},
+    }
+    job = type("Job", (), {
+        "id": "heat-park-failed",
+        "key": "rq:job:heat-park-failed",
+        "created_at": "2026-10-29T00:00:00Z",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "args": ("manual",),
+        "meta": {},
+        "save_meta": lambda self: None,
+    })()
+    connection = type("Connection", (), {"hget": lambda self, *_args: b"2026-10-29T00:00:00Z", "lpos": lambda self, *_args: 0})()
+    queue = type("Queue", (), {
+        "name": "maintenance",
+        "connection": connection,
+        "intermediate_queue": type("Intermediate", (), {"key": "rq:intermediate"})(),
+    })()
+    monkeypatch.setattr(work_heat_queue, "defer_work_heat_for_resources", lambda *args, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="resource park failed"):
+        worker._profile_admission(job, "work_heat", queue)
+
+
+@pytest.mark.integration
+def test_work_heat_resource_park_frees_real_maintenance_worker():
+    """A real RQ claim parks heat and lets the following search job run."""
+    from rq import Queue, Retry
+    from rq.job import Job
+    from app.config import settings
+    from app.services.resource_aware_worker import ResourceAwareWorker
+    from app.jobs.work_heat import run_work_heat_recompute
+    from app.jobs.search_projection import run_search_projection_outbox
+
+    client = redis.Redis.from_url(settings.redis_url)
+    queue = Queue(name="maintenance", connection=client)
+    import_marker = "rq:queue:imports"
+    heat_id = "test-work-heat-resource-park"
+    search_id = "test-work-heat-following-search"
+    try:
+        client.delete(queue.key, import_marker)
+        client.rpush(import_marker, "pending-import-for-heat")
+        heat = queue.enqueue(
+            run_work_heat_recompute,
+            "manual",
+            job_id=heat_id,
+            retry=Retry(max=3, interval=[60, 300, 900]),
+            result_ttl=300,
+        )
+        initial_retry_count = heat.number_of_retries
+        initial_retries_left = heat.retries_left
+        search = queue.enqueue(
+            run_search_projection_outbox,
+            1,
+            job_id=search_id,
+            result_ttl=300,
+        )
+
+        worker = ResourceAwareWorker([queue], connection=client, name="test-work-heat-park")
+        worked = worker.work(burst=True, with_scheduler=False)
+
+        heat.refresh()
+        search.refresh()
+        assert worked is True
+        assert heat.get_status().value == "scheduled"
+        assert heat.number_of_retries == initial_retry_count
+        assert heat.retries_left == initial_retries_left
+        assert search.get_status().value == "finished"
+        assert client.lpos(queue.intermediate_queue.key, heat.id) is None
+    finally:
+        client.delete(queue.key, import_marker)
+        for job_id in (heat_id, search_id):
+            Job.fetch(job_id, connection=client).delete()
+        client.close()
+
+
+@pytest.mark.integration
+def test_work_heat_resource_park_does_not_bypass_business_retry(monkeypatch):
+    """A real business failure after resource promotion keeps its backoff."""
+    from rq import Queue, Retry
+    from rq.job import Job
+    from rq.registry import ScheduledJobRegistry
+    from app.config import settings
+    from app.jobs.search_projection import run_search_projection_outbox
+    from app.jobs.work_heat import run_work_heat_recompute
+    from app.services.resource_aware_scheduler import ResourceAwareScheduler
+    from app.services.resource_aware_worker import ResourceAwareWorker
+    from app.services.work_heat_queue import WORK_HEAT_RESOURCE_WAIT_MARKER
+
+    client = redis.Redis.from_url(settings.redis_url)
+    queue = Queue(name="maintenance", connection=client)
+    import_marker = "rq:queue:imports"
+    heat_id = "test-work-heat-business-retry"
+    heat = None
+    try:
+        client.delete(queue.key, import_marker)
+        client.rpush(import_marker, "pending-import-for-heat")
+        heat = queue.enqueue(
+            run_work_heat_recompute,
+            "manual",
+            job_id=heat_id,
+            retry=Retry(max=3, interval=[60, 300, 900]),
+            result_ttl=300,
+        )
+        initial_retries_left = heat.retries_left
+        worker = ResourceAwareWorker([queue], connection=client, name="test-work-heat-retry")
+        assert worker.work(burst=True, with_scheduler=False) is True
+        heat.refresh()
+        assert heat.get_status().value == "scheduled"
+        assert heat.retries_left == initial_retries_left
+        assert client.hget(heat.key, WORK_HEAT_RESOURCE_WAIT_MARKER)
+
+        client.delete(import_marker)
+        registry = ScheduledJobRegistry(queue=queue)
+        client.zadd(registry.key, {heat.id: 0})
+        scheduler = ResourceAwareScheduler([queue], connection=client, interval=1)
+        scheduler.acquire_locks()
+        try:
+            scheduler.prepare_registries()
+            scheduler.enqueue_scheduled_jobs()
+        finally:
+            scheduler.release_locks()
+
+        def fail_heat(_source):
+            raise ValueError("business failure")
+
+        monkeypatch.setattr("app.jobs.work_heat.run_work_heat_recompute", fail_heat)
+        assert ResourceAwareWorker([queue], connection=client, name="test-work-heat-retry-run").work(
+            burst=True, with_scheduler=False
+        ) is True
+        heat.refresh()
+        assert heat.get_status().value == "scheduled"
+        assert heat.retries_left == initial_retries_left - 1
+        assert client.hget(heat.key, WORK_HEAT_RESOURCE_WAIT_MARKER) is None
+        from rq.utils import current_timestamp
+        assert float(client.zscore(registry.key, heat.id)) >= current_timestamp() + 50
+    finally:
+        client.delete(queue.key, import_marker)
+        try:
+            Job.fetch(heat_id, connection=client).delete()
+        except Exception:
+            pass
+        client.close()

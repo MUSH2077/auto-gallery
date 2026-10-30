@@ -363,7 +363,8 @@ def test_non_download_scheduler_uses_original_rq_work(monkeypatch):
     assert called == ["rq"]
 
 
-def test_download_scheduler_notification_disconnect_returns_to_interval(monkeypatch):
+@pytest.mark.parametrize("queue_name", ["downloads:danbooru", "maintenance"])
+def test_resource_scheduler_notification_disconnect_returns_to_interval(monkeypatch, queue_name):
     from redis.exceptions import ConnectionError
 
     class PubSub:
@@ -386,8 +387,8 @@ def test_download_scheduler_notification_disconnect_returns_to_interval(monkeypa
         def pubsub(self, **kwargs):
             return self.pubsub_instance
 
-    scheduler = _scheduler(acquired_locks={"downloads:danbooru"})
-    scheduler._queue_names = {"downloads:danbooru"}
+    scheduler = _scheduler(acquired_locks={queue_name})
+    scheduler._queue_names = {queue_name}
     scheduler.interval = 0.01
     scheduler._stop_requested = False
     connection = Connection()
@@ -410,6 +411,68 @@ def test_download_scheduler_notification_disconnect_returns_to_interval(monkeypa
     monkeypatch.setattr(scheduler_module.time, "sleep", sleep)
     scheduler.work()
 
-    assert calls == ["enqueue", "heartbeat", "stop"]
+    assert calls == ["enqueue", "heartbeat", "enqueue", "stop"]
     assert sleeps == [scheduler.interval]
     assert connection.pubsub_instance.closed
+
+
+@pytest.mark.parametrize("owned", [True, False])
+def test_heat_resource_wait_promotion_only_uses_owned_maintenance_registry(monkeypatch, owned):
+    from app.services import work_heat_queue
+
+    registry = FakeRegistry("maintenance", [])
+    scheduler = _scheduler([registry], acquired_locks={"maintenance"} if owned else set())
+    calls = []
+    monkeypatch.setattr(work_heat_queue, "promote_work_heat_resource_waits", lambda connection, registries: calls.append(registries))
+    monkeypatch.setattr(scheduler_module.RQScheduler, "enqueue_scheduled_jobs", lambda _self: calls.append("rq"))
+    scheduler.enqueue_scheduled_jobs()
+    assert calls == ([[registry], "rq"] if owned else ["rq"])
+
+
+def test_heat_wake_failure_keeps_rq_due_promotion(monkeypatch):
+    from app.services import work_heat_queue
+
+    scheduler = _scheduler([FakeRegistry("maintenance", [])], acquired_locks={"maintenance"})
+    def unavailable(*args):
+        raise RuntimeError("resource probe unavailable")
+    monkeypatch.setattr(work_heat_queue, "promote_work_heat_resource_waits", unavailable)
+    monkeypatch.setattr(scheduler_module.RQScheduler, "enqueue_scheduled_jobs", lambda _self: "rq-promoted")
+    assert scheduler.enqueue_scheduled_jobs() == "rq-promoted"
+
+
+def test_heat_wait_event_wakes_existing_scheduler_without_interval_sleep(monkeypatch):
+    import json
+
+    class PubSub:
+        closed = False
+        messages = 0
+        def subscribe(self, channel):
+            self.channel = channel
+        def get_message(self, timeout):
+            self.messages += 1
+            return {"data": json.dumps({"type": "work_heat_resource_waiting"})}
+        def close(self):
+            self.closed = True
+
+    pubsub = PubSub()
+    scheduler = _scheduler(acquired_locks={"maintenance"})
+    scheduler._queue_names = {"maintenance"}
+    scheduler._connection = SimpleNamespace(pubsub=lambda **kwargs: pubsub)
+    scheduler.interval = 10
+    scheduler._stop_requested = False
+    calls, sleeps = [], []
+    monkeypatch.setattr(scheduler, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(scheduler, "register_birth", lambda: None)
+    monkeypatch.setattr(scheduler, "heartbeat", lambda: None)
+    monkeypatch.setattr(scheduler, "stop", lambda: calls.append("stop"))
+    def promote():
+        calls.append("promote")
+        if calls.count("promote") == 3:
+            scheduler._stop_requested = True
+    monkeypatch.setattr(scheduler, "enqueue_scheduled_jobs", promote)
+    monkeypatch.setattr(scheduler_module.time, "sleep", lambda value: sleeps.append(value))
+    scheduler.work()
+    assert calls == ["promote", "promote", "promote", "stop"]
+    assert pubsub.messages == 1
+    assert sleeps == [.05]
+    assert pubsub.closed

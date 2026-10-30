@@ -116,6 +116,10 @@ def adaptive_wait_delay(attempt: int, *, jitter: bool = True) -> float:
     return max(IDLE_WAIT_MIN_SECONDS, min(IDLE_WAIT_MAX_SECONDS, base * random.uniform(0.85, 1.15)))
 
 
+class _WorkHeatDeferred(Exception):
+    """A work-heat job was parked without counting an execution failure."""
+
+
 class ResourceAwareWorker(Worker):
     """Pause before dequeueing; an already-running job is never interrupted."""
 
@@ -708,6 +712,7 @@ class ResourceAwareWorker(Worker):
         job=None,
         owner: str | None = None,
         hard_only: bool = False,
+        wait_for_permit: bool = True,
     ) -> dict:
         """Remain alive but idle until this profile receives a permit."""
 
@@ -780,6 +785,8 @@ class ResourceAwareWorker(Worker):
                 return snapshot
 
             wait_reason = str(permit.get("reason") or "resource_pressure")
+            if not wait_for_permit:
+                return snapshot
             if job is not None and owner is not None and wait_reason != last_job_reason:
                 self._set_job_resource_meta(job, workload, "waiting", wait_reason)
                 _set_resource_state_sync(
@@ -924,7 +931,10 @@ class ResourceAwareWorker(Worker):
                 peeked_job, peeked_queue = self._peek_heterogeneous_head()
                 if peeked_job is not None and peeked_queue is not None:
                     peeked_workload = self._job_workload(peeked_job, peeked_queue)
-                    if self._internal_slice_workload(peeked_job) not in ("search_index", "pg_search_db"):
+                    if (
+                        peeked_workload != "work_heat"
+                        and self._internal_slice_workload(peeked_job) not in ("search_index", "pg_search_db")
+                    ):
                         self._wait_until_pressure_allows_dequeue(
                             interval,
                             workload=peeked_workload,
@@ -1022,11 +1032,42 @@ class ResourceAwareWorker(Worker):
         except Exception:
             pass
 
-    def _profile_admission(self, job, workload: str):
+    def _profile_admission(self, job, workload: str, queue=None):
         """Wait without a lock, then hold one profile lease for this slice."""
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
+
+        def defer_work_heat(reason: str) -> None:
+            if workload != "work_heat":
+                return
+            from app.services.work_heat_queue import (
+                _job_created_at_raw,
+                defer_work_heat_for_resources,
+            )
+            actual_queue = queue or getattr(self, "_resource_admission_queue", None)
+            connection = getattr(actual_queue, "connection", None)
+            expected_created_at = _job_created_at_raw(job)
+            parked = defer_work_heat_for_resources(job, actual_queue, reason=reason)
+            if not parked:
+                intermediate = getattr(actual_queue, "intermediate_queue", None)
+                job_id = str(getattr(job, "id", ""))
+                current_created_at = (
+                    connection.hget(job.key, "created_at")
+                    if connection is not None else None
+                )
+                if isinstance(current_created_at, bytes):
+                    current_created_at = current_created_at.decode("utf-8", "replace")
+                still_claimed = bool(
+                    connection is not None
+                    and intermediate is not None
+                    and connection.lpos(intermediate.key, job_id) is not None
+                    and current_created_at == expected_created_at
+                )
+                if still_claimed:
+                    raise RuntimeError("work_heat resource park failed while job remained claimed")
+            raise _WorkHeatDeferred
+
         if self._internal_slice_workload(job) in ("search_index", "pg_search_db"):
             # A remote poll releases an already reserved workload even under
             # pressure. The child applies heavy admission only for new writes.
@@ -1040,8 +1081,13 @@ class ResourceAwareWorker(Worker):
                 job=job,
                 owner=owner,
                 hard_only=self._job_uses_nonblocking_child_admission(job),
+                wait_for_permit=workload != "work_heat",
             )
             self._raise_if_shutdown_requested()
+            if workload == "work_heat":
+                permit = snapshot.get("active_profile") or {}
+                if not permit.get("allowed", False):
+                    defer_work_heat(str(permit.get("reason") or "resource_pressure"))
             nonblocking_child = self._job_uses_nonblocking_child_admission(job)
             if (
                 workload_profile_name(workload) != "maintenance"
@@ -1052,6 +1098,7 @@ class ResourceAwareWorker(Worker):
                 except REDIS_CONNECTION_ERRORS:
                     maintenance_pending = True
                 if maintenance_pending:
+                    defer_work_heat("maintenance_pending")
                     self._set_job_resource_meta(
                         job,
                         workload,
@@ -1101,6 +1148,7 @@ class ResourceAwareWorker(Worker):
                     workload,
                 )
                 if reservation_bytes > reservation_capacity:
+                    defer_work_heat("profile_memory_reserve_live")
                     lease_reason = "profile_memory_reserve_live"
                     self._set_job_resource_meta(job, workload, "waiting", lease_reason)
                     _set_resource_state_sync(
@@ -1128,6 +1176,7 @@ class ResourceAwareWorker(Worker):
                 )
                 if not asyncio.run(lease.try_acquire()):
                     lease_reason = lease.denial_reason or "profile_lease_busy"
+                    defer_work_heat(lease_reason)
                     self._set_job_resource_meta(job, workload, "waiting", lease_reason)
                     _set_resource_state_sync(
                         owner,
@@ -1148,6 +1197,7 @@ class ResourceAwareWorker(Worker):
             if not local_acquired:
                 if lease is not None:
                     asyncio.run(lease.release())
+                defer_work_heat("profile_lock_busy")
                 self._set_job_resource_meta(job, workload, "waiting", "profile_lock_busy")
                 _set_resource_state_sync(
                     owner,
@@ -1206,6 +1256,9 @@ class ResourceAwareWorker(Worker):
         workload = self._job_workload(job, queue)
         publisher_attempt = self._job_publisher_attempt(job)
         internally_sliced = self._internal_slice_workload(job) is not None
+        if workload == "work_heat":
+            from app.services.work_heat_queue import clear_work_heat_resource_wait
+            clear_work_heat_resource_wait(self.connection, job)
         # RQ has popped this still-QUEUED job but not prepared an execution.
         # Make signals cooperative while acquiring leases. At a wait boundary
         # a stop returns ownership atomically, without reviving cancelled jobs.
@@ -1214,7 +1267,12 @@ class ResourceAwareWorker(Worker):
             self.set_state(WorkerStatus.BUSY)
             self._raise_if_shutdown_requested()
             self._bound_job_slice(job, workload)
-            local_lock, lease, owner = self._profile_admission(job, workload)
+            self._resource_admission_queue = queue
+            try:
+                local_lock, lease, owner = self._profile_admission(job, workload)
+            except _WorkHeatDeferred:
+                self.set_state(WorkerStatus.IDLE)
+                return None
         except StopRequested:
             self.connection.eval(
                 """
@@ -1235,6 +1293,7 @@ class ResourceAwareWorker(Worker):
             raise
         finally:
             self._resource_admission_active = False
+            self._resource_admission_queue = None
         profile_snapshot = getattr(self, "_active_profile_snapshot", {})
         slice_started = time.monotonic()
         inherited_profile = workload_profile_name(workload)
