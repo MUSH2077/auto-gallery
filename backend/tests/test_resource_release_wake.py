@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from tests.test_bulk_import_wake import bulk_environment, _persist, _staged_work
 
@@ -228,3 +228,416 @@ async def test_import_recovery_checks_the_pending_phase_lane(waiting_work, curat
     finally:
         w.client.delete(token)
         background.release()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("holder_profile", ["import_db", "image_derive"])
+async def test_committed_work_is_curated_while_more_imports_are_queued(waiting_work, holder_profile):
+    from sqlalchemy import select
+    from app.jobs.import_projection import _run_projection
+    from app.models import ImportCurationOutbox
+
+    w = waiting_work
+    w.client.rpush("rq:queue:imports", "next-import")
+    try:
+        from app.services import heavy_io
+        async with heavy_io.heavy_io_slot(holder_profile, "active-ingest", lane="ingest"):
+            result = await _run_projection(25, 20, {})
+            assert w.client.exists(heavy_io.RESOURCE_DISK_TOKEN_KEY)
+        assert result["processed"] == 1
+        assert result["resource_deferred"]
+        row = (await w.db.execute(select(ImportCurationOutbox))).scalar_one()
+        assert row.state == "complete"
+        assert row.metadata_state == "pending"
+        assert w.published[-1].get("search") == 1
+        assert w.client.llen("rq:queue:imports") == 1
+    finally:
+        w.client.delete("rq:queue:imports", "resource:lanes:last-background")
+
+
+@pytest.mark.integration
+def test_curation_release_recovery_uses_free_database_slot_before_queue_drains(waiting_work):
+    from app.services import heavy_io, outbox_coordinator
+
+    w = waiting_work
+    w.client.rpush("rq:queue:imports", "next-import")
+    _defer(w, "import_projection")
+    importing = heavy_io.local_lock_for_workload("import_db", lane="completion")
+    assert importing.try_acquire()
+    try:
+        assert outbox_coordinator.wake_resource_deferred_outboxes()["enqueued"] == 0
+        importing.release()
+        assert outbox_coordinator.wake_resource_deferred_outboxes()["enqueued"] == 1
+        assert w.published == [{"import_projection": 1}]
+        assert w.client.llen("rq:queue:imports") == 1
+    finally:
+        importing.release()
+        w.client.delete("rq:queue:imports", "resource:lanes:last-background")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ordinary_pg", [True, False])
+async def test_search_release_recovery_classifies_pg_before_ingest_priority(waiting_work, monkeypatch, ordinary_pg):
+    import asyncio
+    from sqlalchemy import delete
+    from app.config import settings
+    from app.models import ImportCurationOutbox
+    from app.models.search_rebuild import SearchRebuild
+    from app.services import outbox_coordinator, postgres_search_store, search_rebuild
+    from app.services.search_index_definitions import INDEX_SETTINGS, WORKS_INDEX
+
+    w = waiting_work
+    monkeypatch.setattr(settings, "search_backend", "postgresql")
+    bootstrap = SearchRebuild(backend="postgresql", owner=search_rebuild.MEMBERSHIP_BOOTSTRAP_OWNER,
+                              state="complete", phase="complete", progress={})
+    w.db.add(bootstrap)
+    await w.db.execute(update(ImportCurationOutbox).values(state="complete"))
+    await w.db.commit()
+    if ordinary_pg:
+        await postgres_search_store._settings(WORKS_INDEX, "PATCH", INDEX_SETTINGS[WORKS_INDEX])
+    else:
+        await postgres_search_store._settings(WORKS_INDEX, "PATCH", {"searchableAttributes": ["different"]})
+    w.client.rpush("rq:queue:imports", "next-import")
+    if ordinary_pg:
+        from app.services import heavy_io, search_delivery
+        holder = heavy_io.local_lock_for_workload("pg_search_db")
+        assert holder.try_acquire()
+        try:
+            denied = await search_delivery.run_delivery_slice(limit=25)
+            assert denied["resource_deferred"] is True
+            await asyncio.to_thread(outbox_coordinator.clear_and_wake_outbox_successor, "search", denied)
+            assert w.client.hget(outbox_coordinator.RESOURCE_DEFERRED_KEY, "search")
+            assert (await asyncio.to_thread(outbox_coordinator.wake_resource_deferred_outboxes))["enqueued"] == 0
+        finally:
+            holder.release()
+    else:
+        _defer(w, "search")
+    try:
+        result = await asyncio.to_thread(outbox_coordinator.wake_resource_deferred_outboxes)
+        assert result["enqueued"] == int(ordinary_pg)
+        assert w.client.llen("rq:queue:imports") == 1
+        assert w.published == ([{"search": 1}] if ordinary_pg else [])
+    finally:
+        w.client.delete("rq:queue:imports", "resource:lanes:last-background")
+        await w.db.execute(delete(SearchRebuild).where(SearchRebuild.id == bootstrap.id))
+        await w.db.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_one_release_inspection_reuses_and_closes_one_database_connection(waiting_work, monkeypatch):
+    import sqlalchemy.ext.asyncio as sa_async
+    from sqlalchemy import event
+    from app.services import outbox_coordinator
+    from app.services.redis_budget import budget_redis
+
+    created, connected, closed = [], [], []
+    real_engine = sa_async.create_async_engine
+    def observed_engine(*args, **kwargs):
+        engine = real_engine(*args, **kwargs)
+        created.append(engine)
+        event.listen(engine.sync_engine, "connect", lambda *_: connected.append(1))
+        event.listen(engine.sync_engine, "close", lambda *_: closed.append(1))
+        return engine
+    monkeypatch.setattr(sa_async, "create_async_engine", observed_engine)
+    with budget_redis(seconds=0.5, reserve_seconds=0):
+        counts, ready, admitted, _future = await outbox_coordinator._inspect_deferred_outboxes(
+            {"import_projection", "search", "media"}, waiting_work.client,
+        )
+    assert counts["import_projection"] > 0
+    assert "import_projection" in ready and "import_projection" in admitted
+    assert len(created) == len(connected) == len(closed) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("status", ["queued", "finished", "missing", "scheduled_orphan"])
+def test_recovery_skips_only_active_single_owner_database_jobs(waiting_work, monkeypatch, status):
+    from uuid import uuid4
+    from rq import Queue
+    from rq.job import JobStatus
+    from app.services import outbox_coordinator
+
+    w = waiting_work
+    queue = Queue("maintenance", connection=w.client)
+    job = queue.enqueue("app.jobs.import_projection.run_import_projection_outbox", job_id="recovery-owner-"+uuid4().hex)
+    key = outbox_coordinator._wake_key("import_projection")
+    w.client.set(key, job.id)
+    _defer(w, "import_projection")
+    inspections = []
+    real_inspect = outbox_coordinator._inspect_deferred_outboxes
+    async def inspect(kinds, client):
+        inspections.append(kinds)
+        return await real_inspect(kinds, client)
+    monkeypatch.setattr(outbox_coordinator, "_inspect_deferred_outboxes", inspect)
+    if status == "finished":job.set_status(JobStatus.FINISHED)
+    elif status == "missing":job.delete()
+    elif status == "scheduled_orphan":job.set_status(JobStatus.SCHEDULED)
+    try:
+        result = outbox_coordinator.wake_resource_deferred_outboxes()
+        assert result["enqueued"] == int(status != "queued")
+        assert len(inspections) == int(status != "queued")
+        assert w.client.hget(outbox_coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+        if status == "queued":
+            job.set_status(JobStatus.FINISHED)
+            outbox_coordinator._clear_owned_wake(w.client, key, job.id)
+            assert not w.client.exists(key)
+            assert outbox_coordinator.wake_resource_deferred_outboxes()["enqueued"] == 1
+            assert len(inspections) == 1
+    finally:
+        queue.remove(job.id)
+        if status != "missing":job.delete()
+        w.client.delete(key)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase,new_curation,expected", [("metadata",True,1),("metadata",False,0),(None,True,0)])
+async def test_metadata_deferral_rechecks_only_new_curation_after_clear(
+    waiting_work, monkeypatch, phase, new_curation, expected,
+):
+    import asyncio
+    from uuid import uuid4
+    from rq import Queue
+    from rq.job import Job, JobStatus
+    from app.models import ImportCurationOutbox
+    from app.services import outbox_coordinator as coordinator
+    w=waiting_work
+    await w.db.execute(update(ImportCurationOutbox).values(state="complete"))
+    await w.db.commit()
+    q=Queue("maintenance",connection=w.client)
+    before=set(q.job_ids)
+    owner=Job.create("app.jobs.import_projection.run_import_projection_outbox",
+        connection=w.client,origin="maintenance",id="metadata-owner-"+uuid4().hex)
+    owner.save();owner.set_status(JobStatus.STARTED)
+    key=coordinator._wake_key("import_projection")
+    w.client.set(key,owner.id)
+    monkeypatch.setattr("rq.get_current_job",lambda:owner)
+    monkeypatch.setattr(coordinator,"wake_pending_outboxes",w.real_wake)
+    if phase == "metadata":
+        # Exercise the liveness race while background work is unavailable.
+        monkeypatch.setattr("app.services.heavy_io.background_turn_available", lambda _redis: False)
+    w.client.rpush("rq:queue:imports","metadata-deferral-ingest")
+    try:
+        if new_curation:
+            # A real commit after the old job's final claim merges into its
+            # still-live owner; clearing that owner must not lose the wake.
+            await w.db.execute(update(ImportCurationOutbox).values(state="pending",available_at=datetime.now(timezone.utc)))
+            coordinator.mark_outbox_wake_pending(w.db,"import_projection")
+            await w.db.commit()
+            assert set(q.job_ids)==before
+            assert w.client.get(key).decode()==owner.id
+        outcome={"claimed":0,"processed":1 if phase == "metadata" else 0,"more_likely":False,"resource_deferred":True}
+        if phase:outcome["deferred_projection_part"]=phase
+        result=await asyncio.to_thread(coordinator.clear_and_wake_outbox_successor,"import_projection",outcome)
+        assert result["enqueued"]==expected
+        assert len(set(q.job_ids)-before)==expected
+        assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY,"import_projection")
+    finally:
+        for identity in set(q.job_ids)-before:
+            q.remove(identity);Job.fetch(identity,connection=w.client).delete()
+        w.client.delete(key);owner.delete()
+        w.client.lrem("rq:queue:imports",0,"metadata-deferral-ingest")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_metadata_deferral_posix_lock_blocks_then_releases_one_wake(waiting_work, monkeypatch):
+    """A ready curation cannot bypass its real completion POSIX lock."""
+    from app.models import ImportCurationOutbox
+    from app.services import heavy_io, outbox_coordinator as coordinator
+
+    import asyncio
+    w = waiting_work
+    await w.db.execute(update(ImportCurationOutbox).values(
+        state="pending", available_at=datetime.now(timezone.utc)
+    ))
+    await w.db.commit()
+    _defer(w, "import_projection")
+    holder = heavy_io.local_lock_for_workload("import_db", lane="completion")
+    assert holder.try_acquire()
+    monkeypatch.setattr(coordinator, "wake_pending_outboxes", w.real_wake)
+    try:
+        blocked = await asyncio.to_thread(coordinator._wake_curation_after_metadata_deferral)
+        assert blocked["enqueued"] == 0
+        assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+    finally:
+        holder.release()
+    from rq import Queue
+    from rq.job import Job
+    q=Queue("maintenance",connection=w.client)
+    before=set(q.job_ids)
+    try:
+        assert (await asyncio.to_thread(coordinator._wake_curation_after_metadata_deferral))["enqueued"] == 1
+        assert len(set(q.job_ids)-before) == 1
+        assert (await asyncio.to_thread(coordinator._wake_curation_after_metadata_deferral))["enqueued"] == 0
+    finally:
+        for identity in set(q.job_ids)-before:
+            q.remove(identity);Job.fetch(identity,connection=w.client).delete()
+        w.client.delete(coordinator._wake_key("import_projection"))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_metadata_deferral_recheck_timeout_keeps_completed_curation_and_token(
+    waiting_work, monkeypatch,
+):
+    from app.models import ImportCurationOutbox
+    from app.services import outbox_coordinator as coordinator
+
+    import asyncio
+    w = waiting_work
+    await w.db.execute(update(ImportCurationOutbox).values(state="complete"))
+    await w.db.commit()
+    _defer(w, "import_projection")
+
+    async def timeout(_db):
+        raise TimeoutError("injected curation readiness timeout")
+
+    monkeypatch.setattr(coordinator, "_curation_projection_ready", timeout)
+    result = await asyncio.to_thread(coordinator._wake_curation_after_metadata_deferral)
+    assert result == {"enqueued": 0, "deferred": 1}
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+    assert await w.db.scalar(
+        select(ImportCurationOutbox.state).where(ImportCurationOutbox.state == "complete")
+    ) == "complete"
+
+
+@pytest.mark.integration
+def test_metadata_deferral_redis_failure_keeps_token(waiting_work, monkeypatch):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    _defer(w, "import_projection")
+    monkeypatch.setattr(
+        coordinator, "get_redis",
+        lambda: (_ for _ in ()).throw(RedisConnectionError("injected recovery Redis failure")),
+    )
+    result = coordinator._wake_curation_after_metadata_deferral()
+    assert result == {"enqueued": 0, "deferred": 1}
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+
+
+@pytest.mark.integration
+def test_metadata_only_deferred_marker_skips_background_probe_until_available(
+    waiting_work, monkeypatch,
+):
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    token = coordinator._resource_deferred_token(metadata_only=True)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "import_projection", token)
+    calls = []
+
+    async def unexpected_probe(*_args):
+        calls.append(True)
+        raise AssertionError("metadata-only recovery must not inspect without background time")
+
+    monkeypatch.setattr("app.services.heavy_io.background_turn_available", lambda _redis: False)
+    monkeypatch.setattr(coordinator, "_inspect_deferred_outboxes", unexpected_probe)
+    assert coordinator.wake_resource_deferred_outboxes()["enqueued"] == 0
+    assert not calls
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection").decode() == token
+
+    async def inspect(_kinds, _redis):
+        assert _kinds == {"import_projection"}
+        return ({"import_projection": 1}, {"import_projection"}, {"import_projection"}, {})
+
+    monkeypatch.setattr("app.services.heavy_io.background_turn_available", lambda _redis: True)
+    monkeypatch.setattr(coordinator, "_inspect_deferred_outboxes", inspect)
+    assert coordinator.wake_resource_deferred_outboxes()["enqueued"] == 1
+    assert w.published[-1] == {"import_projection": 1}
+
+
+@pytest.mark.integration
+def test_deferred_marker_hint_does_not_reclassify_curation_denial(waiting_work, monkeypatch):
+    from app.services import outbox_coordinator as coordinator
+
+    monkeypatch.setattr("rq.get_current_job", lambda: None)
+    coordinator.clear_and_wake_outbox_successor(
+        "import_projection",
+        {"resource_deferred": True, "processed": 0},
+    )
+    token = waiting_work.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+    assert token
+    assert not coordinator._is_metadata_only_deferred_token(token)
+
+    coordinator.clear_and_wake_outbox_successor(
+        "import_projection",
+        {"resource_deferred": True, "deferred_projection_part": "metadata", "processed": 1},
+    )
+    token = waiting_work.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection")
+    assert token
+    assert coordinator._is_metadata_only_deferred_token(token)
+
+
+@pytest.mark.integration
+def test_stale_deferred_token_cannot_clear_a_new_marker(waiting_work):
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    old = coordinator._resource_deferred_token(metadata_only=True)
+    new = coordinator._resource_deferred_token(metadata_only=True)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "import_projection", new)
+    assert w.client.eval(
+        coordinator._CLEAR_DEFERRED_SCRIPT,
+        1,
+        coordinator.RESOURCE_DEFERRED_KEY,
+        "import_projection",
+        old,
+    ) == 0
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection").decode() == new
+
+
+@pytest.mark.integration
+def test_metadata_only_filter_does_not_remove_other_recovery_kinds(waiting_work, monkeypatch):
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    metadata_token = coordinator._resource_deferred_token(metadata_only=True)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "import_projection", metadata_token)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "search", "legacy-search")
+    seen = []
+
+    async def inspect(kinds, _redis):
+        seen.append(set(kinds))
+        return (
+            {"search": 1}, {"search"}, {"search"}, {},
+        )
+
+    monkeypatch.setattr("app.services.heavy_io.background_turn_available", lambda _redis: False)
+    monkeypatch.setattr(coordinator, "_inspect_deferred_outboxes", inspect)
+    assert coordinator.wake_resource_deferred_outboxes()["enqueued"] == 1
+    assert seen == [{"search"}]
+    assert w.published[-1] == {"search": 1}
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection").decode() == metadata_token
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_kind", ["media", "search"])
+def test_metadata_only_filter_keeps_mixed_ready_kind_when_background_is_available(
+    waiting_work, monkeypatch, other_kind,
+):
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    metadata_token = coordinator._resource_deferred_token(metadata_only=True)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "import_projection", metadata_token)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, other_kind, "legacy-" + other_kind)
+    seen = []
+
+    async def inspect(kinds, _redis):
+        seen.append(set(kinds))
+        return (
+            {"import_projection": 1, other_kind: 1},
+            {"import_projection", other_kind},
+            {"import_projection", other_kind},
+            {},
+        )
+
+    monkeypatch.setattr("app.services.heavy_io.background_turn_available", lambda _redis: True)
+    monkeypatch.setattr(coordinator, "_inspect_deferred_outboxes", inspect)
+    assert coordinator.wake_resource_deferred_outboxes()["enqueued"] == 2
+    assert seen == [{"import_projection", other_kind}]

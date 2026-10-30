@@ -38,22 +38,17 @@ async def _run_split_projection(limit: int, max_seconds: float, cooldown: dict[s
     from app.services.heavy_io import adaptive_resource_slice, background_turn_available
     from app.services.redis_client import get_redis
     from app.services.import_projection import process_import_projection_outbox
-    from app.services.outbox_coordinator import wake_pending_outboxes
 
     current = get_current_job()
     owner = str(current.id) if current is not None else "import-projection"
     deadline = monotonic() + max(0.001, float(max_seconds))
     bounded_limit = min(25, max(1, int(limit)))
-    # Preserve ingestion priority on initial delivery as well as release recovery.
-    # The change only removes unrelated background-file locks after ingestion.
-    if not background_turn_available(get_redis()):
-        return {"claimed":0,"processed":0,"failed":0,"resource_deferred":True,"more_likely":False}
     curation_cooldown, metadata_cooldown = {}, {}
     curation = None
     async with adaptive_resource_slice(
         "import_db", owner+":curation", max_work_units=bounded_limit,
         max_slice_seconds=max(0.001, deadline-monotonic()),
-        cooldown_result=curation_cooldown, wait_for_capacity=False, lane="ingest",
+        cooldown_result=curation_cooldown, wait_for_capacity=False, lane="completion",
     ) as limits:
         if limits is None:
             return {"claimed":0,"processed":0,"failed":0,"resource_deferred":True,"more_likely":False}
@@ -62,14 +57,14 @@ async def _run_split_projection(limit: int, max_seconds: float, cooldown: dict[s
             max_seconds=min(max(0.001, deadline-monotonic()), limits.slice_seconds or max_seconds),
             projection_part="curation",
         )
-    # The authoritative transaction has committed before this wake. File
-    # metadata may still be deferred; per-work search visibility is now valid.
-    if int(curation.get("processed") or 0):
-        wake_pending_outboxes({"search":1})
     result = {k:v for k,v in curation.items() if k != "claimed_ids"}
     cooldown["seconds"] = curation_cooldown.get("seconds", 0.0)
     if monotonic() >= deadline:
         return {**result,"more_likely":True}
+    # Curation is a short completion step and may run while ingestion is busy.
+    # Keep the existing background-turn gate for metadata and other maintenance.
+    if not background_turn_available(get_redis()):
+        return {**result,"resource_deferred":True,"deferred_projection_part":"metadata","more_likely":False}
     preferred = curation.get("claimed_ids") or None
     # Keep room for the normal empty confirmation after the preferred batch.
     # preferred IDs bound distinct work, rather than an exactly-full limit.
@@ -80,7 +75,7 @@ async def _run_split_projection(limit: int, max_seconds: float, cooldown: dict[s
         cooldown_result=metadata_cooldown, wait_for_capacity=False, lane="background",
     ) as limits:
         if limits is None:
-            return {**result,"resource_deferred":True,"more_likely":False}
+            return {**result,"resource_deferred":True,"deferred_projection_part":"metadata","more_likely":False}
         metadata = await process_import_projection_outbox(
             limit=min(metadata_limit, limits.work_units),
             max_seconds=min(max(0.001, deadline-monotonic()), limits.slice_seconds or max_seconds),

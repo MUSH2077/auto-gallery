@@ -1,10 +1,11 @@
 """Real PostgreSQL coverage for the native search port and cutover boundary."""
+import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -368,3 +369,356 @@ async def test_atomic_delivery_permit_recheck_defers_before_remote_advance(pgdb,
     assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
         SearchDeliveryReceipt.id == receipt_id
     )) == "prepared"
+
+
+async def _seed_uuid_receipt(pgdb, *, token, action="upsert"):
+    """Seed a receipt whose work/entity id is a real UUID for lookahead SQL."""
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    from app.models.repository_sync_receipt import SearchIndexState
+    from sqlalchemy import update
+    await pgdb.execute(update(SearchIndexState).values(indexed_generation=SearchIndexState.database_generation))
+    entity_id = str(uuid4())
+    outbox = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=entity_id, action=action, version=7,
+    )
+    payload = [document(entity_id, "atomic lookahead")] if action == "upsert" else [entity_id]
+    receipt = SearchDeliveryReceipt(
+        backend="postgresql", index_uid=WORKS_INDEX, action=action,
+        versions=[], payload=payload, state="prepared", phase="documents",
+        lease_token=token,
+        lease_until=datetime.now(timezone.utc) + timedelta(seconds=30),
+    )
+    pgdb.add_all([outbox, receipt])
+    await pgdb.flush()
+    receipt.versions = [[str(outbox.id), outbox.version]]
+    await pgdb.commit()
+    return receipt.id, outbox.id, entity_id
+
+
+async def _apply_with_pgdb(pgdb, monkeypatch, receipt_id, token):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from app.services import search_delivery as delivery, search_rebuild
+    from sqlalchemy import false
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+
+    @asynccontextmanager
+    async def opened_session():
+        yield pgdb
+
+    monkeypatch.setattr(delivery, "async_session", opened_session)
+    return await delivery._apply_database_receipt(
+        SimpleNamespace(id=receipt_id, action="upsert"), token, time.monotonic() + 10
+    )
+
+
+async def test_database_receipt_lookahead_empty_returns_no_successor(pgdb, monkeypatch):
+    """The last ready receipt reports no successor after its atomic commit."""
+    from sqlalchemy import select
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    receipt_id, outbox_id, entity_id = await _seed_uuid_receipt(
+        pgdb, token="lookahead-empty"
+    )
+    result = await _apply_with_pgdb(pgdb, monkeypatch, receipt_id, "lookahead-empty")
+    assert result["status"] == "ok"
+    assert result["more_likely"] is False
+    assert result["database_receipt_committed"] is True
+    await pgdb.rollback()
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == outbox_id
+    )) is not None
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
+        SearchDeliveryReceipt.id == receipt_id
+    )) == "complete"
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"
+    ), {"id": entity_id}) == 1
+
+
+@pytest.mark.parametrize("action", ["upsert", "delete"])
+async def test_database_receipt_lookahead_ready_upsert_or_delete_keeps_successor(
+    pgdb, monkeypatch, action,
+):
+    """A second ready action keeps the successor hint for either action type."""
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    receipt_id, _outbox_id, _entity_id = await _seed_uuid_receipt(
+        pgdb, token="lookahead-ready-" + action
+    )
+    ready_id = str(uuid4())
+    pgdb.add(SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=ready_id, action=action, version=1,
+        available_at=datetime.now(timezone.utc),
+    ))
+    await pgdb.commit()
+    result = await _apply_with_pgdb(pgdb, monkeypatch, receipt_id, "lookahead-ready-" + action)
+    assert result["status"] == "ok"
+    assert result["more_likely"] is True
+    assert result["database_receipt_committed"] is True
+
+
+async def test_database_receipt_lookahead_excludes_uncurated_work_but_keeps_delete(
+    pgdb, monkeypatch,
+):
+    """An uncurated work upsert is not ready, while a delete remains drainable."""
+    from app.models import ImportCurationOutbox, Work
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    receipt_id, _outbox_id, _entity_id = await _seed_uuid_receipt(
+        pgdb, token="lookahead-unrelated"
+    )
+    work = Work(title="not curated yet")
+    pgdb.add(work)
+    await pgdb.flush()
+    pgdb.add(ImportCurationOutbox(
+        work_id=work.id, state="pending", source=None, source_work_id=None,
+        metadata_state="complete",
+    ))
+    pgdb.add(SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=str(work.id), action="upsert", version=1,
+        available_at=datetime.now(timezone.utc),
+    ))
+    await pgdb.commit()
+    result = await _apply_with_pgdb(pgdb, monkeypatch, receipt_id, "lookahead-unrelated")
+    assert result["more_likely"] is False
+
+    # Replace only the uncurated upsert with a delete; the delete is explicitly
+    # drainable even while the work curation intent remains pending.
+    row = (await pgdb.execute(select(SearchProjectionOutbox).where(
+        SearchProjectionOutbox.entity_id == str(work.id)
+    ))).scalar_one()
+    row.action = "delete"
+    await pgdb.commit()
+    receipt_id, _outbox_id, _entity_id = await _seed_uuid_receipt(
+        pgdb, token="lookahead-delete"
+    )
+    result = await _apply_with_pgdb(pgdb, monkeypatch, receipt_id, "lookahead-delete")
+    assert result["more_likely"] is True
+
+
+async def test_database_receipt_lookahead_failure_rolls_back_everything(pgdb, monkeypatch):
+    """A lookahead error cannot leave documents, task, receipt or outbox half-committed."""
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import search_delivery as delivery
+
+    receipt_id, outbox_id, entity_id = await _seed_uuid_receipt(
+        pgdb, token="lookahead-error"
+    )
+    before_tasks = await pgdb.scalar(text("SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"), {"uid": WORKS_INDEX})
+    from app.services import outbox_coordinator
+    def fail_lookahead(*_args, **_kwargs):
+        raise RuntimeError("injected lookahead failure")
+    monkeypatch.setattr(outbox_coordinator, "_search_ready", fail_lookahead)
+    with pytest.raises(RuntimeError, match="injected lookahead failure"):
+        await _apply_with_pgdb(pgdb, monkeypatch, receipt_id, "lookahead-error")
+    await pgdb.rollback()
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"
+    ), {"id": entity_id}) == 0
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_tasks WHERE index_uid=:uid"
+    ), {"uid": WORKS_INDEX}) == before_tasks
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
+        SearchDeliveryReceipt.id == receipt_id
+    )) == "prepared"
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == outbox_id
+    )) is None
+
+
+async def test_two_pg_receipts_commit_independently_when_second_fails(pgdb, monkeypatch):
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    first_id, _first_outbox, first_entity = await _seed_uuid_receipt(pgdb, token="bounded-first")
+    second_entity = str(uuid4())
+    second_outbox = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=second_entity, action="delete", version=1,
+    )
+    pgdb.add(second_outbox)
+    delivery = await _pg_run_environment(pgdb, monkeypatch, receipt_id=first_id, units=2)
+    second_outbox_id = second_outbox.id
+
+    async def fail_second(*_args):
+        raise RuntimeError("injected second receipt failure")
+
+    monkeypatch.setattr(store, "_delete_documents_in_session", fail_second)
+    with pytest.raises(RuntimeError, match="injected second receipt failure"):
+        await delivery.run_delivery_slice(limit=2)
+    await pgdb.rollback()
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(
+        SearchDeliveryReceipt.id == first_id
+    )) == "complete"
+    second = (await pgdb.execute(select(SearchDeliveryReceipt).where(
+        SearchDeliveryReceipt.id != first_id
+    ))).scalar_one()
+    assert second.state == "prepared"
+    assert second.versions == [[str(second_outbox_id), 1]]
+    assert await pgdb.scalar(text(
+        "SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"
+    ), {"id": first_entity}) == 1
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == second_outbox_id
+    )) is None
+
+
+
+async def test_database_receipt_yields_to_real_pending_curation(pgdb, monkeypatch):
+    from app.models import ImportCurationOutbox, Work
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    receipt_id, _outbox_id, _entity_id = await _seed_uuid_receipt(pgdb, token="bounded-curation")
+    work = Work(title="pending curation fairness")
+    pgdb.add(work)
+    await pgdb.flush()
+    pgdb.add(ImportCurationOutbox(
+        work_id=work.id, state="pending", metadata_state="complete",
+    ))
+    ready = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=str(uuid4()), action="delete", version=1,
+    )
+    pgdb.add(ready)
+    delivery = await _pg_run_environment(pgdb, monkeypatch, receipt_id=receipt_id)
+    outcome = await delivery.run_delivery_slice(limit=500)
+    assert outcome["database_receipt_committed"] is True
+    assert outcome["curation_waiting"] is True
+    assert outcome["more_likely"] is True
+    assert outcome["processed"] == 1
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == ready.id
+    )) is None
+
+
+
+class _RealGrant:
+    def __init__(self, units, seconds):
+        self.work_units = units
+        self.slice_seconds = seconds
+
+
+@pytest.mark.asyncio
+async def test_pg_run_entry_respects_first_real_grant_without_refilling(pgdb, monkeypatch):
+    """A real adaptive grant of one item prevents a second receipt claim."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services import heavy_io, search_delivery as delivery
+
+    first_id, _first_outbox, _first_entity = await _seed_uuid_receipt(pgdb, token="grant-one-first")
+    second_entity = str(uuid4())
+    pgdb.add(SearchProjectionOutbox(index_uid=WORKS_INDEX, entity_id=second_entity, action="upsert", version=1))
+    await pgdb.execute(update(SearchDeliveryReceipt).where(SearchDeliveryReceipt.id == first_id).values(lease_until=None))
+    await pgdb.commit()
+    @asynccontextmanager
+    async def opened_session():
+        yield pgdb
+    @asynccontextmanager
+    async def grant(*_args, **_kwargs):
+        yield _RealGrant(1, 20)
+    monkeypatch.setattr(delivery, "async_session", opened_session)
+    monkeypatch.setattr(delivery.settings, "search_backend", "postgresql")
+    monkeypatch.setattr(heavy_io, "adaptive_resource_slice", grant)
+    result = await delivery.run_delivery_slice(limit=500)
+    await pgdb.rollback()
+    assert result["claimed"] == result["processed"] == 1
+    assert await pgdb.scalar(select(SearchDeliveryReceipt.state).where(SearchDeliveryReceipt.id == first_id)) == "complete"
+    assert await pgdb.scalar(text("SELECT count(*) FROM search_pg_documents WHERE entity_id=:id"), {"id": second_entity}) == 0
+
+
+@pytest.mark.asyncio
+async def test_pg_run_entry_soft_grant_deadline_stops_next_receipt_but_finishes_current(pgdb, monkeypatch):
+    import asyncio
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services.search_index_definitions import TAGS_INDEX
+
+    await store._settings(TAGS_INDEX, "PATCH", INDEX_SETTINGS[TAGS_INDEX])
+    first = SearchProjectionOutbox(
+        index_uid=WORKS_INDEX, entity_id=str(uuid4()), action="delete", version=1,
+        available_at=datetime.now(timezone.utc)-timedelta(seconds=2),
+    )
+    second = SearchProjectionOutbox(
+        index_uid=TAGS_INDEX, entity_id=str(uuid4()), action="delete", version=1,
+        available_at=datetime.now(timezone.utc)-timedelta(seconds=1),
+    )
+    pgdb.add_all([first, second])
+    delivery = await _pg_run_environment(pgdb, monkeypatch, seconds=0.001)
+    original_prepare = delivery._prepare
+    prepared_ids = []
+
+    async def slow_prepare(limit, deadline):
+        prepared = await original_prepare(limit, deadline)
+        assert prepared is not None
+        prepared_ids.append(prepared.id)
+        await asyncio.sleep(0.01)
+        return prepared
+
+    monkeypatch.setattr(delivery, "_prepare", slow_prepare)
+    outcome = await delivery.run_delivery_slice(limit=500)
+    assert outcome["claimed"] == outcome["processed"] == 1
+    assert len(prepared_ids) == 1
+    receipt = await pgdb.get(SearchDeliveryReceipt, prepared_ids[0])
+    assert receipt.state == "complete" and receipt.lease_until is None
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == first.id
+    )) is not None
+    assert await pgdb.scalar(select(SearchProjectionOutbox.completed_at).where(
+        SearchProjectionOutbox.id == second.id
+    )) is None
+
+
+
+@pytest.mark.asyncio
+async def test_pg_run_entry_resource_denial_preserves_deferred_result(pgdb, monkeypatch):
+    from contextlib import asynccontextmanager
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.services import heavy_io
+    receipt_id, _outbox_id, _entity_id = await _seed_uuid_receipt(pgdb, token="resource-denied")
+    delivery = await _pg_run_environment(pgdb, monkeypatch, receipt_id=receipt_id)
+
+    @asynccontextmanager
+    async def denied(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr(heavy_io, "adaptive_resource_slice", denied)
+    outcome = await delivery.run_delivery_slice(limit=500)
+    assert outcome["resource_deferred"] is True
+    assert outcome["more_likely"] is False
+    receipt = await pgdb.get(SearchDeliveryReceipt, receipt_id)
+    assert receipt.state == "prepared" and receipt.lease_until is None
+
+
+
+async def _pg_run_environment(pgdb, monkeypatch, *, receipt_id=None, units=500, seconds=20):
+    from contextlib import asynccontextmanager
+    from sqlalchemy import update
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.models.search_rebuild import SearchRebuild
+    from app.services import heavy_io, search_delivery, search_rebuild
+
+    pgdb.add(SearchRebuild(
+        backend="postgresql", owner=search_rebuild.MEMBERSHIP_BOOTSTRAP_OWNER,
+        state="complete", phase="complete", progress={},
+    ))
+    if receipt_id is not None:
+        await pgdb.execute(update(SearchDeliveryReceipt).where(
+            SearchDeliveryReceipt.id == receipt_id
+        ).values(lease_until=None, lease_token=None))
+    await pgdb.commit()
+
+    @asynccontextmanager
+    async def opened_session():
+        yield pgdb
+
+    @asynccontextmanager
+    async def granted(*_args, **_kwargs):
+        yield _RealGrant(units, seconds)
+
+    monkeypatch.setattr(search_delivery, "async_session", opened_session)
+    monkeypatch.setattr(search_delivery.settings, "search_backend", "postgresql")
+    monkeypatch.setattr(heavy_io, "adaptive_resource_slice", granted)
+    return search_delivery

@@ -418,6 +418,8 @@ Eligibility and the execution lease are rechecked inside the transaction. Change
 eligibility releases the lease and defers reclassification to a new admission.
 Rebuilds, settings changes and other deliveries retain the staged path below.
 
+Ordinary PostgreSQL delivery may continue ready receipts within one workhorse without waiting for new work. Cumulative item and soft-time budgets bound the slice; each receipt reacquires admission and commits independently. Delivery yields the maintenance consumer when domain curation is ready. An admitted atomic receipt completes within the original hard deadline; the soft budget prevents starting another. Deferral, cooldown and staged-delivery rules remain unchanged.
+
 After delivery receives a remote taskUid, it persists the task identity in the
 remote resource marker and commits a pending SQL receipt before confirmation.
 It then gives the task at most 250 ms to finish, with 50 ms between status
@@ -473,6 +475,8 @@ asset-dedup runners report resource deferral so the coordinator can record a
 waiting token without marking the durable work complete. PostgreSQL outbox
 rows remain authoritative; Redis wake owners and waiting tokens are recovery
 hints.
+
+When domain curation has completed and only file metadata awaits resources, the waiting token carries a phase hint. Opportunistic recovery skips that phase while no background turn is available and retains the token. New curation still publishes after commit; a clear-owner readiness recheck that finds new curation bypasses the hint while retaining actual admission checks. Legacy tokens, queue drain, background opportunities and scheduled recovery remain effective.
 
 After a worker releases its resources, its parent checks deferred outboxes.
 The scheduled supervisor also consumes `resource:control` notifications while
@@ -903,14 +907,16 @@ Endpoints include:
 ### `/api/v1/search`
 
 Post-import curation and search coordination use the existing `maintenance` consumer;
-media and deduplication remain on `operations`. Curation first obtains import-database
-admission, commits domain curation and releases admission before waking search.
-File-metadata work then obtains background admission separately. Work upserts wait
+media and deduplication remain on `operations`. Domain curation uses short database-completion
+admission, sharing single-writer exclusion with ordinary PostgreSQL indexing rather
+than waiting for a background file-processing turn during ingestion. Its committed
+transaction publishes search intent. File-metadata work retains separate background
+admission, ingestion priority and memory protection. Work upserts wait
 for their own curation; deletes and other entity indexes are not globally blocked.
 Memory protection, queue priorities, file locks and periodic recovery remain in force.
-A document batch and its PostgreSQL command record commit together. Receipt/outbox
-acknowledgement still uses the existing lease and marker recovery protocol in a
-separate transaction. Full rebuilds populate an independent storage generation and
+Ordinary PostgreSQL incremental delivery commits documents, the command record,
+receipt completion and version-matched outbox acknowledgement together. Staged
+delivery retains its existing lease and marker recovery protocol. Full rebuilds populate an independent storage generation and
 atomically swap logical indexes. Command retention is bounded and protects records
 referenced by unfinished receipts.
 

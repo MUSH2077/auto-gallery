@@ -66,6 +66,25 @@ if redis.call('hget', KEYS[1], ARGV[1]) == ARGV[2] then
 end
 return 0
 """
+
+
+_METADATA_DEFERRED_PREFIX = "metadata:"
+
+
+def _resource_deferred_token(*, metadata_only: bool = False) -> str:
+    """Create a compare-and-delete token for a resource-deferred kind."""
+
+    return f"{_METADATA_DEFERRED_PREFIX}{uuid4().hex}" if metadata_only else uuid4().hex
+
+
+def _is_metadata_only_deferred_token(token) -> bool:
+    """Recognize only the metadata marker; old values stay opaque."""
+
+    if isinstance(token, bytes):
+        token = token.decode(errors="replace")
+    return isinstance(token, str) and token.startswith(_METADATA_DEFERRED_PREFIX)
+
+
 _outbox_health_cache: dict[str, dict] | None = None
 _outbox_health_cache_ts = 0.0
 _outbox_health_cache_mode: str | None = None
@@ -462,15 +481,32 @@ def clear_and_wake_outbox_successor(
         try:
             # A new token per deferral prevents an older completion from
             # clearing a concurrent runner's resource-release notification.
-            get_redis().hset(RESOURCE_DEFERRED_KEY, kind, uuid4().hex)
+            # Only completed curation followed by deferred metadata is safe to
+            # skip while background work is unavailable; curation denial keeps
+            # the ordinary opaque recovery marker.
+            metadata_only = bool(
+                result.get("deferred_projection_part") == "metadata"
+                and int(result.get("processed") or 0) > 0
+            )
+            get_redis().hset(
+                RESOURCE_DEFERRED_KEY,
+                kind,
+                _resource_deferred_token(metadata_only=metadata_only),
+            )
         except Exception:
             logger.debug("Unable to record deferred outbox wake", exc_info=True)
     if not isinstance(result, dict) or not bool(result.get("more_likely")):
         released = clear_outbox_wake(kind)
-        if released and isinstance(result, dict) and not result.get("resource_deferred"):
-            # Clear first: commits before this point are visible to the read;
+        if released and isinstance(result, dict):
+            # Clear first: earlier commits are visible to the recheck;
             # later commits can publish against the now-empty owner key.
-            return _wake_after_empty_slice(kind)
+            if result.get("resource_deferred"):
+                if kind == "import_projection" and result.get("deferred_projection_part") == "metadata":
+                    return _wake_curation_after_metadata_deferral()
+            else:
+                if kind == "search" and result.get("database_receipt_committed"):
+                    return _wake_after_empty_slice(kind, immediate_search_ready=True)
+                return _wake_after_empty_slice(kind)
         return {"enqueued": 0, "deferred": 0}
     try:
         current_owner = None
@@ -499,22 +535,6 @@ def clear_and_wake_outbox_successor(
         # source of truth and the scheduler fallback retries within 60 seconds.
         logger.warning("Immediate outbox successor wake failed for %s", kind, exc_info=True)
         return {"enqueued": 0, "deferred": 1}
-
-
-async def _deferred_outbox_readiness() -> dict[str, int]:
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.pool import NullPool
-
-    # The RQ parent forks subsequent jobs and uses new event loops. Never
-    # leave pooled async database connections in that parent process.
-    engine = create_async_engine(
-        settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
-    )
-    try:
-        async with AsyncSession(engine) as db:
-            return await outbox_counts(db, ready_only=True)
-    finally:
-        await engine.dispose()
 
 
 # Far-future cleanup keeps the normal timer fallback instead of retaining an
@@ -578,36 +598,54 @@ def _next_outbox_deadline_statement(kind: str, now: datetime):
     )
 
 
-async def _deferred_outbox_next_delays(kinds: set[str]) -> dict[str, float]:
+async def _load_outbox_next_delays(db: AsyncSession, kinds: set[str]) -> dict[str, float]:
+    delays = {}
+    for kind in sorted(kinds):
+        statement = _next_outbox_deadline_statement(kind, datetime.now(timezone.utc))
+        if statement is None:
+            continue
+        due = await db.scalar(statement)
+        if due is not None:
+            # RQ scheduled scores have one-second precision. A short
+            # delayed recheck avoids spinning on a still-locked row.
+            delays[kind] = max(1.0, (due - datetime.now(timezone.utc)).total_seconds())
+    return delays
+
+
+async def _deferred_outbox_next_delays(
+    kinds: set[str], *, immediate_search_ready: bool = False,
+) -> dict[str, float]:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import NullPool
 
+    # The synchronous empty-slice compatibility path still owns its short
+    # engine; the recovery inspection path reuses one engine/session instead.
     engine = create_async_engine(
         settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
     )
     try:
         async with AsyncSession(engine) as db:
-            delays = {}
-            for kind in sorted(kinds):
-                statement = _next_outbox_deadline_statement(kind, datetime.now(timezone.utc))
-                if statement is None:
-                    continue
-                due = await db.scalar(statement)
-                if due is not None:
-                    # RQ scheduled scores have one-second precision. A short
-                    # delayed recheck avoids spinning on a still-locked row.
-                    delays[kind] = max(1.0, (due - datetime.now(timezone.utc)).total_seconds())
-            return delays
+            if immediate_search_ready and "search" in kinds:
+                ready = await db.scalar(select(_search_ready(datetime.now(timezone.utc))))
+                if ready:
+                    return {"search": 0.0}
+            return await _load_outbox_next_delays(db, kinds)
     finally:
         await engine.dispose()
 
 
-def _wake_after_empty_slice(kind: str) -> dict[str, int]:
+def _wake_after_empty_slice(
+    kind: str, *, immediate_search_ready: bool = False,
+) -> dict[str, int]:
     from app.services.redis_budget import budget_redis
 
     try:
         with budget_redis(seconds=0.5, reserve_seconds=0):
-            delays = asyncio.run(asyncio.wait_for(_deferred_outbox_next_delays({kind}), timeout=0.5))
+            check = (
+                _deferred_outbox_next_delays({kind}, immediate_search_ready=True)
+                if immediate_search_ready else _deferred_outbox_next_delays({kind})
+            )
+            delays = asyncio.run(asyncio.wait_for(check, timeout=0.5))
             if kind in delays:
                 return wake_pending_outboxes({kind: 1}, delay_seconds=delays[kind])
     except Exception:
@@ -618,47 +656,28 @@ def _wake_after_empty_slice(kind: str) -> dict[str, int]:
     return {"enqueued": 0, "deferred": 0}
 
 
-async def _curation_projection_ready() -> bool:
-    """Inspect the database phase without opening the supervisor's shared pool."""
-    from sqlalchemy.ext.asyncio import create_async_engine
-    from sqlalchemy.pool import NullPool
-
+async def _curation_projection_ready(db: AsyncSession) -> bool:
     current = datetime.now(timezone.utc)
     eligible = or_(
         and_(ImportCurationOutbox.state.in_(("pending", "failed")), ImportCurationOutbox.available_at <= current),
         and_(ImportCurationOutbox.state == "processing", ImportCurationOutbox.lease_expires_at < current),
     )
-    engine = create_async_engine(settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options())
-    try:
-        async with AsyncSession(engine) as db:
-            return bool(await db.scalar(select(exists().where(eligible))))
-    finally:
-        await engine.dispose()
+    return bool(await db.scalar(select(exists().where(eligible))))
 
 
-async def _search_recovery_profile() -> str:
-    from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.pool import NullPool
+async def _search_recovery_profile(db: AsyncSession) -> str:
     from app.models.search_delivery_receipt import SearchDeliveryReceipt as Receipt
     from app.services.search_delivery import uses_database_permit
 
-    engine = create_async_engine(
-        settings.database_url,
-        poolclass=NullPool,
-        connect_args=_recovery_sql_options(),
-    )
-    try:
-        async with AsyncSession(engine) as db:
-            receipt = (await db.execute(
-                select(Receipt).where(Receipt.state.not_in(("complete", "failed")))
-            )).scalar_one_or_none()
-            return "pg_search_db" if await uses_database_permit(db, receipt) else "search_index"
-    finally:
-        await engine.dispose()
+    receipt = (await db.execute(
+        select(Receipt).where(Receipt.state.not_in(("complete", "failed")))
+    )).scalar_one_or_none()
+    return "pg_search_db" if await uses_database_permit(db, receipt) else "search_index"
 
 
-async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[str]:
+async def _admissible_deferred_outboxes(
+    kinds: set[str], redis_client, db: AsyncSession,
+) -> set[str]:
     """Check current admission without claiming work or opening parent pools."""
     from app.services.heavy_io import (
         collect_active_resource_leases, background_turn_available,
@@ -673,32 +692,23 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
     leases = collect_active_resource_leases(redis_client=redis_client)
     if leases.get("error"):
         return set()
-    curation_ready = "import_projection" in kinds and await _curation_projection_ready()
-    search_profile = await _search_recovery_profile() if "search" in kinds else None
+    curation_ready = "import_projection" in kinds and await _curation_projection_ready(db)
+    search_profile = await _search_recovery_profile(db) if "search" in kinds else None
     reserved = int(leases.get("reserved_bytes") or 0)
     media_profiles = {"image_derive", "video_derive"}
     if "media" in kinds:
         from app.models.asset import Asset
         from app.services.media_derivatives import _video_candidate_condition
-        from sqlalchemy.ext.asyncio import create_async_engine
-        from sqlalchemy.pool import NullPool
 
-        engine = create_async_engine(
-            settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
-        )
-        try:
-            async with AsyncSession(engine) as db:
-                video = _video_candidate_condition()
-                condition = _leased_ready(MediaDerivativeOutbox, datetime.now(timezone.utc))
-                row = (await db.execute(select(
-                    exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, ~video).label("image"),
-                    exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, video).label("video"),
-                ))).one()
-                media_profiles = {profile for profile, ready in (
-                    ("image_derive", row.image), ("video_derive", row.video),
-                ) if ready}
-        finally:
-            await engine.dispose()
+        video = _video_candidate_condition()
+        condition = _leased_ready(MediaDerivativeOutbox, datetime.now(timezone.utc))
+        row = (await db.execute(select(
+            exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, ~video).label("image"),
+            exists().where(MediaDerivativeOutbox.asset_id == Asset.id, condition, video).label("video"),
+        ))).one()
+        media_profiles = {profile for profile, ready in (
+            ("image_derive", row.image), ("video_derive", row.video),
+        ) if ready}
     admitted = set()
     for kind in kinds:
         descriptor = descriptor_by_name(_RESOURCE_DESCRIPTORS[kind])
@@ -706,7 +716,10 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
             search_profile if kind == "search" else descriptor.profile
         }
         for profile in profiles:
-            if not background_turn_available(redis_client):
+            database_completion = (
+                kind == "import_projection" and curation_ready
+            ) or profile == "pg_search_db"
+            if not database_completion and not background_turn_available(redis_client):
                 continue
             if not profile_slice_limits(snapshot, profile).allowed:
                 continue
@@ -720,7 +733,7 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
                 if reserved + requested > capacity:
                     continue
             if kind != "media":
-                lock = local_lock_for_workload(profile, lane=("ingest" if curation_ready else "background") if kind == "import_projection" else None)
+                lock = local_lock_for_workload(profile, lane=("completion" if curation_ready else "background") if kind == "import_projection" else None)
                 if lock is not None:
                     try:
                         if not lock.try_acquire():
@@ -730,6 +743,42 @@ async def _admissible_deferred_outboxes(kinds: set[str], redis_client) -> set[st
             admitted.add(kind)
             break
     return admitted
+
+
+def _wake_curation_after_metadata_deferral() -> dict[str, int]:
+    from redis.exceptions import RedisError
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+    from app.services.redis_budget import budget_redis
+
+    async def ready():
+        engine = create_async_engine(
+            settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
+        )
+        try:
+            async with AsyncSession(engine) as db:
+                return await _curation_projection_ready(db)
+        finally:
+            await engine.dispose()
+
+    deadline = monotonic() + 0.5
+    try:
+        with budget_redis(seconds=0.5, reserve_seconds=0):
+            has_curation = asyncio.run(asyncio.wait_for(ready(), timeout=0.5))
+        if not has_curation:
+            return {"enqueued": 0, "deferred": 0}
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return {"enqueued": 0, "deferred": 1}
+        return wake_resource_deferred_outboxes(
+            timeout_seconds=remaining,
+            curation_ready=True,
+        )
+    except (TimeoutError, RedisError, OSError, SQLAlchemyError):
+        # The committed curation stays complete; the existing deferred token
+        # retains resource-release and scheduled recovery after this check fails.
+        logger.debug("Curation recheck after metadata deferral unavailable", exc_info=True)
+        return {"enqueued": 0, "deferred": 1}
 
 
 def _recovery_sql_options() -> dict[str, float]:
@@ -753,14 +802,29 @@ def _recovery_pressure_snapshot(redis_client) -> dict | None:
 
 
 async def _inspect_deferred_outboxes(kinds: set[str], redis_client):
-    counts = await _deferred_outbox_readiness()
-    ready = {kind for kind in kinds if counts.get(kind)}
-    admitted = await _admissible_deferred_outboxes(ready, redis_client) if ready else set()
-    future = await _deferred_outbox_next_delays(kinds - ready) if kinds - ready else {}
-    return counts, ready, admitted, future
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    # One short-lived engine/session covers all readiness, admission and
+    # deadline reads in this recovery pass. It is disposed before the parent
+    # can fork another RQ job; no connection pool crosses task boundaries.
+    engine = create_async_engine(
+        settings.database_url, poolclass=NullPool, connect_args=_recovery_sql_options(),
+    )
+    try:
+        async with AsyncSession(engine) as db:
+            counts = await outbox_counts(db, ready_only=True)
+            ready = {kind for kind in kinds if counts.get(kind)}
+            admitted = await _admissible_deferred_outboxes(ready, redis_client, db) if ready else set()
+            future = await _load_outbox_next_delays(db, kinds - ready) if kinds - ready else {}
+            return counts, ready, admitted, future
+    finally:
+        await engine.dispose()
 
 
-def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str, int]:
+def wake_resource_deferred_outboxes(
+    *, timeout_seconds: float = 0.5, curation_ready: bool = False,
+) -> dict[str, int]:
     """Bound recovery reads and publication; retain durable work on timeout."""
     from app.services.redis_budget import budget_redis
     from app.services.remote_search_flight import read_marker
@@ -771,17 +835,39 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
         with budget_redis(seconds=max(0.01, deadline - monotonic()), reserve_seconds=0):
             redis = get_redis()
             deferred = redis.hgetall(RESOURCE_DEFERRED_KEY)
-            if not deferred or not background_turn_available(redis):
+            if not deferred:
                 return {"enqueued": 0, "deferred": 0}
             tokens = {(k.decode() if isinstance(k, bytes) else k): v for k, v in deferred.items()}
             kinds = set(tokens) & set(_SPECS)
-            if not kinds or redis.exists("lock:heavy-io") or read_marker() or (not ({"import_projection", "search"} & kinds) and redis.exists("lock:resource-budget:background")):
+            # Publication already refuses an active single-owner DB runner.
+            # Keep its deferred token for the owner's completion/recovery path.
+            for kind in kinds & {"import_projection", "search"}:
+                owner = redis.get(_wake_key(kind))
+                if owner and _wake_job_is_active(redis, owner.decode() if isinstance(owner, bytes) else str(owner)):
+                    kinds.remove(kind)
+            background_available = background_turn_available(redis)
+            metadata_only = {
+                kind for kind in kinds
+                if kind == "import_projection"
+                and _is_metadata_only_deferred_token(tokens[kind])
+            }
+            # A metadata-only marker has already completed the completion lane.
+            # Do not spend an opportunistic database/readiness pass on it while
+            # background work is unavailable. Keep the marker for a later pass.
+            inspect_kinds = (
+                kinds - metadata_only
+                if not background_available and not curation_ready
+                else kinds
+            )
+            if not ({"import_projection", "search"} & inspect_kinds) and not background_available:
+                return {"enqueued": 0, "deferred": 0}
+            if not inspect_kinds or redis.exists("lock:heavy-io") or read_marker() or (not ({"import_projection", "search"} & inspect_kinds) and redis.exists("lock:resource-budget:background")):
                 return {"enqueued": 0, "deferred": 0}
             remaining = deadline - monotonic()
             if remaining <= 0:
                 return {"enqueued": 0, "deferred": 1}
             counts, ready, admitted, future = asyncio.run(asyncio.wait_for(
-                _inspect_deferred_outboxes(kinds, redis), timeout=remaining,
+                _inspect_deferred_outboxes(inspect_kinds, redis), timeout=remaining,
             ))
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -790,7 +876,7 @@ def wake_resource_deferred_outboxes(*, timeout_seconds: float = 0.5) -> dict[str
         with budget_redis(seconds=remaining, reserve_seconds=0):
             redis = get_redis()
             outcome = {"enqueued": 0, "deferred": 0}
-            for kind in kinds - ready:
+            for kind in inspect_kinds - ready:
                 if kind in future:
                     wake = wake_pending_outboxes({kind: 1}, delay_seconds=future[kind])
                     outcome["enqueued"] += wake["enqueued"]

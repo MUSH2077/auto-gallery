@@ -171,3 +171,112 @@ async def test_search_checkpoint_keeps_its_actual_future_deadline(empty_completi
     finally:
         await c.work.db.execute(delete(SearchIndexState).where(SearchIndexState.index_uid==uid))
         await c.work.db.commit()
+
+
+from tests.test_postgres_search_integration import pgdb
+
+
+@pytest.fixture
+async def completed_search_recheck(pgdb, monkeypatch):
+    from rq import Queue
+    from rq.job import Job
+    from rq.registry import ScheduledJobRegistry
+    from sqlalchemy import false, update
+    from app.models.repository_sync_receipt import SearchIndexState
+    from app.services import outbox_coordinator as coordinator, search_rebuild
+    from app.services.redis_client import get_redis
+    client = get_redis()
+    monkeypatch.setattr(search_rebuild, "membership_bootstrap_due_condition", lambda: false())
+    await pgdb.execute(update(SearchIndexState).values(indexed_generation=SearchIndexState.database_generation))
+    await pgdb.commit()
+    queue = Queue("maintenance", connection=client)
+    registry = ScheduledJobRegistry("maintenance", connection=client)
+    before = set(queue.job_ids) | set(registry.get_job_ids())
+    owner = Job.create("app.jobs.search_projection.run_search_projection_outbox",
+        connection=client, origin="maintenance", id="completed-search-"+uuid4().hex)
+    owner.save()
+    key = coordinator._wake_key("search")
+    client.set(key, owner.id)
+    monkeypatch.setattr("rq.get_current_job", lambda: owner)
+    try:
+        yield SimpleNamespace(db=pgdb, client=client, queue=queue, registry=registry, key=key, owner=owner, before=before)
+    finally:
+        for identity in (set(queue.job_ids) | set(registry.get_job_ids())) - before:
+            registry.remove(identity)
+            queue.remove(identity)
+            Job.fetch(identity, connection=client).delete()
+        client.delete(key)
+        owner.delete()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_completed_search_clear_first_catches_concurrent_ready_without_one_second_delay(
+    completed_search_recheck, monkeypatch,
+):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.services.search_index_definitions import WORKS_INDEX
+    from app.services import outbox_coordinator as coordinator
+    c = completed_search_recheck
+    factory = async_sessionmaker(c.db.bind, expire_on_commit=False)
+    real_clear = coordinator.clear_outbox_wake
+    async def concurrent_commit():
+        async with factory() as db:
+            db.add(SearchProjectionOutbox(index_uid=WORKS_INDEX, entity_id=str(uuid4()),
+                action="upsert", version=1, available_at=datetime.now(timezone.utc)))
+            await db.commit()
+    def release_then_commit(kind):
+        released = real_clear(kind)
+        if released:
+            assert c.client.get(c.key) is None
+            asyncio.run(concurrent_commit())
+        return released
+    monkeypatch.setattr(coordinator, "clear_outbox_wake", release_then_commit)
+    result = await asyncio.to_thread(coordinator.clear_and_wake_outbox_successor,
+        "search", {"status":"ok", "processed":1, "more_likely":False,
+                   "database_receipt_committed":True})
+    assert result == {"enqueued":1,"deferred":0}
+    new = set(c.queue.job_ids) - c.before
+    assert len(new) == 1
+    assert not (set(c.registry.get_job_ids()) - c.before)
+    assert c.client.get(c.key).decode() in new
+    # The old job must not clear or duplicate the new owner's wake.
+    again = await asyncio.to_thread(coordinator.clear_and_wake_outbox_successor,
+        "search", {"status":"ok", "processed":1, "more_likely":False,
+                   "database_receipt_committed":True})
+    assert again == {"enqueued":0,"deferred":0}
+    assert set(c.queue.job_ids) - c.before == new
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("future_kind", ["outbox", "receipt"])
+async def test_completed_search_recheck_keeps_future_business_deadline(
+    completed_search_recheck, future_kind,
+):
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+    from app.models.search_delivery_receipt import SearchDeliveryReceipt
+    from app.services.search_index_definitions import WORKS_INDEX
+    from app.services import outbox_coordinator as coordinator
+    c=completed_search_recheck
+    due=datetime.now(timezone.utc)+timedelta(seconds=10)
+    if future_kind == "outbox":
+        row=SearchProjectionOutbox(index_uid=WORKS_INDEX, entity_id=str(uuid4()),
+            action="upsert", version=1, available_at=due)
+    else:
+        row=SearchDeliveryReceipt(backend="postgresql", index_uid=WORKS_INDEX,
+            action="upsert", state="prepared", phase="documents", payload=[],
+            versions=[], available_at=due)
+    c.db.add(row)
+    await c.db.commit()
+    result=await asyncio.to_thread(coordinator.clear_and_wake_outbox_successor,
+        "search", {"status":"ok", "processed":1, "more_likely":False,
+                   "database_receipt_committed":True})
+    assert result == {"enqueued":1,"deferred":0}
+    assert not (set(c.queue.job_ids)-c.before)
+    scheduled=set(c.registry.get_job_ids())-c.before
+    assert len(scheduled)==1
+    identity=next(iter(scheduled))
+    score=c.client.zscore(c.registry.key,identity)
+    assert due.timestamp()-2 <= score <= due.timestamp()+2

@@ -143,7 +143,6 @@ if total + requested > capacity then
 end
 local background_now = nil
 if KEYS[1] == "lock:resource-budget:background"
-  or KEYS[1] == "lock:resource-budget:pg-search-db"
   or string.find(KEYS[1], "^lock:resource%-budget:media:") then
   background_now = tonumber(redis.call("time")[1])
   local ingest_ready = redis.call("exists", "lock:resource-budget:disk") == 1
@@ -291,14 +290,22 @@ def workload_conflict_group(workload: str) -> str | None:
     return profile.replace("_", "-")
 
 
-def profile_lease_key(workload: str, *, lane: str | None = None) -> str | None:
+def _resource_conflict_group(workload: str, lane: str | None) -> str | None:
     group = workload_conflict_group(workload)
+    if group in (None, "maintenance"):
+        return group
+    # Share the PG writer lock without changing the workload's RAM budget.
+    if lane == "completion":
+        return "pg-search-db"
+    return f"{lane}-{group}" if lane is not None else group
+
+
+def profile_lease_key(workload: str, *, lane: str | None = None) -> str | None:
+    group = _resource_conflict_group(workload, lane)
     if group is None:
         return None
     if group == "maintenance":
         return HEAVY_IO_LOCK_KEY
-    if lane is not None:
-        group = f"{lane}-{group}"
     return f"lock:resource-profile:{group}"
 
 
@@ -308,7 +315,7 @@ def resource_budget_token_key(workload: str, *, lane: str | None = None) -> str 
     from app.services.resource_pressure import workload_profile_name
 
     profile = workload_profile_name(workload)
-    if lane not in (None, "ingest", "background"):
+    if lane not in (None, "ingest", "background", "completion"):
         raise ValueError(f"unsupported resource lane: {lane}")
     if profile == "light":
         return None
@@ -316,7 +323,7 @@ def resource_budget_token_key(workload: str, *, lane: str | None = None) -> str 
         return HEAVY_IO_LOCK_KEY
     if profile == "download_network":
         return RESOURCE_NETWORK_TOKEN_KEY
-    if profile == "pg_search_db":
+    if profile == "pg_search_db" or lane == "completion":
         return RESOURCE_PG_SEARCH_TOKEN_KEY
     if lane == "ingest" or (lane is None and profile == "import_db"):
         return RESOURCE_DISK_TOKEN_KEY
@@ -388,7 +395,7 @@ def local_lock_for_workload(
     from app.services.resource_pressure import workload_profile_name
 
     profile = workload_profile_name(workload)
-    group = workload_conflict_group(workload)
+    group = _resource_conflict_group(workload, lane)
     if group == "maintenance":
         return LocalResourceLocks([LocalHeavyIOLock()], remote_exclusive=True)
     if profile == "light":
@@ -403,8 +410,6 @@ def local_lock_for_workload(
         name = "ingest" if token == RESOURCE_DISK_TOKEN_KEY else "background"
         locks.append(LocalHeavyIOLock(_local_lock_path().with_name(f"lane-{name}.lock")))
     if group is not None:
-        if lane is not None:
-            group = f"{lane}-{group}"
         locks.append(
             LocalHeavyIOLock(_local_lock_path().with_name(f"profile-{group}.lock"))
         )

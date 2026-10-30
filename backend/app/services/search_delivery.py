@@ -312,10 +312,17 @@ async def _apply_database_receipt(receipt, token, deadline):
         row.last_error = None
         row.lease_until = None
         row.lease_token = None
+        await db.flush()
+        from app.services.outbox_coordinator import _curation_projection_ready, _search_ready
+        successor_ready = bool(await db.scalar(select(_search_ready(now()))))
+        curation_waiting = bool(await _curation_projection_ready(db))
         await db.commit()
-    return result(
-        "ok", claimed=len(versions), processed=len(versions), action=receipt.action,
-    )
+    return {
+        **result("ok", claimed=len(versions), processed=len(versions), action=receipt.action),
+        "more_likely": successor_ready,
+        "curation_waiting": curation_waiting,
+        "database_receipt_committed": True,
+    }
 
 
 async def _finalize(receipt, token, deadline, *, error=None):
@@ -469,11 +476,39 @@ async def _advance(receipt, token, client, deadline):
 
 
 async def run_delivery_slice(*, limit=500, client=None):
+    """Run one bounded search slice, continuing only ordinary PG receipts."""
     deadline = time.monotonic() + 20
-    return await _run(limit, client, deadline)
+    if settings.search_backend != "postgresql":
+        return await _run(limit, client, deadline)
+    budget = {"remaining_units": max(1, int(limit)), "deadline": deadline}
+    aggregate = None
+    outcome = None
+    while budget["remaining_units"] > 0 and time.monotonic() < budget["deadline"]:
+        outcome = await _run(budget["remaining_units"], client, deadline, budget=budget)
+        if aggregate is None:
+            aggregate = {"claimed": 0, "processed": 0, "upserted": 0, "deleted": 0, "failed": 0, "continuation_receipts": 0}
+        for key in ("claimed", "processed", "upserted", "deleted", "failed"):
+            aggregate[key] += int(outcome.get(key) or 0)
+        committed = bool(outcome.get("database_receipt_committed"))
+        used = int(outcome.get("claimed") or 0)
+        aggregate["continuation_receipts"] += int(committed)
+        budget["remaining_units"] = max(0, budget["remaining_units"] - max(0, used))
+        if (
+            not committed or outcome.get("status") != "ok"
+            or not outcome.get("more_likely") or outcome.get("curation_waiting")
+            or outcome.get("successor_delay_seconds", 0) > 0 or used <= 0
+        ):
+            break
+    if outcome is None:
+        return result("idle")
+    result_value = dict(outcome)
+    if aggregate:
+        result_value.update(aggregate)
+    result_value["bounded_continuation"] = bool(aggregate and aggregate["continuation_receipts"] > 1)
+    return result_value
 
 
-async def _run_locked(limit, client, deadline):
+async def _run_locked(limit, client, deadline, budget=None):
     # Bound SQL/connect/HTTP scheduling, with no uncancellable worker threads
     # around HTTP. Marker persistence is deliberately completed before return.
     async with asyncio.timeout(remaining(deadline)):
@@ -490,7 +525,7 @@ async def _run_locked(limit, client, deadline):
                     # A prior settings task is already terminal, or this marker
                     # preceded the submitting commit. Re-admit every new write.
                     await durable(remote_flight.clear_marker, str(receipt.id))
-                return await _admitted(limit, client, deadline, receipt, token)
+                return await _admitted(limit, client, deadline, receipt, token, budget=budget)
             return await _advance(receipt, token, client, deadline)
         marker = await durable(remote_flight.read_marker)
         if marker:
@@ -500,10 +535,10 @@ async def _run_locked(limit, client, deadline):
                 await durable(remote_flight.clear_marker, marker["owner"])
             else:
                 return result("ambiguous")
-        return await _admitted(limit, client, deadline)
+        return await _admitted(limit, client, deadline, budget=budget)
 
 
-async def _admitted(limit, client, deadline, receipt=None, token=None):
+async def _admitted(limit, client, deadline, receipt=None, token=None, *, budget=None):
     from app.services.heavy_io import adaptive_resource_slice
 
     async with session(deadline) as db:
@@ -524,30 +559,50 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
         else await search_rebuild.active_workload(deadline)
     )
     cooldown = {}
+    slice_seconds = remaining(deadline)
+    if pg_permit and budget is not None:
+        slice_seconds = min(slice_seconds, budget["deadline"] - time.monotonic())
+        if slice_seconds <= 0:
+            if receipt:
+                await _save(receipt, token, deadline, lease_until=None)
+            return result("pending")
     async with adaptive_resource_slice(workload, "search-delivery", max_work_units=limit,
-                                      max_slice_seconds=remaining(deadline), cooldown_result=cooldown,
+                                      max_slice_seconds=slice_seconds, cooldown_result=cooldown,
                                       wait_for_capacity=False) as limits:
         if limits is None:
             if receipt:
                 await _save(receipt, token, deadline, lease_until=None)
-            if settings.search_backend == "postgresql" and workload == "search_index":
+            if settings.search_backend == "postgresql" and workload in {"search_index", "pg_search_db"}:
                 return {**result("deferred"), "resource_deferred": True, "more_likely": False}
             return result("deferred", delay=2)
+        work_units = min(limit, limits.work_units)
+        if pg_permit and budget is not None:
+            if time.monotonic() >= budget["deadline"]:
+                if receipt:
+                    await _save(receipt, token, deadline, lease_until=None)
+                return result("pending")
+            budget["remaining_units"] = min(budget["remaining_units"], work_units)
+            if limits.slice_seconds:
+                budget["deadline"] = min(
+                    budget["deadline"], time.monotonic() + limits.slice_seconds,
+                )
+            # Finish an admitted atomic receipt under the original hard deadline.
+            # The shared soft deadline only stops starting another receipt.
         local_result = None
         if receipt is None:
             try:
-                next_item = await search_rebuild.prepare_next(min(limit, limits.work_units), deadline, client)
+                next_item = await search_rebuild.prepare_next(work_units, deadline, client)
             except (ValueError, RuntimeError) as exc:
                 await search_rebuild.fail_active(exc, deadline)
                 next_item = result("error")
             if isinstance(next_item, dict):
                 local_result = next_item
             else:
-                receipt = next_item or await _prepare(min(limit, limits.work_units), deadline)
+                receipt = next_item or await _prepare(work_units, deadline)
         if local_result is not None:
             outcome = local_result
         elif pg_permit:
-            prepared = receipt or await _prepare(min(limit, limits.work_units), deadline)
+            prepared = receipt or await _prepare(work_units, deadline)
             if prepared is None:
                 outcome = await _checkpoint(client, deadline)
             else:
@@ -565,7 +620,7 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
                     write_available_at=now() + timedelta(seconds=cooldown["seconds"]),
                 ))
                 await db.commit()
-        else:
+        if receipt is None or outcome.get("database_receipt_committed"):
             outcome["successor_delay_seconds"] = max(outcome["successor_delay_seconds"], cooldown["seconds"])
     return outcome
 
@@ -604,14 +659,14 @@ def checkpoint_due_condition(model):
     )
 
 
-async def _run(limit, client, deadline):
+async def _run(limit, client, deadline, budget=None):
     from app.services.heavy_io import LocalHeavyIOLock, _local_lock_path
 
     writer = LocalHeavyIOLock(_local_lock_path().with_name("search-writer.lock"))
     if not writer.try_acquire():
         return result("busy", delay=2)
     try:
-        return await _run_locked(limit, client, deadline)
+        return await _run_locked(limit, client, deadline, budget=budget)
     finally:
         writer.release()
 
