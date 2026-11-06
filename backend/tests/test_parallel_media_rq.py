@@ -336,15 +336,19 @@ async def _keep_only_first_intent(env: MediaEnvironment) -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_rq_consumers_claim_one_asset_and_emit_one_output(media_environment, tmp_path):
+async def test_real_rq_consumers_claim_one_asset_and_emit_one_output(media_environment, tmp_path, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setenv("MEDIA_WORKER_CONCURRENCY", "4")
+    monkeypatch.setattr(settings, "media_worker_concurrency", 4)
     env = media_environment
     queue_name = "parallel-media:" + env.namespace
     await _keep_only_first_intent(env)
-    jobs = [_enqueue_media(env.redis, queue_name) for _ in range(2)]
+    jobs = [_enqueue_media(env.redis, queue_name) for _ in range(4)]
     processes = []
     handles = []
     try:
-        for index in range(2):
+        for index in range(4):
             process, handle = _start_consumer(
                 env, queue_name, "normal", tmp_path / f"claim-{index}.log"
             )
@@ -372,7 +376,7 @@ async def test_real_rq_consumers_claim_one_asset_and_emit_one_output(media_envir
     output = env.library_root / asset.thumb_sm_path
     assert output.is_file() and output.stat().st_size > 0
     assert asset.sha256
-    assert len({job.id for job in jobs}) == 2
+    assert len({job.id for job in jobs}) == 4
 
 
 @pytest.mark.asyncio

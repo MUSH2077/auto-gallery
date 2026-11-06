@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -401,3 +401,127 @@ def test_stale_missing_asset_completion_is_not_counted(monkeypatch):
         "slice_exhausted": True,
         "more_likely": True,
     }
+
+
+@pytest.fixture
+async def candidate_store(monkeypatch, tmp_path):
+    """Real PostgreSQL rows; only the resource snapshot and clock are fixed."""
+    import os
+    from sqlalchemy import delete
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+    from app.config import settings
+    from app.models import Asset, MediaDerivativeOutbox
+    from app.services import resource_pressure
+    from tests.test_parallel_media_rq import _normal_snapshot
+
+    engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    clock = SimpleNamespace(now=datetime.now(timezone.utc))
+    ids = []
+    snapshot = _normal_snapshot()
+    async def pressure():
+        return snapshot
+    monkeypatch.setattr(media_derivatives, "async_session", sessions)
+    monkeypatch.setattr(media_derivatives, "_now", lambda: clock.now)
+    monkeypatch.setattr(resource_pressure, "get_resource_pressure_snapshot", pressure)
+    monkeypatch.setattr(settings, "media_worker_concurrency", 4)
+    monkeypatch.setenv("HEAVY_IO_LOCK_PATH", str(tmp_path / "heavy-io.lock"))
+
+    async def add(*, at=None, thumbnail=False, existing=False, video=False,
+                  state="pending", lease=None):
+        asset = Asset(file_path=f"priority/{uuid4()}.{'mp4' if video else 'png'}",
+                      file_name="media.mp4" if video else "media.png",
+                      mime_type="video/mp4" if video else "image/png",
+                      thumb_sm_path="ready.webp" if existing else None)
+        async with sessions() as db:
+            db.add(asset)
+            await db.flush()
+            intent = MediaDerivativeOutbox(asset_id=asset.id,
+                requested={"sha256": True, **({"thumbnail": True} if thumbnail else {})},
+                available_at=at if at is not None else clock.now,
+                state=state, lease_expires_at=lease)
+            db.add(intent)
+            await db.commit()
+        ids.append(asset.id)
+        return asset.id
+
+    try:
+        yield SimpleNamespace(add=add, sessions=sessions, clock=clock, snapshot=snapshot)
+    finally:
+        async with sessions() as db:
+            await db.execute(delete(Asset).where(Asset.id.in_(ids)))
+            await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pg_missing_thumbnail_precedes_recent_fingerprint(candidate_store):
+    store = candidate_store
+    fingerprint = await store.add(at=store.clock.now - timedelta(seconds=10))
+    missing = await store.add(at=store.clock.now - timedelta(seconds=1), thumbnail=True)
+    assert await media_derivatives._next_resource_candidate() == (missing, "image_derive")
+    request = await media_derivatives._claim_one(missing)
+    assert request["asset_id"] == missing
+    assert await media_derivatives._next_resource_candidate() == (fingerprint, "image_derive")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pg_old_fingerprint_runs_despite_continuing_missing_thumbnails(candidate_store):
+    from sqlalchemy import update
+    from app.models import MediaDerivativeOutbox
+    store = candidate_store
+    origin = store.clock.now
+    fingerprint = await store.add(at=origin)
+    served_thumbnails = 0
+    for second in range(1, 24):
+        store.clock.now = origin + timedelta(seconds=second)
+        await store.add(thumbnail=True)
+        selected, workload = await media_derivatives._next_resource_candidate()
+        assert workload == "image_derive"
+        if selected == fingerprint:
+            break
+        served_thumbnails += 1
+        async with store.sessions() as db:
+            await db.execute(update(MediaDerivativeOutbox).where(
+                MediaDerivativeOutbox.asset_id == selected).values(state="complete"))
+            await db.commit()
+    assert served_thumbnails > 0
+    assert selected == fingerprint
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state,lease_offset,ready", [
+    ("pending", None, False), ("failed", None, False),
+    ("processing", 30, False), ("processing", -1, True),
+])
+async def test_pg_thumbnail_priority_preserves_due_time_and_lease(candidate_store, state, lease_offset, ready):
+    store = candidate_store
+    fingerprint = await store.add(at=store.clock.now - timedelta(seconds=1))
+    available = store.clock.now + timedelta(seconds=5) if state != "processing" else store.clock.now - timedelta(seconds=5)
+    missing = await store.add(at=available, thumbnail=True, state=state,
+                             lease=store.clock.now + timedelta(seconds=lease_offset) if lease_offset is not None else None)
+    assert await media_derivatives._next_resource_candidate() == ((missing if ready else fingerprint), "image_derive")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pg_existing_thumbnail_does_not_receive_priority(candidate_store):
+    store = candidate_store
+    fingerprint = await store.add(at=store.clock.now - timedelta(seconds=5))
+    await store.add(thumbnail=True, existing=True)
+    assert await media_derivatives._next_resource_candidate() == (fingerprint, "image_derive")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_video", [False, True])
+async def test_pg_thumbnail_rank_is_used_across_admissible_profiles(candidate_store, missing_video):
+    store = candidate_store
+    await store.add(at=store.clock.now - timedelta(seconds=5), video=not missing_video)
+    missing = await store.add(thumbnail=True, video=missing_video)
+    assert await media_derivatives._next_resource_candidate() == (
+        missing, "video_derive" if missing_video else "image_derive")

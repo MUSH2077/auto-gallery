@@ -13,8 +13,12 @@ def media_candidates(monkeypatch):
 
     image, video = uuid4(), uuid4()
     now = datetime.now(timezone.utc)
-    rows = [SimpleNamespace(asset_id=image, available_at=now - timedelta(seconds=2)),
-            SimpleNamespace(asset_id=video, available_at=now - timedelta(seconds=1))]
+    rows = [
+        SimpleNamespace(asset_id=image, available_at=now - timedelta(seconds=2),
+                        priority_at=now - timedelta(seconds=2), id=uuid4()),
+        SimpleNamespace(asset_id=video, available_at=now - timedelta(seconds=1),
+                        priority_at=now - timedelta(seconds=1), id=uuid4()),
+    ]
     class Session:
         def __init__(self):
             self.rows = iter(rows)

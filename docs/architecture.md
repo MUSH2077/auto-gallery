@@ -1022,6 +1022,14 @@ locks retain the local limit when Redis coordination keys disappear. The
 existing database claim and version checks prevent duplicate computation or
 stale result submission for the same asset.
 
+For due media requests whose asset has no small-thumbnail path, a requested
+thumbnail receives a 20-second credit in selection order. The original
+`available_at` and lease conditions still determine eligibility; the credit
+allows older fingerprint work to regain precedence as new previews arrive.
+Image and video candidates use the same ordering before selection among
+admissible profiles. Existing memory reservations, resource barriers and
+claim-version checks still govern execution.
+
 Parallel mode reserves at least 768 MiB per image. Memory pressure or another
 active resource profile can admit fewer images than the configured limit.
 Video, indexing, deduplication, maintenance and unfinished remote search writes

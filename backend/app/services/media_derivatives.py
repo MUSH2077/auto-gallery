@@ -42,6 +42,7 @@ MEDIA_ALGORITHM_VERSION = "media-visual-v3"
 PHASH_ALGORITHM_VERSION = PHASH_VERSION
 _LEASE_SECONDS = 30 * 60
 _REQUEST_SQL_BATCH_SIZE = 500
+_THUMBNAIL_PRIORITY_WINDOW = timedelta(seconds=20)
 MEDIA_DERIVATIVE_STALL_SECONDS = 5 * 60
 
 
@@ -242,7 +243,7 @@ def _video_candidate_condition():
 
 
 async def _next_resource_candidate() -> tuple[UUID, str] | None:
-    """Choose the oldest currently admissible image/video intent.
+    """Prefer missing previews within a bounded window, then preserve age order.
 
     Looking at one candidate of each profile avoids letting an older image
     or video hide another profile that fits the current memory and lock budget.
@@ -251,7 +252,16 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
 
     now = _now()
     video_condition = _video_candidate_condition()
-    candidates: list[tuple[UUID, str, datetime]] = []
+    # A time credit favors visible work without permanently starving older hashes.
+    priority_at = case(
+        (
+            Asset.thumb_sm_path.is_(None)
+            & MediaDerivativeOutbox.requested["thumbnail"].as_boolean().is_(True),
+            MediaDerivativeOutbox.available_at - _THUMBNAIL_PRIORITY_WINDOW,
+        ),
+        else_=MediaDerivativeOutbox.available_at,
+    ).label("priority_at")
+    candidates: list[tuple[UUID, str, datetime, datetime, UUID]] = []
     async with async_session() as db:
         for workload, condition in (
             ("image_derive", not_(video_condition)),
@@ -262,6 +272,8 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                     select(
                         MediaDerivativeOutbox.asset_id,
                         MediaDerivativeOutbox.available_at,
+                        priority_at,
+                        MediaDerivativeOutbox.id,
                     )
                     .join(Asset, Asset.id == MediaDerivativeOutbox.asset_id)
                     .where(
@@ -278,6 +290,7 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                         condition,
                     )
                     .order_by(
+                        priority_at,
                         MediaDerivativeOutbox.available_at,
                         MediaDerivativeOutbox.id,
                     )
@@ -285,7 +298,9 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                 )
             ).first()
             if row is not None:
-                candidates.append((row.asset_id, workload, row.available_at))
+                candidates.append(
+                    (row.asset_id, workload, row.priority_at, row.available_at, row.id)
+                )
     if not candidates:
         return None
 
@@ -305,7 +320,7 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
         # A durable intent exists, but none fits current admission. Preserve
         # this distinction so the runner registers a resource-release retry.
         raise HeavyIOUnavailable("media_resources_unavailable")
-    selected = min(admissible, key=lambda item: item[2])
+    selected = min(admissible, key=lambda item: item[2:])
     return selected[0], selected[1]
 
 
