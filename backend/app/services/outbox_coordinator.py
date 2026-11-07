@@ -68,6 +68,14 @@ return 0
 """
 
 
+_RENEW_DEFERRED_SCRIPT = """
+if redis.call('hget', KEYS[1], ARGV[1]) == ARGV[2] then
+  return redis.call('hset', KEYS[1], ARGV[1], ARGV[3]) + 1
+end
+return 0
+"""
+
+
 _METADATA_DEFERRED_PREFIX = "metadata:"
 
 
@@ -423,7 +431,34 @@ def _publish_outbox_wakes_after_commit(session: Session) -> None:
         # protection line.  PostgreSQL plus the scheduler fallback preserve
         # delivery when Redis is unavailable.
         with budget_redis(seconds=0.45, reserve_seconds=0):
-            wake_pending_outboxes({kind: 1 for kind in sorted(kinds)})
+            # A deferred media runner already requested resource-release recovery.
+            # Renew its token before suppressing commit wakes so a concurrent
+            # recovery based on an older snapshot cannot clear the new work.
+            defer_media = False
+            if "media" in kinds:
+                try:
+                    from app.services.heavy_io import background_turn_available
+
+                    redis = get_redis()
+                    token = redis.hget(RESOURCE_DEFERRED_KEY, "media")
+                    if token and not background_turn_available(redis):
+                        defer_media = bool(redis.eval(
+                            _RENEW_DEFERRED_SCRIPT, 1, RESOURCE_DEFERRED_KEY,
+                            "media", token, _resource_deferred_token(),
+                        ))
+                except Exception:
+                    logger.debug("Unable to coalesce deferred media wake", exc_info=True)
+            pending = {kind: 1 for kind in sorted(kinds) if kind != "media" or not defer_media}
+            if pending:
+                wake_pending_outboxes(pending)
+            # The resource may have become available just before the renewed
+            # token was written, after its release notification was delivered.
+            if defer_media:
+                try:
+                    if background_turn_available(redis):
+                        wake_pending_outboxes({"media": 1})
+                except Exception:
+                    logger.debug("Unable to recheck deferred media wake", exc_info=True)
     except Exception:
         # PostgreSQL is authoritative.  The unique scheduler fallback retries
         # after Redis or the queue becomes available again.

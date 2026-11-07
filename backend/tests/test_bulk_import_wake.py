@@ -151,6 +151,280 @@ async def test_failed_bulk_savepoint_preserves_successful_batch_wake(bulk_enviro
 
 
 @pytest.mark.integration
+def test_post_commit_defers_media_wake_while_background_is_unavailable(
+    monkeypatch,
+):
+    """A deferred media marker must not be replaced by commit-time empty work."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    old_token = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    client.hset(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media", old_token)
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: False,
+    )
+    session = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING:
+              {"import_projection", "media", "search"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(session)
+        assert published == [{"import_projection": 1, "search": 1}]
+        refreshed = client.hget(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media")
+        assert refreshed and refreshed != old_token
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_post_commit_media_wake_rechecks_after_background_release(monkeypatch):
+    """A release racing the post-commit check must publish media promptly."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    client.hset(
+        outbox_coordinator.RESOURCE_DEFERRED_KEY,
+        "media",
+        outbox_coordinator._resource_deferred_token(metadata_only=False),
+    )
+    published = []
+    available = iter((False, True))
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: next(available),
+    )
+    session = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING:
+              {"import_projection", "media", "search"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(session)
+        assert published == [
+            {"import_projection": 1, "search": 1},
+            {"media": 1},
+        ]
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_post_commit_rollback_keeps_deferred_media_marker_without_wake(
+    monkeypatch,
+):
+    """Rollback must discard staged kinds and leave deferred recovery durable."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    token = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    client.hset(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media", token)
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    session = SimpleNamespace(info={
+        outbox_coordinator._OUTBOX_WAKE_INTENTS: {"outer": {"media", "search"}},
+        outbox_coordinator._OUTBOX_WAKE_COMMITTING: {"media", "search"},
+    })
+    previous = SimpleNamespace(parent=None)
+    try:
+        outbox_coordinator._discard_rolled_back_outbox_wakes(session, previous)
+        assert published == []
+        assert client.hget(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media").decode() == token
+        assert outbox_coordinator._OUTBOX_WAKE_INTENTS not in session.info
+        assert outbox_coordinator._OUTBOX_WAKE_COMMITTING not in session.info
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_post_commit_without_media_deferred_marker_publishes_all_kinds(
+    monkeypatch,
+):
+    """A normal commit keeps the existing media wake behavior."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: False,
+    )
+    session = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING:
+              {"import_projection", "media", "search"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(session)
+        assert published == [{
+            "import_projection": 1, "media": 1, "search": 1,
+        }]
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_post_commit_deferred_media_publishes_when_background_is_available(
+    monkeypatch,
+):
+    """A deferred marker does not suppress media when capacity is available."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    client.hset(
+        outbox_coordinator.RESOURCE_DEFERRED_KEY,
+        "media",
+        outbox_coordinator._resource_deferred_token(metadata_only=False),
+    )
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: True,
+    )
+    session = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING:
+              {"import_projection", "media", "search"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(session)
+        assert published == [{
+            "import_projection": 1, "media": 1, "search": 1,
+        }]
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_post_commit_redis_failure_falls_back_to_normal_publication(monkeypatch):
+    """A failed state check must preserve the ordinary publication attempt."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    original_get_redis = outbox_coordinator.get_redis
+    monkeypatch.setattr(
+        outbox_coordinator,
+        "get_redis",
+        lambda: (_ for _ in ()).throw(RedisConnectionError("injected")),
+    )
+    failed = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING: {"media"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(failed)
+        assert published == [{"media": 1}]
+    finally:
+        monkeypatch.setattr(outbox_coordinator, "get_redis", original_get_redis)
+    retry = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING: {"media"}},
+        get_nested_transaction=lambda: None,
+    )
+    outbox_coordinator._publish_outbox_wakes_after_commit(retry)
+    assert published == [{"media": 1}, {"media": 1}]
+    client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+def test_old_media_deferred_token_cannot_clear_new_token():
+    """A stale recovery pass cannot remove a newer media marker."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    old = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    new = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    client.hset(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media", new)
+    try:
+        assert client.eval(
+            outbox_coordinator._CLEAR_DEFERRED_SCRIPT,
+            1,
+            outbox_coordinator.RESOURCE_DEFERRED_KEY,
+            "media",
+            old,
+        ) == 0
+        assert client.hget(
+            outbox_coordinator.RESOURCE_DEFERRED_KEY, "media",
+        ).decode() == new
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("race", ["deleted", "replaced"])
+def test_post_commit_media_token_cas_race_falls_back_to_normal_wake(
+    monkeypatch, race,
+):
+    """A marker changed after inspection must not suppress the media wake."""
+    from app.services import outbox_coordinator
+    from app.services.redis_client import get_redis
+
+    client = get_redis()
+    old = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    replacement = outbox_coordinator._resource_deferred_token(metadata_only=False)
+    client.hset(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media", old)
+
+    class RacingRedis:
+        def __getattr__(self, name):
+            return getattr(client, name)
+
+        def eval(self, script, *args, **kwargs):
+            if script == outbox_coordinator._RENEW_DEFERRED_SCRIPT:
+                if race == "deleted":
+                    client.hdel(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media")
+                else:
+                    client.hset(
+                        outbox_coordinator.RESOURCE_DEFERRED_KEY,
+                        "media",
+                        replacement,
+                    )
+            return client.eval(script, *args, **kwargs)
+
+    published = []
+    monkeypatch.setattr(outbox_coordinator, "get_redis", lambda: RacingRedis())
+    monkeypatch.setattr(outbox_coordinator, "wake_pending_outboxes",
+                        lambda counts, **_: published.append(counts))
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: False,
+    )
+    session = SimpleNamespace(
+        info={outbox_coordinator._OUTBOX_WAKE_COMMITTING:
+              {"import_projection", "media", "search"}},
+        get_nested_transaction=lambda: None,
+    )
+    try:
+        outbox_coordinator._publish_outbox_wakes_after_commit(session)
+        assert published == [{
+            "import_projection": 1, "media": 1, "search": 1,
+        }]
+        value = client.hget(outbox_coordinator.RESOURCE_DEFERRED_KEY, "media")
+        assert value == (None if race == "deleted" else replacement.encode())
+    finally:
+        client.delete(outbox_coordinator.RESOURCE_DEFERRED_KEY)
+
+
+@pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["redis", "enqueue"])
 async def test_bulk_commit_survives_notification_failure_and_can_retry(bulk_environment, monkeypatch, failure):

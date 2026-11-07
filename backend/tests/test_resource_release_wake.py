@@ -1,4 +1,5 @@
 """Release retries preserve admission, ownership and delayed continuations."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -589,6 +590,114 @@ def test_stale_deferred_token_cannot_clear_a_new_marker(waiting_work):
         old,
     ) == 0
     assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "import_projection").decode() == new
+
+
+@pytest.mark.integration
+def test_repeated_media_commit_notifications_refresh_token_until_release(
+    waiting_work, monkeypatch,
+):
+    """Repeated commits keep one durable marker and release wakes it once."""
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    published = w.published
+    _defer(w)
+    tokens = []
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: False,
+    )
+    for _ in range(3):
+        session = SimpleNamespace(
+            info={coordinator._OUTBOX_WAKE_COMMITTING: {"media"}},
+            get_nested_transaction=lambda: None,
+        )
+        coordinator._publish_outbox_wakes_after_commit(session)
+        token = w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "media")
+        assert token
+        tokens.append(token)
+    assert len(set(tokens)) == 3
+    assert published == []
+
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: True,
+    )
+    assert coordinator.wake_resource_deferred_outboxes()["enqueued"] == 1
+    assert published[-1] == {"media": 1}
+    # Recovery leaves the token while work is ready; a later recovery pass
+    # clears it after the durable outbox is drained.
+    assert w.client.hexists(coordinator.RESOURCE_DEFERRED_KEY, "media")
+
+
+@pytest.mark.integration
+def test_released_media_token_cannot_be_cleared_by_previous_commit(
+    waiting_work,
+):
+    """A stale commit/recovery CAS cannot delete the current release marker."""
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    old = coordinator._resource_deferred_token(metadata_only=False)
+    current = coordinator._resource_deferred_token(metadata_only=False)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "media", current)
+    assert w.client.eval(
+        coordinator._CLEAR_DEFERRED_SCRIPT,
+        1,
+        coordinator.RESOURCE_DEFERRED_KEY,
+        "media",
+        old,
+    ) == 0
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "media").decode() == current
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_media_token_clears_only_after_recovered_outbox_drains(
+    waiting_work, monkeypatch,
+):
+    """Recovery publishes first, then clears its token after media completion."""
+    from app.models import MediaDerivativeOutbox
+    from app.services import outbox_coordinator as coordinator
+
+    w = waiting_work
+    _defer(w)
+    monkeypatch.setattr(
+        "app.services.heavy_io.background_turn_available",
+        lambda _redis: True,
+    )
+    first = await asyncio.to_thread(
+        coordinator.wake_resource_deferred_outboxes,
+    )
+    assert first["enqueued"] == 1
+    token = w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "media")
+    assert token
+
+    await w.db.execute(
+        update(MediaDerivativeOutbox).where(
+            MediaDerivativeOutbox.asset_id == w.staged["derivative_requests"][0]["asset_id"]
+        ).values(state="complete")
+    )
+    await w.db.commit()
+
+    # An older recovery pass cannot clear a renewed marker while the outbox is
+    # still authoritative; the current token is cleared only after the row drains.
+    renewed = coordinator._resource_deferred_token(metadata_only=False)
+    w.client.hset(coordinator.RESOURCE_DEFERRED_KEY, "media", renewed)
+    assert w.client.eval(
+        coordinator._CLEAR_DEFERRED_SCRIPT,
+        1,
+        coordinator.RESOURCE_DEFERRED_KEY,
+        "media",
+        token,
+    ) == 0
+    assert w.client.hget(coordinator.RESOURCE_DEFERRED_KEY, "media").decode() == renewed
+
+    second = await asyncio.to_thread(
+        coordinator.wake_resource_deferred_outboxes,
+    )
+    assert second["enqueued"] == 0
+    assert not w.client.hexists(coordinator.RESOURCE_DEFERRED_KEY, "media")
 
 
 @pytest.mark.integration

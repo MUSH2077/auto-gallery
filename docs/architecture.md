@@ -352,6 +352,13 @@ intent. Notification failure leaves the committed outbox rows available for
 recovery. Import completion does not imply thumbnail or search readiness; each
 background result must be observed separately.
 
+When a media resource-deferred marker already exists and background work is
+blocked by import priority, a subsequent commit coalesces the media wake while
+still publishing other kinds. The marker is renewed with a compare-and-set and
+resource availability is rechecked after publication; resource-release wakes
+and timer recovery continue to deliver the durable work. Unknown or changed
+marker state retains normal media publication.
+
 Outbox wake ownership and its RQ job are published in one Redis transaction.
 Immediate publication includes the queue entry; delayed publication includes
 both the job and its scheduled-registry entry. Concurrent publishers recheck a
