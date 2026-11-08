@@ -3677,8 +3677,8 @@ test("repository detail scopes history and opens the full work search", async ({
 
 test("command palette arrows move a focused option before Enter", async ({ page }) => {
   await page.goto("/admin/jobs");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator("input").first().focus();
   await page.keyboard.press("Tab");
@@ -3693,8 +3693,8 @@ test("command palette arrows move a focused option before Enter", async ({ page 
 
 test("command palette clear button owns Enter and query changes reset the selected route", async ({ page }) => {
   await page.goto("/admin/jobs");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   const input = dialog.locator("input").first();
   await input.fill("creator");
@@ -3715,8 +3715,8 @@ test("command palette clear button owns Enter and query changes reset the select
 for (const key of ["Enter", "ArrowDown", "Escape"]) {
   test(`command palette ignores composing ${key}`, async ({ page }) => {
     await page.goto("/admin/jobs");
-    await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
     const dialog = page.getByRole("dialog");
     const input = dialog.locator("input").first();
     await expect(input).toBeFocused();
@@ -3745,8 +3745,8 @@ test("command palette has one option list even when search assistance returns su
     } });
   });
   await page.goto("/admin/jobs");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   const assistance = page.waitForResponse(response => response.url().includes("/api/v1/search/assist")
     && response.request().postDataJSON()?.before_cursor === "works");
@@ -3761,8 +3761,8 @@ test("command palette has one option list even when search assistance returns su
 
 test("command palette closes after a query-only search navigation", async ({ page }) => {
   await page.goto("/admin/search?q=old");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator("input").first().fill("new query & 中文");
   await page.keyboard.press("Enter");
@@ -3773,8 +3773,8 @@ test("command palette closes after a query-only search navigation", async ({ pag
 
 test("command palette input arrows wrap, scroll their option into view and keep input focus", async ({ page }) => {
   await page.goto("/admin/jobs");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   const input = dialog.locator("input").first();
   await expect(input).toBeFocused();
@@ -3795,8 +3795,8 @@ test("command palette input arrows wrap, scroll their option into view and keep 
 test("command palette closes when selecting the same encoded search query", async ({ page }) => {
   const query = "current query & 中文";
   await page.goto(`/admin/search?${new URLSearchParams({ q: query })}`);
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator("input").first().fill(query);
   await page.keyboard.press("Enter");
@@ -3806,19 +3806,20 @@ test("command palette closes when selecting the same encoded search query", asyn
 
 test("command palette overlay and shortcut dismissal permit a clean reopen", async ({ page }) => {
   await page.goto("/admin/jobs");
-  const trigger = page.getByRole("button", { name: "Search", exact: true });
-  await page.locator(".gallery-account > summary").click();
+  const trigger = page.getByRole("button", { name: "Quick jump", exact: true });
+  await page.locator(".gallery-more-trigger").click();
   await trigger.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click({ position: { x: 5, y: 5 } });
   await expect(dialog).toBeHidden();
-  await expect(trigger).toBeFocused();
+  await expect(page.locator(".gallery-more-trigger")).toBeFocused();
   await page.keyboard.press("Control+k");
   await expect(dialog).toBeVisible();
   await dialog.locator("input").first().fill("jobs");
   await page.keyboard.press("Control+k");
   await expect(dialog).toBeHidden();
+  await page.locator(".gallery-more-trigger").click();
   await trigger.click();
   await expect(dialog.locator("input").first()).toHaveValue("");
   await expect(dialog.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
@@ -3831,8 +3832,8 @@ test("command palette retains permission filtering and an empty-query target", a
     ...me, is_admin: false, permissions: ["library"], modules: { library: true, tasks: false, system: false, subscriptions: false },
   } }));
   await page.goto("/admin/works");
-  await page.locator(".gallery-account > summary").click();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.locator(".gallery-more-trigger").click();
+  await page.getByRole("button", { name: "Quick jump", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.locator('a[href="/admin/jobs"]')).toHaveCount(0);
   await expect(dialog.locator('a[href="/admin/subscriptions"]')).toHaveCount(0);
@@ -3849,8 +3850,8 @@ test("command palette retains permission filtering and an empty-query target", a
 for (const query of ['', 'jobs', 'unmatched-phrase']) {
   test(`command palette confines focus for query ${query || 'empty'}`, async ({ page }) => {
     await page.goto('/admin/jobs');
-    await page.locator('.gallery-account > summary').click();
-    await page.getByRole('button', { name: 'Search', exact: true }).focus();
+    await page.locator('.gallery-more-trigger').click();
+    await page.getByRole('button', { name: 'Quick jump', exact: true }).focus();
     await page.keyboard.press('Control+k');
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
@@ -3864,7 +3865,7 @@ for (const query of ['', 'jobs', 'unmatched-phrase']) {
     }
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeFocused();
+    await expect(page.locator('.gallery-more-trigger')).toBeFocused();
   });
 }
 

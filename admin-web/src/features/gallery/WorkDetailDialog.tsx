@@ -100,6 +100,7 @@ export default function WorkDetailDialog({ id, onClose, operationBusy = false }:
     if (!curationConfirm || operationBusy || isCurating || c.qc.isMutating({ mutationKey: ["works", "curation", id] }) > 0) return;
     const current = curationConfirm;
     const token = curationToken.current;
+    if (current !== "purge") setCurationConfirm(null);
     try {
       if (current === "purge") await purgeWork.mutateAsync();
       else await c.curateWork.mutateAsync(current);
@@ -232,14 +233,15 @@ export default function WorkDetailDialog({ id, onClose, operationBusy = false }:
   </div></details>;
 
   const canAdmin = c.has("admin");
+  const isFavorite = c.toggleFavorite.optimistic ?? Boolean(w.is_favorite);
   const detailActions = c.canCurate ? w.curation_state?.visibility === "trashed" ? <>
     <button type="button" className="button primary" disabled={operationBusy || isCurating} aria-busy={isCurating || undefined} onClick={requestCuration}>{t("works.restore")}</button>
     {canAdmin ? <button type="button" className="text-button danger-text" disabled={operationBusy || isCurating} onClick={requestPurge}>{t("deletion.permanent_title")}</button> : null}
   </> : <>
-    <button type="button" className={"button detail-favorite-toggle" + (w.is_favorite ? " is-favorite" : "")} aria-label={t(w.is_favorite ? "gallery.unfavoriteWork" : "gallery.favoriteWork")} aria-pressed={Boolean(w.is_favorite)} aria-busy={c.toggleFavorite.isPending || undefined} aria-disabled={operationBusy || isCurating || c.toggleFavorite.isPending || undefined} disabled={operationBusy || isCurating} onClick={toggleFavorite}>
-      <Icon name="heart" />{w.is_favorite ? copy("saved") : t("gallery.favoriteWork")}
+    <button type="button" className={"button detail-favorite-toggle" + (isFavorite ? " is-favorite" : "")} aria-label={t(isFavorite ? "gallery.unfavoriteWork" : "gallery.favoriteWork")} aria-pressed={isFavorite} aria-busy={c.toggleFavorite.isPending || undefined} disabled={operationBusy || isCurating} onClick={toggleFavorite}>
+      <Icon name="heart" />{isFavorite ? copy("saved") : t("gallery.favoriteWork")}
     </button>
-    <button type="button" className="text-button danger-text" disabled={operationBusy || isCurating || c.toggleFavorite.isPending} onClick={requestCuration}>{t("works.move_to_trash")}</button>
+    <button type="button" className="text-button danger-text" disabled={operationBusy || isCurating} aria-disabled={c.toggleFavorite.isPending || undefined} onClick={requestCuration}>{t("works.move_to_trash")}</button>
   </> : <p className="muted">{t("gallery.notCurator")}</p>;
 
   const feedback = <>

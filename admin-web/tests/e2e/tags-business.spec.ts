@@ -93,3 +93,51 @@ test("tag detail keeps related creators, edit, delete, and works search reachabl
   await page.getByRole("dialog").getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => methods.includes("DELETE")).toBeTruthy();
 });
+
+
+test("tag edit responds immediately and retains draft on failure",async({page,context})=>{
+ await installFixtures(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/**',async route=>{const path=new URL(route.request().url()).pathname;
+  if(path==='/api/v1/auth/me')return json(route,me);
+  if(path==='/api/v1/tags/fixture-tag'&&route.request().method()==='PUT'){await gate;return json(route,{detail:'Tag save failed'},500);}
+  if(path==='/api/v1/tags/fixture-tag')return json(route,{id:'fixture-tag',normalized_name:'night-sky',category:'general',usage_count:0,created_at:'2026-09-01T00:00:00Z',top_creators:[]});
+  if(path==='/api/v1/search')return json(route,{groups:{works:{total:0,items:[]}},query:'',canonical_query:'',parsed:{tokens:[]}});return json(route,{});
+ });
+ try{
+  await page.goto('/admin/tags/fixture-tag');await page.getByRole('button',{name:'Edit',exact:true}).click();const dialog=page.getByRole('dialog');
+  await dialog.locator('#tag-edit-name').fill('new-name');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog).toHaveCount(0);await expect(page.getByRole('heading',{name:'#new-name'})).toBeVisible();await expect(page.getByRole('status').filter({hasText:/saving/i})).toBeVisible();
+  release();await expect(page.getByRole('dialog').locator('#tag-edit-name')).toHaveValue('new-name');await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Tag save failed');
+ }finally{release();}
+});
+
+
+test("tag draft survives navigation while save fails",async({page,context})=>{
+ await installFixtures(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/**',async route=>{const path=new URL(route.request().url()).pathname;
+  if(path==='/api/v1/auth/me')return json(route,me);
+  if(path==='/api/v1/tags/fixture-tag'&&route.request().method()==='PUT'){await gate;return json(route,{detail:'Tag save failed'},500);}
+  if(path==='/api/v1/tags/fixture-tag')return json(route,{id:'fixture-tag',normalized_name:'night-sky',category:'general',usage_count:0,created_at:'2026-09-01T00:00:00Z',top_creators:[]});
+  if(path==='/api/v1/search')return json(route,{groups:{works:{total:0,items:[]}},query:'',canonical_query:'',parsed:{tokens:[]}});return json(route,{total:0,items:[]});
+ });
+ try{
+  await page.goto('/admin/tags/fixture-tag');await page.getByRole('button',{name:'Edit',exact:true}).click();
+  let dialog=page.getByRole('dialog');await dialog.locator('#tag-edit-name').fill('draft-name');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await page.locator('.tag-detail-back').click();await expect(page).toHaveURL(/\/admin\/tags$/);release();await expect(page.getByText('Tag save failed').first()).toBeVisible();
+  await page.goBack();await page.getByRole('button',{name:'Edit',exact:true}).click();dialog=page.getByRole('dialog');await expect(dialog.locator('#tag-edit-name')).toHaveValue('draft-name');
+ }finally{release();}
+});
+
+
+test("tag rename refreshes related work search with confirmed name",async({page,context})=>{
+ await installFixtures(context);let current='old-name';const queries:string[]=[];
+ await context.route('**/api/v1/**',route=>{const url=new URL(route.request().url()),path=url.pathname;
+  if(path==='/api/v1/auth/me')return json(route,me);
+  if(path==='/api/v1/tags/fixture-tag'&&route.request().method()==='PUT'){current='new-name';return json(route,{id:'fixture-tag',normalized_name:current,category:'general',usage_count:0});}
+  if(path==='/api/v1/tags/fixture-tag')return json(route,{id:'fixture-tag',normalized_name:current,category:'general',usage_count:0,created_at:'2026-09-01T00:00:00Z',top_creators:[]});
+  if(path==='/api/v1/search'){queries.push(url.searchParams.get('q')||'');return json(route,{groups:{works:{total:0,items:[]}},query:'',canonical_query:'',parsed:{tokens:[]}});}
+  return json(route,{});
+ });
+ await page.goto('/admin/tags/fixture-tag');await page.getByRole('button',{name:'Edit',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.locator('#tag-edit-name').fill('new-name');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ await expect.poll(()=>queries.some(q=>q.includes('new-name'))).toBe(true);
+});

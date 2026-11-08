@@ -143,3 +143,128 @@ test("creator deletion blocks active tasks and requires an exact phrase before f
   expect(deletes).toBe(2);
   expect(queries).toEqual(["?delete_files=true", "?delete_files=true"]);
 });
+
+
+test("creator favorites respond immediately and serialize rapid clicks", async ({ page, context }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const creator = { id: "creator-instant", name: "atlas", display_name: "Atlas Instant", is_active: true, is_favorite: false, source_count: 0, repository_count: 0 };
+  await setup(context, async (route, path) => {
+    if (path === "/api/v1/search") return json(route, { query: "", canonical_query: "", parsed: { tokens: [] }, groups: { creators: { total: 1, items: [creator] } }, total: 1, results: [], creators: [creator] });
+    if (path === "/api/v1/creators/creator-instant") return json(route, creator);
+    if (path === "/api/v1/creators/creator-instant/favorite") {
+      calls++;
+      if (calls === 1) await gate;
+      creator.is_favorite = !creator.is_favorite;
+      return json(route, creator);
+    }
+    return false;
+  });
+  try {
+    await page.goto("/admin/creators");
+    const button = page.getByRole("button", { name: "Favorite", exact: true });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    const active = page.getByRole("button", { name: "Unfavorite", exact: true });
+    await expect(active).toHaveAttribute("aria-pressed", "true");
+    await active.click();
+    await expect(page.getByRole("button", { name: "Favorite", exact: true })).toHaveAttribute("aria-pressed", "false");
+    expect(calls).toBe(1);
+    release();
+    await expect.poll(() => calls).toBe(2);
+    await expect(page.getByRole("button", { name: "Favorite", exact: true })).toBeVisible();
+  } finally { release(); }
+});
+
+test("creator favorite failure restores the visible state", async ({ page, context }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const creator = { id: "creator-failure", name: "atlas", display_name: "Atlas Failure", is_active: true, is_favorite: false, source_count: 0, repository_count: 0 };
+  await setup(context, async (route, path) => {
+    if (path === "/api/v1/search") return json(route, { query: "", canonical_query: "", parsed: { tokens: [] }, groups: { creators: { total: 1, items: [creator] } }, total: 1, results: [], creators: [creator] });
+    if (path === "/api/v1/creators/creator-failure") return json(route, creator);
+    if (path === "/api/v1/creators/creator-failure/favorite") { await gate; return json(route, { detail: "Favorite failed" }, 500); }
+    return false;
+  });
+  try {
+    await page.goto("/admin/creators");
+    await page.getByRole("button", { name: "Favorite", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Unfavorite", exact: true })).toBeVisible();
+    release();
+    await expect(page.getByRole("button", { name: "Favorite", exact: true })).toBeVisible();
+    await expect(page.getByText(/Favorite failed/)).toBeVisible();
+  } finally { release(); }
+});
+
+
+test("creator favorite remains selected when opening detail while pending", async ({ page, context }) => {
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const creator={id:"creator-cross",name:"atlas",display_name:"Atlas Cross",is_active:true,is_favorite:false,source_count:0,repository_count:0,curation_state:{visibility:"visible"}};
+ await setup(context,async(route,path)=>{
+  if(path==="/api/v1/search")return json(route,{query:"",canonical_query:"",parsed:{tokens:[]},groups:{creators:{total:1,items:[creator]},works:{total:0,items:[]}},total:1,results:[],creators:[creator]});
+  if(path==="/api/v1/creators/creator-cross")return json(route,creator);
+  if(path==="/api/v1/creators/creator-cross/favorite"){await gate;creator.is_favorite=true;return json(route,creator);}
+  if(path==="/api/v1/creators/creator-cross/links")return json(route,[]);
+  if(path==="/api/v1/creators/creator-cross/references")return json(route,{pixiv:[],danbooru:null});
+  if(path.endsWith('/stats'))return json(route,{creator_id:creator.id,total_works:0,total_assets:0,total_tags:0,source_breakdown:[],tag_distribution:[],monthly_frequency:[]});
+  if(path.endsWith('/timeline'))return json(route,{creator_id:creator.id,sources:[],days:[],total:0});
+  if(path.endsWith('/subscription-overview'))return json(route,{summary:{repository_count:0,running_job_count:0},repositories:[],subscriptions:[]});
+  return false;
+ });
+ try{
+  await page.goto('/admin/creators');await page.getByRole('button',{name:'Favorite',exact:true}).click();
+  await page.getByText('Atlas Cross',{exact:true}).click();
+  await expect(page).toHaveURL(/creator-cross/);
+  await expect(page.getByRole('button',{name:/Unfavorite|Unstar/i}).first()).toHaveAttribute('aria-pressed','true');
+ }finally{release();}
+});
+
+
+test("creator favorites filter reflects removal", async ({ page, context }) => {
+  const creator = { id:"creator-filter",name:"atlas",display_name:"Atlas Filter",is_active:true,is_favorite:true,source_count:0,repository_count:0 };
+  await setup(context, async (route, path) => {
+    if(path === "/api/v1/search") { const items=creator.is_favorite?[creator]:[];return json(route,{query:"is:favorite",canonical_query:"is:favorite",parsed:{tokens:[{kind:"qualifier",key:"is",value:"favorite",negated:false}]},groups:{creators:{total:items.length,items}},total:items.length,results:[],creators:items}); }
+    if(path === "/api/v1/creators/creator-filter/favorite"){creator.is_favorite=false;return json(route,creator);}
+    return false;
+  });
+  await page.goto("/admin/creators?q=is%3Afavorite");
+  await page.getByRole("button",{name:"Unfavorite",exact:true}).click();
+  await expect(page.getByText("Atlas Filter",{exact:true})).toHaveCount(0);
+});
+
+
+test("creator lost response reconciles the server state without a second toggle",async({page,context})=>{
+ const creator={id:"creator-timeout",name:"atlas",display_name:"Atlas Timeout",is_active:true,is_favorite:false,source_count:0,repository_count:0};let calls=0;
+ await setup(context,async(route,path)=>{
+  if(path==='/api/v1/search')return json(route,{query:'',canonical_query:'',parsed:{tokens:[]},groups:{creators:{total:1,items:[creator]}},total:1,results:[],creators:[creator]});
+  if(path==='/api/v1/creators/creator-timeout')return json(route,creator);
+  if(path==='/api/v1/creators/creator-timeout/favorite'){calls++;creator.is_favorite=true;return route.abort('timedout');}
+  return false;
+ });
+ await page.goto('/admin/creators');await page.getByRole('button',{name:'Favorite',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Unfavorite',exact:true})).toBeVisible();
+ await expect.poll(()=>calls).toBe(1);await expect(page.getByRole('log')).toBeVisible();
+});
+
+
+test("creator edit responds immediately and restores draft on failure", async ({page,context}) => {
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const creator={id:"creator-edit-instant",name:"atlas",display_name:"Before",description:"Old",is_active:true,is_favorite:false,source_count:0,repository_count:0,curation_state:{visibility:"visible"}};
+ await setup(context,async(route,path)=>{
+  if(path==='/api/v1/creators/creator-edit-instant' && route.request().method()==='PATCH'){await gate;return json(route,{detail:'Save failed'},500);}
+  if(path==='/api/v1/creators/creator-edit-instant')return json(route,creator);
+  if(path.endsWith('/links'))return json(route,[]);
+  if(path.endsWith('/references'))return json(route,{pixiv:[],danbooru:null});
+  if(path.endsWith('/stats'))return json(route,{source_breakdown:[],tag_distribution:[],monthly_frequency:[]});
+  if(path.endsWith('/timeline'))return json(route,{sources:[],days:[],total:0});
+  if(path.endsWith('/subscription-overview'))return json(route,{summary:{repository_count:0,running_job_count:0},repositories:[],subscriptions:[]});
+  if(path==='/api/v1/search')return json(route,{query:'',parsed:{tokens:[]},groups:{works:{total:0,items:[]}}});return false;
+ });
+ try{
+  await page.goto('/admin/creators/creator-edit-instant');await page.getByRole('button',{name:'Edit profile'}).click();
+  const dialog=page.getByRole('dialog');await dialog.getByLabel('Display name').fill('After');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog).toHaveCount(0);await expect(page.getByRole('heading',{name:'After'})).toBeVisible();await expect(page.getByRole('status').filter({hasText:/saving/i})).toBeVisible();
+  release();await expect(page.getByRole('dialog').getByLabel('Display name')).toHaveValue('After');await expect(page.getByText('Save failed').first()).toBeVisible();
+ }finally{release();}
+});

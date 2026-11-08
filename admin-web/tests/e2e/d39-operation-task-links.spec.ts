@@ -77,16 +77,14 @@ async function openFixture(
   return { context, page, taskDetailIds, unhandled };
 }
 
-async function clickAccountLink(page: Page, href: string) {
-  const account = page.locator(".gallery-account");
-  if (!(await account.locator("summary").isVisible())) return;
-  await account.locator("summary").click();
-  await account.locator("a[href='" + href + "']").click();
+async function clickNavigationLink(page: Page, href: string) {
+  const trigger = page.locator(".gallery-more-trigger");
+  await trigger.click();
+  await page.locator(".gallery-more-menu a[href='" + href + "']").click();
 }
 
-async function openAccountMenu(page: Page) {
-  const account = page.locator(".gallery-account");
-  await account.locator("summary").click({ force: true });
+async function openMoreMenu(page: Page) {
+  await page.locator(".gallery-more-trigger").click();
 }
 
 async function expectCanonicalTask(page: Page, taskDetailIds: string[]) {
@@ -251,7 +249,7 @@ for (const entry of ["row", "drawer", "batch", "late-response"] as const) {
         await opened.page.getByRole("button", { name: "Confirm action", exact: true }).click();
       }
       await expect.poll(() => retries).toBe(1);
-      await clickAccountLink(opened.page, "/admin/data-mgmt");
+      await clickNavigationLink(opened.page, "/admin/data-mgmt");
       const status = opened.page.locator('[data-admin-operation="admin-disk-import"]');
       await expect(status).toContainText("Attempt 2 running");
       if (oldResponse) await (oldResponse as Route).fulfill({ json: { task_id: TASK_ID, status: "failed", error: "Late attempt 1" } }).catch(() => {});
@@ -265,7 +263,7 @@ for (const entry of ["row", "drawer", "batch", "late-response"] as const) {
       await expect.poll(() => opened.page.evaluate(() => sessionStorage.getItem("admin_operation_job"))).toBeNull();
       const completedReads = infoReads;
       await opened.page.locator('a[href="/admin/jobs"]').first().click();
-      await clickAccountLink(opened.page, "/admin/data-mgmt");
+      await clickNavigationLink(opened.page, "/admin/data-mgmt");
       await expect(status).toContainText(/complete/i);
       await opened.page.waitForTimeout(500);
       expect(infoReads).toBeLessThanOrEqual(completedReads + 1);
@@ -357,7 +355,7 @@ test("a restored operation learns its canonical task before the notification ent
     }, { jobId: RQ_JOB_ID });
   });
   try {
-    await openAccountMenu(opened.page);
+    await openMoreMenu(opened.page);
     await opened.page.getByRole("button", { name: "Notifications", exact: true }).click();
     const entry = opened.page.getByText("Restored disk import", { exact: true });
     await expect(entry).toBeVisible();
@@ -384,7 +382,7 @@ test("a retained legacy operation without a task UUID never builds a Jobs task l
     });
   });
   try {
-    await openAccountMenu(opened.page);
+    await openMoreMenu(opened.page);
     await opened.page.getByRole("button", { name: "Notifications", exact: true }).click();
     const entry = opened.page.getByText("Legacy disk import", { exact: true });
     await expect(entry).toBeVisible();

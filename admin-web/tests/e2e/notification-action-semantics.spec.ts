@@ -139,7 +139,7 @@ test("notification bell opens an administrator task from the durable feed", asyn
   const page = await context.newPage();
   try {
     await page.goto("/admin/profile");
-    await page.locator(".gallery-account > summary").click();
+    await page.locator(".gallery-more-trigger").click();
     await page.getByRole("button", { name: "Notifications", exact: true }).click();
     await page.getByText("Bell integrity scan", { exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/jobs\\?tab=admin&task=${ADMIN_TASK_ID}$`));

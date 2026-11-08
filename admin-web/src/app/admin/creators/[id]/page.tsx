@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useId } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
 import HierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
 import MotionNumber from "@/components/MotionNumber";
@@ -33,6 +33,7 @@ import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
 import { hasActionableAuthFailure } from "@/lib/auth-health";
 import CreatorReferences from "./CreatorReferences";
+import { useCreatorFavorite } from "@/features/creators/useCreatorFavorite";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -289,22 +290,37 @@ export default function CreatorDetailPage() {
 
   const openEdit = () => {
     if (!creator.data) return;
-    setEditName(creator.data.name);
-    setEditDisplay(creator.data.display_name || "");
-    setEditDesc(creator.data.description || "");
+    const draft = qc.getQueryData<{ name: string; display_name: string; description: string }>(["creator-edit-draft", id]);
+    setEditName(draft?.name ?? creator.data.name);
+    setEditDisplay(draft?.display_name ?? creator.data.display_name ?? "");
+    setEditDesc(draft?.description ?? creator.data.description ?? "");
     setEditing(true);
   };
 
+  const savingEdit = useIsMutating({ mutationKey: ["creator-edit", id], exact: true }) > 0;
   const update = useMutation({
-    mutationFn: () => api.updateCreator(id, { name: editName, display_name: editDisplay || undefined, description: editDesc || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); toast.success(t("common.saved")); },
-    onError: (e: Error) => toast.error(e.message),
+    mutationKey: ["creator-edit", id],
+    mutationFn: (draft: { name: string; display_name: string; description: string }) => api.updateCreator(id, { name: draft.name, display_name: draft.display_name || undefined, description: draft.description || undefined }),
+    onMutate: (draft) => {
+      void qc.cancelQueries({ queryKey: queryKeys.creators.detail(id) }, { revert: false });
+      const previous = qc.getQueryData<typeof creator.data>(queryKeys.creators.detail(id));
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...draft } : current);
+      return { previous };
+    },
+    onSuccess: (saved) => {
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...saved } : current);
+      qc.removeQueries({ queryKey: ["creator-edit-draft", id] });
+      void qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      toast.success(t("common.saved"));
+    },
+    onError: (error: Error, _draft, context) => {
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current && context?.previous ? { ...current, name: context.previous.name, display_name: context.previous.display_name, description: context.previous.description } : current);
+      setEditing(true);
+      toast.error(error.message);
+    },
   });
 
-  const toggleFavorite = useMutation({
-    mutationFn: () => api.toggleCreatorFavorite(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }),
-  });
+  const toggleFavorite = useCreatorFavorite(id, creator.data?.is_favorite);
 
   const curateCreator = useMutation({
     mutationFn: (action: "archive" | "restore") => api.curateCreator(id, action),
@@ -467,21 +483,22 @@ export default function CreatorDetailPage() {
       className="gallery-creators-page gallery-creator-detail"
       actions={(
         <>
-          {canCurate && <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">{c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}</button>}
+          {canCurate && <button onClick={toggleFavorite.toggle} aria-pressed={toggleFavorite.isFavorite} className="btn-ghost">{toggleFavorite.isFavorite ? t("creator_detail.unstar") : t("creator_detail.star")}</button>}
           {(isAdmin || creatorVisibility === "visible") && has("curation") ? (
             <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>{isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}</button>
           ) : (
             has("curation") ? <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button> : null
           )}
           {canManageSubscriptions && <Link href={subscriptionHref} className="btn-ghost">{t("creator_detail.subscription")}</Link>}
-          {canCurate && <button onClick={openEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>}
+          {canCurate && <button onClick={openEdit} disabled={savingEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>}
+          {savingEdit && <span role="status">{t("tags.saving")}</span>}
         </>
       )}
     >
       <div className="gallery-creator-identity">
         <div className="gallery-creator-initials">{initials(c.display_name || c.name)}</div>
         <div className="min-w-0">
-          {c.is_favorite && <span className="gallery-creator-favorite">{t("creator_detail.favorite")}</span>}
+          {toggleFavorite.isFavorite && <span className="gallery-creator-favorite">{t("creator_detail.favorite")}</span>}
           {c.display_name && c.display_name !== c.name && <p className="font-mono text-sm text-muted">{c.name}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted">
             <StatusBadge status={c.is_active ? "up" : "down"} />
@@ -557,7 +574,7 @@ export default function CreatorDetailPage() {
           <CreatorReferences
             creatorId={id}
             currentDisplay={c.display_name}
-            onSelectAlias={canCurate
+            onSelectAlias={canCurate && !savingEdit
               ? (alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }
               : undefined}
           />
@@ -787,7 +804,7 @@ export default function CreatorDetailPage() {
           <div><label htmlFor={`${editFormId}-description`} className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea id={`${editFormId}-description`} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("creator_detail.cancel")}</button>
-            <button onClick={() => update.mutate()} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
+            <button onClick={() => { if (qc.isMutating({ mutationKey: ["creator-edit", id], exact: true })) return; const draft = { name: editName, display_name: editDisplay, description: editDesc }; qc.setQueryData(["creator-edit-draft", id], draft); setEditing(false); update.mutate(draft); }} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
           </div>
         </div>
       </BusinessModal>

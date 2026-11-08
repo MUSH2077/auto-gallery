@@ -28,12 +28,25 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { Star } from "lucide-react";
+import { useCreatorFavorite } from "@/features/creators/useCreatorFavorite";
 import {
   legacyPageInitialIndex,
   referenceNameAnchorsAvailable,
   referenceSortFromTokens,
 } from "@/lib/reference-list-state";
 import { useReferenceListLegacyNavigation, useReferenceListNavigation, useReferenceListSession, useReferenceListState } from "@/lib/useReferenceListNavigation";
+
+function CreatorFavoriteButton({ creator }: { creator: CreatorSearchHit }) {
+  const t = useT();
+  const favorite = useCreatorFavorite(creator.id, creator.is_favorite);
+  return <button type="button" onClick={favorite.toggle}
+    className={`btn-icon text-lg ${favorite.isFavorite ? "text-danger" : "text-muted hover:text-danger"}`}
+    title={favorite.isFavorite ? t("common.unfavorite") : t("common.favorite")}
+    aria-label={favorite.isFavorite ? t("common.unfavorite") : t("common.favorite")}
+    aria-pressed={favorite.isFavorite}>
+    <Star className="h-5 w-5" fill={favorite.isFavorite ? "currentColor" : "none"} aria-hidden="true" />
+  </button>;
+}
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -303,11 +316,6 @@ function CreatorsContent() {
     });
   };
 
-  const toggleFavorite = useMutation({
-    mutationFn: (id: string) => api.toggleCreatorFavorite(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.all }),
-  });
-
   const setSearchQuery = (next: string) => {
     setSelected(new Set());
     window.scrollTo({ top: 0 });
@@ -493,15 +501,7 @@ function CreatorsContent() {
               </div>
               <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
                 {canCurate && (
-                  <button
-                    type="button"
-                    onClick={() => toggleFavorite.mutate(c.id)}
-                    className={`btn-icon text-lg ${c.is_favorite ? "text-danger" : "text-muted hover:text-danger"}`}
-                    title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
-                    aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
-                  >
-                    <Star className="h-5 w-5" fill={c.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
-                  </button>
+                  <CreatorFavoriteButton creator={c} />
                 )}
                 {canCurate && (
                   <RowActionMenu

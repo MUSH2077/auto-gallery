@@ -267,11 +267,11 @@
 .gallery-ui .layout-blur-choice { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 12px 10px 6px; margin-top: 6px; border-top: 1px solid var(--line); cursor: pointer; }
 .gallery-ui .layout-blur-choice input { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--accent); }
 .gallery-ui .layout-bottom-nav { position: fixed; z-index: 20; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 4px; width: min(280px,calc(100% - 40px)); min-height: 56px; padding: 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 20px #26382e12; }
-.gallery-ui .layout-bottom-nav a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; min-width: 0; min-height: 44px; border-radius: 7px; font-size: var(--type-control); color: var(--muted); text-decoration: none; line-height: var(--leading-control); }
-.gallery-ui .layout-bottom-nav a[aria-current] { background: var(--subtle); color: var(--ink); }
-.gallery-ui .layout-bottom-nav a:hover { color: var(--ink); }
-.gallery-ui .layout-bottom-nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.gallery-ui .layout-bottom-nav svg { width: 19px; height: 19px; }
+.gallery-ui .layout-bottom-nav > :is(a,button) { flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; min-width: 0; min-height: 44px; border-radius: 7px; font-size: var(--type-control); color: var(--muted); text-decoration: none; line-height: var(--leading-control); }
+.gallery-ui .layout-bottom-nav > :is(a,button)[aria-current] { background: var(--subtle); color: var(--ink); }
+.gallery-ui .layout-bottom-nav > :is(a,button):hover { color: var(--ink); }
+.gallery-ui .layout-bottom-nav > :is(a,button):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gallery-ui .layout-bottom-nav > :is(a,button) svg { width: 19px; height: 19px; }
 .gallery-ui .app-main :is(a,button,input,select,summary) { scroll-margin-block: 16px; }
 .gallery-ui .layout-selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 18px; padding: 0; font-size: var(--type-control); color: var(--muted); line-height: var(--leading-control); }
 .gallery-ui .layout-selection-bar.has-selection { background: var(--subtle); padding: 8px 12px; border-radius: 4px; color: var(--ink); }
@@ -419,7 +419,7 @@
   .gallery-ui .layout-content-toolbar .search-field { height: 44px; }
 }
 
-.gallery-ui .favorite-button[aria-busy=true] { opacity: 1; cursor: progress; }
+.gallery-ui .favorite-button[aria-busy=true] { opacity: 1; cursor: pointer; }
 .gallery-ui .layout-favorite-error { margin-top: 6px; font-size: var(--type-meta); line-height: var(--leading-meta); color: var(--danger); }
 
 /* Detail collection toggle: state comes from the click, not the hover color. */
@@ -441,7 +441,7 @@
 .gallery-ui .detail-favorite-toggle.is-favorite svg { fill: currentColor; }
 .gallery-ui .detail-favorite-toggle:active:not(:disabled) { transform: scale(.98); }
 .gallery-ui .detail-favorite-toggle:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.gallery-ui .detail-favorite-toggle[aria-busy=true] { opacity: 1; cursor: progress; }
+.gallery-ui .detail-favorite-toggle[aria-busy=true] { opacity: 1; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .gallery-ui .detail-favorite-toggle { transition: none; }
   .gallery-ui .detail-favorite-toggle:active:not(:disabled) { transform: none; }

@@ -3,18 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pushPreferences } from "@/lib/preferencesSync";
 
-export type WorkPreviewDelayMs = 150 | 250 | 400;
-export type WorkPreviewSize = "medium" | "large" | "fit";
-export type WorkPreviewWheelSensitivity = "normal" | "relaxed";
 import type { WorksViewMode } from "../features/works/view";
 export type { WorksViewMode } from "../features/works/view";
 export type WorkCardSize = "small" | "medium" | "large";
 
 export interface AppearanceSettings {
-  workPreviewEnabled: boolean;
-  workPreviewDelayMs: WorkPreviewDelayMs;
-  workPreviewSize: WorkPreviewSize;
-  workPreviewWheelSensitivity: WorkPreviewWheelSensitivity;
   worksViewMode: WorksViewMode;
   workCardSize: WorkCardSize;
   workCardShowCheckbox: boolean;
@@ -25,14 +18,9 @@ export interface AppearanceSettings {
 }
 
 export const APPEARANCE_STORAGE_KEY = "auto-gallery-appearance-v1";
-const LEGACY_WORK_PREVIEW_KEY = "auto-gallery-work-preview";
 const APPEARANCE_EVENT = "auto-gallery-appearance-change";
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
-  workPreviewEnabled: true,
-  workPreviewDelayMs: 250,
-  workPreviewSize: "large",
-  workPreviewWheelSensitivity: "normal",
   worksViewMode: "masonry",
   workCardSize: "medium",
   workCardShowCheckbox: true,
@@ -41,18 +29,6 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   workCardShowFavorite: true,
   blurNsfw: true,
 };
-
-function isPreviewDelay(value: unknown): value is WorkPreviewDelayMs {
-  return value === 150 || value === 250 || value === 400;
-}
-
-function isPreviewSize(value: unknown): value is WorkPreviewSize {
-  return value === "medium" || value === "large" || value === "fit";
-}
-
-function isWheelSensitivity(value: unknown): value is WorkPreviewWheelSensitivity {
-  return value === "normal" || value === "relaxed";
-}
 
 function isWorksViewMode(value: unknown): value is WorksViewMode {
   return value === "grid" || value === "list" || value === "masonry";
@@ -66,12 +42,6 @@ export function sanitizeAppearanceSettings(value: unknown): AppearanceSettings {
   if (!value || typeof value !== "object") return DEFAULT_APPEARANCE_SETTINGS;
   const raw = value as Partial<AppearanceSettings>;
   return {
-    workPreviewEnabled: typeof raw.workPreviewEnabled === "boolean" ? raw.workPreviewEnabled : DEFAULT_APPEARANCE_SETTINGS.workPreviewEnabled,
-    workPreviewDelayMs: isPreviewDelay(raw.workPreviewDelayMs) ? raw.workPreviewDelayMs : DEFAULT_APPEARANCE_SETTINGS.workPreviewDelayMs,
-    workPreviewSize: isPreviewSize(raw.workPreviewSize) ? raw.workPreviewSize : DEFAULT_APPEARANCE_SETTINGS.workPreviewSize,
-    workPreviewWheelSensitivity: isWheelSensitivity(raw.workPreviewWheelSensitivity)
-      ? raw.workPreviewWheelSensitivity
-      : DEFAULT_APPEARANCE_SETTINGS.workPreviewWheelSensitivity,
     worksViewMode: isWorksViewMode(raw.worksViewMode) ? raw.worksViewMode : DEFAULT_APPEARANCE_SETTINGS.worksViewMode,
     workCardSize: isWorkCardSize(raw.workCardSize) ? raw.workCardSize : DEFAULT_APPEARANCE_SETTINGS.workCardSize,
     workCardShowCheckbox: typeof raw.workCardShowCheckbox === "boolean" ? raw.workCardShowCheckbox : DEFAULT_APPEARANCE_SETTINGS.workCardShowCheckbox,
@@ -87,10 +57,6 @@ export function readAppearanceSettings(): AppearanceSettings {
   try {
     const stored = window.localStorage.getItem(APPEARANCE_STORAGE_KEY);
     if (stored) return sanitizeAppearanceSettings(JSON.parse(stored));
-    const legacyPreview = window.localStorage.getItem(LEGACY_WORK_PREVIEW_KEY);
-    if (legacyPreview === "off") {
-      return { ...DEFAULT_APPEARANCE_SETTINGS, workPreviewEnabled: false };
-    }
   } catch {}
   return DEFAULT_APPEARANCE_SETTINGS;
 }
@@ -116,7 +82,7 @@ export function useAppearanceSettings() {
       apply(detail);
     };
     const onStorage = (event: StorageEvent) => {
-      if (event.key === APPEARANCE_STORAGE_KEY || event.key === LEGACY_WORK_PREVIEW_KEY) applyCurrent();
+      if (event.key === APPEARANCE_STORAGE_KEY) applyCurrent();
     };
     applyCurrent();
     window.addEventListener(APPEARANCE_EVENT, onCustom);

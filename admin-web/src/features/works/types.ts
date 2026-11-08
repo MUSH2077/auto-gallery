@@ -1,5 +1,3 @@
-import type { WorkListItem } from "@/lib/api";
-
 export type WorksVisibilityFilter = "visible" | "trashed";
 export type WorksSafetyFilter = "all" | "sfw" | "nsfw";
 export type WorksAiFilter = "all" | "human" | "ai";
@@ -26,10 +24,3 @@ export type WorksSortValue =
   | "updated-asc"
   | "title-desc"
   | "title-asc";
-
-export type WorkCardPreview = {
-  work: WorkListItem;
-  anchor: DOMRect;
-  assetIds: string[];
-  pageIndex: number;
-};

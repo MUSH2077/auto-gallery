@@ -782,7 +782,7 @@ test("switches users in one session without flashing or reusing private discover
   await expect(page.getByRole("table").getByText("Private Artist A")).toBeVisible();
   expect(await privateQueryCacheText(page)).toContain("private_account_a");
 
-  await page.locator(".gallery-account > summary").click();
+  await page.locator(".gallery-account-trigger").click();
   await page.getByRole("button", { name: "Sign Out", exact: true }).click();
   await expect(page.locator("#layout-login-username")).toBeVisible();
   await expect(page.locator("#layout-login-title")).toHaveText("Sign in");
@@ -802,7 +802,7 @@ test("switches users in one session without flashing or reusing private discover
       }
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   });
-  await page.locator(".gallery-account > summary").click();
+  await page.locator(".gallery-more-trigger").click();
   await page.getByRole("link", { name: "Remote Discovery" }).click();
 
   await expect(page.getByText("You do not have access to this discovery data.").first()).toBeVisible();

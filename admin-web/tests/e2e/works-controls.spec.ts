@@ -274,7 +274,7 @@ test("display defaults persist without re-requesting works", async ({ context, p
   await expect(dialog.getByRole("checkbox", { name: "Show AI badge" })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: "Show NSFW badge" })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: "Show favorite button" })).toBeChecked();
-  await expect(dialog.getByRole("checkbox", { name: "Hover preview" })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "Hover preview" })).toHaveCount(0);
   await expect(dialog.getByRole("checkbox", { name: "Blur NSFW thumbnails" })).toBeChecked();
 
   await dialog.getByRole("button", { name: "Masonry", exact: true }).click();
@@ -314,13 +314,14 @@ test("server appearance preferences hydrate older clients with safe defaults", a
   await page.goto("/admin/works");
 
   await expect(page.locator('[data-works-layout="list"]')).toBeVisible();
-  await expect(page.locator('[data-work-card="work-sfw"]')).toHaveAttribute("data-card-size", "large");
-  await expect(page.locator('[data-work-card="work-sfw"]').getByText("AI", { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-works-layout="list"]')).toHaveAttribute("data-card-size", "large");
+  await expect(page.locator('[data-work-id="work-sfw"]').getByText("AI", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Display", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Display settings" });
-  await expect(dialog.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(dialog.getByRole("checkbox", { name: "Show NSFW badge" })).toBeChecked();
-  await expect(dialog.getByRole("checkbox", { name: "Blur NSFW thumbnails" })).toBeChecked();
+  await expect(dialog.getByRole("radio", { name: "List", exact: true })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "Blur adult content" })).toBeChecked();
+  await dialog.getByRole("button", { name: "Display settings", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("checkbox", { name: "NSFW", exact: true })).toBeChecked();
 });
 
 test("shared work cards apply visibility, size, and NSFW blur preferences", async ({ context, page }) => {
@@ -500,24 +501,6 @@ test("hiding checkboxes clears selection while trash actions and permissions sta
   await restricted.close();
 });
 
-test("NSFW blur also covers the desktop hover preview independently of its badge", async ({ context, page }) => {
-  await setup(context);
-  await page.goto("/admin/works");
-  const card = page.locator('[data-work-card="work-nsfw"]');
-  await card.hover();
-  await expect(page.locator('.popover > [data-nsfw-blurred="true"]')).toBeVisible();
-
-  await page.getByRole("button", { name: "Display", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Display settings" });
-  await dialog.getByRole("checkbox", { name: "Show NSFW badge" }).uncheck();
-  await dialog.getByRole("checkbox", { name: "Blur NSFW thumbnails" }).uncheck();
-  await page.keyboard.press("Escape");
-  await card.hover();
-  await expect(page.locator('.popover > [data-nsfw-blurred="true"]')).toHaveCount(0);
-  await expect(card.getByText("NSFW", { exact: true })).toHaveCount(0);
-});
-
-
 test("favorite requests lock only their own work", async ({ context, page }) => {
   await setup(context);
   const calls: string[] = [];
@@ -533,10 +516,105 @@ test("favorite requests lock only their own work", async ({ context, page }) => 
     await page.goto("/admin/works");
     const first = page.locator("article").filter({ hasText: works[0].title });
     const second = page.locator("article").filter({ hasText: works[1].title });
-    await first.getByRole("button", { name: "Unfavorite work", exact: true }).click();
-    const other = second.getByRole("button", { name: "Favorite work", exact: true });
+    await first.getByRole("button", { name: "Unfavorite: Harbor light", exact: true }).click();
+    const other = second.getByRole("button", { name: "Favorite: Portrait study", exact: true });
     await expect(other).toBeEnabled();
     await other.click();
     await expect.poll(() => calls).toEqual(["work-sfw", "work-nsfw"]);
   } finally { release(); }
+});
+
+
+test("favorite updates immediately and serializes rapid changes", async ({ context, page }) => {
+  await setup(context);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  let serverFavorite = true;
+  await context.route("**/api/v1/works/work-sfw/favorite", async (route) => {
+    calls += 1;
+    if (calls === 1) await gate;
+    serverFavorite = !serverFavorite;
+    works[0].is_favorite = serverFavorite;
+    await json(route, { id: "work-sfw", is_favorite: serverFavorite });
+  });
+  try {
+    await page.goto("/admin/works");
+    const card = page.locator("article").filter({ hasText: works[0].title });
+    const favorite = card.getByRole("button", { name: "Unfavorite: Harbor light", exact: true });
+    await favorite.focus();
+    await page.keyboard.press("Enter");
+    const next = card.getByRole("button", { name: "Favorite: Harbor light", exact: true });
+    await expect(next).toHaveAttribute("aria-pressed", "false");
+    expect(await next.evaluate((node) => getComputedStyle(node).cursor)).not.toBe("progress");
+    await next.click();
+    await expect(card.getByRole("button", { name: "Unfavorite: Harbor light", exact: true })).toHaveAttribute("aria-pressed", "true");
+    expect(calls).toBe(1);
+    release();
+    await expect.poll(() => calls).toBe(2);
+    await expect(card.getByRole("button", { name: "Unfavorite: Harbor light", exact: true })).toHaveAttribute("aria-pressed", "true");
+  } finally { release(); works[0].is_favorite = true; }
+});
+
+test("favorite failure restores the confirmed state", async ({ context, page }) => {
+  await setup(context);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await context.route("**/api/v1/works/work-sfw", route => json(route, works[0]));
+  await context.route("**/api/v1/works/work-sfw/favorite", async route => {
+    await gate;
+    await json(route, { detail: "Favorite failed" }, 500);
+  });
+  try {
+    await page.goto("/admin/works");
+    const card = page.locator("article").filter({ hasText: works[0].title });
+    await card.getByRole("button", { name: "Unfavorite: Harbor light", exact: true }).click();
+    await expect(card.getByRole("button", { name: "Favorite: Harbor light", exact: true })).toBeVisible();
+    release();
+    await expect(card.getByRole("button", { name: "Unfavorite: Harbor light", exact: true })).toBeVisible();
+    await expect(card.getByRole("alert")).toBeVisible();
+  } finally { release(); }
+});
+
+
+test("favorite filter reflects confirmed removal", async ({ context, page }) => {
+  await setup(context);
+  let favorite = true;
+  await context.route(/\/api\/v1\/search(?:\?.*)?$/, route => {
+    const items = favorite ? [{ ...works[0], is_favorite: true }] : [];
+    return json(route, { query: "is:favorite", canonical_query: "is:favorite", parsed: { tokens: [{kind:"qualifier",key:"is",value:"favorite",negated:false}] }, groups: { works: { total: items.length, items } }, total: items.length, results: items });
+  });
+  await context.route("**/api/v1/works/work-sfw/favorite", route => { favorite = false; return json(route, {id:"work-sfw", is_favorite:false}); });
+  await page.goto("/admin/works?q=is%3Afavorite");
+  await page.getByRole("button", { name: "Unfavorite: Harbor light" }).click();
+  await expect(page.locator('[data-work-id="work-sfw"]')).toHaveCount(0);
+});
+
+test("lost favorite response reconciles server state without toggling again", async ({ context, page }) => {
+  await setup(context);
+  let favorite = true; let calls = 0;
+  await context.route("**/api/v1/works/work-sfw", route => json(route, { ...works[0], is_favorite: favorite }));
+  await context.route(/\/api\/v1\/search(?:\?.*)?$/, route => {
+    const items = [{...works[0],is_favorite:favorite},works[1]];
+    return json(route, { query:"",canonical_query:"",parsed:{tokens:[]},groups:{works:{total:2,items}},total:2,results:items });
+  });
+  await context.route("**/api/v1/works/work-sfw/favorite", route => { calls++; favorite = false; return route.abort("timedout"); });
+  await page.goto("/admin/works");
+  const card=page.locator('[data-work-id="work-sfw"]');
+  await card.getByRole("button", { name: "Unfavorite: Harbor light" }).click();
+  await expect(card.getByRole("button", { name: "Favorite: Harbor light" })).toBeVisible();
+  await expect(card.getByRole("alert")).toBeVisible();
+  expect(calls).toBe(1);
+});
+
+
+test("favorite keeps existing thumbnail and avoids unnecessary list requests",async({page,context})=>{
+ const fixture=await setup(context);await context.route('**/media/**',route=>route.fulfill({status:200,contentType:'image/gif',body:Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==','base64')}));await context.route('**/api/v1/works/work-sfw/favorite',route=>json(route,{id:'work-sfw',is_favorite:false}));
+ await page.goto('/admin/works');const card=page.locator('[data-work-id="work-sfw"]');await expect(card).toBeVisible();
+ const image=await card.locator('img').elementHandle();const before=fixture.searchRequests();
+ await card.getByRole('button',{name:'Unfavorite: Harbor light'}).click();
+ await expect(card.getByRole('button',{name:'Favorite: Harbor light'})).toBeVisible();
+ await expect(card.getByRole('button',{name:'Favorite: Harbor light'})).not.toHaveAttribute('aria-busy','true');
+ expect(fixture.searchRequests()).toBe(before);
+ expect(await image!.evaluate(node=>node.isConnected)).toBe(true);
 });

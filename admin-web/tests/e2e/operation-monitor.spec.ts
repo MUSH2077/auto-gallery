@@ -99,11 +99,11 @@ for (const importType of ["pixiv", "url"] as const) {
           await expect.poll(() => statusCalls).toBeGreaterThan(0);
           release();
           await expect.poll(() => page.evaluate(() => sessionStorage.getItem("danbooru_batch_job")), { timeout: 15_000 }).toBeNull();
-          await page.locator(".gallery-account > summary").click();
+          await page.locator(".gallery-more-trigger").click();
           await page.getByRole("button", { name: "Notifications", exact: true }).click();
           if (outcome === "completed") {
             await expect(page.getByText("Done: 1 imported", { exact: true })).toBeVisible();
-            await page.locator(".gallery-account > summary").click();
+            await page.locator(".gallery-more-trigger").click();
             await page.getByRole("button", { name: "Expand", exact: true }).last().click();
             await expect(page.getByText("1 imported", { exact: true })).toBeVisible();
             await expect(page.getByText(result.imported[0].artist_name, { exact: true })).toBeVisible();

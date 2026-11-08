@@ -70,14 +70,14 @@ function readTheme(fallback: Record<string, RgbColor>, scope?: string): Record<s
 }
 
 export function useChartTheme(scope?: string): ChartTheme {
-  const { resolved } = useTheme();
-  const fallback = resolved === "dark" ? FALLBACK_DARK : FALLBACK_LIGHT;
+  const { theme } = useTheme();
+  const fallback = theme === "dark" ? FALLBACK_DARK : FALLBACK_LIGHT;
   const [palette, setPalette] = useState<Record<string, RgbColor>>(() => fallback);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setPalette(readTheme(fallback, scope)));
     return () => window.cancelAnimationFrame(frame);
-  }, [resolved, scope]);
+  }, [theme, scope]);
 
   return useMemo(() => {
     const semantic = (key: string) => rgbCss(palette[key] || fallback[key]);
@@ -94,7 +94,7 @@ export function useChartTheme(scope?: string): ChartTheme {
       return semantic("text");
     };
     return {
-      isDark: resolved === "dark",
+      isDark: theme === "dark",
       surface: semantic("surface"),
       text: semantic("text"),
       muted: semantic("muted"),
@@ -106,5 +106,5 @@ export function useChartTheme(scope?: string): ChartTheme {
       danger: semantic("danger"),
       colorFor,
     };
-  }, [fallback, palette, resolved]);
+  }, [fallback, palette, theme]);
 }

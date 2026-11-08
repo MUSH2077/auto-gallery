@@ -8,27 +8,23 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Globe2, Monitor, Moon, Sun } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 import { pushPreferences } from "@/lib/preferencesSync";
 import { DEFAULT_THEME, THEME_STORAGE_KEY, type Theme } from "@/lib/themePreference";
 
 export type { Theme } from "@/lib/themePreference";
-type ResolvedTheme = "light" | "dark";
 
 export const STORAGE_KEY = THEME_STORAGE_KEY;
-export const LEGACY_PALETTE_KEY = "auto-gallery-palette";
 
 interface ThemeContextType {
   theme: Theme;
-  resolved: ResolvedTheme;
   setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: DEFAULT_THEME,
-  resolved: "light",
   setTheme: () => {},
 });
 
@@ -36,53 +32,28 @@ export function useTheme() {
   return useContext(ThemeContext);
 }
 
-function resolveTheme(theme: Theme): ResolvedTheme {
-  if (theme === "system") {
-    return typeof window !== "undefined"
-      && window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
-  }
-  return theme;
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(DEFAULT_THEME);
-  const [resolved, setResolved] = useState<ResolvedTheme>("light");
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored === "light" || stored === "dark" || stored === "system") {
+      if (stored === "light" || stored === "dark") {
         setThemeState(stored);
       }
-      // Palette selection was removed in the neutral console redesign.
-      localStorage.removeItem(LEGACY_PALETTE_KEY);
-      document.documentElement.removeAttribute("data-theme");
     } catch {}
     setInitialized(true);
   }, []);
 
   const applyTheme = useCallback((nextTheme: Theme) => {
-    const nextResolved = resolveTheme(nextTheme);
-    setResolved(nextResolved);
-    document.documentElement.classList.toggle("dark", nextResolved === "dark");
-    document.documentElement.style.colorScheme = nextResolved;
+    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+    document.documentElement.style.colorScheme = nextTheme;
   }, []);
 
   useEffect(() => {
     if (initialized) applyTheme(theme);
   }, [applyTheme, theme, initialized]);
-
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = () => {
-      if (theme === "system") applyTheme("system");
-    };
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, [applyTheme, theme]);
 
   const setTheme = useCallback((nextTheme: Theme) => {
     setThemeState(nextTheme);
@@ -92,7 +63,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [applyTheme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, resolved, setTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -101,14 +72,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const { t } = useI18n();
-  const cycle: Theme[] = ["light", "dark", "system"];
-  const next = cycle[(cycle.indexOf(theme) + 1) % cycle.length];
+  const next = theme === "light" ? "dark" : "light";
   const labels: Record<Theme, string> = {
     light: t("theme.light"),
     dark: t("theme.dark"),
-    system: t("theme.system"),
   };
-  const Icon = theme === "dark" ? Moon : theme === "system" ? Monitor : Sun;
+  const Icon = theme === "dark" ? Moon : Sun;
 
   return (
     <button
@@ -131,14 +100,11 @@ export function LangToggle() {
     <button
       type="button"
       onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-      className="btn-icon relative"
+      className="text-button gallery-account-language"
       title={label}
       aria-label={label}
     >
-      <Globe2 className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden />
-      <span className="absolute -bottom-0.5 -right-0.5 rounded bg-surface px-0.5 text-sm font-bold leading-4 text-muted" aria-hidden>
-        {lang === "zh" ? "EN" : "中"}
-      </span>
+      {lang === "zh" ? "English" : "中文"}
     </button>
   );
 }

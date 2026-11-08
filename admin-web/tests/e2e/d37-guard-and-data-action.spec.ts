@@ -271,7 +271,7 @@ test("logout and account change stop saved Danbooru polling despite cached prior
   fixtureContext = opened.context;
   try {
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
-    await opened.page.locator(".gallery-account > summary").click();
+    await opened.page.locator(".gallery-account-trigger").click();
     await expect(opened.page.locator(".gallery-account-menu")).toBeVisible();
     await opened.page.getByText("Sign Out", { exact: true }).click();
     await expect(opened.page).toHaveURL(/\/admin\/login(?:\?|$)/, { timeout: 15_000 });
@@ -315,8 +315,8 @@ test("Escape closes the command palette before its delayed autofocus runs", asyn
       };
     });
 
-    await opened.page.locator(".gallery-account > summary").click();
-    const trigger = opened.page.getByRole("button", { name: "Search", exact: true });
+    await opened.page.locator(".gallery-more-trigger").click();
+    const trigger = opened.page.getByRole("button", { name: "Quick jump", exact: true });
     await trigger.focus();
     await trigger.evaluate((element: HTMLButtonElement) => element.click());
     const dialog = opened.page.getByRole("dialog", { name: "Search" });

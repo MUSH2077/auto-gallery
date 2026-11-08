@@ -32,7 +32,7 @@ function readFullPreferencesFromLocalStorage(): Record<string, unknown> | null {
     const appearanceRaw = localStorage.getItem(APPEARANCE_KEY);
     const slideshowRaw = localStorage.getItem(SLIDESHOW_KEY);
     return {
-      theme: localStorage.getItem(THEME_KEY) || DEFAULT_THEME,
+      theme: localStorage.getItem(THEME_KEY) === "dark" ? "dark" : DEFAULT_THEME,
       lang: localStorage.getItem(LANG_KEY) || "zh",
       appearance: appearanceRaw ? JSON.parse(appearanceRaw) : {},
       slideshow: slideshowRaw ? JSON.parse(slideshowRaw) : {},

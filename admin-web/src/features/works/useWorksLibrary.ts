@@ -5,16 +5,14 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useT } from '@/lib/i18n';
 import { api, queryKeys, type WorkListItem, type SearchQualifierToken, type SearchResponse } from '@/lib/api';
-import type { WorkAsset } from '@/lib/api/endpoints/works';
 import { useAppearanceSettings } from '@/lib/appearance';
 import { useSearchBatchComposer, useSearchComposer, type SearchComposeRequest } from '@/components/SmartSearchInput';
 import type { SlideItem } from '@/components/SlideshowPlayer';
 import { useSlideshow } from '@/lib/useSlideshow';
 import { usePermissions } from '@/lib/usePermissions';
-import { resolveMediaKind } from '@/lib/media';
 import { useToast } from '@/components/Toast';
 import { pollInterval } from '@/lib/polling';
-import type { WorksFilterValue, WorksMediaFilter, WorksSortValue, WorkCardPreview as PreviewState } from '@/features/works/types';
+import type { WorksFilterValue, WorksMediaFilter, WorksSortValue } from '@/features/works/types';
 
 const LEGACY_WORK_QUERY_KEYS = [
   "source",
@@ -54,10 +52,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
   const toast = useToast();
   const { settings: appearance, updateSettings } = useAppearanceSettings();
   const [selectedWorkIds, setSelectedWorkIds] = useState<Set<string>>(new Set());
-  const [preview, setPreview] = useState<PreviewState | null>(null);
-  const closePreviewTimer = useRef<number | null>(null);
-  const previewEnabled = appearance.workPreviewEnabled;
-  const wheelThreshold = appearance.workPreviewWheelSensitivity === "relaxed" ? 120 : 70;
   // q is canonical search state; page, random seed, and the temporary legacy
   // view override remain separate navigation state.
   const search = sp.get("q") ?? "";
@@ -131,16 +125,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     setInputVal("");
     updateParams({ q: null, p: null, seed: null }, false);
   }
-
-  const scheduleClosePreview = () => {
-    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
-    closePreviewTimer.current = window.setTimeout(() => setPreview(null), 140);
-  };
-
-  const cancelClosePreview = () => {
-    if (closePreviewTimer.current) window.clearTimeout(closePreviewTimer.current);
-    closePreviewTimer.current = null;
-  };
 
   const worksQueryKey = [...queryKeys.works.all, "compound-search", page, search, seed, limit] as const;
   const worksQuery = useQuery({
@@ -300,45 +284,11 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
 
   const workItems = works.data?.items || [];
 
-  const previewAssets = useQuery({
-    queryKey: ["works", preview?.work.id, "assets"],
-    queryFn: () => api.getWorkAssets(preview!.work.id),
-    enabled: !!preview && previewEnabled,
-    staleTime: 60000,
-    refetchInterval: (query) => query.state.data?.some(
-      (asset) => asset.derivative_status === "pending" || asset.derivative_status === "processing",
-    ) ? pollInterval(true) : false,
-    refetchIntervalInBackground: false,
-  });
-  const previewAssetIds = useMemo(
-    () => previewAssets.data?.length
-      ? previewAssets.data.slice(0, 10).map((asset) => asset.id)
-      : preview?.assetIds || [],
-    [preview?.assetIds, previewAssets.data],
-  );
-
-  useEffect(() => {
-    if (!preview || !previewAssets.data?.length || !previewAssetIds.length) return;
-    const byId = new Map<string, WorkAsset>(previewAssets.data.map((asset) => [asset.id, asset]));
-    [preview.pageIndex, preview.pageIndex - 1, preview.pageIndex + 1].forEach((idx) => {
-      const id = previewAssetIds[(idx + previewAssetIds.length) % previewAssetIds.length];
-      const asset = id ? byId.get(id) : undefined;
-      const src = asset
-        ? resolveMediaKind(asset) === "video"
-          ? asset.poster_url || asset.thumb_url
-          : asset.original_url
-        : undefined;
-      if (!src) return;
-      const img = new Image();
-      img.src = src;
-    });
-  }, [preview, previewAssetIds, previewAssets.data]);
-
   useEffect(() => {
     setSelectedWorkIds(new Set());
   }, [page, filters, seed]);
 
-  const queryTransitioning = isComposing || inputVal !== search || composer.isPending || batchComposer.isPending;
+  const queryTransitioning = isComposing || inputVal !== search || composer.isPending || batchComposer.isPending || worksQuery.isPlaceholderData;
   useEffect(() => {
     if (queryTransitioning) setSelectedWorkIds(new Set());
   }, [queryTransitioning]);
@@ -368,12 +318,11 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
           "batch move to trash",
           `Move ${chunk.length} works to trash`,
         );
+        setSelectedWorkIds(previous => new Set([...previous].filter(id => !chunk.includes(id))));
       }
     },
-    onSuccess: (_data, ids) => {
-      setSelectedWorkIds(previous => new Set([...previous].filter(id => !ids.includes(id))));
-      qc.invalidateQueries({ queryKey: queryKeys.works.all });
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+    onSettled: async () => {
+      await Promise.all([qc.invalidateQueries({ queryKey: queryKeys.works.all }), qc.invalidateQueries({ queryKey: queryKeys.curation.all })]);
     },
   });
 
@@ -404,7 +353,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     batchComposer,
     batchTrash,
     canCurate,
-    cancelClosePreview,
     clearSearch,
     composer,
     curationVisibility,
@@ -419,22 +367,16 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     page,
     pageAllSelected,
     pathname,
-    preview,
-    previewAssetIds,
-    previewAssets,
-    previewEnabled,
     purgeWork,
     qc,
     queryTransitioning,
     router,
-    scheduleClosePreview,
     search,
     selectSort,
     selectedCount,
     selectedWorkIds,
     setInputVal,
     setIsComposing,
-    setPreview,
     setSelectedWorkIds,
     slideItems,
     slideshow,
@@ -447,7 +389,6 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     updateParams,
     updateSettings,
     viewMode,
-    wheelThreshold,
     workItems,
     works,
   };

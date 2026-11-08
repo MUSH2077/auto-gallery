@@ -4,8 +4,8 @@ test.use({actionTimeout:10000});
 const json=(route:Route,body:unknown,status=200)=>route.fulfill({status,contentType:"application/json",body:JSON.stringify(body)});
 const origin=process.env.PLAYWRIGHT_BASE_URL||"http://127.0.0.1:13000";
 const pixel=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlBCe0AAAAASUVORK5CYII=","base64");
-async function setup(context:BrowserContext,options:{libraryOnly?:boolean;failTags?:boolean;failHistory?:boolean}={}){
- let preferences:Record<string,unknown>={lang:'en',theme:'light',appearance:{workPreviewEnabled:false}};
+async function setup(context:BrowserContext,options:{libraryOnly?:boolean;failTags?:boolean;failHistory?:boolean;legacyPreview?:boolean}={}){
+ let preferences:Record<string,unknown>={lang:'en',theme:'light',appearance:{workPreviewEnabled:options.legacyPreview??false}};
  let failTags=options.failTags||false,failHistory=options.failHistory||false;const requests:Array<{path:string;method:string;query:string;body:unknown}>=[];
  const works=Array.from({length:24},(_,index)=>({id:index===0?'work-one':'work-'+index,title:index===0?'Harbor light':'Harbor '+index,creator_name:'Harbor Archive',creator_id:null,created_at:'2026-10-08T00:00:00Z',posted_at:'2026-10-07T00:00:00Z',description:'A quiet harbor.',source:index%2?'x':'pixiv',is_nsfw:index===1,is_ai_generated:false,is_favorite:false,asset_count:index===0?2:1,thumbnail_asset_id:'asset-one',thumbnail_width:1200,thumbnail_height:800,preview_asset_ids:['asset-one','asset-two'],curation_state:{visibility:'visible'}}));
  const assets=['asset-one','asset-two'].map(id=>({id,file_name:id+'.png',file_path:id+'.png',mime_type:'image/png',media_kind:'image',width:1200,height:800,file_size:68,created_at:'2026-10-08T00:00:00Z',preview_url:'/media/preview/'+id,original_url:'/media/original/'+id,thumb_url:'/media/thumb/'+id,derivative_status:'ready'}));
@@ -64,8 +64,8 @@ test('appearance changes affect visible card geometry and do not reset default m
  await page.getByRole('button',{name:'Display',exact:true}).click();await page.getByLabel('Blur adult content').uncheck();await page.keyboard.press('Escape');await page.getByRole('button',{name:'Next',exact:true}).click();await expect(page.locator('.work-collection')).toHaveAttribute('data-works-layout','masonry');
 });
 
-test('slideshow remains reachable with hover preview disabled and search random seeds stay stable',async({page,context})=>{
- await setup(context);await page.goto('/admin/works?q=sort%3Arandom&seed=42');const dialog=await displaySettings(page);await expect(dialog.locator('input[type=checkbox]').first()).not.toBeChecked();await dialog.getByRole('button',{name:/Slideshow/i}).click();await expect(page.getByRole('dialog')).toBeVisible();await page.keyboard.press('Escape');
+test('slideshow remains reachable and search random seeds stay stable',async({page,context})=>{
+ await setup(context);await page.goto('/admin/works?q=sort%3Arandom&seed=42');const dialog=await displaySettings(page);await expect(dialog.getByLabel('Enlarged preview',{exact:true})).toHaveCount(0);await dialog.getByRole('button',{name:/Slideshow/i}).click();await expect(page.getByRole('dialog')).toBeVisible();await page.keyboard.press('Escape');
  await page.getByRole('button',{name:'Next',exact:true}).click();expect(new URL(page.url()).searchParams.get('seed')).toBe('42');
 });
 
@@ -88,10 +88,12 @@ test('clear library keeps impact preview exact confirmation phrase and native mo
 });
 
 
-test('hover preview consumes wheel paging and closes before opening work detail',async({page,context})=>{
- await setup(context);await page.setViewportSize({width:1440,height:900});await page.goto('/admin/works');const settings=await displaySettings(page);await settings.getByLabel('Enlarged preview',{exact:true}).check();await settings.getByRole('button',{name:'Done',exact:true}).click();
- const card=page.locator('[data-work-id="work-one"]');await card.locator('h2 a').hover();const preview=page.locator('.popover.fixed');await expect(preview).toBeVisible();await expect(preview).toContainText('1 / 2');
- await preview.hover();await page.mouse.wheel(0,150);await expect(preview).toContainText('2 / 2');await preview.dispatchEvent('mouseleave');await card.locator('h2 a').click();await expect(page.getByRole('dialog')).toBeVisible();await expect(preview).toHaveCount(0);
+test('hovering never opens a preview or requests original media',async({page,context})=>{
+ const state=await setup(context,{legacyPreview:true});const media:string[]=[];page.on('request',request=>{if(/\/media\/(original|preview)\//.test(request.url()))media.push(request.url());});await page.setViewportSize({width:1440,height:900});await page.goto('/admin/works');
+ const card=page.locator('[data-work-id="work-one"]');await card.locator('h2 a').hover();await page.waitForTimeout(600);
+ await expect(page.locator('.popover.fixed')).toHaveCount(0);
+ expect(state.requests.filter(request=>request.path==='/api/v1/works/work-one/assets')).toHaveLength(0);expect(media).toHaveLength(0);
+ await card.locator('h2 a').click();await expect(page.getByRole('dialog')).toBeVisible();
 });
 
 test('complete sort choices are reachable and reshuffle changes the random seed',async({page,context})=>{
@@ -128,3 +130,108 @@ for (const [label, broken] of [["non-array", null], ["null record", [null]], ["i
   await expect(detail.getByRole("link",{name:/View on pixiv/i})).toHaveAttribute("href","https://www.pixiv.net/artworks/1200");
  });
 }
+
+
+test('detail trash reacts immediately and restores state on failure',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/works/batch-curate',async route=>{await gate;return json(route,{detail:'Curation failed'},500);});
+ try{
+  await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+  await detail.getByRole('button',{name:'Move to Trash',exact:true}).click();
+  const confirm=page.getByRole('dialog',{name:'Move to Trash'});await confirm.getByRole('button',{name:'Confirm',exact:true}).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(detail.getByRole('button',{name:'Restore',exact:true})).toBeVisible();
+  release();
+  await expect(detail.getByRole('button',{name:'Move to Trash',exact:true})).toBeVisible();
+  await expect(detail.getByRole('alert').filter({hasText:'Curation failed'})).toBeVisible();
+ }finally{release();}
+});
+
+test('batch trash immediately removes selected card and restores it on failure',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/works/batch-curate',async route=>{await gate;return json(route,{detail:'Batch failed'},500);});
+ try{
+  await page.goto('/admin/works');await page.getByRole('button',{name:'Select works'}).click();
+  const card=page.locator('[data-work-id="work-one"]');await card.getByRole('checkbox').check();
+  await page.getByRole('button',{name:'Move to Trash',exact:true}).click();
+  const confirm=page.getByRole('dialog');await confirm.getByRole('button',{name:'Confirm',exact:true}).click();
+  await expect(confirm).toHaveCount(0);await expect(card).toHaveCount(0);
+  release();await expect(card).toBeVisible();await expect(page.getByText('Batch failed').first()).toBeVisible();
+ }finally{release();}
+});
+
+
+test('favorite stays selected when opening detail before the response',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/works/work-one/favorite',async route=>{await gate;return route.fallback();});
+ try{
+  await page.goto('/admin/works');const card=page.locator('[data-work-id="work-one"]');
+  await card.getByRole('button',{name:'Favorite: Harbor light'}).click();
+  await card.getByRole('link',{name:'Harbor light',exact:true}).click();
+  const detail=page.getByRole('dialog').first();
+  await expect(detail.getByRole('button',{name:'Unfavorite work'})).toHaveAttribute('aria-pressed','true');
+ }finally{release();}
+});
+
+test('restore reacts immediately and rolls back if it fails',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/works/batch-curate',async route=>{
+  if(route.request().postDataJSON().action==='trash')return route.fallback();
+  await gate;return json(route,{detail:'Restore failed'},500);
+ });
+ try{
+  await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+  await detail.getByRole('button',{name:'Move to Trash',exact:true}).click();
+  await page.getByRole('dialog',{name:'Move to Trash'}).getByRole('button',{name:'Confirm'}).click();
+  const restore=detail.getByRole('button',{name:'Restore',exact:true});await expect(restore).toBeEnabled();await restore.click();
+  await page.getByRole('dialog',{name:'Restore'}).getByRole('button',{name:'Confirm'}).click();
+  await expect(detail.getByRole('button',{name:'Move to Trash',exact:true})).toBeVisible();
+  release();await expect(detail.getByRole('button',{name:'Restore',exact:true})).toBeVisible();
+  await expect(detail.getByRole('alert').filter({hasText:'Restore failed'})).toBeVisible();
+ }finally{release();}
+});
+
+
+test('trash list restore immediately hides item and restores it on failure',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const work={id:'work-trash',title:'Recoverable work',creator_name:'Archive',created_at:'2026-10-08T00:00:00Z',source:'manual',is_nsfw:false,is_ai_generated:false,is_favorite:false,asset_count:1,thumbnail_asset_id:'asset-one',curation_state:{visibility:'trashed'}};
+ await context.route(/\/api\/v1\/search(?:\?.*)?$/,route=>json(route,{query:'is:trashed',canonical_query:'is:trashed',parsed:{tokens:[{kind:'qualifier',key:'is',value:'trashed',negated:false}]},groups:{works:{total:1,items:[work]}},total:1,next_cursor:null}));
+ await context.route('**/api/v1/works/batch-curate',async route=>{await gate;return json(route,{detail:'Restore failed'},500);});
+ try{
+  await page.goto('/admin/works?q=is%3Atrashed');const card=page.locator('[data-work-id="work-trash"]');
+  await card.getByRole('button',{name:'Restore',exact:true}).click();await expect(card).toHaveCount(0);
+  release();await expect(card).toBeVisible();await expect(card.getByRole('alert')).toContainText('Restore failed');
+ }finally{release();}
+});
+
+
+test('permanent deletion keeps confirmation open until the server responds',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let calls=0;
+ await context.route('**/api/v1/works/work-one',route=>json(route,{id:'work-one',title:'Harbor light',creator_name:'Harbor Archive',created_at:'2026-10-08T00:00:00Z',source:'manual',is_nsfw:false,is_ai_generated:false,is_favorite:false,asset_count:1,curation_state:{visibility:'trashed'}}));
+ await context.route('**/api/v1/curation/purge',async route=>{calls++;await gate;return json(route,{detail:'Purge failed'},500);});
+ try{
+  await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+  await detail.getByRole('button',{name:'Permanently delete',exact:true}).click();
+  const confirm=page.getByRole('dialog').last();await confirm.getByRole('button',{name:'Confirm',exact:true}).click();
+  await expect.poll(()=>calls).toBe(1);await expect(confirm).toBeVisible();
+  release();await expect(confirm.getByRole('alert')).toContainText('Purge failed');
+ }finally{release();}
+});
+
+
+test('detail favorite keeps image and trash action visually stable while protecting curation',async({page,context})=>{
+ await setup(context);let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let assetCalls=0, favoriteCalls=0;
+ await context.route('**/api/v1/works/work-one/assets',route=>{assetCalls++;return route.fallback();});
+ await context.route('**/api/v1/works/work-one/favorite',async route=>{favoriteCalls++;await gate;return route.fallback();});
+ try{
+  await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+  const image=detail.locator('.detail-media-viewer img').first();await expect(image).toBeVisible();
+  const handle=await image.elementHandle();const src=await image.getAttribute('src');const initialCalls=assetCalls;
+  const trash=detail.getByRole('button',{name:'Move to Trash',exact:true});const opacity=await trash.evaluate(node=>getComputedStyle(node).opacity);
+  await detail.locator('.detail-favorite-toggle').click();await expect.poll(()=>favoriteCalls).toBe(1);
+  await expect(trash).toHaveAttribute('aria-disabled','true');expect(await trash.evaluate(node=>getComputedStyle(node).opacity)).toBe(opacity);
+  await trash.dispatchEvent('click');await expect(page.getByRole('dialog',{name:'Move to Trash'})).toHaveCount(0);
+  release();await expect(trash).not.toHaveAttribute('aria-disabled','true');
+  expect(await handle!.evaluate(node=>node.isConnected)).toBe(true);await expect(image).toHaveAttribute('src',src!);expect(assetCalls).toBe(initialCalls);
+ }finally{release();}
+});

@@ -16,16 +16,18 @@ import { useGalleryFormat } from "@/features/gallery-ui/format";
 import { hasWorkDetailListOrigin, markWorkDetailListEntry } from "./detailHistory";
 import { WorksView, WorkCollection, type ScopeLink } from "@/features/gallery-ui/CollectionViews";
 import { ToolbarSelect, DisplayOptions, SearchField } from "@/features/gallery-ui/Controls";
-import { WorkItem, type WorkItemProps } from "@/features/gallery-ui/WorkItem";
+import { WorkItem } from "@/features/gallery-ui/WorkItem";
 import { Modal } from "@/features/gallery-ui/Modal";
 import { useGalleryCopy } from "@/features/gallery-ui/copy";
-import { WorkPreviewOverlay } from "@/components/work-interactions";
+import { useToast } from "@/components/Toast";
 import ClearDomain from "@/features/gallery-ui/ClearDomain";
 
 export default function WorksPage() {
   const c = useWorksLibrary({ pageSize: 8 });
   const t = c.t;
   const { copy } = useGalleryCopy();
+  const toast = useToast();
+  const [moving, setMoving] = useState(new Set<string>());
   const [showSelection, setShowSelection] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
@@ -51,6 +53,7 @@ export default function WorksPage() {
       id: String(mutation.options.mutationKey?.[2] || ""),
       status: mutation.state.status,
       error: mutation.state.error,
+      action: mutation.state.variables as "trash" | "restore" | undefined,
     }),
   });
   const latestCurations = new Map(detailCurations.map(state => [state.id, state]));
@@ -76,10 +79,11 @@ export default function WorksPage() {
     });
     try {
       await api.batchCurateWorks([id], "restore", "restored from trash");
-      void c.qc.invalidateQueries({ queryKey: queryKeys.works.all });
-      void c.qc.invalidateQueries({ queryKey: queryKeys.curation.all });
+      await Promise.all([c.qc.invalidateQueries({ queryKey: queryKeys.works.all }), c.qc.invalidateQueries({ queryKey: queryKeys.curation.all })]);
     } catch (error) {
-      setOperationErrors(previous => ({ ...previous, [id]: error instanceof Error ? error.message : String(error) }));
+      const message = error instanceof Error ? error.message : String(error);
+      setOperationErrors(previous => ({ ...previous, [id]: message }));
+      toast.error(message);
     } finally {
       restoringRef.current.delete(id);
       setRestoring(new Set(restoringRef.current));
@@ -113,6 +117,7 @@ export default function WorksPage() {
     current.ids.forEach(id => curatingRef.current.add(id));
     setCurating(new Set(curatingRef.current));
     setOperationErrors(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => !current.ids.includes(id))));
+    if (current.kind === "batch") { setMoving(previous => new Set([...previous, ...current.ids])); setConfirm(null); }
     try {
       if (current.kind === "batch") await c.batchTrash.mutateAsync(current.ids);
       else await c.purgeWork.mutateAsync(current.ids[0]);
@@ -120,8 +125,10 @@ export default function WorksPage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setOperationErrors(previous => ({ ...previous, ...Object.fromEntries(current.ids.map(id => [id, message])) }));
-      if (token === confirmToken.current) setConfirmError(message);
+      if (current.kind === "batch") toast.error(message);
+      else if (token === confirmToken.current) setConfirmError(message);
     } finally {
+      if (current.kind === "batch") setMoving(previous => new Set([...previous].filter(id => !current.ids.includes(id))));
       current.ids.forEach(id => curatingRef.current.delete(id));
       setCurating(new Set(curatingRef.current));
     }
@@ -137,7 +144,6 @@ export default function WorksPage() {
   }
   const detailOrigin = useRef<"list" | "direct" | null>(detail ? "direct" : null);
   const open = (id: string) => {
-    c.setPreview(null);
     detailOrigin.current = "list";
     c.updateParams({ work: id }, false, "push");
   };
@@ -172,7 +178,7 @@ export default function WorksPage() {
     ...item,
     href: href({ q: scopeQ(item.value), p: null, work: null }),
     active: scope === item.value,
-    count: scope === item.value ? String(total) : undefined,
+    count: scope === item.value && !c.works.isPlaceholderData ? String(total) : undefined,
     countSuffix: undefined,
     onClick: event => {
       if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -184,7 +190,11 @@ export default function WorksPage() {
     },
   }));
 
-  const available = c.workItems.length > 0 && !c.works.isLoading && !c.works.isError;
+  const visibleWorkItems = c.workItems.filter(work => {
+    const state = latestCurations.get(work.id);
+    return !moving.has(work.id) && !restoring.has(work.id) && !(state?.status === "pending" && (scope === "trash" ? state.action === "restore" : state.action === "trash"));
+  });
+  const available = visibleWorkItems.length > 0 && !c.works.isLoading && !c.works.isError;
   const selectable = c.canCurate && scope !== "trash" && c.appearance.workCardShowCheckbox;
   const selectionVisible = selectable && showSelection;
   const openFilters = () => { setFilterDraft(c.filterValue); setFilterOpen(true); };
@@ -266,21 +276,20 @@ export default function WorksPage() {
       scopes={scopes}
       toolbar={toolbar}
       selection={selection}
-      pagination={available && total > 0 ? <nav className="pagination" aria-label={t("gallery.pagination")}>
-        <button className="button" disabled={c.page === 0 || c.composer.isPending || c.batchComposer.isPending || c.inputVal !== c.search || c.isComposing || c.works.isFetching} onClick={() => c.updateParams({ p: String(c.page - 1), work: null }, false, "push")}>{t("works.prev")}</button>
+      pagination={available && total > 0 && !c.works.isPlaceholderData ? <nav className="pagination" aria-label={t("gallery.pagination")}>
+        <button className="button" disabled={c.page === 0 || c.queryTransitioning || c.works.isFetching} onClick={() => c.updateParams({ p: String(c.page - 1), work: null }, false, "push")}>{t("works.prev")}</button>
         <span>{t("gallery.pageCount", { page: c.page + 1, total: pages })}</span>
-        <button className="button" disabled={c.page + 1 >= pages || c.composer.isPending || c.batchComposer.isPending || c.inputVal !== c.search || c.isComposing || c.works.isFetching} onClick={() => c.updateParams({ p: String(c.page + 1), work: null }, false, "push")}>{t("works.next")}</button>
+        <button className="button" disabled={c.page + 1 >= pages || c.queryTransitioning || c.works.isFetching} onClick={() => c.updateParams({ p: String(c.page + 1), work: null }, false, "push")}>{t("works.next")}</button>
       </nav> : undefined}
     >
       {c.works.isError ? <ErrorState error={c.works.error} onRetry={() => void c.works.refetch()} /> :
         c.works.isLoading ? <div className="state-view" role="status">{t("common.loading")}</div> :
-        c.workItems.length ? <WorkCollection mode={viewMode} size={c.appearance.workCardSize}>
-          {c.workItems.map((work, index) => <GalleryWorkItem
+        visibleWorkItems.length ? <><div aria-busy={c.works.isPlaceholderData} inert={c.works.isPlaceholderData || undefined}><WorkCollection mode={viewMode} size={c.appearance.workCardSize}>
+          {visibleWorkItems.map((work, index) => <GalleryWorkItem
             key={work.id}
             work={work}
             settings={c.appearance}
             selected={c.selectedWorkIds.has(work.id)}
-            preview={c.previewEnabled && !selectionVisible ? { enabled: c.previewEnabled, delayMs: c.appearance.workPreviewDelayMs, wheelThreshold: c.wheelThreshold, pageIndex: c.preview?.work.id === work.id ? c.preview.pageIndex : 0, assetIds: work.preview_asset_ids || (work.thumbnail_asset_id ? [work.thumbnail_asset_id] : []), onOpen: preview => c.setPreview({ work, anchor: preview.anchor, assetIds: preview.assetIds, pageIndex: preview.pageIndex }), onEnter: c.cancelClosePreview, onLeave: c.scheduleClosePreview, onPage: pageIndex => c.setPreview(current => current?.work.id === work.id ? { ...current, pageIndex } : current) } : undefined}
             canCurate={c.canCurate}
             onSelect={selectionVisible ? () => c.toggleSelectWork(work.id) : undefined}
             trashMode={scope === "trash"}
@@ -293,11 +302,12 @@ export default function WorksPage() {
             open={() => open(work.id)}
             index={index}
           />)}
-        </WorkCollection> :
+        </WorkCollection></div>{c.works.isPlaceholderData && <p role="status">{t("common.loading")}</p>}</> :
+        c.works.isPlaceholderData ? <div className="state-view" role="status">{t("common.loading")}</div> :
+        moving.size || restoring.size || detailCurationIds.length ? <div className="state-view" role="status">{t("common.processing")}</div> :
         <div className="state-view"><h2>{t("gallery.noResults")}</h2><button className="button" onClick={c.clearSearch}>{t("gallery.clearFilters")}</button></div>}
     </WorksView>
     {filterOpen && filterDraft ? <WorksFilterDialog value={filterDraft} onChange={setFilterDraft} onApply={applyFilters} onClose={() => setFilterOpen(false)} /> : null}
-    {c.preview && c.previewEnabled ? <WorkPreviewOverlay wheelThreshold={c.wheelThreshold} anchor={c.preview.anchor} title={c.preview.work.title} creatorName={c.preview.work.creator_name} source={c.preview.work.source} assetIds={c.previewAssetIds} assets={c.previewAssets.data} isLoading={c.previewAssets.isLoading || (c.previewAssets.isFetching && !c.previewAssets.data)} isError={c.previewAssets.isError} previewSize={c.appearance.workPreviewSize} pageIndex={c.preview.pageIndex} assetCount={c.preview.work.asset_count} blurred={c.preview.work.is_nsfw && c.appearance.blurNsfw} onMouseEnter={c.cancelClosePreview} onMouseLeave={c.scheduleClosePreview} onWheelPage={delta => c.setPreview(current => current ? { ...current, pageIndex: (current.pageIndex + delta + c.previewAssetIds.length) % c.previewAssetIds.length } : current)} onRefreshAssets={() => void c.previewAssets.refetch()} /> : null}
     {c.slideshow.node}
     {appearanceOpen ? <AppearanceDialog value={c.appearance} onChange={patch => c.updateSettings(patch)} canSlideshow={c.slideItems.length>0} canMaintain={c.has("system")} onSlideshow={() => { setAppearanceOpen(false); c.slideshow.open(c.slideItems); }} onClose={() => setAppearanceOpen(false)} /> : null}
     {detail ? <WorkDetailDialog key={detail} id={detail} operationBusy={curating.has(detail) || restoring.has(detail)} onClose={close} /> : null}
@@ -322,11 +332,7 @@ function AppearanceDialog({ value, onChange, onSlideshow, canSlideshow, canMaint
   const t = useT();
   return <Modal title={copy("displaySettings")} onClose={onClose}>
     <div className="gallery-filter-dialog">
-      <label className="gallery-filter-checkbox"><input type="checkbox" checked={value.workPreviewEnabled} onChange={event => onChange({ workPreviewEnabled: event.target.checked })} />{t("appearance.work_preview")}</label>
       <div className="gallery-setting-row"><span>{t("works.card_size")}</span><ToolbarSelect label={t("works.card_size")} value={value.workCardSize} onValueChange={workCardSize=>onChange({workCardSize:workCardSize as AppearanceSettings["workCardSize"]})} options={["small","medium","large"].map(size=>({value:size,label:t(`works.card_size_${size}`)}))}/></div>
-      <div className="gallery-setting-row"><span>{t("appearance.preview_size")}</span><ToolbarSelect label={t("appearance.preview_size")} value={value.workPreviewSize} onValueChange={workPreviewSize=>onChange({workPreviewSize:workPreviewSize as AppearanceSettings["workPreviewSize"]})} options={["medium","large","fit"].map(size=>({value:size,label:t(`appearance.preview_size_${size}`)}))}/></div>
-      <div className="gallery-setting-row"><span>{t("appearance.preview_delay")}</span><ToolbarSelect label={t("appearance.preview_delay")} value={String(value.workPreviewDelayMs)} onValueChange={delay=>onChange({workPreviewDelayMs:Number(delay) as AppearanceSettings["workPreviewDelayMs"]})} options={[150,250,400].map(delay=>({value:String(delay),label:t("gallery.milliseconds",{count:delay})}))}/></div>
-      <div className="gallery-setting-row"><span>{t("appearance.wheel_sensitivity")}</span><ToolbarSelect label={t("appearance.wheel_sensitivity")} value={value.workPreviewWheelSensitivity} onValueChange={sensitivity=>onChange({workPreviewWheelSensitivity:sensitivity as AppearanceSettings["workPreviewWheelSensitivity"]})} options={[{value:"normal",label:t("appearance.wheel_normal")},{value:"relaxed",label:t("appearance.wheel_relaxed")}]}/></div>
       <label className="gallery-filter-checkbox"><input type="checkbox" checked={value.workCardShowCheckbox} onChange={event => onChange({ workCardShowCheckbox: event.target.checked })} />{t("gallery.showSelectionControls")}</label>
       <label className="gallery-filter-checkbox"><input type="checkbox" checked={value.workCardShowAi} onChange={event => onChange({ workCardShowAi: event.target.checked })} />{t("works.ai_badge")}</label>
       <label className="gallery-filter-checkbox"><input type="checkbox" checked={value.workCardShowNsfw} onChange={event => onChange({ workCardShowNsfw: event.target.checked })} />{t("works.nsfw_badge")}</label>
@@ -364,10 +370,9 @@ function WorksFilterDialog({ value, onChange, onApply, onClose }: { value: Works
   </Modal>;
 }
 
-function GalleryWorkItem({ work: w, settings, selected, preview, canCurate, onSelect, trashMode = false, canPurge, restoreBusy = false, restoreError, onRestore, onPurge, href, open, index }: {
+function GalleryWorkItem({ work: w, settings, selected, canCurate, onSelect, trashMode = false, canPurge, restoreBusy = false, restoreError, onRestore, onPurge, href, open, index }: {
   work: WorkListItem;
   settings: AppearanceSettings;
-  preview?: WorkItemProps["preview"];
   selected: boolean;
   canCurate: boolean;
   onSelect?: () => void;
@@ -407,10 +412,9 @@ function GalleryWorkItem({ work: w, settings, selected, preview, canCurate, onSe
     onOpen={intercept}
     media={<WorkMediaThumbnail assetId={w.thumbnail_asset_id || undefined} hasVideo={w.has_video} alt={w.title || ""} className={w.is_nsfw && settings.blurNsfw ? "blurred" : ""} eager={index < 3} />}
     selected={selected}
-    preview={preview}
     onSelect={onSelect}
     favorite={canCurate && !trashMode && settings.workCardShowFavorite ? {
-      active: Boolean(w.is_favorite),
+      active: favorite.optimistic ?? Boolean(w.is_favorite),
       busy: favorite.isPending,
       disabled: restoreBusy,
       error: favoriteError,

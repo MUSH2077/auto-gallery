@@ -1,12 +1,7 @@
 "use client";
 
 import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
-import {
-  type WorkPreviewDelayMs,
-  type WorkPreviewSize,
-  type WorkPreviewWheelSensitivity,
-  useAppearanceSettings,
-} from "@/lib/appearance";
+import { useAppearanceSettings } from "@/lib/appearance";
 import { type Theme, useTheme } from "@/lib/theme";
 import { useT } from "@/lib/i18n";
 
@@ -56,24 +51,12 @@ function SettingRow({
 export default function AppearanceSettingsPage() {
   const t = useT();
   const { theme, setTheme } = useTheme();
-  const { settings, updateSettings, resetSettings } = useAppearanceSettings();
+  const { resetSettings } = useAppearanceSettings();
 
   const themeOptions: { value: Theme; label: string }[] = [
     { value: "light", label: t("theme.light") },
     { value: "dark", label: t("theme.dark") },
-    { value: "system", label: t("theme.system") },
   ];
-  const previewDelayOptions: WorkPreviewDelayMs[] = [150, 250, 400];
-  const previewSizeOptions: { value: WorkPreviewSize; label: string }[] = [
-    { value: "medium", label: t("appearance.preview_size_medium") },
-    { value: "large", label: t("appearance.preview_size_large") },
-    { value: "fit", label: t("appearance.preview_size_fit") },
-  ];
-  const sensitivityOptions: { value: WorkPreviewWheelSensitivity; label: string }[] = [
-    { value: "normal", label: t("appearance.wheel_normal") },
-    { value: "relaxed", label: t("appearance.wheel_relaxed") },
-  ];
-
   return (
     <PageShell>
       <PageHeader title={t("appearance.title")} description={t("appearance.desc")} />
@@ -84,49 +67,6 @@ export default function AppearanceSettingsPage() {
           <div className="segmented-control">
             {themeOptions.map((option) => (
               <OptionButton key={option.value} value={option.value} activeValue={theme} onSelect={setTheme}>
-                {option.label}
-              </OptionButton>
-            ))}
-          </div>
-        </SettingRow>
-      </section>
-
-      <section className="card mt-5 p-5">
-        <h2 className="section-title mb-2">{t("appearance.works")}</h2>
-        <SettingRow title={t("appearance.work_preview")} description={t("appearance.work_preview_desc")}>
-          <button
-            type="button"
-            onClick={() => updateSettings({ workPreviewEnabled: !settings.workPreviewEnabled })}
-            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-              settings.workPreviewEnabled ? "border-accent bg-accent-subtle text-accent" : "border-border text-muted hover:bg-subtle"
-            }`}
-            aria-pressed={settings.workPreviewEnabled}
-          >
-            {settings.workPreviewEnabled ? t("common.on") : t("common.off")}
-          </button>
-        </SettingRow>
-        <SettingRow title={t("appearance.preview_delay")} description={t("appearance.preview_delay_desc")}>
-          <div className="segmented-control">
-            {previewDelayOptions.map((delay) => (
-              <OptionButton key={delay} value={delay} activeValue={settings.workPreviewDelayMs} onSelect={(value) => updateSettings({ workPreviewDelayMs: value })}>
-                {delay}ms
-              </OptionButton>
-            ))}
-          </div>
-        </SettingRow>
-        <SettingRow title={t("appearance.preview_size")} description={t("appearance.preview_size_desc")}>
-          <div className="segmented-control">
-            {previewSizeOptions.map((option) => (
-              <OptionButton key={option.value} value={option.value} activeValue={settings.workPreviewSize} onSelect={(value) => updateSettings({ workPreviewSize: value })}>
-                {option.label}
-              </OptionButton>
-            ))}
-          </div>
-        </SettingRow>
-        <SettingRow title={t("appearance.wheel_sensitivity")} description={t("appearance.wheel_sensitivity_desc")}>
-          <div className="segmented-control">
-            {sensitivityOptions.map((option) => (
-              <OptionButton key={option.value} value={option.value} activeValue={settings.workPreviewWheelSensitivity} onSelect={(value) => updateSettings({ workPreviewWheelSensitivity: value })}>
                 {option.label}
               </OptionButton>
             ))}

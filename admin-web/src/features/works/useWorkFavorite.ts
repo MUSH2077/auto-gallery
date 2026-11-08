@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback } from "react";
-import { useIsMutating, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useMutationState, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 
 export const WORK_FAVORITE_MUTATION_KEY = ["works", "favorite"] as const;
+
+const confirmedFavorites = new WeakMap<QueryClient, Map<string, boolean>>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -76,35 +78,63 @@ function currentWorkFavorite(qc: ReturnType<typeof useQueryClient>, id: string):
 export function useWorkFavorite(workId: string) {
   const qc = useQueryClient();
   const pendingCount = useIsMutating({ mutationKey: [...WORK_FAVORITE_MUTATION_KEY, workId] });
-  const mutationStates = useMutationState({ filters: { mutationKey: [...WORK_FAVORITE_MUTATION_KEY, workId], exact: true }, select: (current) => ({ status: current.state.status, error: current.state.error }) });
+  const mutationStates = useMutationState({ filters: { mutationKey: [...WORK_FAVORITE_MUTATION_KEY, workId], exact: true }, select: (current) => ({ status: current.state.status, error: current.state.error, variables: current.state.variables as { desired: boolean } | undefined }) });
   const latestState = mutationStates[mutationStates.length - 1];
   const sharedError = latestState?.status === "error" ? latestState.error : undefined;
+  const key = [...WORK_FAVORITE_MUTATION_KEY, workId] as const;
   const mutation = useMutation({
-    mutationKey: [...WORK_FAVORITE_MUTATION_KEY, workId],
-    mutationFn: () => api.toggleWorkFavorite(workId),
-    onMutate: async () => {
-      await qc.cancelQueries({ queryKey: queryKeys.works.all });
-      const previous = currentWorkFavorite(qc, workId);
-      const optimistic = previous === undefined ? undefined : !previous;
-      if (optimistic !== undefined) updateWorkQueries(qc, workId, optimistic);
-      return { optimistic };
+    mutationKey: key,
+    scope: { id: `work-favorite:${workId}` },
+    mutationFn: async ({ desired }: { desired: boolean; previous: boolean }) => {
+      const confirmed = confirmedFavorites.get(qc)!;
+      let current = confirmed.get(workId);
+      if (current === undefined) {
+        current = (await api.getWork(workId)).is_favorite;
+        confirmed.set(workId, current);
+      }
+      if (current === desired) return { is_favorite: current };
+      try {
+        const updated = await api.toggleWorkFavorite(workId);
+        confirmed.set(workId, updated.is_favorite);
+        return updated;
+      } catch (error) {
+        confirmed.delete(workId);
+        try { confirmed.set(workId, (await api.getWork(workId)).is_favorite); } catch { /* Keep the outcome unknown. */ }
+        throw error;
+      }
     },
-    onError: (_error, _variables, context) => {
-      if (context?.optimistic !== undefined) updateWorkQueries(qc, workId, !context.optimistic);
+    onError: (_error, variables) => {
+      if (qc.isMutating({ mutationKey: key, exact: true }) <= 1) {
+        updateWorkQueries(qc, workId, confirmedFavorites.get(qc)?.get(workId) ?? variables.previous);
+      }
     },
     onSuccess: (updated) => {
-      updateWorkQueries(qc, workId, updated.is_favorite);
+      if (qc.isMutating({ mutationKey: key, exact: true }) <= 1) updateWorkQueries(qc, workId, updated.is_favorite);
     },
-    onSettled: () => {
+    onSettled: (_data, error) => {
+      if (qc.isMutating({ mutationKey: key, exact: true }) <= 1) confirmedFavorites.get(qc)?.delete(workId);
+      if (qc.isMutating({ mutationKey: key, exact: true }) <= 1) void qc.invalidateQueries({ queryKey: queryKeys.curation.subject("work", workId) });
       if (qc.isMutating({ mutationKey: WORK_FAVORITE_MUTATION_KEY }) <= 1) {
-        void qc.invalidateQueries({ queryKey: queryKeys.works.all });
+        void qc.invalidateQueries({ queryKey: queryKeys.works.all, predicate: query => {
+          const [,, , search] = query.queryKey;
+          return query.queryKey[1] === "compound-search" && typeof search === "string" && (Boolean(error) || /(?:^|\s)-?is:favorite(?:\s|$)|(?:^|\s)sort:(?:heat|updated)(?:-|\s|$)/i.test(search));
+        } });
       }
     },
   });
   const toggle = useCallback(() => {
-    if (pendingCount > 0 || mutation.isPending || qc.isMutating({ mutationKey: [...WORK_FAVORITE_MUTATION_KEY, workId] }) > 0) return;
-    mutation.mutate();
-  }, [mutation, pendingCount, qc, workId]);
+    const pending = qc.getMutationCache().findAll({ mutationKey: key, exact: true, status: "pending" });
+    const previous = (pending.at(-1)?.state.variables as { desired: boolean } | undefined)?.desired ?? currentWorkFavorite(qc, workId);
+    if (previous === undefined) return;
+    let confirmed = confirmedFavorites.get(qc);
+    if (!confirmed) { confirmed = new Map(); confirmedFavorites.set(qc, confirmed); }
+    if (!confirmed.has(workId) && !qc.isMutating({ mutationKey: key, exact: true })) confirmed.set(workId, previous);
+    void qc.cancelQueries({ queryKey: queryKeys.works.all }, { revert: false });
+    const desired = !previous;
+    updateWorkQueries(qc, workId, desired);
+    mutation.mutate({ desired, previous });
+  }, [mutation, qc, workId]);
   const favoriteError = mutationStates.length ? sharedError : mutation.error;
-  return { ...mutation, error: favoriteError, isError: Boolean(favoriteError), isPending: pendingCount > 0, toggle };
+  const optimistic = mutationStates.filter(state => state.status === "pending").at(-1)?.variables?.desired;
+  return { ...mutation, error: favoriteError, isError: Boolean(favoriteError), isPending: pendingCount > 0, optimistic, toggle };
 }

@@ -391,36 +391,6 @@ test("video remains poster-only until click and switching assets unloads playbac
   expect(consoleErrors, calls.join("\n")).toEqual([]);
 });
 
-test("work preview wheel sensitivity keeps card and overlay pages synchronized", async ({ context, page }) => {
-  const calls: string[] = [];
-  await installMediaRoutes(context, calls);
-  await page.goto("/admin/works");
-  const card = page.locator(`[data-work-id="${WORK.id}"]`).first();
-  await card.hover();
-  const preview = page.locator(".popover").filter({ hasText: WORK.title });
-  await expect(preview).toBeVisible();
-  await page.mouse.move((await card.boundingBox())!.x + 30, (await card.boundingBox())!.y + 30);
-  await page.mouse.wheel(0, 50);
-  await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
-  await card.dispatchEvent("wheel", { deltaY: 200, ctrlKey: true });
-  await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
-  await card.dispatchEvent("wheel", { deltaY: 20 });
-  await expect(preview.getByText("2 / 2", { exact: true })).toBeVisible();
-  await page.goto("/admin/works");
-  await page.getByRole("button", { name: "Display", exact: true }).click();
-  await page.getByRole("button", { name: "Display settings", exact: true }).click();
-  await page.getByRole("combobox", { name: "Wheel paging", exact: true }).click();
-  await page.getByRole("option", { name: "Relaxed", exact: true }).click();
-  await page.getByRole("button", { name: "Done", exact: true }).click();
-  const relaxedCard = page.locator(`[data-work-id="${WORK.id}"]`).first();
-  await relaxedCard.hover();
-  const relaxedPreview = page.locator(".popover").filter({ hasText: WORK.title });
-  await expect(relaxedPreview).toBeVisible();
-  await relaxedCard.dispatchEvent("wheel", { deltaY: 100 });
-  await expect(relaxedPreview.getByText("1 / 2", { exact: true })).toBeVisible();
-  await relaxedCard.dispatchEvent("wheel", { deltaY: 30 });
-  await expect(relaxedPreview.getByText("2 / 2", { exact: true })).toBeVisible();
-});
 test("mobile video player is keyboard reachable without horizontal overflow", async ({ context, page }) => {
   const calls: string[] = [];
   await installMediaRoutes(context, calls);

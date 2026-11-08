@@ -28,7 +28,7 @@ test("new login stays in the approved light palette even when the system is dark
 
 test("an account without a theme uses light instead of following the system", async ({ page, context }) => {
   await account(context); await page.emulateMedia({ colorScheme: "dark" });
-  await page.goto("/admin/works"); await expect(page.locator(".gallery-account summary")).toBeVisible();
+  await page.goto("/admin/works"); await expect(page.locator(".gallery-account-trigger")).toBeVisible();
   await expect.poll(() => canvas(page)).toBe("#edf1ed");
   await page.emulateMedia({ colorScheme: "light" }); await page.emulateMedia({ colorScheme: "dark" });
   await expect(page.locator("html")).not.toHaveClass(/dark/);
@@ -36,25 +36,17 @@ test("an account without a theme uses light instead of following the system", as
 
 test("manual dark and light choices persist through navigation and reload", async ({ page, context }) => {
   const state = await account(context, { lang: "en" }); await page.emulateMedia({ colorScheme: "dark" });
-  await page.goto("/admin/works"); await page.locator(".gallery-account summary").click();
+  await page.goto("/admin/works"); await page.locator(".gallery-account-trigger").click();
   await page.getByRole("button", { name: "Light — Dark", exact: true }).click();
   await expect.poll(() => canvas(page)).toBe("#29322c");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("auto-gallery-theme"))).toBe("dark");
   await expect.poll(async () => state.readPreferences().theme).toBe("dark");
   await page.locator(".layout-bottom-nav").getByRole("link", { name: "Jobs", exact: true }).click(); await page.reload();
-  await expect.poll(() => canvas(page)).toBe("#29322c"); await page.locator(".gallery-account summary").click();
-  await page.getByRole("button", { name: "Dark — System", exact: true }).click();
-  await page.getByRole("button", { name: "System — Light", exact: true }).click();
+  await expect.poll(() => canvas(page)).toBe("#29322c"); await page.locator(".gallery-account-trigger").click();
+  await page.getByRole("button", { name: "Dark — Light", exact: true }).click();
   await expect.poll(() => canvas(page)).toBe("#edf1ed");
   await expect.poll(async () => state.readPreferences().theme).toBe("light");
   await page.reload(); await expect.poll(() => canvas(page)).toBe("#edf1ed");
-});
-
-test("an explicitly chosen system theme still follows system changes", async ({ page, context }) => {
-  await account(context, { theme: "system", lang: "en" }); await page.emulateMedia({ colorScheme: "dark" });
-  await page.goto("/admin/jobs"); await expect.poll(() => canvas(page)).toBe("#29322c");
-  await page.emulateMedia({ colorScheme: "light" }); await expect.poll(() => canvas(page)).toBe("#edf1ed");
-  await page.emulateMedia({ colorScheme: "dark" }); await expect.poll(() => canvas(page)).toBe("#29322c");
 });
 
 test("saved account light preference overrides stale browser dark preference", async ({ page, context }) => {
@@ -67,14 +59,14 @@ test("saved account light preference overrides stale browser dark preference", a
 
 
 test("the selected theme is applied before client hydration", async ({ context }) => {
-  for (const stored of [null, "light", "dark", "system"]) {
+  for (const stored of [null, "light", "dark"]) {
     const page = await context.newPage();
     try {
       await page.emulateMedia({ colorScheme: "dark" });
       await page.addInitScript(value => { if (value) localStorage.setItem("auto-gallery-theme", value); else localStorage.removeItem("auto-gallery-theme"); }, stored);
       await page.route("**/_next/static/chunks/**.js", route => route.abort());
       await page.goto("/admin/login", { waitUntil: "domcontentloaded" });
-      const expected = stored === "dark" || stored === "system";
+      const expected = stored === "dark";
       expect(await page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(expected);
       expect(await page.locator("html").evaluate(element => element.style.colorScheme)).toBe(expected ? "dark" : "light");
     } finally { await page.close(); }
@@ -103,4 +95,19 @@ test("task technical content shares the approved local typography without a fift
   expect(externalFonts).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(detail).toHaveCount(0);
+});
+
+
+test("account language switches visible text and logout follows change password", async ({ page, context }) => {
+  await account(context, { lang: "zh" });
+  await page.goto("/admin/works");
+  await page.locator(".gallery-account-trigger").click();
+  const header = page.locator(".gallery-account-header");
+  await expect(header.getByText("theme-review")).toBeVisible();
+  await expect(page.locator(".gallery-account-menu").getByRole("button", { name: "退出登录" })).toBeVisible();
+  await page.getByRole("button", { name: "Switch to English" }).click();
+  await expect(page.locator(".gallery-account-trigger")).toHaveText("Account");
+  await expect(page.locator(".gallery-account-menu").getByRole("button", { name: /log out|sign out/i })).toBeVisible();
+  await page.getByRole("button", { name: "切换到中文" }).click();
+  await expect(page.locator(".gallery-account-trigger")).toHaveText("账户");
 });

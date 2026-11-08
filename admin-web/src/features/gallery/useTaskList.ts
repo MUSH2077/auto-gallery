@@ -160,6 +160,7 @@ export function useTaskList() {
         queryKey,
         queryFn: fetchTaskPage,
         enabled: (recordKind ? permissions.has("tasks") : allowed) && !recordScopeUnsupported,
+        placeholderData: (previous, previousQuery) => previousQuery?.queryKey.at(-6) === records ? previous : undefined,
         staleTime: 15000,
         refetchInterval: query => query.state.data?.items.some(task => !terminalTaskStatuses.has(task.status)) ? POLL_ACTIVE_MS : false,
         refetchIntervalInBackground: false,
@@ -184,6 +185,6 @@ export function useTaskList() {
             return new Set([...previous, ...rows.map(task => task.id)]);
         });
     }
-    return { t, permissions, allowed, q, kind, records, status, source, sort, order, scope, page, recordKind, relatedRecord, recordScopeUnsupported, input, setInput, isComposing, setIsComposing, selected, setSelected, toggle, togglePage, allSelected, query, rows, total, totalKnown, hasNext, pages, href, update, closeTask, closeLegacyJob, taskId: route.taskId, downloadJobId: route.downloadJobId, importJobId: route.importJobId, downloadJobFilterId: route.downloadJobFilterId, subscriptionSourceId: route.subscriptionSourceId, busy: input !== q || (query.isFetching && !query.data) };
+    return { t, permissions, allowed, q, kind, records, status, source, sort, order, scope, page, recordKind, relatedRecord, recordScopeUnsupported, input, setInput, isComposing, setIsComposing, selected, setSelected, toggle, togglePage, allSelected, query, rows, total, totalKnown, hasNext, pages, href, update, closeTask, closeLegacyJob, taskId: route.taskId, downloadJobId: route.downloadJobId, importJobId: route.importJobId, downloadJobFilterId: route.downloadJobFilterId, subscriptionSourceId: route.subscriptionSourceId, busy: input !== q || query.isPlaceholderData || (query.isFetching && !query.data) };
 }
 export type TaskListController = ReturnType<typeof useTaskList>;

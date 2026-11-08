@@ -537,7 +537,7 @@ test("logout stops pending ticket and reconnect work", async ({context,page}) =>
  await page.clock.install();
  try {
   await page.goto("/admin/scheduler");await expect.poll(fixture.wsTicketReads).toBe(1);
-  await page.locator(".gallery-account>summary").click();
+  await page.locator(".gallery-account-trigger").click();
   await page.getByRole("button",{name:/log.?out|sign.?out/i}).click();
   await expect(page).toHaveURL(/\/admin\/login/);
   release();await page.clock.runFor(16_000);

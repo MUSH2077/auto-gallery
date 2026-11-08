@@ -29,10 +29,19 @@ export function useWorkDetails(id:string) {
   const curateWork = useMutation({
     mutationKey: ["works", "curation", id],
     mutationFn: (action: "trash" | "restore") => api.batchCurateWorks([id], action),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.works.detail(id) });
-      qc.invalidateQueries({ queryKey: queryKeys.curation.all });
-      qc.invalidateQueries({ queryKey: queryKeys.works.all });
+    onMutate: (action) => {
+      void qc.cancelQueries({ queryKey: queryKeys.works.detail(id) }, { revert: false });
+      const previous = qc.getQueryData<typeof work.data>(queryKeys.works.detail(id));
+      qc.setQueryData<typeof work.data>(queryKeys.works.detail(id), current => current ? {
+        ...current, curation_state: { ...current.curation_state, visibility: action === "trash" ? "trashed" : "visible" },
+      } : current);
+      return { curationState: previous?.curation_state };
+    },
+    onError: (_error, _action, context) => {
+      qc.setQueryData<typeof work.data>(queryKeys.works.detail(id), current => current ? { ...current, curation_state: context?.curationState } : current);
+    },
+    onSettled: async () => {
+      await Promise.all([qc.invalidateQueries({ queryKey: queryKeys.works.all }), qc.invalidateQueries({ queryKey: queryKeys.curation.all })]);
     },
   });
 

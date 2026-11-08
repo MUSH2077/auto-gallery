@@ -3,9 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { quoteSearchValue } from "@/lib/search-query";
@@ -22,6 +23,7 @@ const LIMIT = 24;
 
 function TagDetailContent() {
   const t = useT();
+  const toast = useToast();
   const fmt = useI18nFormat();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -37,16 +39,25 @@ function TagDetailContent() {
 
   const tag = useQuery({ queryKey: ["tag-detail", id], queryFn: () => api.getTagDetail(id) });
   const works = useQuery({
-    queryKey: ["tag-works", id, page],
+    queryKey: ["tag-works", id, page, tag.data?.normalized_name],
     queryFn: async () => {
       const result = await api.search("type:work tag:" + quoteSearchValue(tag.data?.normalized_name || ""), page * LIMIT, LIMIT, "works");
       return result.groups.works || { total: 0, items: [] };
     },
     enabled: !!tag.data?.normalized_name,
   });
+  const savingEdit = useIsMutating({ mutationKey: ["tag-edit", id], exact: true }) > 0;
   const updateTag = useMutation({
-    mutationFn: () => api.updateTag(id, { normalized_name: formName.trim().toLowerCase(), category: formCategory || undefined }),
-    onSuccess: async () => { setShowEdit(false); await queryClient.invalidateQueries({ queryKey: ["tag-detail", id] }); await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all }); },
+    mutationKey: ["tag-edit", id],
+    mutationFn: (draft: { normalized_name: string; category: string }) => api.updateTag(id, { normalized_name: draft.normalized_name, category: draft.category || undefined }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<typeof tag.data>(["tag-detail", id], current => current ? { ...current, ...saved } : current);
+      queryClient.removeQueries({ queryKey: ["tag-edit-draft", id] });
+      void queryClient.invalidateQueries({ queryKey: ["tag-detail", id] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.works.all });
+    },
+    onError: (error: Error) => { setShowEdit(true); toast.error(error.message); },
   });
   const deleteTag = useMutation({
     mutationFn: () => api.deleteTag(id),
@@ -62,7 +73,8 @@ function TagDetailContent() {
 
   return (
     <div className="gallery-tags">
-      <BusinessPage title={"#" + td.normalized_name} actions={canCurate ? <div className="tags-heading-actions"><button type="button" className="tags-button" onClick={() => { setFormName(td.normalized_name); setFormCategory(td.category || "general"); setShowEdit(true); }}>{t("common.edit")}</button><button type="button" className="tags-button danger" onClick={() => setShowDelete(true)}>{t("common.delete")}</button></div> : undefined}>
+      <BusinessPage title={"#" + (updateTag.isPending ? updateTag.variables.normalized_name : td.normalized_name)} actions={canCurate ? <div className="tags-heading-actions"><button type="button" className="tags-button" disabled={savingEdit} onClick={() => { const draft = queryClient.getQueryData<{ normalized_name: string; category: string }>(["tag-edit-draft", id]); setFormName(draft?.normalized_name ?? td.normalized_name); setFormCategory(draft?.category ?? td.category ?? "general"); setShowEdit(true); }}>{t("common.edit")}</button><button type="button" className="tags-button danger" onClick={() => setShowDelete(true)}>{t("common.delete")}</button></div> : undefined}>
+        {savingEdit && <span role="status">{t("tags.saving")}</span>}
         <Link className="tag-detail-back" href="/admin/tags">← {t("tags.title")}</Link>
         <div className="tag-detail-layout">
           <aside className="tag-detail-aside">
@@ -84,7 +96,7 @@ function TagDetailContent() {
         </div>
       </BusinessPage>
       <BusinessModal open={showEdit} onClose={() => setShowEdit(false)} title={t("tags.edit_title")}>
-        <form className="tags-form" onSubmit={event => { event.preventDefault(); if (formName.trim() && !updateTag.isPending) updateTag.mutate(); }}>
+        <form className="tags-form" onSubmit={event => { event.preventDefault(); if (formName.trim() && !queryClient.isMutating({ mutationKey: ["tag-edit", id], exact: true })) { const draft = { normalized_name: formName.trim().toLowerCase(), category: formCategory }; queryClient.setQueryData(["tag-edit-draft", id], draft); setShowEdit(false); updateTag.mutate(draft); } }}>
           <div className="tags-form-field"><label htmlFor="tag-edit-name">{t("tags.name_label")}</label><input id="tag-edit-name" value={formName} onChange={event => setFormName(event.target.value)} /></div>
           <div className="tags-form-field"><span>{t("tags.category_label")}</span><ToolbarSelect label={t("tags.category_label")} value={formCategory} onValueChange={setFormCategory} options={CATEGORIES.map(category => ({ value: category, label: category }))} /></div>
           {updateTag.error ? <p className="tags-form-error" role="alert">{(updateTag.error as Error).message}</p> : null}

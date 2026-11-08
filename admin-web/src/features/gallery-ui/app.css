@@ -42,12 +42,23 @@ html.dark .gallery-app .favorite-button:focus-visible { outline-color: #e68088; 
 .gallery-app :is(dialog,table,progress) {color:inherit;}
 .gallery-app dialog {margin:auto;}
 .gallery-app .layout-login-error {color:var(--danger);font-size:var(--type-meta);line-height:var(--leading-meta);}
-.gallery-app .gallery-account {position:absolute;right:20px;top:8px;z-index:30;font-size:var(--type-meta);line-height:var(--leading-meta);}
-.gallery-app .gallery-account>summary {display:flex;align-items:center;gap:6px;min-height:44px;padding:4px 8px;border-radius:4px;}
-.gallery-app .gallery-account>summary:hover {background:var(--subtle);}
-.gallery-app .gallery-account-menu {position:absolute;right:0;top:50px;width:280px;max-width:calc(100vw - 32px);max-height:calc(100svh - 74px);overflow:auto;display:grid;gap:12px;padding:20px;background:var(--surface);border:1px solid var(--line);border-radius:5px;box-shadow:0 8px 24px #0002;}
-.gallery-app .gallery-account-menu :is(a,button) {min-height:36px;text-align:left;}
-.gallery-app .gallery-account-menu .gallery-account-utilities {display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.gallery-app .gallery-account {position:absolute;right:20px;top:8px;z-index:30;}
+.gallery-app .gallery-account-trigger {min-height:44px;}
+.gallery-app .gallery-account-menu {width:280px;max-width:calc(100vw - 32px);max-height:min(480px,var(--radix-popover-content-available-height));overflow:auto;display:grid;gap:4px;}
+.gallery-app .gallery-account-header {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;}
+.gallery-app .gallery-account-header span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;}
+.gallery-app .gallery-account-language {font-size:13px;}
+.gallery-app .gallery-account-menu>a,.gallery-app .gallery-account-menu>button {display:flex;align-items:center;min-height:36px;padding:8px 10px;border-radius:4px;text-align:left;}
+.gallery-app .gallery-account-menu>a:hover,.gallery-app .gallery-account-menu>button:hover {background:var(--subtle);}
+.gallery-app .gallery-account-menu .gallery-account-utilities {display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 10px;}
+.gallery-app .gallery-more-trigger {border:0;background:transparent;cursor:pointer;}
+.gallery-app .gallery-more-menu {width:300px;max-width:calc(100vw - 32px);max-height:min(520px,var(--radix-popover-content-available-height));overflow:auto;}
+.gallery-app .gallery-more-menu section + section {border-top:1px solid var(--line);}
+.gallery-app .gallery-more-menu h2 {padding:10px 10px 4px;color:var(--muted);font-size:var(--type-meta);line-height:var(--leading-meta);font-weight:500;}
+.gallery-app .gallery-more-quick {display:flex;align-items:center;gap:8px;padding:0 4px;}
+.gallery-app .gallery-more-links {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;}
+.gallery-app .gallery-more-links a {display:flex;align-items:center;min-height:40px;padding:7px 10px;border-radius:4px;}
+.gallery-app .gallery-more-links a:hover,.gallery-app .gallery-more-links a[aria-current] {background:var(--subtle);}
 @media(max-width:540px){.gallery-app .gallery-account{right:12px;}}
 
 /* Real media uses the shared detail padding once; full media stays inside its dialog. */
