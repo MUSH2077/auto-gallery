@@ -23,3 +23,5 @@ Filter-based task commands delegate refresh to the calling mutation's settlement
 Favorite updates cancel queries that can overwrite favorite state (the affected detail and relevant lists), while in-flight assets, sources and creator links continue to populate their caches.
 
 Image request failures use a localized loading-failure message instead of the missing-resource placeholder. Explicit caller fallbacks and the existing recovery on source or asset changes are preserved; this does not add requests or automatic retries.
+
+Download/import-filtered task and record views ignore progress notifications explicitly belonging to the opposite record type. All-task views, unknown types and same-type off-page IDs retain authoritative refreshes; status changes and polling keep their existing paths. Progress refreshes do not wait behind an older in-flight response.

@@ -214,3 +214,38 @@ for (const outcome of ["success","partial","failure"] as const) test(`filter ret
   if(outcome==='failure')await expect(dialog.getByRole('alert')).toContainText('Retry refused');
  }finally{release();}
 });
+
+
+for(const view of ['task-download','task-import','record-download','record-import','all','unknown','same-kind-foreign'] as const)test(`progress scope ${view}`,async({page,context})=>{
+ let reads=0,notify!:(type?:string)=>void;
+ const download=view==='task-download'||view==='record-download'||view==='same-kind-foreign'||view==='unknown';const record=view.startsWith('record-');const domain=download?'download':'import';
+ const path=record?'/api/v1/'+domain+'-jobs':'/api/v1/tasks';
+ await setup(context,(route,url)=>{if(url==='/api/v1/auth/ws-ticket')return json(route,{ticket:'scope-ticket'});if(url===path){reads++;const item=record?{...baseJob,id:'domain-visible',source_url:'Visible record'}:{id:'run-visible',subject_id:'domain-visible',subject_type:domain+'_job',kind:domain,title:'Visible task',status:'complete',created_at:baseJob.created_at,available_actions:[]};return json(route,record&&download?[item]:{total:1,items:[item],summary:{all:1,attention:0,running:0,waiting:0}});}});
+ await context.routeWebSocket('**/api/v1/ws*',socket=>{notify=type=>socket.send(JSON.stringify({type:'progress',task_id:'other-domain-id',...(type?{task_type:type}:{})}));});
+ const query=record?'records='+domain:view==='all'?'':view==='unknown'||view==='same-kind-foreign'?'kind=download':'kind='+domain;
+ await page.goto('/admin/jobs?'+query);await expect(page.getByRole('link',{name:record?'Visible record':'Visible task',exact:true})).toBeVisible();await expect.poll(()=>typeof notify).toBe('function');const before=reads;
+ await page.evaluate(()=>{(window as any).__progressSeen=0;window.addEventListener('auto-gallery:job-event',()=>{(window as any).__progressSeen++;});});
+ notify(view==='unknown'?undefined:view==='same-kind-foreign'?'download':download?'import':'download');await expect.poll(()=>page.evaluate(()=>(window as any).__progressSeen)).toBe(1);await new Promise(r=>setTimeout(r,100));
+ expect(reads-before).toBe(view==='all'||view==='unknown'||view==='same-kind-foreign'?1:0);
+});
+
+test('latest progress does not wait for an older in-flight response',async({page,context})=>{
+ let reads=0,notify!:()=>void,release!:()=>void,oldReturned=false;const pending=new Promise<void>(resolve=>{release=resolve;});
+ await setup(context,(route,path)=>{if(path==='/api/v1/auth/ws-ticket')return json(route,{ticket:'latency-ticket'});if(path==='/api/v1/tasks')return(async()=>{const n=++reads;if(n===2)await pending;await json(route,{total:1,items:[{id:'run-visible',subject_type:'download_job',subject_id:'domain-visible',kind:'download',status:'running',title:n>=3?'Latest progress':n===2?'Old progress':'Initial progress',progress_current:n>=3?42:1,progress_total:100,created_at:baseJob.created_at,available_actions:[]}],summary:{all:1,attention:0,running:1,waiting:0}});if(n===2)oldReturned=true;})();});
+ await context.routeWebSocket('**/api/v1/ws*',socket=>{notify=()=>socket.send(JSON.stringify({type:'progress',task_id:'domain-visible',task_type:'download',progress:{current:42,total:100}}));});
+ try{
+  await page.goto('/admin/jobs?kind=download');await expect(page.getByRole('link',{name:'Initial progress',exact:true})).toBeVisible();await expect.poll(()=>typeof notify).toBe('function');
+  notify();await expect.poll(()=>reads).toBe(2);notify();await expect(page.getByRole('link',{name:'Latest progress',exact:true})).toBeVisible();
+  release();await expect.poll(()=>oldReturned).toBe(true);await expect(page.getByRole('link',{name:'Latest progress',exact:true})).toBeVisible();
+ }finally{release();}
+});
+
+for(const status of ['complete','failed'] as const)test(`terminal status stays immediate ${status}`,async({page,context})=>{
+ let reads=0,send!:(type:string)=>void,release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;});
+ await setup(context,(route,path)=>{if(path==='/api/v1/auth/ws-ticket')return json(route,{ticket:'terminal-ticket'});if(path==='/api/v1/tasks')return(async()=>{const n=++reads;if(n===2)await pending;return json(route,{total:1,items:[{id:'terminal-task',kind:'download',title:n>=3?'Terminal '+status:'Running task',status:n>=3?status:'running',created_at:baseJob.created_at,available_actions:[]}],summary:{all:1,attention:status==='failed'?1:0,running:n>=3?0:1,waiting:0}});})();});
+ await context.routeWebSocket('**/api/v1/ws*',socket=>{send=type=>socket.send(JSON.stringify({type,task_id:'terminal-task',task_type:type==='progress'?'download':'import',new_status:status}));});
+ try{
+ await page.goto('/admin/jobs?kind=download');await expect(page.getByRole('link',{name:'Running task',exact:true})).toBeVisible();await expect.poll(()=>typeof send).toBe('function');
+ send('progress');await expect.poll(()=>reads).toBe(2);send('status_change');await expect(page.getByRole('link',{name:'Terminal '+status,exact:true})).toBeVisible();
+ }finally{release();}
+});
