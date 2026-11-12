@@ -53,9 +53,8 @@ function TagDetailContent() {
     onSuccess: (saved) => {
       queryClient.setQueryData<typeof tag.data>(["tag-detail", id], current => current ? { ...current, ...saved } : current);
       queryClient.removeQueries({ queryKey: ["tag-edit-draft", id] });
-      void queryClient.invalidateQueries({ queryKey: ["tag-detail", id] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.works.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.works.all, predicate: ({ queryKey }) => queryKey[1] === "compound-search" || queryKey.at(-1) === "tags" });
     },
     onError: (error: Error) => { setShowEdit(true); toast.error(error.message); },
   });

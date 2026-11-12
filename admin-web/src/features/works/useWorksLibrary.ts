@@ -10,6 +10,7 @@ import { useSearchBatchComposer, useSearchComposer, type SearchComposeRequest } 
 import type { SlideItem } from '@/components/SlideshowPlayer';
 import { useSlideshow } from '@/lib/useSlideshow';
 import { usePermissions } from '@/lib/usePermissions';
+import { refreshWorkVisibility } from "./refreshWorkVisibility";
 import { useToast } from '@/components/Toast';
 import { pollInterval } from '@/lib/polling';
 import type { WorksFilterValue, WorksMediaFilter, WorksSortValue } from '@/features/works/types';
@@ -157,6 +158,12 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
     ...worksQuery,
     data: worksQuery.data?.groups.works,
   };
+  useEffect(() => {
+    if (!worksQuery.isSuccess || worksQuery.isPlaceholderData || worksQuery.isFetching) return;
+    const lastPage = Math.max(0, Math.ceil((works.data?.total ?? 0) / limit) - 1);
+    if (page > lastPage) updateParams({ p: String(lastPage) }, false);
+  }, [worksQuery.isSuccess, worksQuery.isPlaceholderData, worksQuery.isFetching, works.data?.total, limit, page]);
+
   const derivativeProgress = useQuery({
     queryKey: queryKeys.works.derivativeProgress,
     queryFn: ({ signal }) => api.getMediaDerivativeProgress(signal),
@@ -321,8 +328,8 @@ export function useWorksLibrary({ pageSize = 30 }: { pageSize?: number } = {}) {
         setSelectedWorkIds(previous => new Set([...previous].filter(id => !chunk.includes(id))));
       }
     },
-    onSettled: async () => {
-      await Promise.all([qc.invalidateQueries({ queryKey: queryKeys.works.all }), qc.invalidateQueries({ queryKey: queryKeys.curation.all })]);
+    onSettled: async (_data, _error, ids) => {
+      await refreshWorkVisibility(qc, ids);
     },
   });
 

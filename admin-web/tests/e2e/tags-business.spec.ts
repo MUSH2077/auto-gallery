@@ -129,15 +129,17 @@ test("tag draft survives navigation while save fails",async({page,context})=>{
 });
 
 
-test("tag rename refreshes related work search with confirmed name",async({page,context})=>{
- await installFixtures(context);let current='old-name';const queries:string[]=[];
+for (const rename of [true, false]) test(`tag ${rename ? "rename refreshes related search" : "category edit keeps related search"} without rereading detail`,async({page,context})=>{
+ await installFixtures(context);let current='old-name';let detailReads=0;const queries:string[]=[];
  await context.route('**/api/v1/**',route=>{const url=new URL(route.request().url()),path=url.pathname;
   if(path==='/api/v1/auth/me')return json(route,me);
-  if(path==='/api/v1/tags/fixture-tag'&&route.request().method()==='PUT'){current='new-name';return json(route,{id:'fixture-tag',normalized_name:current,category:'general',usage_count:0});}
-  if(path==='/api/v1/tags/fixture-tag')return json(route,{id:'fixture-tag',normalized_name:current,category:'general',usage_count:0,created_at:'2026-09-01T00:00:00Z',top_creators:[]});
+  if(path==='/api/v1/tags/fixture-tag'&&route.request().method()==='PUT'){current=rename?'new-name':'old-name';return json(route,{id:'fixture-tag',normalized_name:current,category:'artist',usage_count:0});}
+  if(path==='/api/v1/tags/fixture-tag'){detailReads++;return json(route,{id:'fixture-tag',normalized_name:current,category:'general',usage_count:0,created_at:'2026-09-01T00:00:00Z',top_creators:[]});}
   if(path==='/api/v1/search'){queries.push(url.searchParams.get('q')||'');return json(route,{groups:{works:{total:0,items:[]}},query:'',canonical_query:'',parsed:{tokens:[]}});}
   return json(route,{});
  });
- await page.goto('/admin/tags/fixture-tag');await page.getByRole('button',{name:'Edit',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.locator('#tag-edit-name').fill('new-name');await dialog.getByRole('button',{name:'Save',exact:true}).click();
- await expect.poll(()=>queries.some(q=>q.includes('new-name'))).toBe(true);
+ await page.goto('/admin/tags/fixture-tag');await page.getByRole('button',{name:'Edit',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.locator('#tag-edit-name').fill(rename?'new-name':'old-name');await dialog.getByRole('combobox',{name:'Category',exact:true}).click();await page.getByRole('option',{name:'artist',exact:true}).click();await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.locator('.tag-detail-category')).toHaveText('artist');
+ if(rename) await expect.poll(()=>queries.some(q=>q.includes('new-name'))).toBe(true);
+ await expect(page.getByRole('button',{name:'Edit',exact:true})).toBeEnabled();expect(detailReads).toBe(1);expect(queries).toHaveLength(rename?2:1);
 });

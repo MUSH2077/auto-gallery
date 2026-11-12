@@ -268,3 +268,23 @@ test("creator edit responds immediately and restores draft on failure", async ({
   release();await expect(page.getByRole('dialog').getByLabel('Display name')).toHaveValue('After');await expect(page.getByText('Save failed').first()).toBeVisible();
  }finally{release();}
 });
+
+
+test("creator profile save uses returned detail without rereading profile or links",async({page,context})=>{
+ let detailReads=0,linkReads=0;
+ const creator={id:"creator-edit-scope",name:"atlas",display_name:"Before",description:"Old",is_active:true,is_favorite:false,source_count:0,repository_count:0,curation_state:{visibility:"visible"}};
+ await setup(context,async(route,path)=>{
+  if(path==='/api/v1/creators/creator-edit-scope' && route.request().method()==='PATCH'){creator.display_name='After';return json(route,creator);}
+  if(path==='/api/v1/creators/creator-edit-scope'){detailReads++;return json(route,creator);}
+  if(path.endsWith('/links')){linkReads++;return json(route,[]);}
+  if(path.endsWith('/references'))return json(route,{pixiv:[],danbooru:null});
+  if(path.endsWith('/stats'))return json(route,{source_breakdown:[],tag_distribution:[],monthly_frequency:[]});
+  if(path.endsWith('/timeline'))return json(route,{sources:[],days:[],total:0});
+  if(path.endsWith('/subscription-overview'))return json(route,{summary:{repository_count:0,running_job_count:0},repositories:[],subscriptions:[]});
+  if(path==='/api/v1/search')return json(route,{query:'',parsed:{tokens:[]},groups:{works:{total:0,items:[]}}});return false;
+ });
+ await page.goto('/admin/creators/creator-edit-scope');await page.getByRole('button',{name:'Edit profile'}).click();
+ const dialog=page.getByRole('dialog');await dialog.getByLabel('Display name').fill('After');await dialog.getByRole('button',{name:'Save',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'After'})).toBeVisible();await expect(page.getByRole('button',{name:'Edit profile'})).toBeEnabled();
+ expect(detailReads).toBe(1);expect(linkReads).toBe(1);
+});

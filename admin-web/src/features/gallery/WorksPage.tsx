@@ -7,6 +7,7 @@ import type { AppearanceSettings } from "@/lib/appearance";
 import { useT } from "@/lib/i18n";
 import ErrorState from "@/components/ErrorState";
 import WorkDetailDialog from "./WorkDetailDialog";
+import { refreshWorkVisibility } from "@/features/works/refreshWorkVisibility";
 import { useWorksLibrary } from "@/features/works/useWorksLibrary";
 import { useMutationState } from "@tanstack/react-query";
 import { WORK_FAVORITE_MUTATION_KEY, useWorkFavorite } from "@/features/works/useWorkFavorite";
@@ -79,7 +80,7 @@ export default function WorksPage() {
     });
     try {
       await api.batchCurateWorks([id], "restore", "restored from trash");
-      await Promise.all([c.qc.invalidateQueries({ queryKey: queryKeys.works.all }), c.qc.invalidateQueries({ queryKey: queryKeys.curation.all })]);
+      await refreshWorkVisibility(c.qc, [id]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setOperationErrors(previous => ({ ...previous, [id]: message }));

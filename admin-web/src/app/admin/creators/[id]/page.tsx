@@ -302,7 +302,7 @@ export default function CreatorDetailPage() {
     mutationKey: ["creator-edit", id],
     mutationFn: (draft: { name: string; display_name: string; description: string }) => api.updateCreator(id, { name: draft.name, display_name: draft.display_name || undefined, description: draft.description || undefined }),
     onMutate: (draft) => {
-      void qc.cancelQueries({ queryKey: queryKeys.creators.detail(id) }, { revert: false });
+      void qc.cancelQueries({ queryKey: queryKeys.creators.detail(id), exact: true }, { revert: false });
       const previous = qc.getQueryData<typeof creator.data>(queryKeys.creators.detail(id));
       qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...draft } : current);
       return { previous };
@@ -310,7 +310,7 @@ export default function CreatorDetailPage() {
     onSuccess: (saved) => {
       qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...saved } : current);
       qc.removeQueries({ queryKey: ["creator-edit-draft", id] });
-      void qc.invalidateQueries({ queryKey: queryKeys.creators.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.creators.all, predicate: ({ queryKey }) => queryKey[1] !== id });
       toast.success(t("common.saved"));
     },
     onError: (error: Error, _draft, context) => {

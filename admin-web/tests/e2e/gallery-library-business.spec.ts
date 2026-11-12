@@ -235,3 +235,31 @@ test('detail favorite keeps image and trash action visually stable while protect
   expect(await handle!.evaluate(node=>node.isConnected)).toBe(true);await expect(image).toHaveAttribute('src',src!);expect(assetCalls).toBe(initialCalls);
  }finally{release();}
 });
+
+
+test('restore refreshes visibility and history without refetching unchanged media',async({page,context})=>{
+ const fixture=await setup(context);await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+ await expect(detail.locator('.detail-media-viewer img').first()).toBeVisible();
+ await detail.getByRole('button',{name:'Move to Trash',exact:true}).click();await page.getByRole('dialog',{name:'Move to Trash'}).getByRole('button',{name:'Confirm'}).click();
+ await expect(detail.getByRole('button',{name:'Restore',exact:true})).toBeEnabled();
+ const before=fixture.requests.length;const image=await detail.locator('.detail-media-viewer img').first().elementHandle();
+ await detail.getByRole('button',{name:'Restore',exact:true}).click();await page.getByRole('dialog',{name:'Restore'}).getByRole('button',{name:'Confirm'}).click();
+ await expect(detail.getByRole('button',{name:'Move to Trash',exact:true})).toBeEnabled();
+ const reads=fixture.requests.slice(before).filter(r=>r.method==='GET');
+ expect(reads.filter(r=>/\/(assets|sources|tags|remote-state)$/.test(r.path))).toEqual([]);
+ expect(reads.filter(r=>r.path==='/api/v1/works/derivative-progress')).toEqual([]);
+ expect(reads.some(r=>r.path==='/api/v1/works/work-one')).toBe(true);
+ expect(reads.some(r=>r.path==='/api/v1/search')).toBe(true);
+ expect(await image!.evaluate(node=>node.isConnected)).toBe(true);
+});
+
+test('favorite count and cached paging recover after removing the last item on a page',async({page,context})=>{
+ await setup(context);let items=Array.from({length:9},(_,i)=>({id:'fav-'+i,title:'Favorite '+i,is_favorite:true,is_nsfw:false,is_ai_generated:false,asset_count:0,created_at:'2026-10-08T00:00:00Z',curation_state:{visibility:'visible'}}));
+ await context.route(/\/api\/v1\/search(?:\?.*)?$/,route=>{const u=new URL(route.request().url()),offset=Number(u.searchParams.get('offset')||0);return json(route,{query:'is:favorite',canonical_query:'is:favorite',parsed:{tokens:[{kind:'qualifier',key:'is',value:'favorite',negated:false}]},groups:{works:{total:items.length,items:items.slice(offset,offset+8)}},total:items.length,next_cursor:null});});
+ await context.route('**/api/v1/works/fav-8/favorite',route=>{items=items.slice(0,8);return json(route,{id:'fav-8',is_favorite:false});});
+ await page.goto('/admin/works?q=is%3Afavorite');await expect(page.locator('.layout-scope-tabs')).toContainText('9');
+ await page.locator('.pagination button').last().click();
+ await page.getByRole('button',{name:'Unfavorite: Favorite 8',exact:true}).click();
+ await expect(page.locator('[data-work-id="fav-0"]')).toBeVisible();await expect(page.locator('.layout-scope-tabs')).toContainText('8');
+ expect(new URL(page.url()).searchParams.get('p')).toBe('0');await expect(page.locator('.pagination button').first()).toBeDisabled();await expect(page.locator('.pagination button').last()).toBeDisabled();
+});

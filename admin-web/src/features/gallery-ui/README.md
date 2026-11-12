@@ -11,3 +11,5 @@ Component copy is Chinese by default and supports English through GalleryCopyPro
 These modules do not register application routes. defaultGalleryRoutes refers to the existing admin routes; GalleryShell and LoginPage accept the route values they need from their owner.
 
 While a new works or task filter loads, the previous list remains visible but cannot be operated; loading status is shown until the matching results arrive.
+
+Visibility changes refresh work lists, the affected work detail and curation history through refreshWorkVisibility; unchanged assets, sources and remote state stay cached. Profile and tag edits merge the saved response into the current detail and invalidate the related lists. Tag renaming refreshes its associated work search through the changed name key; a category-only edit retains the existing search result. When the authoritative total makes the current work page invalid, navigation returns to the last valid page without closing an open detail.
