@@ -19,3 +19,5 @@ The shared WebSocket bridge invalidates task status queries; JobsPage subscribes
 The works-controls Playwright suite exercises current Select/Popover controls, display persistence without list refetches, compound filter preservation, random-sort seeds, selection permissions and favorite recovery. Tests use the current work-collection/data-work-id markup and accessible labels, with keyboard and narrow-viewport checks. The removed bottom-sheet and hover-preview behaviors are not compatibility targets; unexpected fixture API requests return an explicit error rather than an empty success response.
 
 Filter-based task commands delegate refresh to the calling mutation's settlement handler, including partial success and request errors, so one action does not refresh the same list twice.
+
+Favorite updates cancel queries that can overwrite favorite state (the affected detail and relevant lists), while in-flight assets, sources and creator links continue to populate their caches.

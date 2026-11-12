@@ -263,3 +263,30 @@ test('favorite count and cached paging recover after removing the last item on a
  await expect(page.locator('[data-work-id="fav-0"]')).toBeVisible();await expect(page.locator('.layout-scope-tabs')).toContainText('8');
  expect(new URL(page.url()).searchParams.get('p')).toBe('0');await expect(page.locator('.pagination button').first()).toBeDisabled();await expect(page.locator('.pagination button').last()).toBeDisabled();
 });
+
+
+test('favoriting a work keeps its in-flight media query alive',async({page,context})=>{
+ await setup(context);let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;});let assetReads=0;
+ await context.route('**/api/v1/works/work-one/assets',async route=>{assetReads++;await pending;return route.fallback();});
+ try{
+  await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();await expect.poll(()=>assetReads).toBe(1);
+  await detail.getByRole('button',{name:'Favorite work',exact:true}).click();
+  await expect(detail.getByRole('button',{name:'Unfavorite work',exact:true})).not.toHaveAttribute('aria-busy','true');
+  release();await expect(detail.locator('.detail-media-viewer img').first()).toBeVisible();expect(assetReads).toBe(1);
+ }finally{release();}
+});
+
+
+test('favorite still rejects an older in-flight response for the same work detail',async({page,context})=>{
+ await setup(context);await page.clock.install();let reads=0,release!:()=>void,returned=false;const pending=new Promise<void>(resolve=>{release=resolve;});
+ await context.route('**/api/v1/works/work-one',async route=>{
+  if(++reads===1)return route.fallback();await pending;await json(route,{id:'work-one',title:'Harbor light',is_favorite:false,asset_count:2,created_at:'2026-10-08T00:00:00Z',curation_state:{visibility:'visible'}});returned=true;
+ });
+ try{
+  await page.goto('/admin/works?work=work-one');let detail=page.getByRole('dialog').first();await expect(detail.locator('.detail-media-viewer img').first()).toBeVisible();
+  await detail.locator('.dialog-top button').first().click();await expect(detail).toHaveCount(0);await page.clock.fastForward(31_000);
+  await page.locator('[data-work-id="work-one"]').getByRole('link',{name:'Harbor light',exact:true}).click();detail=page.getByRole('dialog').first();await expect.poll(()=>reads).toBe(2);
+  await detail.getByRole('button',{name:'Favorite work',exact:true}).click();await expect(detail.getByRole('button',{name:'Unfavorite work',exact:true})).not.toHaveAttribute('aria-busy','true');
+  release();await expect.poll(()=>returned).toBe(true);await expect(detail.getByRole('button',{name:'Unfavorite work',exact:true})).toHaveAttribute('aria-pressed','true');
+ }finally{release();}
+});

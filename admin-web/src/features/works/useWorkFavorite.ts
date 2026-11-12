@@ -129,7 +129,9 @@ export function useWorkFavorite(workId: string) {
     let confirmed = confirmedFavorites.get(qc);
     if (!confirmed) { confirmed = new Map(); confirmedFavorites.set(qc, confirmed); }
     if (!confirmed.has(workId) && !qc.isMutating({ mutationKey: key, exact: true })) confirmed.set(workId, previous);
-    void qc.cancelQueries({ queryKey: queryKeys.works.all }, { revert: false });
+    void qc.cancelQueries({ queryKey: queryKeys.works.all, predicate: ({ queryKey, state }) =>
+      queryKey[1] === "compound-search" || (queryKey.length === 2 && queryKey[1] === workId)
+      || findWorkFavorite(state.data, workId) !== undefined }, { revert: false });
     const desired = !previous;
     updateWorkQueries(qc, workId, desired);
     mutation.mutate({ desired, previous });

@@ -288,3 +288,24 @@ test("creator profile save uses returned detail without rereading profile or lin
  await expect(page.getByRole('heading',{name:'After'})).toBeVisible();await expect(page.getByRole('button',{name:'Edit profile'})).toBeEnabled();
  expect(detailReads).toBe(1);expect(linkReads).toBe(1);
 });
+
+
+test('favoriting a creator keeps its in-flight external links query alive',async({page,context})=>{
+ let release!:()=>void,linkReads=0;const pending=new Promise<void>(resolve=>{release=resolve;});
+ const creator={id:'favorite-loading',name:'atlas',display_name:'Atlas Loading',is_active:true,is_favorite:false,source_count:0,repository_count:0,curation_state:{visibility:'visible'}};
+ await setup(context,async(route,path)=>{
+  if(path==='/api/v1/creators/favorite-loading')return json(route,creator);
+  if(path.endsWith('/favorite')){creator.is_favorite=true;return json(route,creator);}
+  if(path.endsWith('/links')){linkReads++;await pending;return json(route,[{id:'link-one',link_type:'pixiv',url:'https://www.pixiv.net/users/7324626'}]);}
+  if(path.endsWith('/references'))return json(route,{pixiv:[],danbooru:null});
+  if(path.endsWith('/stats'))return json(route,{source_breakdown:[],tag_distribution:[],monthly_frequency:[]});
+  if(path.endsWith('/timeline'))return json(route,{sources:[],days:[],total:0});
+  if(path.endsWith('/subscription-overview'))return json(route,{summary:{repository_count:0,running_job_count:0},repositories:[],subscriptions:[]});
+  if(path==='/api/v1/search')return json(route,{query:'',parsed:{tokens:[]},groups:{works:{total:0,items:[]}}});return false;
+ });
+ try{
+  await page.goto('/admin/creators/favorite-loading');await expect.poll(()=>linkReads).toBe(1);
+  await page.getByRole('button',{name:'Star',exact:true}).click();await expect(page.getByRole('button',{name:'Unstar',exact:true})).toBeVisible();
+  release();await expect(page.locator('a[href="https://www.pixiv.net/users/7324626"]')).toBeVisible();expect(linkReads).toBe(1);
+ }finally{release();}
+});

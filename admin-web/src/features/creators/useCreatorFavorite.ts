@@ -79,7 +79,8 @@ export function useCreatorFavorite(id: string, initialFavorite: boolean | undefi
     let confirmed = confirmedFavorites.get(qc);
     if (!confirmed) { confirmed = new Map(); confirmedFavorites.set(qc, confirmed); }
     if (!confirmed.has(id) && !qc.isMutating({ mutationKey: key, exact: true })) confirmed.set(id, previous);
-    void qc.cancelQueries({ queryKey: queryKeys.creators.all }, { revert: false });
+    void qc.cancelQueries({ queryKey: queryKeys.creators.all, predicate: ({ queryKey }) =>
+      queryKey[1] === "virtual" || queryKey[1] === "list" || (queryKey.length === 2 && queryKey[1] === id) }, { revert: false });
     updateCreatorQueries(qc, id, !previous);
     mutation.mutate({ desired: !previous, previous });
   } };
