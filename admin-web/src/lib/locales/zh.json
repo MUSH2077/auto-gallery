@@ -1126,6 +1126,7 @@
   "media.open_video": "打开视频",
   "media.loading_video": "正在准备视频…",
   "media.video_unsupported": "此浏览器无法播放该视频格式。",
+  "media.image_load_failed": "图片加载失败",
   "media.video_load_failed": "视频加载失败，请重试或打开原文件。",
   "media.open_original": "打开原文件",
   "media.duration": "时长",

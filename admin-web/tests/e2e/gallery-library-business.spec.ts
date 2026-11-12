@@ -290,3 +290,15 @@ test('favorite still rejects an older in-flight response for the same work detai
   release();await expect.poll(()=>returned).toBe(true);await expect(detail.getByRole('button',{name:'Unfavorite work',exact:true})).toHaveAttribute('aria-pressed','true');
  }finally{release();}
 });
+
+
+test('failed image explains loading failure and a different asset still loads',async({page,context})=>{
+ await setup(context);let calls=0;
+ await context.route('**/media/preview/asset-one',route=>{calls++;return json(route,{detail:'File not found'},404);});
+ await page.goto('/admin/works?work=work-one');const detail=page.getByRole('dialog').first();
+ await expect(detail.locator('.detail-media-viewer')).toContainText('Image failed to load');
+ expect(calls).toBe(1);
+ await detail.getByRole('button',{name:'Next image',exact:true}).click();
+ await expect(detail.locator('.detail-media-viewer img').first()).toBeVisible();
+ await expect(detail.locator('.detail-media-viewer img').first()).toHaveAttribute('src','/media/preview/asset-two');
+});

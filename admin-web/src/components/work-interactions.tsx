@@ -44,7 +44,7 @@ export function AssetImage({
   if ((!assetId && !src) || failed) {
     return (
       <div className={`${className} flex items-center justify-center bg-subtle text-xs text-muted`}>
-        {fallback || t("common.na")}
+        {fallback || (failed ? t("media.image_load_failed") : t("common.na"))}
       </div>
     );
   }

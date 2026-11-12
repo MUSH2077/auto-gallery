@@ -1126,6 +1126,7 @@
   "media.open_video": "Open video",
   "media.loading_video": "Preparing video…",
   "media.video_unsupported": "This browser cannot play this video format.",
+  "media.image_load_failed": "Image failed to load",
   "media.video_load_failed": "The video could not be loaded. Retry or open the original file.",
   "media.open_original": "Open original",
   "media.duration": "Duration",
