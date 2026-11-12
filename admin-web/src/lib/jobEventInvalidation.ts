@@ -3,7 +3,6 @@ export const JOB_EVENT_QUERY_KEYS = [
   ["download-jobs"],
   ["import-jobs"],
   ["tasks"],
-  ["tasks", "operations", "attention"],
   ["admin-operation-task"],
   ["admin-operation-snapshot"],
   ["notifications"],

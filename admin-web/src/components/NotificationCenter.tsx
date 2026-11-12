@@ -57,8 +57,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const fetchOperationStatus = useCallback((operation: OperationJobState) => operation.kind === "danbooru-mapping-refresh"
     ? api.getDanbooruMappingRefreshStatus(operation.jobId)
     : api.getAdminOperationStatus(operation.taskId ?? operation.jobId), []);
-  const refreshOperation = useCallback((operation: OperationJobState, result: OperationJobState["result"]) => {
-    refreshOperationResources(qc, operation.kind, operation.meta, result);
+  const refreshOperation = useCallback((operation: OperationJobState) => {
+    refreshOperationResources(qc, operation.kind, operation.meta);
   }, [qc]);
   const monitor = useOperationMonitor({
     storageKey: OPERATION_STORAGE_KEY,

@@ -52,8 +52,8 @@ export function adaptBatchStatus(response: AdminOperationPollResponse | BatchRes
 
 export function useBatchImportMonitor(enabled: boolean) {
   const client = useQueryClient();
-  const refresh = useCallback((_operation: OperationJobState, result: OperationJobState["result"]) => {
-    refreshOperationResources(client, "danbooru-import-all", undefined, result);
+  const refresh = useCallback(() => {
+    refreshOperationResources(client, "danbooru-import-all");
   }, [client]);
   const monitor = useOperationMonitor({ storageKey: BATCH_STORAGE_KEY, fetchStatus: fetchBatchStatus, refreshResources: refresh,
     maxAgeMs: BATCH_RECOVERY_MS, enabled, restoreRecord: restoreBatchRecord, persistRecord: persistBatchRecord, terminalError: terminalBatchError });

@@ -114,7 +114,7 @@ function TaskDetailDialog({ id, c, pendingAction, notice, error, onAction, onCon
 export default function JobsPage() {
   const { copy } = useGalleryCopy();
   const c = useTaskList();
-  useJobEvents({ enabled: c.allowed, onStatusChange: () => { void c.query.refetch(); }, onProgress: () => { void c.query.refetch(); } });
+  useJobEvents({ enabled: c.allowed, onProgress: () => { void c.query.refetch(); } });
   const t = c.t;
   const fmt = useGalleryFormat();
   const summary = c.query.data?.summary;

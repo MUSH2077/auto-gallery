@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { api, queryKeys } from "../src/lib/api/index.ts";
 import { refreshOperationResources } from "../src/lib/operationRefresh.ts";
 
@@ -41,4 +41,37 @@ test("global completion refresh covers the data-management callbacks it owns", (
     for (const key of keys) assert.equal(client.getQueryState(key)?.isInvalidated, true, `${kind}: ${key}`);
     client.clear();
   }
+});
+
+
+for (const kind of ["danbooru-import-all", "danbooru-mapping-refresh", "hierarchy-delete", "admin-clear"]) {
+  test(`${kind} refreshes each affected active cache once`, async () => {
+    const client = new QueryClient();
+    const keys = [queryKeys.creators.detail("artist"), queryKeys.creators.links("artist"), queryKeys.creators.count,
+      queryKeys.subscriptions.detail("sub"), queryKeys.subscriptions.sources("sub"), queryKeys.subscriptions.count,
+      queryKeys.workbench, ["creator-subscription-overview", "artist"]];
+    const counts = new Map();
+    const unsubscribe = keys.map(queryKey => {
+      const observer = new QueryObserver(client, { queryKey, initialData: { version: 0 }, staleTime: Infinity,
+        queryFn: async ({signal}) => { const key=JSON.stringify(queryKey);counts.set(key,(counts.get(key)||0)+1);
+          await new Promise(resolve => setTimeout(resolve, 10));return {version:1}; } });
+      return observer.subscribe(() => {});
+    });
+    try {
+      refreshOperationResources(client, kind, {entity:"all"});
+      await new Promise(resolve => setTimeout(resolve, 30));
+      for(const key of keys) assert.equal(counts.get(JSON.stringify(key)), 1, JSON.stringify(key));
+    } finally {unsubscribe.forEach(stop=>stop());client.clear();}
+  });
+}
+
+test("completed import also refreshes inactive creator and subscription caches",async()=>{
+ const client=new QueryClient();let reads=0;
+ const queryKey=queryKeys.creators.detail("inactive");
+ try {
+  await client.fetchQuery({queryKey,queryFn:async()=>({version:++reads}),staleTime:Infinity});
+  refreshOperationResources(client,"danbooru-import-all");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(reads,2);assert.deepEqual(client.getQueryData(queryKey),{version:2});
+ }finally{client.clear();}
 });

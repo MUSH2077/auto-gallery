@@ -178,3 +178,21 @@ test("task details preserve conflict comparison, apply and rollback", async ({ p
   await expect.poll(() => rollbacks).toBe(1);
   await expect(comparison).toHaveCount(0);
 });
+
+
+test("one task status push refreshes the list once while progress still updates it",async({page,context})=>{
+ let reads=0,notify!:(type:string)=>void,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ await setup(context,(route,path)=>{
+  if(path==='/api/v1/auth/ws-ticket')return json(route,{ticket:'refresh-ticket'});
+  if(path==='/api/v1/tasks')return (async()=>{const read=++reads;if(read===2||read===3)await gate;
+   return json(route,{total:1,items:[{id:'push-task',kind:'download',title:read===1?'Before push':read===2?'After status':'After progress',status:'complete',created_at:baseJob.created_at,available_actions:[]}],summary:{all:1,attention:0,running:0,waiting:0}});})();
+ });
+ await context.routeWebSocket('**/api/v1/ws*',socket=>{notify=type=>socket.send(JSON.stringify({type,task_id:'push-task',new_status:'complete'}));});
+ try{
+  await page.goto('/admin/jobs');await expect(page.getByRole('link',{name:'Before push',exact:true})).toBeVisible();await expect.poll(()=>typeof notify).toBe('function');
+  notify('status_change');await expect.poll(()=>reads).toBeGreaterThan(1);await page.waitForTimeout(100);expect(reads).toBe(2);
+  release();await expect(page.getByRole('link',{name:'After status',exact:true})).toBeVisible();
+  notify('progress');await expect(page.getByRole('link',{name:'After progress',exact:true})).toBeVisible();expect(reads).toBe(3);
+ }finally{release();}
+});
