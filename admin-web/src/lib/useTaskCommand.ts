@@ -16,10 +16,7 @@ export function useTaskCommands(userId?: string | number | null) {
     execute: (task: CommandTask, action: TaskAction, surface?: CommandSurface) => executeTaskCommand(task, action, context, surface),
     repeat: (task: CommandTask, surface?: CommandSurface) => executeTaskCommand(task, "repeat_sync", context, surface),
     batch: (tasks: CommandTask[], action: TaskAction, surface?: CommandSurface) => executeTaskBatch(tasks, action, context, surface),
-    byFilter: async (filters: Record<string, string>, action: string, note?: string) => {
-      try { return await api.batchDownloadJobsByFilter(filters, action, note); }
-      finally { invalidateTaskCommandQueries(client); }
-    },
+    byFilter: api.batchDownloadJobsByFilter,
     invalidate: () => invalidateTaskCommandQueries(client),
   };
 }

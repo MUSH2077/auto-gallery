@@ -196,3 +196,21 @@ test("one task status push refreshes the list once while progress still updates 
   notify('progress');await expect(page.getByRole('link',{name:'After progress',exact:true})).toBeVisible();expect(reads).toBe(3);
  }finally{release();}
 });
+
+
+for (const outcome of ["success","partial","failure"] as const) test(`filter retry ${outcome} refreshes the records once`,async({page,context})=>{
+ let reads=0,body:unknown,release!:()=>void,submitted=false;const pending=new Promise<void>(resolve=>{release=resolve;});
+ await setup(context,(route,path)=>{
+  if(path==='/api/v1/download-jobs')return (async()=>{const read=++reads;if(submitted)await pending;return json(route,[{...baseJob,id:'filter-job',source_url:read===1?'Before retry':'After retry'}]);})();
+  if(path==='/api/v1/download-jobs/batch-by-filter'){body=route.request().postDataJSON();submitted=true;return json(route,outcome==='failure'?{detail:'Retry refused'}:{matched:2,succeeded:outcome==='success'?2:1,failed:outcome==='success'?0:1,errors:outcome==='success'?[]:[{id:'refused',error:'Not retryable'}]},outcome==='failure'?500:200);}
+ });
+ try{
+  await page.goto('/admin/jobs?records=download&status=failed');await expect(page.getByRole('link',{name:'Before retry',exact:true})).toBeVisible();
+  await page.getByText('Records and maintenance',{exact:true}).click();await page.getByRole('button',{name:'Batch current filter',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Retry All Failed',exact:true});await dialog.getByRole('button',{name:'Confirm',exact:true}).click();
+  await expect.poll(()=>reads).toBeGreaterThan(1);await page.waitForTimeout(100);expect(reads).toBe(2);expect(body).toEqual({filters:{status:'failed'},action:'retry'});
+  release();await expect(page.getByRole('link',{name:'After retry',exact:true})).toBeVisible();
+  if(outcome==='success')await expect(dialog).toHaveCount(0);else await expect(dialog).toBeVisible();
+  if(outcome==='failure')await expect(dialog.getByRole('alert')).toContainText('Retry refused');
+ }finally{release();}
+});
