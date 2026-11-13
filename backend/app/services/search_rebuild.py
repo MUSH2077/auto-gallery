@@ -13,6 +13,12 @@ from sqlalchemy.dialects.postgresql import insert
 from app.models.search_rebuild import SearchRebuild as Build, SearchRebuildReplay as Replay
 from app.models.search_delivery_receipt import SearchDeliveryReceipt as Receipt
 from app.models.search_projection_outbox import SearchProjectionOutbox as Outbox
+from app.models import ImportCurationOutbox
+from app.config import settings
+from app.services.search_backend import require_backend
+from app.services.search_index_definitions import WORKS_INDEX
+
+from app.services.search_projection import PROJECTION_SPECS
 
 ACTIVE_BUILD = Build.state.not_in(("complete", "failed"))
 
@@ -25,19 +31,20 @@ def membership_bootstrap_due_condition():
     from app.services.search_delivery import now
     return ~exists().where(
         Build.owner == MEMBERSHIP_BOOTSTRAP_OWNER,
+        Build.backend == settings.search_backend,
         or_(Build.state != "failed", Build.updated_at > now() - timedelta(minutes=5)),
     )
 
 
 async def _bootstrap_memberships(db, limit):
     """Called under the existing writer lock; each later slice advances a cursor."""
-    from app.services.search import MEMBERSHIPS_INDEX
+    from app.services.search_index_definitions import MEMBERSHIPS_INDEX
     from app.services.search_delivery import now
     from app.services.search_projection_outbox import _mark_index_changed
 
     if not (await db.execute(select(membership_bootstrap_due_condition()))).scalar_one():
         return None
-    build = Build(id=uuid4(), owner=MEMBERSHIP_BOOTSTRAP_OWNER, phase="settings", progress={
+    build = Build(backend=settings.search_backend, id=uuid4(), owner=MEMBERSHIP_BOOTSTRAP_OWNER, phase="settings", progress={
         "indexes": [MEMBERSHIPS_INDEX], "position": 0, "cursor": None,
         "batch_size": max(1, min(500, limit)), "counts": {}, "batches": 0,
         "replayed": 0, "since": now().isoformat(),
@@ -46,15 +53,6 @@ async def _bootstrap_memberships(db, limit):
     await _mark_index_changed(db, MEMBERSHIPS_INDEX)
     await db.commit()
     return build
-
-
-def _specs():
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    return {WORKS_INDEX: (Work, "_build_work_documents"), CREATORS_INDEX: (Creator, "_build_creator_documents"),
-            TAGS_INDEX: (Tag, "_build_tag_documents"), REPOSITORIES_INDEX: (SubscriptionSource, "_build_repository_documents"),
-            SUBSCRIPTIONS_INDEX: (Subscription, "_build_subscription_documents"),
-            MEMBERSHIPS_INDEX: (UserSubscription, "_build_membership_documents")}
 
 
 async def start_rebuild(indexes, *, batch_size=500, owner=None):
@@ -67,16 +65,17 @@ async def start_rebuild(indexes, *, batch_size=500, owner=None):
         async with session(time.monotonic() + 20) as db:
             active = (await db.execute(select(Build).where(ACTIVE_BUILD))).scalar_one_or_none()
             if active:
+                require_backend(active)
                 if owner and active.owner == str(owner):
                     return _status(active)
                 raise RuntimeError("Another search rebuild is active")
             if owner:
-                existing = (await db.execute(select(Build).where(Build.owner == str(owner)).order_by(Build.created_at.desc()).limit(1))).scalar_one_or_none()
+                existing = (await db.execute(select(Build).where(Build.owner == str(owner), Build.backend == settings.search_backend).order_by(Build.created_at.desc()).limit(1))).scalar_one_or_none()
                 if existing:
                     return _status(existing)
-            if not indexes or any(index not in _specs() for index in indexes):
+            if not indexes or any(index not in PROJECTION_SPECS for index in indexes):
                 raise ValueError("Unsupported rebuild indexes")
-            build = Build(id=uuid4(), owner=str(owner) if owner else None, phase="settings", progress={
+            build = Build(backend=settings.search_backend, id=uuid4(), owner=str(owner) if owner else None, phase="settings", progress={
                 "indexes": list(dict.fromkeys(indexes)), "position": 0, "cursor": None,
                 "batch_size": max(1, min(500, batch_size)), "counts": {}, "batches": 0, "replayed": 0,
                 "since": now().isoformat(),
@@ -125,7 +124,7 @@ def _advance_index(build, next_phase):
 
 def _receipt(build, uid, action, payload, progress, *, phase=None, versions=()):
     from app.services.search_delivery import now
-    return Receipt(rebuild_id=build.id, index_uid=uid, action=action, payload=payload,
+    return Receipt(backend=build.backend, rebuild_id=build.id, index_uid=uid, action=action, payload=payload,
                    versions=list(versions), phase="raw", state="prepared", lease_token=str(uuid4()),
                    lease_until=now() + timedelta(seconds=30),
                    continuation={"phase": phase or build.phase, "progress": progress})
@@ -145,13 +144,15 @@ def _begin_failure(build, error):
 async def prepare_next(limit, deadline, client):
     """Return None without a rebuild, a receipt, or a local phase-progress result."""
     from app.services.search_delivery import session, result, request, now, set_sql_budget
-    from app.services.search import SearchService, INDEX_SETTINGS, _document_batches
+    from app.services.search_index_definitions import INDEX_SETTINGS
+    from app.services.search_projection import SearchProjection, _document_batches
     async with session(deadline) as db:
         build = (await db.execute(select(Build).where(ACTIVE_BUILD).with_for_update())).scalar_one_or_none()
         if build is None:
             build = await _bootstrap_memberships(db, limit)
             if build is None:
                 return None
+        require_backend(build)
         # An admin cancellation prevents new remote commands; accepted commands
         # already in receipts are polled first by the delivery engine.
         if build.owner and build.state != "cleaning_failure":
@@ -177,7 +178,7 @@ async def prepare_next(limit, deadline, client):
             build.phase = "settings"
             build.progress = progress
         elif build.phase == "build":
-            model, builder = _specs()[live]
+            model = PROJECTION_SPECS[live].model
             query = select(model.id).order_by(model.id).limit(min(limit, progress["batch_size"]))
             if progress["cursor"]:
                 query = query.where(model.id > UUID(progress["cursor"]))
@@ -185,7 +186,7 @@ async def prepare_next(limit, deadline, client):
             if not identities:
                 _advance_index(build, "replay")
             else:
-                docs = await getattr(SearchService(db), builder)(identities)
+                docs = await SearchProjection(db).build(live, identities)
                 by_id = {str(doc["id"]): doc for doc in docs}
                 ordered = [by_id[str(identity)] for identity in identities if str(identity) in by_id]
                 payload = next(iter(_document_batches(ordered)), [])
@@ -213,14 +214,39 @@ async def prepare_next(limit, deadline, client):
             if not events:
                 _advance_index(build, "ensure_live")
             else:
-                _, builder = _specs()[live]
-                docs = await getattr(SearchService(db), builder)([UUID(event.entity_id) for event in events if event.action == "upsert"])
+                upsert_ids = [UUID(event.entity_id) for event in events if live == WORKS_INDEX and event.action == "upsert"]
+                blocked_ids = set()
+                if upsert_ids:
+                    blocked_ids = {
+                        str(work_id)
+                        for work_id in (
+                            await db.execute(select(ImportCurationOutbox.work_id).where(
+                                ImportCurationOutbox.work_id.in_(upsert_ids),
+                                ImportCurationOutbox.state != "complete",
+                            ))
+                        ).scalars()
+                    }
+                eligible_events = [
+                    event for event in events
+                    if event.action == "delete" or str(event.entity_id) not in blocked_ids
+                ]
+                if not eligible_events:
+                    # Do not convert pending curation to delete or ack its
+                    # version. Advance the rebuild cursor only for this
+                    # staging pass; the live outbox remains authoritative.
+                    progress["cursor"] = [events[-1].updated_at.isoformat(), str(events[-1].id)]
+                    build.progress = progress
+                    await db.commit()
+                    return result("pending", delay=2)
+                docs = await SearchProjection(db).build(live, [
+                    UUID(event.entity_id) for event in eligible_events if event.action == "upsert"
+                ])
                 by_id = {str(doc["id"]): doc for doc in docs}
-                action = "upsert" if events[0].action == "upsert" and events[0].entity_id in by_id else "delete"
+                action = "upsert" if eligible_events[0].action == "upsert" and eligible_events[0].entity_id in by_id else "delete"
                 payload, versions = [], []
                 import json
                 size = 2
-                for event in events:
+                for event in eligible_events:
                     actual = "upsert" if event.action == "upsert" and event.entity_id in by_id else "delete"
                     if actual != action:
                         break
@@ -237,7 +263,7 @@ async def prepare_next(limit, deadline, client):
                 progress["replayed"] += len(versions)
                 if progress["replayed"] > 500_000:
                     raise RuntimeError("Rebuild replay exceeded 500,000 events")
-                receipt = _receipt(build, staging, action, payload, progress, versions=versions)
+                receipt = _receipt(build, staging, action, payload, progress, phase=build.phase, versions=versions)
         elif build.phase == "ensure_live":
             # End the read transaction before checking Meili. The global writer
             # flock serializes this transition against other local schedulers.

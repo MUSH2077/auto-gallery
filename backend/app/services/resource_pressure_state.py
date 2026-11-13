@@ -84,14 +84,18 @@ RESOURCE_PROFILES: dict[str, ResourceProfile] = {
     "image_derive": ResourceProfile("image_derive", 256 * MIB, 20.0, 1),
     "video_derive": ResourceProfile("video_derive", 384 * MIB, 20.0, 1),
     "search_index": ResourceProfile("search_index", 192 * MIB, 20.0, 2_000),
+    "pg_search_db": ResourceProfile("pg_search_db", 192 * MIB, 20.0, 2_000),
     # A Git projection outbox unit is one commit, and one import commit may
     # contain up to 25 work changes.  Releasing after one commit bounds the real
     # filesystem/DB work rather than the coordinator row count.
     "git_projection": ResourceProfile("git_projection", 128 * MIB, 20.0, 1),
     "maintenance": ResourceProfile("maintenance", 256 * MIB, 20.0, 1),
+    # Retain the former maintenance RAM reservation without its exclusive barrier.
+    "work_heat": ResourceProfile("work_heat", 256 * MIB, None, 1),
 }
 
 RESOURCE_PROFILE_ALIASES = {
+    "work-heat": "work_heat",
     "download": "download_network",
     "downloads": "download_network",
     "import": "import_db",
@@ -102,6 +106,7 @@ RESOURCE_PROFILE_ALIASES = {
     "video": "video_derive",
     "search": "search_index",
     "meili": "search_index",
+    "pg-search-db": "pg_search_db",
     "git": "git_projection",
     "gitllery": "git_projection",
     "operations": "maintenance",
@@ -131,6 +136,8 @@ def _configured_enforced_profiles() -> set[str] | None:
 
 
 def profile_soft_budget_enforced(profile_name: str) -> bool:
+    if profile_name == "pg_search_db":
+        profile_name = "search_index"
     if str(settings.resource_governance_mode).strip().lower() != "enforce":
         return False
     configured = _configured_enforced_profiles()
@@ -587,6 +594,8 @@ class ResourcePressureStateMachine:
             if profile.name == "maintenance"
             else "ingest"
             if profile.name == "import_db"
+            else "database"
+            if profile.name == "pg_search_db"
             else "background"
         )
         reservation_capacity = (

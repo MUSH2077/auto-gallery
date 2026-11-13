@@ -7,9 +7,6 @@ HTTP request timeouts. Redis keys are scoped by job_id to support concurrent imp
 import asyncio
 import json
 import logging
-import os
-import urllib.parse
-from app.config import settings
 from app.services.redis_client import get_redis
 from app.database import async_session
 from app.services.cache import invalidate_creator_subscription_caches
@@ -44,29 +41,6 @@ async def _publish_progress(job_id: str, progress: dict, redis_client) -> None:
     redis_client.setex(progress_key, PROGRESS_TTL, json.dumps(progress))
 
 
-def _get_auto_enable_sources() -> set[str]:
-    """Read auto-enable-on-import from gallery-dl config.json per extractor."""
-    try:
-        config_path = os.path.join(
-            os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                cfg = json.load(f)
-            extractors = cfg.get("extractor", {})
-            result = set()
-            for src_name, src_cfg in extractors.items():
-                if src_cfg.get("auto-enable-on-import") is True:
-                    if src_name == "twitter":
-                        result.add("x")
-                    else:
-                        result.add(src_name)
-            if result:
-                return result
-    except Exception:
-        pass
-    return {"pixiv"}
-
-
 def run_batch_import(pixiv_ids: list[str], job_id: str = ""):
     """Entry point for RQ worker — Pixiv ID batch import."""
     return asyncio.run(_batch_import(pixiv_ids, job_id))
@@ -79,13 +53,8 @@ def run_url_batch_import(urls: list[str], job_id: str = ""):
 
 async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
     """Process a batch of Pixiv user IDs: search Danbooru, auto-import."""
-    from app.models.creator import Creator
-    from app.models.creator_link import CreatorLink
-    from app.models.subscription import Subscription
-    from app.models.subscription_source import SubscriptionSource
     from app.services import danbooru as danbooru_svc
-    from app.services.creator_dedup import find_existing_creator
-    from sqlalchemy import select
+    from app.services.danbooru_import import persist_danbooru_artist
 
     imported = []
     low_confidence = []
@@ -146,123 +115,7 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                     })
                     continue
 
-                first_dl = dl_urls[0] if dl_urls else {}
-                first_url = first_dl.get("normalized_url") or first_dl.get("url", "")
-                existing = await find_existing_creator(
-                    db, danbooru_artist_id=artist_id,
-                    source="pixiv", source_creator_id=pid,
-                    source_url=first_url,
-                )
-
-                if existing:
-                    creator = existing
-                    was_merged = True
-                    if not creator.danbooru_artist_id:
-                        creator.danbooru_artist_id = artist_id
-                else:
-                    from app.models.source_creator import SourceCreator
-                    sc_result = await db.execute(
-                        select(SourceCreator).where(
-                            SourceCreator.source == "pixiv",
-                            SourceCreator.source_creator_id == str(pid),
-                        )
-                    )
-                    sc = sc_result.scalar_one_or_none()
-                    pixiv_display = sc.display_name if sc else None
-                    creator = Creator(
-                        name=artist_name,
-                        display_name=pixiv_display or artist_name,
-                        danbooru_artist_id=artist_id,
-                    )
-                    db.add(creator)
-                    await db.flush()
-                    was_merged = False
-                    # description is left for the admin to write — keep creator
-                    # pages identical regardless of which import path created them.
-
-                links_count = 0
-                for link_data in links:
-                    existing_link = await db.execute(
-                        select(CreatorLink).where(
-                            CreatorLink.creator_id == creator.id,
-                            CreatorLink.url == link_data["url"]))
-                    if existing_link.scalar_one_or_none():
-                        continue
-                    db.add(CreatorLink(
-                        creator_id=creator.id, url=link_data["url"],
-                        link_type=link_data["link_type"],
-                        source=link_data["source"],
-                        confidence=link_data["confidence"],
-                        is_verified=link_data["is_verified"],
-                        notes=link_data.get("notes"),
-                    ))
-                    links_count += 1
-
-                sub_result = await db.execute(
-                    select(Subscription).where(Subscription.creator_id == creator.id))
-                subscription = sub_result.scalar_one_or_none()
-                if not subscription:
-                    from app.services.subscription import get_subscription_defaults
-                    defaults = await get_subscription_defaults(db)
-                    subscription = Subscription(creator_id=creator.id,
-                        sync_interval_hours=defaults["sync_interval_hours"],
-                        sync_enabled=defaults["sync_enabled"],
-                        is_active=defaults["is_active"])
-                    db.add(subscription)
-                    await db.flush()
-
-                sources_count = 0
-                seen_source_types: set[str] = set()
-                for u in dl_urls:
-                    raw_url = u.get("normalized_url") or u.get("url", "")
-                    src_type = danbooru_svc._classify_url(raw_url)
-                    # Dedup by source type within this batch (a single artist
-                    # may have multiple URLs of the same platform, e.g. two
-                    # weibo URLs, but the DB constraint is (subscription_id,
-                    # source) — only one per source type per subscription).
-                    if src_type in seen_source_types:
-                        continue
-                    seen_source_types.add(src_type)
-                    # Also check if this source type already exists in DB
-                    existing_ss = await db.execute(
-                        select(SubscriptionSource).where(
-                            SubscriptionSource.subscription_id == subscription.id,
-                            SubscriptionSource.source == src_type))
-                    if existing_ss.scalar_one_or_none():
-                        continue
-                    db.add(SubscriptionSource(
-                        subscription_id=subscription.id,
-                        source=src_type, source_url=raw_url,
-                        is_enabled=(src_type in _get_auto_enable_sources()),
-                    ))
-                    sources_count += 1
-
-                danbooru_posts_url = (
-                    f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(artist_name)}"
-                )
-                existing_ds = await db.execute(
-                    select(SubscriptionSource).where(
-                        SubscriptionSource.subscription_id == subscription.id,
-                        SubscriptionSource.source == "danbooru",
-                    )
-                )
-                if not existing_ds.scalar_one_or_none():
-                    db.add(SubscriptionSource(
-                        subscription_id=subscription.id,
-                        source="danbooru",
-                        source_url=danbooru_posts_url,
-                        is_enabled=("danbooru" in _get_auto_enable_sources()),
-                    ))
-                    sources_count += 1
-
-                from app.services.creator import CreatorService
-                from app.services.creator_aliases import backfill_creator_alias_batch
-                await backfill_creator_alias_batch(
-                    db,
-                    (creator.id,),
-                    request_projection=False,
-                )
-                await CreatorService(db)._request_creator_projection(creator.id)
+                applied = await persist_danbooru_artist(artist, links, db)
                 await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()
                 # Release all ORM objects from the session so the identity
@@ -270,13 +123,13 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
                 db.expunge_all()
 
                 imported.append({
-                    "pixiv_id": pid, "creator_id": str(creator.id),
+                    "pixiv_id": pid, "creator_id": str(applied.creator_id),
                     "artist_name": artist_name, "artist_id": artist_id,
-                    "links_imported": links_count,
-                    "sources_created": sources_count,
+                    "links_imported": applied.links_imported,
+                    "sources_created": applied.sources_created,
                     "downloadable_urls": [
                         u.get("normalized_url") or u.get("url") for u in dl_urls],
-                    "merged": was_merged,
+                    "merged": not applied.created_new,
                 })
 
             except AdminOperationAttemptRejected:
@@ -322,13 +175,8 @@ async def _batch_import(pixiv_ids: list[str], job_id: str) -> dict:
 
 async def _url_batch_import(urls: list[str], job_id: str) -> dict:
     """Process a batch of URLs: look up each on Danbooru, auto-import."""
-    from app.models.creator import Creator
-    from app.models.creator_link import CreatorLink
-    from app.models.subscription import Subscription
-    from app.models.subscription_source import SubscriptionSource
     from app.services import danbooru as danbooru_svc
-    from app.services.creator_dedup import find_existing_creator
-    from sqlalchemy import select
+    from app.services.danbooru_import import persist_danbooru_artist
 
     imported = []
     not_found = []
@@ -376,107 +224,7 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
                     continue
 
                 canonical_name = artist.get("name", "Unknown")
-                existing = await find_existing_creator(
-                    db, danbooru_artist_id=artist.get("id"))
-                if existing:
-                    creator = existing
-                    created_new = False
-                else:
-                    creator = Creator(
-                        name=canonical_name,
-                        display_name=canonical_name,
-                    )
-                    db.add(creator)
-                    await db.flush()
-                    created_new = True
-
-                if creator.danbooru_artist_id is None:
-                    creator.danbooru_artist_id = artist.get("id")
-
-                links_created = 0
-                for link_data in links:
-                    existing_link = await db.execute(
-                        select(CreatorLink).where(
-                            CreatorLink.creator_id == creator.id,
-                            CreatorLink.url == link_data["url"],
-                        )
-                    )
-                    if existing_link.scalar_one_or_none():
-                        continue
-                    db.add(CreatorLink(
-                        creator_id=creator.id,
-                        url=link_data["url"],
-                        link_type=link_data["link_type"],
-                        source=link_data["source"],
-                        confidence=link_data["confidence"],
-                        is_verified=link_data["is_verified"],
-                        notes=link_data.get("notes"),
-                    ))
-                    links_created += 1
-
-                sub_result = await db.execute(
-                    select(Subscription).where(
-                        Subscription.creator_id == creator.id))
-                subscription = sub_result.scalar_one_or_none()
-                if not subscription:
-                    from app.services.subscription import get_subscription_defaults
-                    defaults = await get_subscription_defaults(db)
-                    subscription = Subscription(
-                        creator_id=creator.id,
-                        sync_interval_hours=defaults["sync_interval_hours"],
-                        sync_enabled=defaults["sync_enabled"],
-                        is_active=defaults["is_active"],
-                    )
-                    db.add(subscription)
-                    await db.flush()
-
-                sources_created = 0
-                for link_data in links:
-                    if not danbooru_svc.is_downloadable_url(link_data["url"]):
-                        continue
-                    src_type = danbooru_svc._classify_url(link_data["url"])
-                    existing_ss = await db.execute(
-                        select(SubscriptionSource).where(
-                            SubscriptionSource.subscription_id == subscription.id,
-                            SubscriptionSource.source_url == link_data["url"],
-                        )
-                    )
-                    if existing_ss.scalar_one_or_none():
-                        continue
-                    db.add(SubscriptionSource(
-                        subscription_id=subscription.id,
-                        source=src_type,
-                        source_url=link_data["url"],
-                        is_enabled=(src_type in _get_auto_enable_sources()),
-                    ))
-                    sources_created += 1
-
-                danbooru_posts_url = (
-                    f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(canonical_name)}"
-                )
-                existing_ds = await db.execute(
-                    select(SubscriptionSource).where(
-                        SubscriptionSource.subscription_id == subscription.id,
-                        SubscriptionSource.source == "danbooru",
-                    )
-                )
-                if not existing_ds.scalar_one_or_none():
-                    db.add(SubscriptionSource(
-                        subscription_id=subscription.id,
-                        source="danbooru",
-                        source_url=danbooru_posts_url,
-                        is_enabled=("danbooru" in _get_auto_enable_sources()),
-                    ))
-                    sources_created += 1
-
-                from app.services.creator import CreatorService
-                from app.services.creator_aliases import backfill_creator_alias_batch
-                await backfill_creator_alias_batch(
-                    db,
-                    (creator.id,),
-                    request_projection=False,
-                )
-                await CreatorService(db)._request_creator_projection(creator.id)
+                applied = await persist_danbooru_artist(artist, links, db)
                 await fence_current_admin_operation_transaction(db, task_id=job_id)
                 await db.commit()
                 # Release all ORM objects from the session so the identity
@@ -485,12 +233,12 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
 
                 imported.append({
                     "url": url,
-                    "creator_id": str(creator.id),
+                    "creator_id": str(applied.creator_id),
                     "artist_name": canonical_name,
                     "artist_id": artist.get("id"),
-                    "links_imported": links_created,
-                    "sources_created": sources_created,
-                    "created_new": created_new,
+                    "links_imported": applied.links_imported,
+                    "sources_created": applied.sources_created,
+                    "created_new": applied.created_new,
                 })
 
             except AdminOperationAttemptRejected:
@@ -514,6 +262,10 @@ async def _url_batch_import(urls: list[str], job_id: str) -> dict:
         "not_found_count": len(not_found),
         "error_count": len(errors),
         "imported": imported,
+        # URL imports do not run Pixiv confidence splitting, but share the
+        # complete batch-result contract consumed by monitoring and display.
+        "low_confidence_count": 0,
+        "low_confidence": [],
         "not_found": not_found,
         "errors": errors,
     }

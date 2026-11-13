@@ -1,5 +1,20 @@
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
+import { access } from "node:fs/promises";
+
+export async function resolve(specifier, context, nextResolve) {
+  const candidate = specifier.startsWith("@/")
+    ? new URL(`../src/${specifier.slice(2)}`, import.meta.url)
+    : specifier.startsWith(".") && context.parentURL ? new URL(specifier, context.parentURL) : null;
+  if (candidate) {
+    for (const suffix of ["", ".ts", "/index.ts"]) {
+      const url = new URL(candidate.href + suffix);
+      if (!url.pathname.endsWith(".ts")) continue;
+      try { await access(url); return { url: url.href, shortCircuit: true }; } catch {}
+    }
+  }
+  return nextResolve(specifier, context);
+}
 
 // Node 20 cannot run the pure TypeScript rule modules directly. Keep the
 // regression tests on the repository's pinned TypeScript compiler.

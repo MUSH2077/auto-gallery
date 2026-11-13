@@ -6,7 +6,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, CircleAlert, ExternalLink, RotateCcw, UserRound } from "lucide-react";
 
-import { EmptyState, ErrorState, FilterBar, Modal, Pagination, SectionPanel, SelectionBar, StatusBadge, TableSkeleton, useToast } from "@/components";
+import { EmptyState, ErrorState, FilterBar, Pagination, SectionPanel, SelectionBar, StatusBadge, TableSkeleton, useToast } from "@/components";
+import { BusinessModal } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import {
   ApiError,
   api,
@@ -223,7 +225,7 @@ function ImportDialog({
     if (open) setSyncNow(false);
   }, [open]);
   return (
-    <Modal open={open} onClose={onClose} title={t("discovery.import_title")}>
+    <BusinessModal open={open} onClose={onClose} title={t("discovery.import_title")}>
       <p className="text-sm leading-5 text-muted">{t("discovery.import_message", { count })}</p>
       {unfinishedCount > 0 ? <p role="alert" className="mt-3 rounded-md border border-warning/30 bg-warning-subtle p-3 text-sm text-warning">{t("discovery.import_evidence_warning", { count: unfinishedCount })}</p> : null}
       {syncDisabled ? <p className="mt-3 rounded-md border border-border bg-subtle p-3 text-sm text-muted">{t("discovery.protected_download_cookie_required")}</p> : null}
@@ -235,7 +237,7 @@ function ImportDialog({
         <button type="button" className="btn-ghost" onClick={onClose}>{t("common.cancel")}</button>
         <button type="button" className="btn-primary" disabled={pending} onClick={() => onConfirm(syncNow)}>{t("discovery.confirm_import")}</button>
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }
 
@@ -479,60 +481,12 @@ export default function CandidateWorkbench({
           className="flex-col items-stretch sm:flex-row sm:items-center"
           meta={candidates.data && !candidates.error ? <span className="block w-full text-right text-xs tabular-nums text-muted">{t("common.total")}: {fmt.number(candidates.data.total)}</span> : undefined}
         >
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_provider")}</span>
-            <select className="select w-full sm:min-w-36" value={provider} onChange={(event) => { setProvider(event.target.value as typeof provider); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              {accounts.map((account) => <option key={account.id} value={account.source}>{providerLabel(t, account.source)}</option>)}
-            </select>
-          </label>
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_evidence")}</span>
-            <select className="select w-full sm:min-w-36" value={evidence} onChange={(event) => { setEvidence(event.target.value as typeof evidence); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              <option value="pending">{t("discovery.evidence_pending")}</option>
-              <option value="retrying">{t("discovery.evidence_retrying")}</option>
-              <option value="ready">{t("discovery.evidence_ready")}</option>
-              <option value="failed">{t("discovery.evidence_failed")}</option>
-              <option value="not_required">{t("discovery.evidence_not_required")}</option>
-            </select>
-          </label>
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_confidence")}</span>
-            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_confidence")} value={confidence} onChange={(event) => { setConfidence(event.target.value as typeof confidence); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              <option value="high">{t("discovery.confidence_high")}</option>
-              <option value="medium">{t("discovery.confidence_medium")}</option>
-              <option value="low">{t("discovery.confidence_low")}</option>
-            </select>
-          </label>
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_status")}</span>
-            <select className="select w-full sm:min-w-32" aria-label={t("discovery.filter_status")} value={status} onChange={(event) => { setStatus(event.target.value as typeof status); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              <option value="pending">{t("discovery.status_pending")}</option>
-              <option value="imported">{t("discovery.status_imported")}</option>
-              <option value="dismissed">{t("discovery.status_dismissed")}</option>
-              <option value="conflict">{t("discovery.status_conflict")}</option>
-            </select>
-          </label>
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_following")}</span>
-            <select className="select w-full sm:min-w-36" value={following} onChange={(event) => { setFollowing(event.target.value as typeof following); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              <option value="true">{t("discovery.filter_following_yes")}</option>
-              <option value="false">{t("discovery.filter_following_no")}</option>
-            </select>
-          </label>
-          <label className="grid w-full gap-1 text-xs font-medium text-muted sm:w-auto">
-            <span>{t("discovery.filter_local")}</span>
-            <select className="select w-full sm:min-w-36" value={local} onChange={(event) => { setLocal(event.target.value as LocalFilter); resetFilters(); }}>
-              <option value="">{t("discovery.filter_all")}</option>
-              <option value="matched">{t("discovery.filter_local_matched")}</option>
-              <option value="unmatched">{t("discovery.filter_local_unmatched")}</option>
-              <option value="conflict">{t("discovery.filter_local_conflict")}</option>
-            </select>
-          </label>
+          <ToolbarSelect label={t("discovery.filter_provider")} value={provider} options={[{value:"",label:t("discovery.filter_all")}, ...accounts.map(account=>({value:account.source,label:providerLabel(t, account.source)}))]} onValueChange={value=>{setProvider(value as typeof provider);resetFilters();}} />
+          <ToolbarSelect label={t("discovery.filter_evidence")} value={evidence} options={[{value:"",label:t("discovery.filter_all")},{value:"pending",label:t("discovery.evidence_pending")},{value:"retrying",label:t("discovery.evidence_retrying")},{value:"ready",label:t("discovery.evidence_ready")},{value:"failed",label:t("discovery.evidence_failed")},{value:"not_required",label:t("discovery.evidence_not_required")}]} onValueChange={value=>{setEvidence(value as typeof evidence);resetFilters();}} />
+          <ToolbarSelect label={t("discovery.filter_confidence")} value={confidence} options={[{value:"",label:t("discovery.filter_all")},{value:"high",label:t("discovery.confidence_high")},{value:"medium",label:t("discovery.confidence_medium")},{value:"low",label:t("discovery.confidence_low")}]} onValueChange={value=>{setConfidence(value as typeof confidence);resetFilters();}} />
+          <ToolbarSelect label={t("discovery.filter_status")} value={status} options={[{value:"",label:t("discovery.filter_all")},{value:"pending",label:t("discovery.status_pending")},{value:"imported",label:t("discovery.status_imported")},{value:"dismissed",label:t("discovery.status_dismissed")},{value:"conflict",label:t("discovery.status_conflict")}]} onValueChange={value=>{setStatus(value as typeof status);resetFilters();}} />
+          <ToolbarSelect label={t("discovery.filter_following")} value={following} options={[{value:"",label:t("discovery.filter_all")},{value:"true",label:t("discovery.filter_following_yes")},{value:"false",label:t("discovery.filter_following_no")}]} onValueChange={value=>{setFollowing(value as typeof following);resetFilters();}} />
+          <ToolbarSelect label={t("discovery.filter_local")} value={local} options={[{value:"",label:t("discovery.filter_all")},{value:"matched",label:t("discovery.filter_local_matched")},{value:"unmatched",label:t("discovery.filter_local_unmatched")},{value:"conflict",label:t("discovery.filter_local_conflict")}]} onValueChange={value=>{setLocal(value as LocalFilter);resetFilters();}} />
         </FilterBar>
 
         <SelectionBar

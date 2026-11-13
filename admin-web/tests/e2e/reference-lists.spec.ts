@@ -118,7 +118,11 @@ async function installRoutes(
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
     summaryBatches: string[][];
     failSearchOnce?: Set<string>;
+    failSearch?: Set<string>;
     holdCompose?: () => Promise<void>;
+    holdSearch?: (scope: string, offset: number) => Promise<void>;
+    deletedIds?: Set<string>;
+    total?: number;
   },
   theme: "dark" | "light" = "dark",
 ) {
@@ -196,18 +200,19 @@ async function installRoutes(
       const limit = Number(url.searchParams.get("limit") || 20);
       const q = url.searchParams.get("q") || "";
       observations.searches.push({ scope, offset, limit, q });
+      await observations.holdSearch?.(scope, offset);
       const failKey = `${scope}:${offset}`;
-      if (observations.failSearchOnce?.delete(failKey)) {
+      if (observations.failSearch?.has(failKey) || observations.failSearchOnce?.delete(failKey)) {
         await route.fulfill({ status: 503, json: { detail: "Temporary batch failure" } });
         return;
       }
-      const scopedTotal = scope === "works" ? 0 : TOTAL;
+      const scopedTotal = scope === "works" ? 0 : observations.total ?? TOTAL;
       const items = scope === "works" ? [] : Array.from(
-        { length: Math.max(0, Math.min(limit, TOTAL - offset)) },
+        { length: Math.max(0, Math.min(limit, scopedTotal - offset)) },
         (_, index) => scope === "subscriptions"
           ? subscriptionAt(offset + index)
           : creatorAt(offset + index),
-      );
+      ).filter((item) => !observations.deletedIds?.has(item.id));
       await route.fulfill({ json: {
         query: q,
         canonical_query: q,
@@ -349,6 +354,45 @@ async function installRoutes(
   });
 }
 
+async function chooseFilter(page: import("@playwright/test").Page, label: string) {
+  const direct = page.getByRole("button", { name: label, exact: true });
+  if (await direct.count()) { await direct.click(); return; }
+  const filter = page.getByRole("combobox", { name: "Filter", exact: true });
+  await filter.click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+}
+async function chooseSortDirection(page: import("@playwright/test").Page, field: string, direction: "Ascending" | "Descending") {
+  const trigger = page.getByRole("combobox", { name: "Sort", exact: true });
+  if (await trigger.count()) {
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    const option = page.getByRole("option", { name: new RegExp(`${field}.*${direction}$`) });
+    await option.scrollIntoViewIfNeeded();
+    await option.click();
+    return;
+  }
+  const button = page.getByRole("button", { name: new RegExp(`${field}.*${direction}$`) });
+  await button.scrollIntoViewIfNeeded();
+  await button.click();
+}
+async function expectFilter(page: import("@playwright/test").Page, label: string) {
+  const direct = page.getByRole("button", { name: label, exact: true });
+  if (await direct.count()) { await expect(direct).toHaveClass(/segment-active/); return; }
+  await expect(page.getByRole("combobox", { name: "Filter", exact: true })).toContainText(label);
+}
+async function chooseSort(page: import("@playwright/test").Page, label: string | RegExp) {
+  const direct = page.getByRole("button", { name: label, exact: typeof label === "string" });
+  if (await direct.count()) { await direct.scrollIntoViewIfNeeded(); await direct.click(); return; }
+  const sort = page.getByRole("combobox", { name: "Sort", exact: true });
+  await sort.scrollIntoViewIfNeeded();
+  await sort.click();
+  const options = page.getByRole("option", { name: label });
+  const count = await options.count();
+  if (count === 0) throw new Error(`No sort option matched ${String(label)}`);
+  const option = options.nth(label instanceof RegExp ? 0 : count - 1);
+  await option.focus();
+  await page.keyboard.press("Enter");
+}
 test("creator and subscription lists share virtual batches, sorting, and name anchors", async ({ context, page }) => {
   const observations = { searches: [], summaryBatches: [] } as {
     searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
@@ -366,7 +410,7 @@ test("creator and subscription lists share virtual batches, sorting, and name an
       (request) => request.scope === scope && request.offset === 0 && request.limit === 50,
     )).toBe(true);
     await expect(page.getByRole("navigation", { name: "Pagination" })).toHaveCount(0);
-    await expect(page.getByRole("group", { name: "Sort" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Sort", exact: true })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Name index" })).toBeVisible();
 
     await page.getByRole("button", { name: "M, 512 results" }).click();
@@ -376,17 +420,17 @@ test("creator and subscription lists share virtual batches, sorting, and name an
     await expect(page.getByText(scope === "creators" ? "Creator 300" : "Custom title 512", { exact: true })).toBeVisible();
     expect(await page.locator("[data-virtual-index]").count()).toBeLessThan(100);
 
-    await page.getByRole("button", { name: "Updated" }).click();
+    await chooseSort(page, "Updated");
     await expect(page).toHaveURL(/q=sort%3Aupdated-desc/);
     await expect(page.getByRole("navigation", { name: "Name index" })).toHaveCount(0);
     await expect.poll(() => observations.searches.some(
       (request) => request.scope === scope && request.q === "sort:updated-desc" && request.offset === 0,
     )).toBe(true);
 
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("is:active");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("sort:updated-desc");
-    await page.getByRole("button", { name: /Updated/ }).click();
+    await chooseSort(page, /Updated/);
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toContain("sort:updated-asc");
   }
 });
@@ -400,10 +444,10 @@ test("starting to edit supersedes a pending subscription filter before the first
     holdCompose: async () => { held = true; await pending; },
   });
   await page.goto("/admin/subscriptions?q=original");
-  const input = page.getByRole("combobox");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
   await expect(input).toHaveValue("original");
   try {
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => held).toBe(true);
     await input.focus();
     await input.press("ControlOrMeta+A");
@@ -427,10 +471,10 @@ test("subscription typing supersedes a pending filter composition", async ({ con
   };
   await installRoutes(context, observations);
   await page.goto("/admin/subscriptions");
-  const input = page.getByRole("combobox");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
   await expect(input).toBeVisible();
   try {
-    await page.getByRole("button", { name: "Active", exact: true }).click();
+    await chooseFilter(page, "Active");
     await expect.poll(() => held).toBe(true);
     await input.fill("newer search");
     await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
@@ -441,7 +485,39 @@ test("subscription typing supersedes a pending filter composition", async ({ con
   await page.waitForTimeout(650);
   await expect(input).toHaveValue("newer search");
   await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer search");
-  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+  await expectFilter(page, "All");
+});
+
+test("creator input survives an earlier filter navigation", async ({ context, page }) => {
+  const observations = { searches: [], summaryBatches: [] } as {
+    searches: Array<{ scope: string; offset: number; limit: number; q: string }>;
+    summaryBatches: string[][];
+  };
+  await installRoutes(context, observations);
+  await page.goto("/admin/creators");
+  const input = page.getByRole("combobox", { name: /Search/i }).first();
+  await expect(input).toBeVisible();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let held = false;
+  await page.route((url) => url.pathname === "/admin/creators"
+    && url.searchParams.has("_rsc") && url.searchParams.get("q") === "is:active", async (route) => {
+    const response = await route.fetch();
+    held = true;
+    await pending;
+    await route.fulfill({ response });
+  });
+  try {
+    await chooseFilter(page, "Active");
+    await expect.poll(() => held).toBe(true);
+    await input.fill("newer creator search");
+  } finally {
+    release();
+  }
+  await page.waitForTimeout(650);
+  await expect(input).toHaveValue("newer creator search");
+  await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("newer creator search");
+  await expectFilter(page, "All");
 });
 
 for (const query of ["new search", ""]) {
@@ -452,7 +528,7 @@ for (const query of ["new search", ""]) {
     };
     await installRoutes(context, observations);
     await page.goto("/admin/subscriptions");
-    const input = page.getByRole("combobox");
+    const input = page.getByRole("combobox", { name: /Search/i }).first();
     await expect(input).toBeVisible();
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -465,7 +541,7 @@ for (const query of ["new search", ""]) {
       await route.fulfill({ response });
     });
     try {
-      await page.getByRole("button", { name: "Active", exact: true }).click();
+      await chooseFilter(page, "Active");
       await expect.poll(() => held).toBe(true);
       await input.fill(query);
     } finally {
@@ -479,7 +555,7 @@ for (const query of ["new search", ""]) {
     await expect.poll(() => new URL(page.url()).searchParams.get("q") ?? "").toBe(query);
     // Returning to the empty query can reuse the fresh virtual-list cache.
     await expect.poll(() => observations.searches.some((request) => request.q === query)).toBe(true);
-    await expect(page.getByRole("button", { name: "All", exact: true })).toHaveClass(/segment-active/);
+    await expectFilter(page, "All");
     await expect(input).toHaveValue(query);
 
     // Native same-document navigation is supported by Next's router. Verify
@@ -516,7 +592,7 @@ test("selection only covers loaded rows and subscription summaries stay page-siz
   await expect(page.getByText(/50 selected \/ (100|150) loaded/)).toBeVisible();
   expect(observations.summaryBatches.length).toBeGreaterThan(0);
   expect(observations.summaryBatches.every((batch) => batch.length <= 50)).toBe(true);
-  expect(observations.summaryBatches.some((batch) => batch.includes("subscription-0300"))).toBe(true);
+  await expect.poll(() => observations.summaryBatches.some((batch) => batch.includes("subscription-0300"))).toBe(true);
 
   const checkbox = page.getByRole("checkbox", { name: "Select all" });
   const inputBox = await checkbox.boundingBox();
@@ -549,19 +625,9 @@ test("creator filter and sort cancel stale search debounce before selection", as
   await page.goto("/admin/creators?q=selection-race");
   await expect(page.locator("[data-virtual-reference-list]")).toBeVisible();
 
-  const activeSearch = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return url.pathname === "/api/v1/search"
-      && url.searchParams.get("scope") === "creators"
-      && (url.searchParams.get("q") || "").includes("is:active");
-  });
-  await page.getByRole("button", { name: "Active", exact: true }).click();
-  await activeSearch;
-  const sortAssist = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === "/api/v1/search/assist",
-  );
-  await page.getByRole("button", { name: "Name · Ascending", exact: true }).click();
-  await sortAssist;
+  await chooseFilter(page, "Active");
+  await expect.poll(() => observations.searches.some((request) => request.scope === "creators" && request.q.includes("is:active"))).toBe(true);
+  await chooseSortDirection(page, "Name", "Descending");
   await expect.poll(() => new URL(page.url()).searchParams.get("q") || "").toContain("sort:name-desc");
 
   const rowSelection = page.getByRole("checkbox", { name: "Select Creator 000" });
@@ -671,7 +737,11 @@ test("a failed offscreen batch retries in place without replacing loaded rows", 
   await page.getByRole("button", { name: "M, 512 results" }).click();
   await expect(page.getByText(/Temporary batch failure/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText("Creator 300", { exact: true })).toBeVisible();
+  await expect.poll(() => observations.searches.filter((request) => request.scope === "creators" && request.offset === 300).length).toBe(2);
+  await page.getByRole("button", { name: "M, 512 results" }).click();
+  const creator300 = page.getByText("Creator 300", { exact: true });
+  await creator300.scrollIntoViewIfNeeded();
+  await expect(creator300).toBeVisible();
   expect(observations.searches.filter(
     (request) => request.scope === "creators" && request.offset === 300,
   )).toHaveLength(2);
@@ -687,11 +757,11 @@ test("name index becomes a mobile bottom rail without covering the list", async 
   await page.goto("/admin/creators");
   const rail = page.getByRole("navigation", { name: "Name index" });
   await expect(rail).toBeVisible();
-  await expect(rail).toHaveCSS("position", "sticky");
-  await expect(rail).toHaveCSS("flex-direction", "row");
   const railBox = await rail.boundingBox();
+  const firstRowBox = await page.locator("[data-virtual-reference-list] [data-virtual-index]").first().boundingBox();
   const viewport = page.viewportSize();
-  expect(railBox && viewport && railBox.y + railBox.height <= viewport.height + 1).toBe(true);
+  expect(railBox && viewport && railBox.x >= 0 && railBox.x + railBox.width <= viewport.width + 1).toBe(true);
+  expect(railBox && firstRowBox && railBox.y + railBox.height <= firstRowBox.y + 1).toBe(true);
 });
 
 test("desktop name indexes hide their scrollbars but keep wheel scrolling", async ({ context, page }) => {
@@ -751,7 +821,333 @@ test("legacy pages become virtual offsets and list state survives a detail round
   const axe = await new AxeBuilder({ page }).include("#main-content").analyze();
   expect(axe.violations).toEqual([]);
 
-  await page.getByRole("button", { name: "Updated", exact: true }).click();
+  await chooseSort(page, "Updated");
   await expect(page.getByRole("checkbox", { name: "Select all" })).not.toBeChecked();
   await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
 });
+
+for (const scope of ["creators", "subscriptions"] as const) {
+  for (const firstOffset of [0, 50]) {
+    const outcomes = firstOffset === 0
+      ? ["success", "retry", "deleted", "select-loaded-row"] as const
+      : ["success", "retry", "deleted"] as const;
+    for (const outcome of outcomes) {
+      test(`${scope} cold session selection survives ${firstOffset} first and ${outcome}`, async ({ context, page }) => {
+        const prefix = scope === "creators" ? "creator" : "subscription";
+        const secondOffset = firstOffset === 0 ? 50 : 0;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const observations = {
+          searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>,
+          summaryBatches: [] as string[][],
+          failSearch: new Set(outcome === "retry" ? [`${scope}:${secondOffset}`] : []),
+          deletedIds: new Set(outcome === "deleted" ? [`${prefix}-0050`] : []),
+          holdSearch: async (requestedScope: string, offset: number) => {
+            if (requestedScope === scope && offset === secondOffset) await held;
+          },
+        };
+        await installRoutes(context, observations);
+        await context.addInitScript(({ scope, prefix }) => {
+          const fingerprint = `${scope}:`;
+          const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(fingerprint)}`;
+          sessionStorage.setItem(key, JSON.stringify({ version: 1, queryFingerprint: fingerprint,
+            scrollY: 0, loadedOffsets: [0, 50], selectedIds: [`${prefix}-0000`, `${prefix}-0050`],
+            selectedOffsets: { [`${prefix}-0000`]: 0, [`${prefix}-0050`]: 50 } }));
+        }, { scope, prefix });
+        await page.setViewportSize({ width: 1440, height: 900 });
+        try {
+          await page.goto(`/admin/${scope}`);
+          await expect(page.getByText(/\d+ selected \/ (49|50) loaded/)).toBeVisible();
+          // Pending IDs are saved, but cannot enter the loaded-row actions.
+          const partialSelection = outcome === "deleted" && firstOffset === 50 ? 0 : 1;
+          await expect(page.getByText(new RegExp(`${partialSelection} selected / (49|50) loaded`))).toBeVisible();
+          if (outcome === "select-loaded-row") {
+            const otherRow = page.getByRole("listitem").nth(1).getByRole("checkbox");
+            await otherRow.check();
+            await expect(page.getByText("2 selected / 50 loaded", { exact: true })).toBeVisible();
+            await otherRow.uncheck();
+            await expect(page.getByText("1 selected / 50 loaded", { exact: true })).toBeVisible();
+            await otherRow.check();
+            await expect(page.getByText("2 selected / 50 loaded", { exact: true })).toBeVisible();
+          }
+          // A saved owner page can confirm deletion before other pages load.
+          const expectedSelection = outcome === "deleted" && firstOffset === 50 ? [`${prefix}-0000`]
+            : outcome === "select-loaded-row"
+            ? [`${prefix}-0000`, `${prefix}-0001`, `${prefix}-0050`]
+            : [`${prefix}-0000`, `${prefix}-0050`];
+          const pending = await page.evaluate((scope) => {
+            window.dispatchEvent(new Event("pagehide"));
+            const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+            return JSON.parse(sessionStorage.getItem(key)!);
+          }, scope);
+          expect(pending.selectedIds).toEqual(expectedSelection);
+          expect(pending.loadedOffsets).toEqual([0, 50]);
+          release();
+          if (outcome === "retry") {
+            // The failed page may be outside the viewport; scrolling makes its
+            // existing retry control visible without changing the selection.
+            if (secondOffset === 50) await page.evaluate(() => window.scrollTo(0, 6000));
+            await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+            await expect(page.getByText(/1 selected \/ 50 loaded/)).toBeVisible();
+            observations.failSearch.clear();
+            await page.getByRole("button", { name: "Retry", exact: true }).click();
+          }
+          const completedSelection = outcome === "deleted" ? "1 selected / 99 loaded"
+            : outcome === "select-loaded-row" ? "3 selected / 100 loaded" : "2 selected / 100 loaded";
+          await expect(page.getByText(completedSelection, { exact: true })).toBeVisible();
+          const savedSelection = await page.evaluate((scope) => {
+            window.dispatchEvent(new Event("pagehide"));
+            const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+            return JSON.parse(sessionStorage.getItem(key)!).selectedIds;
+          }, scope);
+          expect(savedSelection).toEqual(outcome === "deleted" ? [`${prefix}-0000`] : expectedSelection);
+          if (outcome === "success") {
+            await chooseSort(page, "Updated");
+            await expect(page.getByText(/0 selected \/ 50 loaded/)).toBeVisible();
+          }
+        } finally { release(); }
+      });
+    }
+  }
+}
+for (const scope of ["creators", "subscriptions"] as const) {
+  test(`${scope} legacy selection with unknown page ownership remains pending`, async ({ context, page }) => {
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+    await installRoutes(context, observations);
+    const prefix = scope === "creators" ? "creator" : "subscription";
+    await context.addInitScript(({ scope, prefix }) => {
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      sessionStorage.setItem(key, JSON.stringify({ version: 1, queryFingerprint: `${scope}:`, scrollY: 0,
+        loadedOffsets: [0], selectedIds: [`${prefix}-0250`] }));
+    }, { scope, prefix });
+    await page.goto(`/admin/${scope}`);
+    await expect(page.getByText("0 selected / 50 loaded", { exact: true })).toBeVisible();
+    const saved = await page.evaluate(scope => {
+      window.dispatchEvent(new Event("pagehide"));
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      return JSON.parse(sessionStorage.getItem(key)!);
+    }, scope);
+    expect(saved.selectedIds).toEqual([`${prefix}-0250`]);
+  });
+
+  test(`${scope} evicted selection survives reload and retained-page restoration`, async ({ context, page }) => {
+    test.setTimeout(120_000);
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][], total: 10_000, deletedIds: new Set<string>() };
+    await installRoutes(context, observations);
+    const prefix = scope === "creators" ? "creator" : "subscription";
+    const name = scope === "creators" ? "Creator" : "Custom title";
+    const rowName = (index: number) => scope === "creators"
+      ? `Select ${name} ${String(index).padStart(3, "0")}`
+      : `Select ${name} ${String(TOTAL - index).padStart(3, "0")}`;
+    const save = () => page.evaluate(scope => {
+      window.dispatchEvent(new Event("pagehide"));
+      const key = `reference-list:v1:17:${encodeURIComponent(`/admin/${scope}`)}:${encodeURIComponent(`${scope}:`)}`;
+      return JSON.parse(sessionStorage.getItem(key)!);
+    }, scope);
+    const scrollPage = async (index: number) => {
+      const target = index * 50;
+      await expect(async () => {
+        await page.evaluate(target => {
+          const first = document.querySelector("[data-virtual-index]") as HTMLElement;
+          const exact = document.querySelector(`[data-virtual-index="${target}"]`) as HTMLElement | null;
+          const row = exact || first;
+          const distance = exact ? 0 : (target - Number(first.dataset.virtualIndex)) * first.getBoundingClientRect().height;
+          window.scrollTo(0, row.getBoundingClientRect().top + window.scrollY + distance - 150);
+        }, target);
+        await expect(page.getByRole("checkbox", { name: rowName(target), exact: true })).toBeVisible({ timeout: 500 });
+      }).toPass({ timeout: 8_000 });
+    };
+    await page.goto(`/admin/${scope}`);
+    await expect(page.getByRole("checkbox", { name: rowName(0), exact: true })).toBeVisible();
+    await scrollPage(5);
+    await page.getByRole("checkbox", { name: rowName(250), exact: true }).check();
+    for (let index = 6; index <= 45; index++) await scrollPage(index);
+    const before = await save();
+    expect(before.loadedOffsets).not.toContain(250);
+    expect(before.selectedIds).toContain(`${prefix}-0250`);
+    expect(before.selectedOffsets[`${prefix}-0250`]).toBe(250);
+    await page.reload();
+    await expect(page.locator("[data-virtual-reference-list]")).toBeVisible();
+    // Finish loading every retained page without fetching the evicted owner.
+    for (const offset of before.loadedOffsets.toReversed()) await scrollPage(offset / 50);
+    expect((await save()).selectedIds).toContain(`${prefix}-0250`);
+    await scrollPage(5);
+    await expect(page.getByRole("checkbox", { name: rowName(250), exact: true })).toBeChecked();
+    // Once the saved owner really reloads without the ID, it may be pruned.
+    await save();
+    observations.deletedIds.add(`${prefix}-0250`);
+    const beforeDeletion = observations.searches.length;
+    await page.reload();
+    await expect.poll(() => observations.searches.slice(beforeDeletion).some(request => request.offset === 250)).toBe(true);
+    await expect.poll(async () => (await save()).selectedIds).not.toContain(`${prefix}-0250`);
+  });
+}
+
+for (const pages of [10, 50, 100]) {
+  test(`favorite invalidation stays bounded after browsing ${pages} pages`, async ({ context, page }) => {
+    test.setTimeout(90_000);
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][], total: 10_000 };
+    await installRoutes(context, observations);
+    await page.goto('/admin/creators');
+    await expect(page.getByRole('checkbox', { name: 'Select Creator 000' })).toBeVisible();
+    await page.getByRole('checkbox', { name: 'Select Creator 000' }).check();
+    for (let index = 1; index < pages; index++) {
+      await page.evaluate(index => {
+        const row = document.querySelector('[data-virtual-index]') as HTMLElement;
+        const list = document.querySelector('[data-virtual-reference-list]') as HTMLElement;
+        const height = row.getBoundingClientRect().height;
+        window.scrollTo(0, list.getBoundingClientRect().top + window.scrollY + index * 50 * height);
+      }, index);
+      await expect.poll(() => observations.searches.some(request => request.offset >= index * 50)).toBe(true);
+    }
+    await expect(page.getByRole('button', { name: 'Favorite', exact: true }).first()).toBeVisible();
+    await page.waitForTimeout(200);
+    const before = observations.searches.length;
+    await page.getByRole('button', { name: 'Favorite', exact: true }).first().click();
+    await expect.poll(() => observations.searches.length).toBeGreaterThan(before);
+    await page.waitForTimeout(500);
+    expect(observations.searches.length - before).toBeLessThanOrEqual(4);
+    const saved = await page.evaluate(() => {
+      window.dispatchEvent(new Event('pagehide'));
+      const key = 'reference-list:v1:17:' + encodeURIComponent('/admin/creators') + ':' + encodeURIComponent('creators:');
+      return JSON.parse(sessionStorage.getItem(key)!);
+    });
+    expect(saved.loadedOffsets.length).toBeLessThanOrEqual(32);
+    expect(saved.selectedIds).toContain('creator-0000');
+    expect(Math.max(...saved.loadedOffsets)).toBeGreaterThanOrEqual((pages - 1) * 50);
+    if (pages === 50) {
+      const visibleName = await page.getByRole('link', { name: /^Open Creator \d+$/ }).evaluateAll(rows =>
+        rows.find(row => {
+          const rect = row.getBoundingClientRect();
+          return rect.top >= 64 && rect.bottom < window.innerHeight;
+        })?.getAttribute('aria-label'));
+      expect(visibleName).toBeTruthy();
+      const scrollY = await page.evaluate(() => window.scrollY);
+      await page.getByRole('link', { name: visibleName!, exact: true }).click();
+      await expect(page).toHaveURL(/\/admin\/creators\/creator-\d+/);
+      await page.goBack();
+      await expect(page).toHaveURL(/\/admin\/creators$/);
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollY - 300);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(page.getByRole('checkbox', { name: 'Select Creator 000' })).toBeChecked();
+  });
+}
+
+test('creator fields have native labels and associated submission errors', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await context.route('**/api/v1/creators', async route => route.fulfill({ status: 503, json: { detail: 'Create fixture failed' } }));
+  await page.goto('/admin/creators');
+  await page.getByRole('button', { name: /New/, exact: false }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  expect(await dialog.locator('input, textarea').evaluateAll(fields => fields.every(field => (field as HTMLInputElement).labels?.length === 1))).toBe(true);
+  for (const label of await dialog.locator('label').all()) {
+    await label.click();
+    const target = await label.getAttribute('for');
+    await expect(dialog.locator(`[id="${target}"]`)).toBeFocused();
+  }
+  await dialog.getByRole('textbox', { name: /Name.*\*/ }).fill('Fixture name');
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Create fixture failed');
+  await expect(dialog.getByRole('textbox', { name: /Name.*\*/ })).toHaveAttribute('aria-describedby', /error/);
+  expect((await new AxeBuilder({ page }).include('body').withRules(['label']).analyze()).violations).toEqual([]);
+});
+
+test('creator editing retains native labels', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await page.goto('/admin/creators/creator-0050');
+  await page.getByRole('button', { name: 'Edit profile', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  expect(await dialog.locator('input, textarea').evaluateAll(fields => fields.every(field => (field as HTMLInputElement).labels?.length === 1))).toBe(true);
+  expect((await new AxeBuilder({ page }).include('body').withRules(['label']).analyze()).violations).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Edit profile', exact: true })).toBeFocused();
+});
+
+test('a command palette above a creator dialog preserves both focus layers', async ({ context, page }) => {
+  const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+  await installRoutes(context, observations);
+  await page.goto('/admin/creators');
+  const newButton = page.getByRole('button', { name: /New/, exact: false }).first();
+  const originalOverflow = await page.evaluate(() => document.body.style.overflow);
+  await newButton.click();
+  const form = page.getByRole('dialog');
+  const nameField = form.getByRole('textbox', { name: /Name.*\*/ });
+  await expect(form).toBeVisible();
+  await nameField.focus();
+  for (let index = 0; index < 8; index++) {
+    await page.keyboard.press('Tab');
+    expect(await form.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  }
+  await nameField.focus();
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Search', exact: true });
+  await expect(palette).toBeVisible();
+  await palette.getByRole('combobox').focus();
+  for (let index = 0; index < 14; index++) {
+    await page.keyboard.press('Tab');
+    expect(await palette.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  }
+  const backgroundFocusAttempted = await page.evaluate(() => {
+    const target = [...document.querySelectorAll("a,button")].find(element => !element.closest("dialog, [role=\"dialog\"]")) as HTMLElement | undefined;
+    if (!target) return false;
+    target.focus();
+    return true;
+  });
+  expect(backgroundFocusAttempted).toBe(true);
+  expect(await palette.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
+  await expect(nameField).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(originalOverflow);
+  await page.keyboard.press('Escape');
+  await expect(form).toBeHidden();
+  await expect(newButton).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(originalOverflow);
+});
+for (const overflow of ["", "clip"]) {
+  test(`stacked dialog navigation releases its locks and preserves original overflow ${overflow || "default"}`, async ({ context, page }) => {
+    const observations = { searches: [] as Array<{ scope: string; offset: number; limit: number; q: string }>, summaryBatches: [] as string[][] };
+    await installRoutes(context, observations);
+    await page.goto("/admin/creators");
+    await expect(page.getByRole("button", { name: /New/ })).toBeVisible();
+    await page.evaluate(overflow => {
+      document.body.style.overflow = overflow;
+      const existing = document.createElement("div");
+      existing.id = "existing-inert-fixture";
+      existing.inert = true;
+      document.body.append(existing);
+    }, overflow);
+    await page.getByRole("button", { name: /New/ }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Control+k");
+    const palette = page.getByRole("dialog", { name: "Search", exact: true });
+    await expect(palette).toBeVisible();
+    await palette.getByRole("combobox").fill("jobs");
+    await palette.getByRole("option", { name: /Tasks & Issues/ }).click();
+    await expect(page).toHaveURL(/\/admin\/jobs$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => ({
+      overflow: document.body.style.overflow,
+      inert: [...document.querySelectorAll("[inert]")].map(element => element.id),
+    }))).toEqual({ overflow, inert: ["existing-inert-fixture"] });
+    // Reopening and dismissing must not leave ownership behind either.
+    await page.keyboard.press("Control+k");
+    await expect(palette).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe(overflow);
+    await page.evaluate(() => { document.body.style.overflow = ""; });
+    await page.goto("/admin/creators");
+    await expect(page).toHaveURL(/\/admin\/creators$/);
+    await expect(page.getByRole("button", { name: /New/ })).toBeVisible();
+    await page.mouse.move(900, 500);
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  });
+}

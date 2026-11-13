@@ -1,6 +1,6 @@
 """Pure search sort, stable cursor, and shuffle-ring rules.
 
-The public SearchService continues to own database and Meilisearch execution.
+The public SearchService continues to own domain and indexed-search execution.
 Keep cursor wire formats here so both backends share deterministic boundaries.
 """
 
@@ -142,7 +142,7 @@ def _shuffle_ring_start(seed: int) -> int:
 
 
 def _meili_shuffle_key(value: int) -> str:
-    """Keep 63-bit hash order exact across Meilisearch's JSON number boundary."""
+    """Keep 63-bit hash order exact across the JSON projection number boundary."""
 
     if not 0 <= int(value) < SHUFFLE_RING_SIZE:
         raise ValueError("Shuffle key is outside the stable hash ring")

@@ -100,6 +100,11 @@ class ManualProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        flags["is_nsfw"] = bool(raw_metadata.get("is_nsfw", False))
+        return flags
+
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         result = []
         for entry in raw_metadata.get("files", []):

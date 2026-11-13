@@ -1,0 +1,30 @@
+/* Scoped presentation for scheduler, notification, and system routes. */
+.gallery-ui .gallery-scheduler-page,
+.gallery-ui .gallery-notifications-page,
+.gallery-ui .gallery-system-page { max-width: 1216px; margin-inline: auto; }
+.gallery-ui .gallery-scheduler-page [data-page-primary-content],
+.gallery-ui .gallery-notifications-page .card,
+.gallery-ui .gallery-system-page .card { border-color: var(--line); background: color-mix(in srgb, var(--surface) 72%, transparent); box-shadow: none; }
+.gallery-ui .gallery-notification-filters { margin-block: 0 28px; }
+.gallery-ui .gallery-notification-filters .btn-secondary { min-width: 116px; }
+.gallery-ui .gallery-notification-filters .btn-secondary.is-active { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.gallery-ui .gallery-notifications-page time { color: var(--ink); opacity: .72; }
+.gallery-ui .gallery-system-page [role="tablist"] { justify-content: center; margin-inline: auto; }
+.gallery-ui .gallery-system-page [role="tabpanel"] { min-width: 0; }
+.gallery-ui .gallery-system-page .opacity-75,
+.gallery-ui .gallery-system-page .opacity-80,
+.gallery-ui .gallery-system-page .opacity-90 { opacity: 1; }
+@media (max-width: 720px) {
+  .gallery-ui .gallery-notification-filters { justify-content: stretch; }
+  .gallery-ui .gallery-notification-filters .btn-secondary { flex: 1 1 0; min-width: 0; }
+}
+.gallery-ui .gallery-notifications-page [role="tabpanel"]>.space-y-3 {max-width:960px;margin-inline:auto;}
+.gallery-ui .gallery-notifications-page .card {border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;margin-top:0;padding:20px 0;min-height:82px;}
+.gallery-ui .gallery-notifications-page .notification-entry-body {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 24px;align-items:baseline;}
+.gallery-ui .gallery-notifications-page .notification-entry-body>time {grid-column:2;grid-row:1;margin:0;opacity:1;}
+.gallery-ui .gallery-notifications-page .notification-entry-body>[role="progressbar"] {grid-column:1/-1;grid-row:2;}
+.gallery-ui .gallery-system-page [role="tablist"] {display:flex;width:fit-content;}
+.gallery-ui .gallery-system-page .segment {font-size:var(--type-meta);line-height:var(--leading-meta);}
+@media(max-width:600px){.gallery-ui .gallery-notifications-page .notification-entry-body {grid-template-columns:minmax(0,1fr);}.gallery-ui .gallery-notifications-page .notification-entry-body>time {grid-column:1;grid-row:auto;}.gallery-ui .gallery-notifications-page .notification-entry-body>[role="progressbar"] {grid-row:auto;}}
+
+.gallery-ui .gallery-system-page .opacity-70 {opacity:1;}

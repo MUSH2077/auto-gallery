@@ -7,26 +7,22 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { api, type SearchQualifierToken, type SearchTarget } from "@/lib/api";
 import {
-  Breadcrumb,
   EmptyState,
   ErrorState,
-  PageHeader,
-  PageShell,
-  PermissionGuard,
   MatchedIdentityBadge,
   SmartSearchInput,
-  SourceBadge,
   WorkMediaThumbnail,
   useSearchComposer,
 } from "@/components";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
-import { useStaggeredEntrance } from "@/lib/motion";
 import { adminRoutes } from "@/lib/adminRoutes";
 import { useToast } from "@/components/Toast";
 import { quoteSearchValue, searchUrl } from "@/lib/search-query";
 import { usePermissions } from "@/lib/usePermissions";
 import { authHealthPresentation } from "@/lib/auth-health";
+import { BusinessConfirm, BusinessPage, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import styles from "./search.module.css";
 
 type SearchTab = "all" | "work" | "creator" | "tag" | "repo" | "subscription";
 
@@ -53,6 +49,12 @@ function SearchContent() {
   const urlSyncTimer = useRef<number | null>(null);
   const latestQuery = useRef(initialQuery);
   const deferredQuery = useDeferredValue(query);
+  const [reindexOpen, setReindexOpen] = useState(false);
+  const [reindexTask,setReindexTask] = useState<string|null>(null);
+  const [reindexPending, setReindexPending] = useState(false);
+  const [reindexError, setReindexError] = useState<string | null>(null);
+  const reindexPendingRef = useRef(false);
+  const reindexRequestRef = useRef(0);
 
   useEffect(() => {
     const nextQuery = searchParams.get("q") || "";
@@ -118,11 +120,6 @@ function SearchContent() {
   const total = Object.values(groups || {}).reduce((sum, group) => sum + (group?.total || 0), 0);
   const activeTotal = activeTab === "all" ? total : groups?.[TAB_TARGET[activeTab]]?.total || 0;
 
-  const workEntrance = useStaggeredEntrance(works.map((item) => `work:${item.id}`));
-  const creatorEntrance = useStaggeredEntrance(creators.map((item) => `creator:${item.id}`));
-  const tagEntrance = useStaggeredEntrance(tags.map((item) => `tag:${item.id}`));
-  const repositoryEntrance = useStaggeredEntrance(repositories.map((item) => `repo:${item.id}`));
-  const subscriptionEntrance = useStaggeredEntrance(subscriptions.map((item) => `subscription:${item.id}`));
 
   const tabs = useMemo(() => ([
     { key: "all" as const, label: t("search.tab_all"), count: total },
@@ -145,26 +142,52 @@ function SearchContent() {
     );
   };
 
+  const startReindex = async () => {
+    if (reindexPendingRef.current) return;
+    const requestId = ++reindexRequestRef.current;
+    reindexPendingRef.current = true;
+    setReindexPending(true);
+    setReindexError(null);
+    try {
+      const result = await api.reindexSearch();
+      if (reindexRequestRef.current !== requestId) return;
+      setReindexTask(result.task_id);
+      toast.info(result.message || result.status);
+      setReindexOpen(false);
+    } catch (error) {
+      if (reindexRequestRef.current !== requestId) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setReindexError(message);
+      toast.error(message);
+    } finally {
+      if (reindexRequestRef.current === requestId) {
+        reindexPendingRef.current = false;
+        setReindexPending(false);
+      }
+    }
+  };
+
   return (
-      <PageShell>
-        <Breadcrumb items={[{ label: t("search.title") }, { label: deferredQuery || "…" }]} />
-        <PageHeader
-          title={t("search.title")}
-          description={t("search.desc")}
-          secondaryActions={has("system") ? (
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => {
-                if (!confirm(t("settings.reindex_confirm_msg"))) return;
-                api.reindexSearch()
-                  .then((result) => toast.info(result.message || result.status))
-                  .catch((error: Error) => toast.error(error.message));
-              }}
-            >
-              {t("settings.reindex")}
-            </button>
-          ) : undefined}
+      <BusinessPage
+        title={t("search.title")}
+        description={t("search.desc")}
+        className={styles.page}
+
+      >
+        <BusinessConfirm
+          open={reindexOpen}
+          title={t("settings.reindex_confirm_title")}
+          message={t("settings.reindex_confirm_msg")}
+          onConfirm={startReindex}
+          onCancel={() => {
+            reindexRequestRef.current += 1;
+            reindexPendingRef.current = false;
+            setReindexOpen(false);
+            setReindexPending(false);
+            setReindexError(null);
+          }}
+          isPending={reindexPending}
+          error={reindexError}
         />
 
         <SmartSearchInput
@@ -177,18 +200,18 @@ function SearchContent() {
             setPage(0);
           }}
           scope="global"
-          autoFocus
+          parseWhenUnfocused
           showHelp
-          className="mb-6"
+          className={styles.searchInput}
         />
 
         {!deferredQuery.trim() && (
           <EmptyState title={t("search.empty")} description={t("search.empty_desc")} />
         )}
         {results.isLoading && deferredQuery.trim() && (
-          <div className="space-y-2">
+          <div className={styles.resultList}>
             {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="h-20 animate-pulse rounded-md bg-subtle" />
+              <div key={index} className={styles.loadingRow} />
             ))}
           </div>
         )}
@@ -201,8 +224,8 @@ function SearchContent() {
             warning instead of replacing the user's working result set. */}
         {results.data && deferredQuery.trim() && (
           <>
-            <div className="mb-5 overflow-x-auto border-b border-border" aria-label={t("search.title")}>
-              <div className="flex min-w-max gap-1" role="tablist">
+            <div className={styles.tabsWrap} aria-label={t("search.title")}>
+              <div className={styles.tabs} role="tablist">
                 {tabs.map((tab) => (
                   <button
                     key={tab.key}
@@ -211,39 +234,33 @@ function SearchContent() {
                     aria-selected={activeTab === tab.key}
                     onClick={() => setTab(tab.key)}
                     disabled={composer.isPending}
-                    className={`min-h-11 border-b-2 px-4 text-sm transition-colors ${
-                      activeTab === tab.key
-                        ? "border-accent font-medium text-accent"
-                        : "border-transparent text-muted hover:text-fg"
-                    }`}
+                    className={styles.tab + (activeTab === tab.key ? " " + styles.tabActive : "")}
                   >
                     {tab.label}
-                    <span className="ml-1.5 rounded-full bg-subtle px-1.5 py-0.5 text-xs">{tab.count}</span>
+                    <span className={styles.tabCount}>{tab.count}</span>
                   </button>
                 ))}
               </div>
             </div>
 
             {creators.length > 0 && (
-              <section className="mb-7" aria-labelledby="search-creators-heading">
-                <h2 id="search-creators-heading" className="mb-2 text-sm font-medium text-muted">{t("search.creators_section")}</h2>
-                <div className="space-y-2">
-                  {creators.map((creator, index) => {
-                    const entrance = creatorEntrance(`creator:${creator.id}`, index);
+              <section className={styles.section} aria-labelledby="search-creators-heading">
+                <h2 id="search-creators-heading" className={styles.sectionHeading}>{t("search.creators_section")}</h2>
+                <div className={styles.resultList}>
+                  {creators.map((creator) => {
                     return (
                       <Link
                         key={creator.id}
                         href={`/admin/creators/${creator.id}`}
-                        className={`card-interactive ${entrance.className} flex min-h-16 items-center gap-4 p-4`}
-                        style={entrance.style}
+                        className="search-result-row"
                       >
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-semibold text-white">
+                        <span className={styles.creatorAvatar}>
                           {(creator.display_name || creator.name).trim().slice(0, 2).toUpperCase()}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{creator.display_name || creator.name}</span>
-                          {creator.description && <span className="mt-1 block truncate text-xs text-muted">{creator.description}</span>}
-                          <span className="mt-1 block"><MatchedIdentityBadge identity={creator.matched_identity} /></span>
+                        <span className={styles.resultMain}>
+                          <span className={styles.resultTitle}>{creator.display_name || creator.name}</span>
+                          {creator.description && <span className={styles.resultDescription}>{creator.description}</span>}
+                          <span className={styles.resultIdentity}><MatchedIdentityBadge identity={creator.matched_identity} /></span>
                         </span>
                       </Link>
                     );
@@ -253,20 +270,19 @@ function SearchContent() {
             )}
 
             {works.length > 0 && (
-              <section className="mb-7" aria-labelledby="search-works-heading">
-                <h2 id="search-works-heading" className="mb-2 text-sm font-medium text-muted">{t("search.works_section")}</h2>
-                <div className="space-y-2">
-                  {works.map((work, index) => {
-                    const entrance = workEntrance(`work:${work.id}`, index);
+              <section className={styles.section} aria-labelledby="search-works-heading">
+                <h2 id="search-works-heading" className={styles.sectionHeading}>{t("search.works_section")}</h2>
+                <div className={styles.resultList}>
+                  {works.map((work) => {
                     return (
-                      <article key={work.id} className={`card-interactive media-motion-card ${entrance.className} relative flex min-h-20 gap-4 p-4`} style={entrance.style}>
+                      <article key={work.id} className="search-result-row search-work-row">
                         <Link
                           href={`/admin/works/${work.id}`}
-                          className="absolute inset-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                          className="search-row-link"
                           aria-label={t("search.open_work", { title: work.title || t("search.untitled") })}
                         />
                         {work.thumbnail_asset_id ? (
-                          <span className="media-motion-visual h-16 w-16 shrink-0 overflow-hidden rounded">
+                          <span className="search-work-thumb media-motion-visual">
                             <WorkMediaThumbnail
                               assetId={work.thumbnail_asset_id}
                               hasVideo={work.has_video}
@@ -275,21 +291,18 @@ function SearchContent() {
                             />
                           </span>
                         ) : (
-                          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded border border-border bg-subtle text-xs text-muted">
+                          <span className="search-work-thumb search-work-thumb-empty">
                             {t("search.na")}
                           </span>
                         )}
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium">{work.title || t("search.untitled")}</span>
-                            {work.is_nsfw && <span className="badge bg-danger-subtle text-xs text-danger">{t("search.nsfw")}</span>}
+                        <span className={styles.resultMain}>
+                          <span className={styles.resultTitleLine}>
+                            <span className={styles.resultTitle}>{work.title || t("search.untitled")}</span>
+                            {work.is_nsfw && <span className="search-nsfw-badge">{t("search.nsfw")}</span>}
                           </span>
-                          <span className="relative z-10 mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                          <span className={styles.resultMeta}>
                             {work.source && (
-                              <SourceBadge
-                                source={work.source}
-                                href={searchUrl("/admin/search", `type:work source:${work.source}`)}
-                              />
+                              <Link className={styles.source} href={searchUrl("/admin/search", `type:work source:${work.source}`)} onClick={event=>event.stopPropagation()}>{work.source}</Link>
                             )}
                             {work.creator_name && work.creator_id && (
                               <Link href={`/admin/creators/${work.creator_id}`} className="text-accent hover:underline">
@@ -300,13 +313,13 @@ function SearchContent() {
                             <MatchedIdentityBadge identity={work.matched_identity} />
                           </span>
                           {work.tags && work.tags.length > 0 && (
-                            <span className="relative z-10 mt-2 flex flex-wrap gap-1">
+                            <span className="search-tag-list search-tag-list-inline">
                               {work.tags.slice(0, 8).map((tag) => (
                                 <button
                                   key={tag}
                                   type="button"
                                   onClick={() => router.push(searchUrl("/admin/search", `type:work tag:${quoteSearchValue(tag)}`))}
-                                  className="badge min-h-6 text-[10px] hover:text-accent"
+                                  className="search-tag-button"
                                 >
                                   {tag}
                                 </button>
@@ -322,17 +335,15 @@ function SearchContent() {
             )}
 
             {tags.length > 0 && (
-              <section className="mb-7" aria-labelledby="search-tags-heading">
-                <h2 id="search-tags-heading" className="mb-2 text-sm font-medium text-muted">{t("search.tags_section")}</h2>
-                <div className="flex flex-wrap gap-2">
-                  {tags.map((tag, index) => {
-                    const entrance = tagEntrance(`tag:${tag.id}`, index);
+              <section className={styles.section} aria-labelledby="search-tags-heading">
+                <h2 id="search-tags-heading" className={styles.sectionHeading}>{t("search.tags_section")}</h2>
+                <div className="search-tag-list">
+                  {tags.map((tag) => {
                     return (
                       <Link
                         key={tag.id}
                         href={`/admin/tags/${tag.id}`}
-                        className={`${entrance.className} inline-flex min-h-11 items-center rounded-full border border-border bg-subtle px-4 text-sm hover:border-accent/40 hover:text-accent`}
-                        style={entrance.style}
+                        className="search-tag-link"
                       >
                         #{tag.normalized_name}
                         {typeof tag.usage_count === "number" && <span className="ml-1.5 text-xs text-muted">{tag.usage_count}</span>}
@@ -344,24 +355,22 @@ function SearchContent() {
             )}
 
             {repositories.length > 0 && (
-              <section className="mb-7" aria-labelledby="search-repositories-heading">
-                <h2 id="search-repositories-heading" className="mb-2 text-sm font-medium text-muted">{t("search.repositories_section")}</h2>
-                <div className="space-y-2">
-                  {repositories.map((repository, index) => {
-                    const entrance = repositoryEntrance(`repo:${repository.id}`, index);
+              <section className={styles.section} aria-labelledby="search-repositories-heading">
+                <h2 id="search-repositories-heading" className={styles.sectionHeading}>{t("search.repositories_section")}</h2>
+                <div className={styles.resultList}>
+                  {repositories.map((repository) => {
                     return (
                       <Link
                         key={repository.id}
                         href={adminRoutes.repository(repository.id)}
                         aria-label={t("search.repository_open", { name: repository.name })}
-                        className={`card-interactive ${entrance.className} flex min-h-16 items-center gap-3 p-4`}
-                        style={entrance.style}
+                        className="search-result-row"
                       >
-                        <SourceBadge source={repository.source} />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{repository.name}</span>
-                          <span className="mt-1 block truncate text-xs text-muted">{repository.creator_name} · {repository.source_url || repository.source_creator_id}</span>
-                          <span className="mt-1 block"><MatchedIdentityBadge identity={repository.matched_identity} /></span>
+                        <span className={styles.source}>{repository.source}</span>
+                        <span className={styles.resultMain}>
+                          <span className={styles.resultTitle}>{repository.name}</span>
+                          <span className={styles.resultDescription}>{repository.creator_name} · {repository.source_url || repository.source_creator_id}</span>
+                          <span className={styles.resultIdentity}><MatchedIdentityBadge identity={repository.matched_identity} /></span>
                         </span>
                         <span className={`h-2 w-2 shrink-0 rounded-full ${authHealthPresentation(repository).dotClass}`} aria-hidden />
                       </Link>
@@ -372,28 +381,26 @@ function SearchContent() {
             )}
 
             {subscriptions.length > 0 && (
-              <section className="mb-7" aria-labelledby="search-subscriptions-heading">
-                <h2 id="search-subscriptions-heading" className="mb-2 text-sm font-medium text-muted">{t("search.subscriptions_section")}</h2>
-                <div className="space-y-2">
-                  {subscriptions.map((subscription, index) => {
-                    const entrance = subscriptionEntrance(`subscription:${subscription.id}`, index);
+              <section className={styles.section} aria-labelledby="search-subscriptions-heading">
+                <h2 id="search-subscriptions-heading" className={styles.sectionHeading}>{t("search.subscriptions_section")}</h2>
+                <div className={styles.resultList}>
+                  {subscriptions.map((subscription) => {
                     return (
                       <Link
                         key={subscription.id}
                         href={`/admin/subscriptions/${subscription.id}`}
                         aria-label={t("search.subscription_open", { name: subscription.name })}
-                        className={`card-interactive ${entrance.className} flex min-h-16 items-center gap-3 p-4`}
-                        style={entrance.style}
+                        className="search-result-row"
                       >
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-subtle font-semibold text-accent">
+                        <span className={styles.creatorAvatar}>
                           {subscription.creator_name.slice(0, 2).toUpperCase()}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{subscription.name}</span>
-                          <span className="mt-1 block text-xs text-muted">
+                        <span className={styles.resultMain}>
+                          <span className={styles.resultTitle}>{subscription.name}</span>
+                          <span className={styles.resultDescription}>
                             {subscription.creator_name} · {subscription.source_count}
                           </span>
-                          <span className="mt-1 block"><MatchedIdentityBadge identity={subscription.matched_identity} /></span>
+                          <span className={styles.resultIdentity}><MatchedIdentityBadge identity={subscription.matched_identity} /></span>
                         </span>
                         <span className={`h-2 w-2 shrink-0 rounded-full ${subscription.is_active && subscription.sync_enabled ? "bg-success" : "bg-border"}`} aria-hidden />
                       </Link>
@@ -410,21 +417,21 @@ function SearchContent() {
               />
             )}
             {activeTab !== "all" && activeTotal > 0 && (
-              <nav className="mt-6 flex items-center justify-center gap-3" aria-label={t("common.pagination")}>
+              <nav className={styles.pagination} aria-label={t("common.pagination")}>
                 <button
                   type="button"
                   onClick={() => setPage((current) => Math.max(0, current - 1))}
                   disabled={page === 0}
-                  className="btn-ghost disabled:opacity-40"
+                  className={styles.paginationButton}
                 >
                   {t("works.prev")}
                 </button>
-                <span className="text-sm text-muted">{t("works.page", { page: page + 1 })}</span>
+                <span className={styles.pageIndicator}>{t("works.page", { page: page + 1 })}</span>
                 <button
                   type="button"
                   onClick={() => setPage((current) => current + 1)}
                   disabled={(page + 1) * 50 >= activeTotal}
-                  className="btn-ghost disabled:opacity-40"
+                  className={styles.paginationButton}
                 >
                   {t("works.next")}
                 </button>
@@ -432,16 +439,27 @@ function SearchContent() {
             )}
           </>
         )}
-      </PageShell>
+        {has("system")?<details className="business-section"><summary>{t("jobs.maintenance_actions")}</summary>          <button
+            type="button"
+            className={styles.reindexButton}
+            disabled={reindexPending}
+            onClick={() => {
+              setReindexError(null);
+              setReindexOpen(true);
+            }}
+          >
+            {reindexPending ? t("settings.reindexing") : t("settings.reindex")}
+          </button>{reindexTask?<p className="operation-feedback" role="status">{t("jobs.action_accepted")} <Link className="text-link" href={"/admin/jobs?task="+encodeURIComponent(reindexTask)}>{t("jobs.task_detail")}</Link></p>:null}</details>:null}
+      </BusinessPage>
   );
 }
 
 export default function SearchPage() {
   return (
-    <PermissionGuard anyOf={["library", "subscriptions"]}>
+    <BusinessPermissionGuard anyOf={["library", "subscriptions"]}>
       <Suspense>
         <SearchContent />
       </Suspense>
-    </PermissionGuard>
+    </BusinessPermissionGuard>
   );
 }

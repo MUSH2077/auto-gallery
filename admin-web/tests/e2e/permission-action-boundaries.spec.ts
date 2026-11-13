@@ -92,6 +92,7 @@ async function openFixture(browser: Browser, pathname: string, me: Principal, ha
     if (path === "/api/v1/auth/ws-ticket") return json(route, { detail: "fixture websocket unavailable" }, 503);
     if (path === "/api/v1/system/workbench") return json(route, { updated_at: "2026-09-13T00:00:00Z", queue: {}, scheduler: {}, storage: {}, health: {}, attention: {}, recent: {} });
     if (path === "/api/v1/tasks") return json(route, { total: 0, items: [] });
+    if (path === "/api/v1/system/queue-stats") { await json(route, { queue: {}, scheduler: {} }); return true; }
     if (path === "/api/v1/system/scheduler-decisions") return json(route, { total: 0, items: [], summary: { blocked_count: 0 } });
     if (path === "/api/v1/operations/overview") return json(route, { summary: { attention: 0 }, items: [] });
     if (path.includes("/notifications")) return json(route, { total: 0, items: [], unread_count: 0 });
@@ -242,8 +243,8 @@ test("curation actions remain available while repository setup requires subscrip
   try {
     await expect(opened.page.getByRole("button", { name: "+ Add Link" })).toBeVisible();
     await expect(opened.page.getByRole("button", { name: "Unverify" })).toBeVisible();
-    const websiteCard = opened.page.locator(".card").filter({ hasText: "https://creator.example" });
-    const pixivCard = opened.page.locator(".card").filter({ hasText: "https://pixiv.net/users/7" });
+    const websiteCard = opened.page.locator("a[href=\"https://creator.example\"]").locator("xpath=../..");
+    const pixivCard = opened.page.locator("a[href=\"https://pixiv.net/users/7\"]").locator("xpath=../..");
     await expect(websiteCard.getByRole("button", { name: "Approve" })).toBeEnabled();
     await expect(pixivCard.getByRole("button", { name: "Approve" })).toBeDisabled();
     await expect(opened.page.getByText("Subscriptions permission is required to verify and set up repository links.", { exact: true }).first()).toBeVisible();
@@ -398,25 +399,28 @@ test("Gitllery verify is admin-only while system readers retain the settings pag
   }
 });
 
-test("tasks-only sidebar keeps the failed and stale jobs badge without system access", async ({ browser }) => {
+test("tasks-only Jobs view keeps the attention summary without system access", async ({ browser }) => {
   const requested: string[] = [];
   const opened = await openFixture(browser, "/admin/profile", principal(["tasks"]), async (route, path) => {
     requested.push(path);
     if (path === "/api/v1/tasks") {
-      await json(route, { total: 3, items: [] });
+      await json(route, { total: 3, items: [], summary: { all: 3, attention: 2, running: 1, waiting: 0 } });
       return true;
     }
     return false;
   });
   try {
-    await expect(opened.page.locator('#admin-sidebar a[href="/admin/jobs"]')).toContainText("3");
-    expect(requested).toContain("/api/v1/tasks");
+    await expect(opened.page.getByRole("link", { name: "Jobs", exact: true })).toHaveAttribute("href", "/admin/jobs");
+    await opened.page.getByRole("link", { name: "Jobs", exact: true }).click();
+    await expect(opened.page).toHaveURL(/\/admin\/jobs/);
+    await expect(opened.page.getByRole("link", { name: /Needs attention\s+2/i })).toBeVisible();
+    await expect.poll(() => requested).toContain("/api/v1/tasks");
     expect(requested).not.toContain("/api/v1/system/workbench");
     expect(opened.unhandled).toEqual([]);
   } finally { await opened.context.close(); }
 });
 
-test("scheduler sidebar badge uses the full actionable attention count", async ({ browser }) => {
+test("scheduler page shows the full blocked attention count", async ({ browser }) => {
   const requested: string[] = [];
   const opened = await openFixture(browser, "/admin/profile", principal(["system"]), async (route, path) => {
     requested.push(route.request().url());
@@ -427,8 +431,10 @@ test("scheduler sidebar badge uses the full actionable attention count", async (
     return false;
   });
   try {
-    await expect(opened.page.locator('#admin-sidebar a[href="/admin/scheduler"]')).toContainText("4");
-    expect(requested.some((url) => url.includes("/api/v1/system/scheduler-decisions") && url.includes("view=attention"))).toBe(true);
+    await expect(opened.page.getByRole("link", { name: "Jobs", exact: true })).toHaveAttribute("href", "/admin/jobs");
+    await opened.page.goto("/admin/scheduler");
+    await expect.poll(() => requested.some((url) => url.includes("/api/v1/system/scheduler-decisions") && url.includes("view=attention"))).toBe(true);
+    await expect(opened.page.getByText("Blocked", { exact: true }).locator("..")).toContainText("4");
     expect(opened.unhandled).toEqual([]);
   } finally { await opened.context.close(); }
 });

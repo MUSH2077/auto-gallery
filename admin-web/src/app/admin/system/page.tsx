@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
-import { ErrorState, PageHeader, PageShell, PermissionGuard, StatusBadge } from "@/components";
+import { ErrorState, StatusBadge } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import SourceRegistryPanel from "@/components/SourceRegistryPanel";
 import { api, queryKeys } from "@/lib/api";
 import { useT, type TFunction } from "@/lib/i18n";
@@ -140,27 +141,35 @@ export default function SystemPage() {
 
   return (
     <PermissionGuard anyOf={["system", "subscriptions"]}>
-      <PageShell>
-        <PageHeader
-          title={t("system_health.title")}
-          description={t("system_health.desc")}
-          primaryAction={
-            <button
-              type="button"
-              onClick={refreshCurrent}
-              disabled={refreshing}
-              className="btn-primary disabled:opacity-100"
-            >
-              {refreshing ? t("system_health.refreshing") : t("system_health.refresh")}
-            </button>
-          }
-        />
+      <BusinessPage
+        title={t("system_health.title")}
+        description={t("system_health.desc")}
+        className="gallery-system-page"
+        actions={
+          <button
+            type="button"
+            onClick={refreshCurrent}
+            disabled={refreshing}
+            className="btn-primary"
+          >
+            {refreshing ? t("system_health.refreshing") : t("system_health.refresh")}
+          </button>
+        }
+      >
 
         <div data-page-primary-content>
           <nav
             className="segmented-control mb-6 w-fit max-w-full flex-wrap"
             role="tablist"
             aria-label={t("system_health.sections")}
+            onKeyDown={(event) => {
+              const links = Array.from(event.currentTarget.querySelectorAll<HTMLAnchorElement>("a[role=tab]"));
+              const index = links.indexOf(event.target as HTMLAnchorElement);
+              if (index < 0) return;
+              const next = event.key === "Home" ? 0 : event.key === "End" ? links.length - 1 : event.key === "ArrowRight" ? (index + 1) % links.length : event.key === "ArrowLeft" ? (index + links.length - 1) % links.length : -1;
+              if (next < 0) return;
+              event.preventDefault(); links[next].focus(); links[next].click();
+            }}
           >
             {canViewServices && (
               <Link
@@ -169,6 +178,7 @@ export default function SystemPage() {
                 scroll={false}
                 role="tab"
                 aria-selected={activeTab === "services"}
+                tabIndex={activeTab === "services" ? 0 : -1}
                 aria-controls="system-panel-services"
                 className={`segment min-h-11 ${activeTab === "services" ? "segment-active" : ""}`}
               >
@@ -182,6 +192,7 @@ export default function SystemPage() {
                 scroll={false}
                 role="tab"
                 aria-selected={activeTab === "sources"}
+                tabIndex={activeTab === "sources" ? 0 : -1}
                 aria-controls="system-panel-sources"
                 className={`segment min-h-11 ${activeTab === "sources" ? "segment-active" : ""}`}
               >
@@ -422,7 +433,7 @@ export default function SystemPage() {
             </section>
           )}
         </div>
-      </PageShell>
+      </BusinessPage>
     </PermissionGuard>
   );
 }

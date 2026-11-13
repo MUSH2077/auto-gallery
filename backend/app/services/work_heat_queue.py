@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Iterable
@@ -11,7 +12,8 @@ from threading import Event, Thread
 from rq import Queue, Retry
 from rq.exceptions import NoSuchJobError
 from rq.job import Dependency, Job
-from rq.registry import DeferredJobRegistry
+from rq.registry import DeferredJobRegistry, ScheduledJobRegistry
+from rq.utils import current_timestamp, utcformat
 from redis.exceptions import LockNotOwnedError
 
 from app.services.queue_admission import checked_enqueue, notify_queue_worker
@@ -29,6 +31,210 @@ _DEPENDENCY_RELEASE_STATUSES = frozenset({"finished", "failed"})
 _ENQUEUE_LOCK_TIMEOUT_SECONDS = 120
 _ENQUEUE_LOCK_BLOCKING_SECONDS = 10
 _ENQUEUE_LOCK_RENEW_INTERVAL_SECONDS = 20
+
+
+WORK_HEAT_RESOURCE_WAIT_MARKER = "auto_gallery:work_heat_resource_wait"
+
+_DEFER_RESOURCE_SCRIPT = """
+local key = KEYS[1]
+local queue_key = KEYS[2]
+local intermediate_key = KEYS[3]
+local first_seen_key = KEYS[4]
+local registry_key = KEYS[5]
+local queues_key = KEYS[6]
+if redis.call('HGET', key, 'created_at') ~= ARGV[1] then return 0 end
+local status = redis.call('HGET', key, 'status')
+if status ~= 'queued' then return 0 end
+if redis.call('HGET', key, ARGV[4]) then return 0 end
+if redis.call('LPOS', intermediate_key, ARGV[2]) == false then return 0 end
+redis.call('LREM', intermediate_key, 0, ARGV[2])
+redis.call('LREM', queue_key, 0, ARGV[2])
+redis.call('DEL', first_seen_key)
+redis.call('HSET', key, 'status', 'scheduled', ARGV[4], ARGV[5])
+redis.call('ZADD', registry_key, ARGV[3], ARGV[2])
+redis.call('SADD', queues_key, queue_key)
+return 1
+"""
+
+_CLEAR_RESOURCE_SCRIPT = """
+local key = KEYS[1]
+if redis.call('HGET', key, 'created_at') ~= ARGV[1] then return 0 end
+if redis.call('HGET', key, ARGV[2]) ~= ARGV[3] then return 0 end
+return redis.call('HDEL', key, ARGV[2])
+"""
+
+_PROMOTE_RESOURCE_SCRIPT = """
+local key = KEYS[1]
+local queue_key = KEYS[2]
+local registry_key = KEYS[3]
+if redis.call('HGET', key, 'created_at') ~= ARGV[1] then return 0 end
+if redis.call('HGET', key, 'status') ~= 'scheduled' then return 0 end
+if redis.call('HGET', key, ARGV[4]) ~= ARGV[5] then return 0 end
+local score = redis.call('ZSCORE', registry_key, ARGV[2])
+if not score or tonumber(score) ~= tonumber(ARGV[3]) then return 0 end
+redis.call('ZADD', registry_key, ARGV[6], ARGV[2])
+redis.call('HDEL', key, ARGV[4])
+return 1
+"""
+
+
+
+def _work_heat_job(job) -> bool:
+    return str(getattr(job, "func_name", "")).endswith("run_work_heat_recompute")
+
+
+def _job_created_at_raw(job) -> str | None:
+    value = getattr(job, "created_at", None)
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    if isinstance(value, str):
+        return value
+    try:
+        return utcformat(value)
+    except (AttributeError, TypeError, ValueError):
+        return str(value)
+
+
+def _work_heat_resource_wait_ready(connection) -> bool:
+    """Probe hard guards without taking the work_heat lease."""
+    try:
+        from app.services.heavy_io import (
+            background_turn_available,
+            local_lock_for_workload,
+            RESOURCE_RESERVATION_KEYS,
+            resource_reservation_details,
+        )
+        from app.services.remote_search_flight import read_marker
+        from app.services.resource_pressure import (
+            get_resource_pressure_snapshot_sync,
+            resource_profile_permit,
+        )
+        if not background_turn_available(connection):
+            return False
+        if read_marker():
+            return False
+        snapshot = get_resource_pressure_snapshot_sync(redis_client=connection)
+        allowed, _ = resource_profile_permit(snapshot, "work_heat")
+        if not allowed:
+            return False
+        requested, capacity = resource_reservation_details(snapshot, "work_heat")
+        total = 0
+        for key in RESOURCE_RESERVATION_KEYS:
+            raw = connection.get(key)
+            if not raw:
+                continue
+            payload = json.loads(raw)
+            total += int(payload["reserved_bytes"])
+        if total + requested > capacity:
+            return False
+        lock = local_lock_for_workload("work_heat")
+        if lock is not None:
+            if not lock.try_acquire():
+                return False
+            lock.release()
+        return True
+    except Exception:
+        return False
+
+
+def defer_work_heat_for_resources(
+    job, queue, *, reason: str, delay_seconds: float = 10.0,
+) -> bool:
+    """Move one claimed work_heat job to scheduled without consuming Retry."""
+    if not _work_heat_job(job) or str(getattr(queue, "name", "")) != "maintenance":
+        return False
+    if not str(reason or ""):
+        return False
+    connection = queue.connection
+    created_at = _job_created_at_raw(job)
+    if created_at is None:
+        return False
+    registry = ScheduledJobRegistry(queue=queue)
+    intermediate = queue.intermediate_queue
+    first_seen = intermediate.get_first_seen_key(job.id)
+    score = float(current_timestamp()) + max(0.1, float(delay_seconds))
+    marker = json.dumps({
+        "job_id": str(job.id), "created_at": created_at,
+        "scheduled_score": score, "reason": reason,
+    }, separators=(",", ":"))
+    changed = connection.eval(
+        _DEFER_RESOURCE_SCRIPT, 6, job.key, queue.key, intermediate.key,
+        first_seen, registry.key, queue.redis_queues_keys, created_at,
+        job.id, str(score), WORK_HEAT_RESOURCE_WAIT_MARKER, marker,
+    )
+    if changed:
+        try:
+            from app.services.resource_pressure_snapshot import RESOURCE_CONTROL_CHANNEL
+            connection.publish(RESOURCE_CONTROL_CHANNEL, json.dumps({
+                "type": "work_heat_resource_waiting", "job_id": str(job.id),
+            }, separators=(",", ":")))
+        except Exception:
+            logger.debug("Unable to publish work_heat resource wait", exc_info=True)
+    return bool(int(changed or 0))
+
+
+def clear_work_heat_resource_wait(connection, job) -> None:
+    try:
+        raw = connection.hget(job.key, WORK_HEAT_RESOURCE_WAIT_MARKER)
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        created_at = _job_created_at_raw(job)
+        if not raw or created_at is None:
+            return
+        connection.eval(
+            _CLEAR_RESOURCE_SCRIPT, 1, job.key,
+            created_at, WORK_HEAT_RESOURCE_WAIT_MARKER, raw,
+        )
+    except Exception:
+        logger.debug("Unable to clear work_heat resource marker", exc_info=True)
+
+
+def _marked_work_heat_ids(connection, registry, *, pages: int = 2, count: int = 50):
+    cursor = int(getattr(registry, "_work_heat_resource_wait_cursor", 0) or 0)
+    for _ in range(pages):
+        cursor, entries = connection.zscan(registry.key, cursor, count=count)
+        for raw_id, score in entries:
+            job_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
+            yield job_id, float(score)
+        if cursor == 0:
+            break
+    registry._work_heat_resource_wait_cursor = cursor
+
+
+def promote_work_heat_resource_waits(connection, registries, *, now=None) -> int:
+    """Promote only marked, due work_heat jobs whose hard guards are clear."""
+    timestamp = float(current_timestamp() if now is None else now)
+    promoted = 0
+    for registry in registries:
+        if str(getattr(registry, "name", "")) != "maintenance":
+            continue
+        queue = Queue(name=registry.name, connection=connection)
+        for job_id, scheduled_score in _marked_work_heat_ids(connection, registry):
+            if scheduled_score <= timestamp:
+                continue
+            raw = connection.hget(f"rq:job:{job_id}", WORK_HEAT_RESOURCE_WAIT_MARKER)
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "replace")
+            if not raw or not _work_heat_resource_wait_ready(connection):
+                continue
+            job = _fetch(job_id, connection)
+            if job is None or not _work_heat_job(job):
+                continue
+            marker = json.loads(raw)
+            expected_score = float(marker.get("scheduled_score", -1))
+            marker_created_at = marker.get("created_at")
+            if not marker_created_at or expected_score != scheduled_score:
+                continue
+            changed = connection.eval(
+                _PROMOTE_RESOURCE_SCRIPT, 3, job.key, queue.key, registry.key,
+                str(marker_created_at), job_id, str(scheduled_score),
+                WORK_HEAT_RESOURCE_WAIT_MARKER, raw, str(timestamp),
+            )
+            if changed:
+                promoted += int(changed)
+    return promoted
 
 
 def _status(job) -> str:
@@ -124,6 +330,7 @@ def _enqueue_recompute_job(
 ):
     options = {
         "job_id": job_id,
+        "meta": {"resource_descriptor": "work-heat"},
         "job_timeout": 3600,
         "result_ttl": 60 * 60,
         "failure_ttl": 24 * 60 * 60,
@@ -238,7 +445,6 @@ def request_work_heat_recompute(
 
     redis_client = redis_client or get_redis()
     queue = Queue(name="maintenance", connection=redis_client)
-    from app.jobs.work_heat import run_work_heat_recompute
 
     for source in normalized:
         try:
@@ -312,7 +518,7 @@ def request_work_heat_recompute(
                 _ensure_enqueue_lock_owned(lock_guard)
                 job = _enqueue_recompute_job(
                     queue,
-                    run_work_heat_recompute,
+                    "app.jobs.work_heat.run_work_heat_recompute",
                     source,
                     job_id,
                     dependency_id=dependency_id,
@@ -398,4 +604,11 @@ def reconcile_deferred_work_heat_jobs(*, redis_client=None) -> dict[str, int]:
     return outcome
 
 
-__all__ = ["reconcile_deferred_work_heat_jobs", "request_work_heat_recompute"]
+__all__ = [
+    "WORK_HEAT_RESOURCE_WAIT_MARKER",
+    "clear_work_heat_resource_wait",
+    "defer_work_heat_for_resources",
+    "promote_work_heat_resource_waits",
+    "reconcile_deferred_work_heat_jobs",
+    "request_work_heat_recompute",
+]

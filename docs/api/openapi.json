@@ -12371,6 +12371,16 @@
             "title": "Items",
             "type": "array"
           },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "total": {
             "title": "Total",
             "type": "integer"
@@ -12806,6 +12816,32 @@
           "status"
         ],
         "title": "TaskRead",
+        "type": "object"
+      },
+      "TaskSummary": {
+        "properties": {
+          "all": {
+            "default": 0,
+            "title": "All",
+            "type": "integer"
+          },
+          "attention": {
+            "default": 0,
+            "title": "Attention",
+            "type": "integer"
+          },
+          "running": {
+            "default": 0,
+            "title": "Running",
+            "type": "integer"
+          },
+          "waiting": {
+            "default": 0,
+            "title": "Waiting",
+            "type": "integer"
+          }
+        },
+        "title": "TaskSummary",
         "type": "object"
       },
       "TokenResponse": {
@@ -19016,7 +19052,7 @@
     },
     "/api/v1/admin/search/reindex": {
       "post": {
-        "description": "Enqueue a full Meilisearch reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
+        "description": "Enqueue a full PostgreSQL search reindex — a whole-library walk that belongs\nin a worker, not inline in the backend process.",
         "operationId": "post_api_v1_admin_search_reindex",
         "responses": {
           "202": {
@@ -32301,7 +32337,7 @@
     },
     "/api/v1/system/reindex-works": {
       "post": {
-        "description": "Queue a full Meilisearch rebuild on the protected import worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
+        "description": "Queue a full PostgreSQL search rebuild on the protected worker.\n\nThis compatibility endpoint used to run the whole-library scan inside the\nbackend request process, bypassing the NAS pressure and heavy-I/O gates.\nRoute it through the same operation as the admin data-management endpoint\nso the long coordinator cannot starve bounded operations outboxes.",
         "operationId": "post_api_v1_system_reindex_works",
         "responses": {
           "202": {
@@ -33561,6 +33597,32 @@
               ],
               "title": "Visibility",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "attention",
+                "running",
+                "waiting"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_summary",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Summary",
+              "type": "boolean"
             }
           },
           {
@@ -37198,7 +37260,7 @@
     },
     "/media/thumb/{asset_id}": {
       "get": {
-        "description": "Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).\n\nThumbnails are content-addressed by asset id and never change. Keep them in\nthe signed-in browser cache, but out of shared intermediary caches.",
+        "description": "Serve a private thumbnail via browser/Bearer auth or a scoped ticket.\n\nThumbnails are content-addressed by asset id and never change. Keep them in\nthe signed-in browser cache, but out of shared intermediary caches.",
         "operationId": "get_media_thumb_asset_id",
         "parameters": [
           {
@@ -37208,6 +37270,38 @@
             "schema": {
               "title": "Asset Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
             }
           }
         ],
@@ -37251,6 +37345,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Thumb",
         "tags": [
           "works"

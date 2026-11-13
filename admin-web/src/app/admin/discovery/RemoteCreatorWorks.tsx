@@ -13,7 +13,8 @@ import {
   LoaderCircle,
 } from "lucide-react";
 
-import { Modal, StatusBadge, useToast } from "@/components";
+import { StatusBadge, useToast } from "@/components";
+import { BusinessModal } from "@/features/gallery-ui/BusinessPage";
 import {
   ApiError,
   api,
@@ -56,7 +57,7 @@ function WorkLightbox({
       ? [work.thumbnail_url]
       : [];
   return (
-    <Modal open={!!work} onClose={onClose} title={work.title}>
+    <BusinessModal open={!!work} onClose={onClose} title={work.title}>
       {images[page] ? (
         // Signed provider media is intentionally served by the backend proxy.
         // eslint-disable-next-line @next/next/no-img-element
@@ -98,7 +99,7 @@ function WorkLightbox({
           <ChevronRight aria-hidden="true" className="h-4 w-4" />
         </button>
       </div>
-    </Modal>
+    </BusinessModal>
   );
 }
 

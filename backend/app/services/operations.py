@@ -48,31 +48,6 @@ ADMIN_ATTEMPT_HEARTBEAT_STALE_SECONDS = 90
 ADMIN_DISPATCH_RETRY_MIN_SECONDS = 30
 ADMIN_DISPATCH_RETRY_MAX_SECONDS = 15 * 60
 ADMIN_RQ_FUNCTION = "app.jobs.admin_operations.run_registered_admin_operation"
-ADMIN_PARENT_ADMISSION_OPERATION_TYPES = frozenset({
-    "admin-integrity-scan",
-    "admin-backup-estimate",
-    "admin-backup-create",
-    "admin-restore-validate",
-    "admin-proxy-test",
-    "admin-gallerydl-connectivity-test",
-})
-_ADMIN_INTERNAL_RESOURCE_PROFILES = {
-    "subscription-sync-batch": "download",
-    "subscription-sync-batch-cleanup": "download",
-    "admin-clear": "maintenance",
-    "admin-rebuild": "maintenance",
-    "admin-disk-import": "maintenance",
-    "admin-creator-reenrich": "maintenance",
-    "admin-creator-alias-backfill": "maintenance",
-    "danbooru-mapping-refresh": "maintenance",
-    "admin-search-reindex": "search_index",
-    "admin-curation-backfill": "import_db",
-    "admin-gitllery-sync": "git_projection",
-    "admin-gitllery-build": "git_projection",
-    "admin-gitllery-verify": "git_projection",
-    "hierarchy-delete": "maintenance",
-    "asset-dedup-scan": "image_derive",
-}
 _ADMIN_OPERATION_ATTEMPT: ContextVar[tuple[UUID, int] | None] = ContextVar(
     "admin_operation_attempt",
     default=None,
@@ -108,6 +83,25 @@ class AdminOperationSpec:
     scope_prefixes: tuple[str, ...]
     default_job_timeout: int
     required_permission: str
+    handler: str
+    result_policy: str = "success"
+    internal_profile: str | None = None
+    parent_admission: bool = False
+
+    def normalize_result(self, payload: dict):
+        from dataclasses import replace
+        from app.services import admin_operation_results
+        # A handoff already advanced the durable attempt. Override terminal
+        # classification while retaining the policy's progress projection.
+        outcome = getattr(admin_operation_results, self.result_policy)(payload)
+        if payload.get("_admin_handoff"):
+            return replace(outcome, status="running", error=None, reason_code=None, continues=True)
+        return outcome
+
+    async def execute(self, task_id: str, attempt: int, options: dict):
+        from app.services import admin_operation_handlers
+        payload = await getattr(admin_operation_handlers, self.handler)(task_id, attempt, options)
+        return self.normalize_result(payload)
 
 
 @dataclass(frozen=True)
@@ -127,6 +121,10 @@ def _spec(
     scopes: tuple[str, ...],
     timeout: int = 14400,
     permission: str = "system",
+    handler: str,
+    result_policy: str = "success",
+    internal_profile: str | None = None,
+    parent_admission: bool = False,
 ) -> AdminOperationSpec:
     return AdminOperationSpec(
         operation_type=operation_type,
@@ -135,6 +133,10 @@ def _spec(
         scope_prefixes=scopes,
         default_job_timeout=timeout,
         required_permission=permission,
+        handler=handler,
+        result_policy=result_policy,
+        internal_profile=internal_profile,
+        parent_admission=parent_admission,
     )
 
 
@@ -144,58 +146,82 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "subscription-sync-batch-cleanup",
             "app.jobs.admin_operations.run_subscription_sync_batch_cleanup",
+            handler="handle_subscription_sync_batch_cleanup",
+            internal_profile="download",
             queues=("operations",), scopes=("library:subscription-sync-cancel:",),
             timeout=120, permission="system",
         ),
         _spec(
             "subscription-sync-batch",
             "app.jobs.admin_operations.run_subscription_sync_batch",
+            handler="handle_subscription_sync_batch",
+            result_policy="subscription_batch",
+            internal_profile="download",
             queues=("operations",), scopes=("library:subscription-sync-batch:active",),
             timeout=120, permission="system",
         ),
         _spec(
             "admin-clear",
             "app.jobs.admin_operations.run_clear_operation",
+            handler="handle_admin_clear",
+            internal_profile="maintenance",
+            parent_admission=True,
+            result_policy="media_clear",
             scopes=("library:clear:",),
             timeout=7200,
         ),
         _spec(
             "admin-cleanup-metadata-jsons",
             "app.jobs.admin_operations.run_cleanup_metadata_jsons_operation",
+            handler="handle_admin_cleanup_metadata_jsons",
+            result_policy="metadata_cleanup",
             scopes=("library:cleanup-metadata-jsons:active",),
             timeout=7200,
         ),
         _spec(
             "admin-rebuild",
             "app.jobs.admin_operations.run_library_rebuild_operation",
+            handler="handle_admin_rebuild",
+            internal_profile="maintenance",
             scopes=("library:rebuild:active",),
         ),
         _spec(
             "admin-disk-import",
             "app.jobs.admin_operations.run_disk_import_operation",
+            handler="handle_admin_disk_import",
+            internal_profile="maintenance",
             scopes=("library:disk-import:active",),
         ),
         _spec(
             "admin-creator-reenrich",
             "app.jobs.admin_operations.run_creator_reenrich_operation",
+            handler="handle_admin_creator_reenrich",
+            result_policy="creator_refresh",
+            internal_profile="maintenance",
             scopes=("library:creator-reenrich:active",),
             timeout=7200,
         ),
         _spec(
             "admin-creator-alias-backfill",
             "app.jobs.admin_operations.run_creator_alias_backfill_operation",
+            handler="handle_admin_creator_alias_backfill",
+            internal_profile="maintenance",
             scopes=("library:creator-alias-backfill:active",),
             timeout=7200,
         ),
         _spec(
             "danbooru-mapping-refresh",
             "app.jobs.admin_operations.run_creator_reenrich_operation",
+            handler="handle_admin_creator_reenrich",
+            result_policy="creator_refresh",
+            internal_profile="maintenance",
             scopes=("library:creator-reenrich:active",),
             permission="subscriptions",
         ),
         _spec(
             "admin-danbooru-batch-import",
             "app.jobs.batch_import.run_batch_import",
+            handler="handle_admin_danbooru_batch_import",
             queues=("imports",),
             scopes=("danbooru:batch-import:",),
             timeout=3600,
@@ -204,6 +230,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "danbooru-import-all",
             "app.jobs.danbooru_import.run_import_all_danbooru",
+            handler="handle_danbooru_import_all",
             queues=("imports",),
             scopes=("danbooru:import-all:",),
             timeout=3600,
@@ -212,6 +239,7 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-danbooru-url-batch-import",
             "app.jobs.batch_import.run_url_batch_import",
+            handler="handle_admin_danbooru_url_batch_import",
             queues=("imports",),
             scopes=("danbooru:url-batch-import:",),
             timeout=3600,
@@ -220,12 +248,17 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-search-reindex",
             "app.jobs.admin_operations.run_search_reindex_operation",
+            handler="handle_admin_search_reindex",
+            result_policy="search_reindex",
+            internal_profile="search_index",
             scopes=("library:search-reindex:active",),
             timeout=7 * 24 * 60 * 60,
         ),
         _spec(
             "admin-curation-backfill",
             "app.jobs.admin_operations.run_curation_backfill_operation",
+            handler="handle_admin_curation_backfill",
+            internal_profile="import_db",
             scopes=("library:curation-backfill:active",),
             timeout=7 * 24 * 60 * 60,
             permission="curation",
@@ -233,6 +266,8 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-gitllery-verify",
             "app.jobs.admin_operations.run_gitllery_verify_operation",
+            handler="handle_admin_gitllery_verify",
+            internal_profile="git_projection",
             scopes=("gitllery:verify:",),
             timeout=7 * 24 * 60 * 60,
             permission="curation",
@@ -240,6 +275,8 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-gitllery-build",
             "app.jobs.admin_operations.run_gitllery_build_operation",
+            handler="handle_admin_gitllery_build",
+            internal_profile="git_projection",
             scopes=("library:gitllery-build:active",),
             timeout=7 * 24 * 60 * 60,
             permission="curation",
@@ -247,12 +284,16 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-gitllery-sync",
             "app.jobs.admin_operations.run_gitllery_sync_operation",
+            handler="handle_admin_gitllery_sync",
+            internal_profile="git_projection",
             scopes=("library:gitllery-sync:active",),
             timeout=7 * 24 * 60 * 60,
         ),
         _spec(
             "hierarchy-delete",
             "app.jobs.admin_operations.run_hierarchy_delete_operation",
+            handler="handle_hierarchy_delete",
+            internal_profile="maintenance",
             queues=("operations", "maintenance"),
             scopes=("library:hierarchy-delete:active",),
             timeout=7 * 24 * 60 * 60,
@@ -260,6 +301,9 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "asset-dedup-scan",
             "app.jobs.asset_dedup.run_asset_dedup_scan",
+            handler="handle_asset_dedup_scan",
+            result_policy="asset_dedup",
+            internal_profile="image_derive",
             scopes=("lock:admin:asset-dedup-scan",),
             timeout=3600,
             permission="curation",
@@ -267,45 +311,64 @@ ADMIN_OPERATION_REGISTRY: dict[str, AdminOperationSpec] = {
         _spec(
             "admin-download-conflict-reconciliation",
             "app.jobs.download_conflicts.reconcile_historical_download_conflicts",
+            handler="handle_admin_download_conflict_reconciliation",
             scopes=("diagnostics:download-conflicts:active",),
             timeout=3600,
         ),
         _spec(
             "admin-integrity-scan",
             "app.jobs.admin_operations.run_integrity_scan_operation",
+            handler="handle_admin_integrity_scan",
+            parent_admission=True,
             scopes=("diagnostics:integrity:active",),
         ),
         _spec(
             "admin-backup-estimate",
             "app.jobs.admin_operations.run_backup_estimate_operation",
+            handler="handle_admin_backup_estimate",
+            parent_admission=True,
             scopes=("backup:estimate:active",),
         ),
         _spec(
             "admin-backup-create",
             "app.jobs.admin_operations.run_backup_create_operation",
+            handler="handle_admin_backup_create",
+            parent_admission=True,
             scopes=("backup:create:active",),
             timeout=3600,
         ),
         _spec(
             "admin-restore-validate",
             "app.jobs.admin_operations.run_restore_validation_operation",
+            handler="handle_admin_restore_validate",
+            parent_admission=True,
             scopes=("restore:validate:",),
             timeout=3600,
         ),
         _spec(
             "admin-proxy-test",
             "app.jobs.admin_operations.run_proxy_test_operation",
+            handler="handle_admin_proxy_test",
+            parent_admission=True,
             scopes=("diagnostics:proxy:active",),
             timeout=120,
         ),
         _spec(
             "admin-gallerydl-connectivity-test",
             "app.jobs.admin_operations.run_gallerydl_connectivity_test_operation",
+            handler="handle_admin_gallerydl_connectivity_test",
+            parent_admission=True,
             scopes=("diagnostics:gallerydl:",),
             timeout=180,
         ),
     )
 }
+
+
+# Compatibility names now derive from the complete operation definition.
+ADMIN_PARENT_ADMISSION_OPERATION_TYPES = frozenset(
+    spec.operation_type for spec in ADMIN_OPERATION_REGISTRY.values() if spec.parent_admission
+)
 
 
 def admin_operation_required_permission(operation_type: str | None) -> str | None:
@@ -1604,9 +1667,13 @@ def _enqueue_admin_rq(
 
     connection = redis_client if redis_client is not None else get_redis()
     metadata = {"registered_admin_operation": operation_type}
-    internal_profile = _ADMIN_INTERNAL_RESOURCE_PROFILES.get(operation_type)
+    internal_profile = ADMIN_OPERATION_REGISTRY[operation_type].internal_profile
     if internal_profile is not None:
         metadata["registered_admin_internal_profile"] = internal_profile
+        # Keep registered admin profiles separate from outbox descriptors:
+        # this metadata describes admission only and must never cause the
+        # worker to rewrite task arguments for a child handler.
+        metadata["registered_admin_resource_profile"] = internal_profile
     return checked_enqueue(
         Queue(name=queue_name, connection=connection),
         ADMIN_RQ_FUNCTION,

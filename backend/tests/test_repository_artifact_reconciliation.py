@@ -35,6 +35,40 @@ async def _clear_reconciliation_tables(db) -> None:
     await db.commit()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_repository_reconciliation_keeps_owned_metadata_without_provider_directory():
+    from app.database import async_session, engine
+    from app.services.repository_artifact_reconciliation import (
+        _repository_creator_dirs, reconcile_repository_artifacts,
+    )
+
+    try:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+            subscription, repository, _other, current, historical, _manual = await _repository_fixture(
+                db, source="danbooru", source_creator_id="test_artist",
+                source_url="https://danbooru.donmai.us/posts?tags=test_artist",
+            )
+            db.add_all([
+                _artifact(path="danbooru/None/date/current.json", work_id="current",
+                          creator_dir="None", job_id=current.id, source="danbooru"),
+                _artifact(path="danbooru/None/date/other.json", work_id="other",
+                          creator_dir="None", job_id=historical.id, source="danbooru"),
+            ])
+            await db.commit()
+            assert await _repository_creator_dirs(db, repository, subscription.creator_id) == set()
+            result = await reconcile_repository_artifacts(db, current)
+            await db.commit()
+            assert result.downloaded_metadata_paths == ("danbooru/None/date/current.json",)
+            assert result.pending_work_count == 1
+            assert result.recovered_metadata_count == 0
+    finally:
+        async with async_session() as db:
+            await _clear_reconciliation_tables(db)
+        await engine.dispose()
+
+
 async def _repository_fixture(
     db,
     *,
@@ -897,7 +931,7 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     async def fake_defaults():
         return {"max_posts": 1, "timeout_seconds": 1, "stall_timeout_seconds": 1}
 
-    async def fake_enqueue(_job_id, import_error=None, new_json_paths=None):
+    async def fake_enqueue(_job_id, import_error=None, new_json_paths=None, *, publisher_checkpoint=None):
         paths = set(new_json_paths or [])
         if import_error is None:
             assert initial_publications == []
@@ -921,7 +955,7 @@ async def test_successful_download_boundary_retries_durable_recovered_backlog_af
     while hasattr(raw_runner, "__wrapped__"):
         raw_runner = raw_runner.__wrapped__
     monkeypatch.setattr(download_module, "_read_download_defaults", fake_defaults)
-    monkeypatch.setattr(download_module, "_enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
     monkeypatch.setattr(download_module, "build_effective_gallerydl_config", lambda *_args: {})
     monkeypatch.setattr(download_module, "staging_enabled", lambda: False)
     monkeypatch.setattr(download_module, "ControlListener", FakeControlListener)

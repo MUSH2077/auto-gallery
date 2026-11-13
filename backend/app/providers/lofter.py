@@ -65,6 +65,9 @@ class LofterProvider(BaseProvider):
             "raw_metadata": {"blog_name": blog_name},
         }
 
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://{source_creator_id}.lofter.com/"
+
     def parse_work_source(self, raw_metadata: dict) -> dict:
         post_id = str(raw_metadata.get("id", ""))
         blog_name = raw_metadata.get("blog_name", "")

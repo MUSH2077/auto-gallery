@@ -496,6 +496,7 @@ async def _cancel_batch_item(item_id, cleanup_task_id, options):
     from app.models.task_state import DOWNLOAD_CANCELLABLE_STATUSES
 
     async with async_session() as db:
+        cancellation = None
         item = (await db.execute(select(SchedulerBatchItem).where(SchedulerBatchItem.id == item_id).with_for_update())).scalar_one()
         if item.status in TERMINAL:
             return
@@ -513,13 +514,17 @@ async def _cancel_batch_item(item_id, cleanup_task_id, options):
                 .with_for_update().execution_options(populate_existing=True))
             await reconcile_item(db, item)
             if item.status not in TERMINAL and item.owns_download and job and job.status in DOWNLOAD_CANCELLABLE_STATUSES:
-                await TaskEngine(db).cancel_download(job.id, operator=options.get("operator"), note=options.get("note"))
+                cancellation = await TaskEngine(db).apply_cancel_download(job.id, operator=options.get("operator"), note=options.get("note"))
         if item.status not in TERMINAL:
             item.status = "cancelled"
             item.reason_code = "batch_cancelled"
             item.next_retry_at = None
         await fence_current_admin_operation_transaction(db, task_id=cleanup_task_id)
+        # Domain cancellation and item reconciliation share this final fence
+        # and commit. A superseded cleanup cannot leave either persisted.
         await db.commit()
+        if cancellation is not None:
+            cancellation.notify()
 
 
 async def run_batch_cleanup_slice(task_id, options):

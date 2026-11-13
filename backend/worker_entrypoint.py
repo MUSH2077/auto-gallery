@@ -14,8 +14,12 @@ import socket
 import subprocess
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from app.services.shared_worker_process import SharedWorkerProcess
 from datetime import datetime, timedelta, timezone
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
@@ -28,70 +32,71 @@ SUPERVISOR_STATUS_TTL_SECONDS = 75
 SUPERVISOR_STATUS_INTERVAL_SECONDS = 5
 SUPERVISOR_STABLE_HEARTBEAT_SECONDS = 30
 WORKER_SUPERVISOR_HASH_KEY = "worker:supervisors:v1"
+DOWNLOAD_DRAIN_KEY = "worker:download:drain:v1"
+DOWNLOAD_WORKER_LIFECYCLE_ENV = "DOWNLOAD_WORKER_LIFECYCLE"
 SCHEDULER_WATCHDOG_INTERVAL_SECONDS = 60
 OUTBOX_FALLBACK_INTERVAL_SECONDS = 60
 OUTBOX_HEALTH_REFRESH_INTERVAL_SECONDS = 30
+IMPORT_WORKER_CONCURRENCY_ENV = "IMPORT_WORKER_CONCURRENCY"
+IMPORT_WORKER_CONCURRENCY_DEFAULT = 1
+IMPORT_WORKER_CONCURRENCY_MIN = 1
+IMPORT_WORKER_CONCURRENCY_MAX = 4
 
 
-def resolve_concurrency(db_value, argv_value, default=3, lo=1, hi=5):
-    """Pick DB -> CLI -> default and clamp the configured value."""
-
-    for candidate in (db_value, argv_value, default):
-        if candidate is None:
-            continue
-        try:
-            n = int(candidate)
-        except (TypeError, ValueError):
-            continue
-        return max(lo, min(hi, n))
-    return default
-
-
-def resolve_concurrency_cap(value=None, *, lo=1, hi=5) -> int:
-    candidate = value if value is not None else os.environ.get("DOWNLOAD_CONCURRENCY_CAP", "1")
-    try:
-        return max(lo, min(hi, int(candidate)))
-    except (TypeError, ValueError):
-        return 1
+from app.services.download_concurrency import (
+    resolve_concurrency,
+    resolve_concurrency_cap,
+    resolve_download_concurrency as _resolve_download_concurrency,
+)
 
 
 def resolve_download_concurrency(db_value, argv_value) -> tuple[int, int, int]:
-    configured = resolve_concurrency(db_value, argv_value, default=3)
+    """Keep the supervisor's tuple API while sharing the pure resolver."""
+
     from app.services.device_profile import current_device_profile
 
-    cap = min(
-        resolve_concurrency_cap(),
-        current_device_profile().download_concurrency_limit,
+    decision = _resolve_download_concurrency(
+        db_value,
+        argv_value,
+        cap_value=os.environ.get("DOWNLOAD_CONCURRENCY_CAP", "1"),
+        automatic_device_limit=current_device_profile().download_concurrency_limit,
+        explicit_device_limit=os.environ.get("DOWNLOAD_DEVICE_CONCURRENCY_LIMIT"),
     )
-    return configured, cap, min(configured, cap)
+    return decision.configured, decision.cap, decision.effective
 
 
-def _db_download_concurrency():
-    """Best-effort read from DB; boot remains possible while DB is recovering."""
+def _download_startup(argv_value: str | None) -> dict:
+    """Run one-off imports outside the long-lived download supervisor."""
+
+    command = [sys.executable, "-m", "app.services.download_startup"]
+    if argv_value is not None:
+        command.append(argv_value)
+    process = subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+    )
+    previous_handlers = {}
+
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
 
     try:
-        import asyncio
-
-        from app.database import async_session, engine
-        from app.services.settings import get_download_defaults
-
-        async def _query():
-            try:
-                async with async_session() as db:
-                    defaults = await get_download_defaults(db)
-                    return defaults.get("download_concurrency")
-            finally:
-                # The supervisor never queries PostgreSQL again; do not retain
-                # one of the 40 budgeted connections for its whole lifetime.
-                await engine.dispose()
-
-        return asyncio.run(_query())
-    except Exception as exc:  # noqa: BLE001 - boot-time best effort
-        print(
-            f"[worker_entrypoint] DB concurrency read failed ({exc}); using fallback",
-            file=sys.stderr,
-        )
-        return None
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, interrupted)
+        output, diagnostic = process.communicate(timeout=15)
+        if diagnostic:
+            print(diagnostic, end="", file=sys.stderr)
+        if process.returncode:
+            raise RuntimeError(f"download startup helper exited with code {process.returncode}")
+        return json.loads(output)
+    finally:
+        # Also reap on timeout, malformed output, or a stop during startup.
+        # No credential checker or database helper remains as a resident child.
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 class RestartCircuit:
@@ -141,7 +146,7 @@ class RestartCircuit:
 
 @dataclass
 class ManagedProcess:
-    process: subprocess.Popen
+    process: subprocess.Popen | SharedWorkerProcess
     queues: tuple[str, ...]
     with_scheduler: bool = False
 
@@ -151,6 +156,16 @@ class PendingRestart:
     due_at: float
     queues: tuple[str, ...]
     with_scheduler: bool = False
+
+
+def download_worker_environment(worker_queues, effective_concurrency: int):
+    """Pass the supervisor's resolved slots to a download child only."""
+
+    if not any(str(queue).startswith("downloads") for queue in worker_queues):
+        return None
+    child_env = os.environ.copy()
+    child_env["DOWNLOAD_EXECUTION_CONCURRENCY"] = str(effective_concurrency)
+    return child_env
 
 
 def _worker_command(queues: list[str], *, with_scheduler: bool) -> list[str]:
@@ -176,6 +191,34 @@ _last_status_publish_at = 0.0
 def _supervisor_status_field(queues: list[str]) -> str:
     # Queue identity is stable across container recreation, unlike hostname.
     return "+".join(queues).replace(":", "_")
+
+
+def _read_download_drain_token(queues: list[str]) -> str | None:
+    """Read the host controller's short-lived download drain lease."""
+
+    if os.environ.get(DOWNLOAD_WORKER_LIFECYCLE_ENV, "resident").strip().lower() != "on_demand":
+        return None
+    if not any(
+        str(queue) == "downloads" or str(queue).startswith("downloads:")
+        for queue in queues
+    ):
+        return None
+    global _status_client
+    try:
+        if _status_client is None:
+            import redis
+
+            _status_client = redis.from_url(
+                REDIS_URL,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+        value = _status_client.get(DOWNLOAD_DRAIN_KEY)
+        if value is None:
+            return None
+        return value.decode() if isinstance(value, bytes) else str(value)
+    except Exception:  # noqa: BLE001 - control polling cannot kill supervisor
+        return None
 
 
 def _publish_supervisor_status(queues: list[str], payload: dict) -> None:
@@ -221,22 +264,6 @@ def _publish_supervisor_status(queues: list[str], payload: dict) -> None:
         print(f"[worker_entrypoint] status publish failed: {exc}", file=sys.stderr)
 
 
-def _register_resource_state_bridge() -> None:
-    try:
-        from app.services.heavy_io import register_resource_state_callback
-        from app.services.tasks import update_task_resource_state
-
-        register_resource_state_callback(update_task_resource_state)
-    except Exception as exc:
-        # RQ metadata is still populated if an older database is being rolled
-        # forward.  ResourceAwareWorker repeats registration in the actual RQ
-        # interpreter so its forked workhorse inherits the callback.
-        print(
-            f"[worker_entrypoint] TaskRun resource-state bridge unavailable: {exc}",
-            file=sys.stderr,
-        )
-
-
 def build_worker_specs(
     queues: list[str],
     concurrency: int,
@@ -253,6 +280,102 @@ def build_worker_specs(
     # RQ promotes delayed jobs only for queues owned by that scheduler.
     specs.extend(((name,), with_scheduler) for name in extra_queues)
     return specs
+
+
+def resolve_import_concurrency(argv_value: str | None) -> int:
+    """Resolve import consumers, preferring an explicit CLI value.
+
+    Unlike the historical generic worker fallback, malformed import values
+    are configuration errors. Silently turning an invalid value into one
+    consumer makes a deployment typo difficult to detect and can hide an
+    unintended throughput change.
+    """
+
+    source = "CLI" if argv_value is not None else IMPORT_WORKER_CONCURRENCY_ENV
+    raw_value = argv_value if argv_value is not None else os.environ.get(
+        IMPORT_WORKER_CONCURRENCY_ENV, str(IMPORT_WORKER_CONCURRENCY_DEFAULT)
+    )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{source} {IMPORT_WORKER_CONCURRENCY_ENV} must be an integer "
+            f"between {IMPORT_WORKER_CONCURRENCY_MIN} and {IMPORT_WORKER_CONCURRENCY_MAX}; "
+            f"got {raw_value!r}"
+        ) from exc
+    if not IMPORT_WORKER_CONCURRENCY_MIN <= value <= IMPORT_WORKER_CONCURRENCY_MAX:
+        raise ValueError(
+            f"{source} {IMPORT_WORKER_CONCURRENCY_ENV} must be between "
+            f"{IMPORT_WORKER_CONCURRENCY_MIN} and {IMPORT_WORKER_CONCURRENCY_MAX}; got {value}"
+        )
+    return value
+
+
+def _missing_worker_restarts(
+    worker_specs: list[tuple[tuple[str, ...], bool]],
+    processes: list[ManagedProcess],
+    pending_restarts: list[PendingRestart],
+    *,
+    due_at: float,
+) -> list[PendingRestart]:
+    """Return only worker specs absent from live and pending processes."""
+
+    active_specs = Counter(
+        (managed.queues, managed.with_scheduler)
+        for managed in processes
+    )
+    active_specs.update(
+        (pending.queues, pending.with_scheduler)
+        for pending in pending_restarts
+    )
+    missing: list[PendingRestart] = []
+    for spec_queues, scheduler in worker_specs:
+        spec = (tuple(spec_queues), scheduler)
+        if active_specs[spec]:
+            active_specs[spec] -= 1
+        else:
+            missing.append(
+                PendingRestart(
+                    due_at=due_at, queues=tuple(spec_queues), with_scheduler=scheduler
+                )
+            )
+    return missing
+
+
+def _clear_restarts_on_download_drain_start(
+    pending_restarts: list[PendingRestart],
+    *,
+    drain_active: bool,
+    was_drain_active: bool,
+) -> None:
+    """Discard crash backoff plans while an intentional drain is active."""
+
+    if drain_active and not was_drain_active:
+        pending_restarts.clear()
+
+
+def _queue_worker_counts(
+    processes: list[ManagedProcess],
+    worker_specs: list[tuple[tuple[str, ...], bool]],
+) -> dict[str, dict[str, int]]:
+    """Report fixed-shape counts for the import and maintenance queues."""
+
+    tracked_queues = ("imports", "maintenance")
+    target_counts = {
+        queue: sum(queue in spec_queues for spec_queues, _scheduler in worker_specs)
+        for queue in tracked_queues
+    }
+    alive_counts = {
+        queue: sum(
+            queue in managed.queues and managed.process.poll() is None
+            for managed in processes
+        )
+        for queue in tracked_queues
+    }
+    return {
+        queue: {"alive": alive_counts[queue], "target": target_counts[queue]}
+        for queue in tracked_queues
+    }
 
 
 def _sweep_personal_auth_startup(queues: list[str]) -> int:
@@ -323,13 +446,34 @@ def main():
         else None
     )
     with_scheduler = "--with-scheduler" in sys.argv[2:]
-    _register_resource_state_bridge()
 
+    # Resolve imports before starting consumers. Each independent RQ
+    # interpreter must inherit the selected CLI value, otherwise a stale
+    # environment value can reject startup or select a different count.
+    import_concurrency: int | None = None
+    if queues and queues[0] == "imports":
+        try:
+            import_concurrency = resolve_import_concurrency(argv_concurrency)
+        except ValueError as exc:
+            print(f"[worker_entrypoint] {exc}", file=sys.stderr, flush=True)
+            sys.exit(2)
+        os.environ[IMPORT_WORKER_CONCURRENCY_ENV] = str(import_concurrency)
+
+    # RQ is launched in a separate interpreter. Its ResourceAwareWorker
+    # registers the TaskRun resource-state bridge before forking workhorses;
+    # registering it here cannot reach those consumers and loads unused ORM
+    # dependencies into an otherwise lightweight process.
+
+    download_startup = None
     try:
-        removed_auth_configs = _sweep_personal_auth_startup(queues)
+        if queues and queues[0].startswith("downloads"):
+            download_startup = _download_startup(argv_concurrency)
+            removed_auth_configs = download_startup["removed_auth_configs"]
+        else:
+            removed_auth_configs = _sweep_personal_auth_startup(queues)
     except Exception as exc:
         print(
-            f"[worker_entrypoint] personal authentication tmpfs validation failed: {exc}",
+            f"[worker_entrypoint] startup validation failed: {exc}",
             file=sys.stderr,
             flush=True,
         )
@@ -345,9 +489,9 @@ def main():
     configured_concurrency: int | None = None
     concurrency_cap: int | None = None
     if queues and queues[0].startswith("downloads"):
-        configured_concurrency, concurrency_cap, concurrency = resolve_download_concurrency(
-            _db_download_concurrency(), argv_concurrency
-        )
+        configured_concurrency = download_startup["configured"]
+        concurrency_cap = download_startup["cap"]
+        concurrency = download_startup["effective"]
         print(
             "[worker_entrypoint] downloads concurrency "
             f"configured={configured_concurrency} cap={concurrency_cap} effective={concurrency}",
@@ -355,10 +499,14 @@ def main():
             flush=True,
         )
     else:
-        try:
-            concurrency = max(1, int(argv_concurrency)) if argv_concurrency is not None else 1
-        except (TypeError, ValueError):
-            concurrency = 1
+        if queues and queues[0] == "imports":
+            # Already validated before app.config was imported.
+            concurrency = import_concurrency
+        else:
+            try:
+                concurrency = max(1, int(argv_concurrency)) if argv_concurrency is not None else 1
+            except (TypeError, ValueError):
+                concurrency = 1
 
     processes: list[ManagedProcess] = []
     pending_restarts: list[PendingRestart] = []
@@ -370,6 +518,9 @@ def main():
     last_scheduler_watchdog_at = 0.0
     last_outbox_fallback_at = 0.0
     last_outbox_health_at = 0.0
+    drain_token: str | None = None
+    drain_active = False
+    was_drain_active = False
 
     worker_specs = build_worker_specs(
         queues,
@@ -377,6 +528,27 @@ def main():
         with_scheduler=with_scheduler,
         extra_queues=extra_queues,
     )
+    shared_factory = None
+    shared_mode = os.environ.get("WORKER_SHARED_INITIALIZATION", "0").strip().lower()
+    if shared_mode not in {"0", "false", "1", "true"}:
+        raise ValueError("WORKER_SHARED_INITIALIZATION must be 0 or 1")
+    if shared_mode in {"1", "true"}:
+        supported_queues = (
+            queues == ["operations"] and not extra_queues
+        ) or (
+            queues == ["imports"] and extra_queues in ([], ["maintenance"])
+        )
+        if not supported_queues or concurrency < 2:
+            raise ValueError(
+                "Shared initialization requires multiple operations or imports consumers; "
+                "only imports may include the independent maintenance queue"
+            )
+        from app.services.shared_worker_process import SharedWorkerFactory
+
+        shared_factory = SharedWorkerFactory(
+            preload_control=queues in (["operations"], ["imports"]),
+        )
+    fatal_shared_failure = False
     expected_worker_count = len(worker_specs)
     supervised_queues = list(
         dict.fromkeys(name for spec, _scheduler in worker_specs for name in spec)
@@ -393,7 +565,19 @@ def main():
 
     def spawn(worker_queues: tuple[str, ...], *, scheduler: bool) -> ManagedProcess:
         command = _worker_command(list(worker_queues), with_scheduler=scheduler)
-        process = subprocess.Popen(command)
+        child_env = download_worker_environment(worker_queues, concurrency)
+        if child_env is None and "imports" in worker_queues:
+            child_env = os.environ.copy()
+            child_env[IMPORT_WORKER_CONCURRENCY_ENV] = str(concurrency)
+        if shared_factory is not None:
+            process = shared_factory.start(command)
+        else:
+            process = subprocess.Popen(command, env=child_env) if child_env is not None else subprocess.Popen(command)
+        if not running:
+            # A stop can arrive while a shared template is still initializing.
+            # Include the just-created consumer in teardown, never leave it
+            # running after the shutdown handler has finished its first pass.
+            process.terminate()
         managed = ManagedProcess(
             process=process,
             queues=worker_queues,
@@ -427,6 +611,7 @@ def main():
                 "state": "stopping",
                 "worker_count": len(processes),
                 "expected_worker_count": expected_worker_count,
+                "queue_worker_counts": _queue_worker_counts(processes, worker_specs),
             },
         )
         for managed in processes:
@@ -442,13 +627,33 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    for worker_queues, scheduler_enabled in worker_specs:
-        spawn(worker_queues, scheduler=scheduler_enabled)
+    recovery_control = None
+    if "scheduled" in supervised_queues:
+        from app.services.outbox_recovery_control import OutboxRecoveryControl
+
+        recovery_control = OutboxRecoveryControl(REDIS_URL)
+
+    try:
+        for worker_queues, scheduler_enabled in worker_specs:
+            if not running:
+                break
+            spawn(worker_queues, scheduler=scheduler_enabled)
+    except BaseException:
+        shutdown(signal.SIGTERM, None)
+        for managed in processes:
+            managed.process.wait(timeout=10)
+        raise
 
     while running:
+        if shared_factory is not None and not shared_factory.alive():
+            print("[worker_entrypoint] shared initialization process exited; stopping consumers", file=sys.stderr, flush=True)
+            fatal_shared_failure = True
+            shutdown(signal.SIGTERM, None)
+            break
         now = time.monotonic()
         restart_circuit.refresh(now)
-
+        drain_token = _read_download_drain_token(supervised_queues)
+        drain_active = drain_token is not None
         if (
             "scheduled" in supervised_queues
             and now - last_scheduler_watchdog_at >= SCHEDULER_WATCHDOG_INTERVAL_SECONDS
@@ -471,6 +676,7 @@ def main():
                 )
             last_scheduler_watchdog_at = now
         if "scheduled" in supervised_queues:
+            recovery_control.poll()
             fallback_due = (
                 now - last_outbox_fallback_at >= OUTBOX_FALLBACK_INTERVAL_SECONDS
             )
@@ -514,7 +720,10 @@ def main():
                 "return_code": return_code,
                 "at": datetime.now(timezone.utc).isoformat(),
             }
-            if not running:
+            if not running or drain_active or was_drain_active:
+                # A deliberate drain is a warm stop, not a crash. During the
+                # cancellation transition, reap those normal exits first; the
+                # exact-spec recovery below recreates only missing consumers.
                 continue
             delay = restart_circuit.record_exit(now)
             due_at = now + delay
@@ -539,21 +748,53 @@ def main():
                     flush=True,
                 )
 
+        _clear_restarts_on_download_drain_start(
+            pending_restarts,
+            drain_active=drain_active,
+            was_drain_active=was_drain_active,
+        )
+        if was_drain_active and not drain_active:
+            # Reap processes before comparing specs. A parent that already
+            # returned during drain must not be counted as live or scheduled
+            # through crash backoff; only missing specs are recreated now.
+            pending_restarts.extend(
+                _missing_worker_restarts(
+                    worker_specs, processes, pending_restarts, due_at=now
+                )
+            )
+
         circuit_open = restart_circuit.is_open(now)
-        if not circuit_open:
+        if not circuit_open and not drain_active:
             for pending in list(pending_restarts):
                 if pending.due_at > now:
                     continue
                 # Schedulers are queue-scoped. Preserve the crashed spec even
                 # when a different queue's scheduler is still alive.
-                spawn(pending.queues, scheduler=pending.with_scheduler)
+                try:
+                    spawn(pending.queues, scheduler=pending.with_scheduler)
+                except Exception as exc:
+                    if shared_factory is None:
+                        raise
+                    print(f"[worker_entrypoint] shared consumer restart failed: {type(exc).__name__}", file=sys.stderr, flush=True)
+                    fatal_shared_failure = True
+                    shutdown(signal.SIGTERM, None)
+                    break
                 pending_restarts.remove(pending)
 
+        if not running:
+            break
         if len(processes) == expected_worker_count and not pending_restarts:
             restart_circuit.observe_fully_running(now)
 
         if now - last_status_at >= SUPERVISOR_STATUS_INTERVAL_SECONDS:
-            state = "circuit_open" if circuit_open else "backoff" if pending_restarts else "running"
+            drained = drain_active and not processes and not pending_restarts
+            state = (
+                "drained" if drained
+                else "draining" if drain_active
+                else "circuit_open" if circuit_open
+                else "backoff" if pending_restarts
+                else "running"
+            )
             circuit_open_until = None
             if restart_circuit.circuit_until is not None:
                 remaining = max(0.0, restart_circuit.circuit_until - now)
@@ -570,16 +811,24 @@ def main():
                     "concurrency_cap": concurrency_cap,
                     "effective_concurrency": concurrency,
                     "expected_worker_count": expected_worker_count,
+                    "queue_worker_counts": _queue_worker_counts(processes, worker_specs),
                     "extra_queues": extra_queues,
                     "pending_restarts": len(pending_restarts),
                     "crashes_in_window": len(restart_circuit.crashes),
                     "circuit_open_until": circuit_open_until,
                     "last_exit": last_exit,
+                    "drain_token": drain_token,
+                    "drain_ack": drained,
                 },
             )
             last_status_at = now
+            if drained:
+                print("[worker_entrypoint] download drain acknowledged; all consumers stopped", flush=True)
+        was_drain_active = drain_active
         time.sleep(1)
 
+    if recovery_control is not None:
+        recovery_control.close()
     for managed in processes:
         try:
             return_code = managed.process.wait(timeout=10)
@@ -589,7 +838,11 @@ def main():
             # Do not claim success before the killed child has been reaped.
             return_code = managed.process.wait(timeout=10)
         record_exit(managed, return_code)
+    if shared_factory is not None:
+        shared_factory.close()
     print("All workers stopped.", flush=True)
+    if fatal_shared_failure:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

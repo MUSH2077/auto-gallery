@@ -22,7 +22,6 @@ export function useSlideshow(): { open: (items: SlideItem[], startIndex?: number
     <SlideshowPlayer
       items={state.items}
       startIndex={state.startIndex}
-      open={state.open}
       onClose={() => setState((s) => ({ ...s, open: false }))}
     />
   ) : null;

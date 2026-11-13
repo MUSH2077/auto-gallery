@@ -22,6 +22,8 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.services.cookie_paths import InvalidCookiePath, resolve_cookie_path
+from app.services.connectivity import TEST_URLS, AUTH_ERROR_PATTERNS, probe_source_connection as _run_source_connection_test
 from app.schemas.admin_operations import (
     AdminOperationAccepted,
     AdminOperationSnapshotResponse,
@@ -338,10 +340,10 @@ def _convert_to_netscape_cookies(raw: str, source: str) -> str:
 
 
 def _load_config() -> tuple[dict, str]:
-    from app.services.settings import ensure_gallerydl_config, gallerydl_config_path
+    from app.services.settings import read_gallerydl_config, gallerydl_config_path
 
     config_path = gallerydl_config_path()
-    return ensure_gallerydl_config(config_path), str(config_path)
+    return read_gallerydl_config(config_path), str(config_path)
 
 def _read_source_config(extractor_config: dict, schema_map: dict, config: dict | None = None) -> dict:
     """Read gallery-dl extractor config back into our API schema shape."""
@@ -409,28 +411,7 @@ def _rebuild_managed_postprocessors(config: dict, pixiv_ugoira: str | None) -> l
 
 # ── Gallery-dl connectivity test ──
 
-TEST_URLS = {
-    "pixiv": "https://www.pixiv.net/users/11",
-    "twitter": "https://x.com/X",
-    "iwara": "https://www.iwara.tv/videos",
-    "danbooru": "https://danbooru.donmai.us/posts?tags=rating:s&limit=1",
-    "pinterest": "https://www.pinterest.com/pinterest/",
-    "lofter": "https://www.lofter.com/tag/%E6%8F%92%E7%94%BB",
-    "weibo": "https://weibo.com/u/2803301701",
-    "bilibili": "https://space.bilibili.com/8047632",
-}
 
-AUTH_ERROR_PATTERNS = [
-    (r"(?i)AuthRequired", "Authentication failed — invalid or missing credentials"),
-    (r"(?i)AuthorizationError", "Authorization denied — check account permissions"),
-    (r"(?i)HttpError.*401", "HTTP 401 Unauthorized — check username/password"),
-    (r"(?i)HttpError.*403", "HTTP 403 Forbidden — check account access"),
-    (r"(?i)LoginRequired", "Login required — credentials not provided or invalid"),
-    (r"(?i)NotFoundError", "User/page not found — check the test URL"),
-    (r"(?i)cookie.*(?:expired|invalid|missing)", "Cookie expired or invalid"),
-    (r"(?i)token.*(?:expired|invalid|revoked)", "Token expired or revoked"),
-    (r"(?i)Could not authenticate", "Authentication rejected by server"),
-]
 
 @router.post(
     "/gallerydl-config/test-connection",
@@ -476,103 +457,6 @@ async def latest_source_connection(
     )
 
 
-async def _run_source_connection_test(source: str):
-    """Execute gallery-dl connectivity using the saved source configuration."""
-
-    test_url = TEST_URLS[source]
-    import json as _json, os, re as _re, subprocess, tempfile, shutil
-
-    tmpdir = tempfile.mkdtemp(prefix="gallerydl-test-")
-    tmp_config = os.path.join(tmpdir, "test-config.json")
-    try:
-        from app.providers import registry as _registry
-        from app.services.settings import (
-            build_effective_gallerydl_config,
-            source_key_for_extractor,
-        )
-
-        provider_source = source_key_for_extractor(source)
-        provider_config = {}
-        try:
-            provider = _registry.get(provider_source)
-            provider_config = provider.build_gallerydl_config(None)
-        except KeyError:
-            provider_config = {}
-        config = build_effective_gallerydl_config(provider_source, provider_config)
-        with open(tmp_config, "w") as f:
-            _json.dump(config, f)
-
-        cmd = [
-            "gallery-dl", "--config", tmp_config,
-            "--write-metadata",
-            "--range", "1-1",
-            "--destination", tmpdir,
-            test_url,
-        ]
-
-        env = os.environ.copy()
-        proxy_enabled = False
-        try:
-            from app.services.proxy import _load_proxy_config, get_proxy_env
-            proxy_config = await _load_proxy_config()
-            proxy_enabled = bool(proxy_config.get("enabled", False))
-            env.update(get_proxy_env(proxy_config))
-        except Exception:
-            logger.warning("Failed to apply proxy env for gallery-dl test", exc_info=True)
-
-        logger.info("Testing %s connectivity: %s (proxy=%s)", source, " ".join(cmd), proxy_enabled)
-        # gallery-dl can run up to 120s — off the event loop so a connection
-        # test doesn't freeze the whole backend for other users.
-        result = await asyncio.to_thread(
-            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env))
-        stderr = result.stderr or ""
-        stdout = result.stdout or ""
-        combined = stdout + stderr
-
-        auth_issue = None
-        for pattern, label in AUTH_ERROR_PATTERNS:
-            if _re.search(pattern, combined):
-                auth_issue = label
-                break
-
-        if result.returncode == 0 and not auth_issue:
-            return {
-                "source": source, "success": True,
-                "message": f"Connection test passed for {source}. Credentials are valid.",
-                "details": stderr[:1000] or "(no output)",
-            }
-        elif auth_issue:
-            return {
-                "source": source, "success": False,
-                "message": auth_issue,
-                "details": (stderr or stdout or "")[:2000],
-            }
-        else:
-            # Show last portion of stderr (gallery-dl puts the actual error at the end)
-            detail = (stderr or stdout or "").strip()
-            if len(detail) > 2000:
-                detail = "...(truncated)\n" + detail[-2000:]
-            return {
-                "source": source, "success": False,
-                "message": f"gallery-dl exited with code {result.returncode}",
-                "details": detail or "(no output — check gallery-dl version and network connectivity)",
-            }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "source": source, "success": False,
-            "message": "Connection test timed out after 120s",
-            "details": "The request to the remote server took too long.",
-        }
-    except Exception:
-        logger.exception("Connection test failed for %s", source)
-        return {
-            "source": source, "success": False,
-            "message": "Connection test failed unexpectedly.",
-            "details": "Check the backend logs for the request details.",
-        }
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @router.get("/gallerydl-config/effective")
@@ -611,8 +495,11 @@ async def get_effective_gallerydl_config(
             "retryable": False,
         })
 
-    provider_config = provider.build_gallerydl_config(None)
-    effective = build_effective_gallerydl_config(provider_source, provider_config)
+    try:
+        provider_config = provider.build_gallerydl_config(None)
+        effective = build_effective_gallerydl_config(provider_source, provider_config)
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
 
     url_valid = bool(source_url and provider.validate_url(provider.normalize_url(source_url) or source_url)) if source_url else None
     return {
@@ -648,15 +535,14 @@ async def get_gallerydl_config(source: str | None = None):
     # Read cookie file contents for sources that have cookies configured
     for src_name, src_cfg in all_config.items():
         if isinstance(src_cfg, dict) and src_cfg.get("cookies_path"):
-            cookie_path = os.path.join(
-                os.environ.get("GALLERYDL_CONFIG_ROOT", "/gallerydl-config"),
-                src_cfg["cookies_path"].lstrip("/"))
-            if os.path.exists(cookie_path):
-                try:
-                    with open(cookie_path) as cf:
-                        src_cfg["cookie_content"] = cf.read().strip()
-                except Exception:
-                    pass
+            try:
+                cookie_path = resolve_cookie_path(src_cfg["cookies_path"])
+                if cookie_path.exists():
+                    src_cfg["cookie_content"] = cookie_path.read_text().strip()
+            except (InvalidCookiePath, OSError, UnicodeError) as exc:
+                raise HTTPException(status_code=400, detail={
+                    "code": "invalid_cookie_path", "message": f"Cannot read cookies for {src_name}: {exc}",
+                }) from exc
 
     if source:
         return {source: all_config.get(source, {}), "sources": GALLERYDL_SOURCE_OPTIONS}
@@ -668,6 +554,17 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     """Update gallery-dl extractor configs. Only provided source blocks are updated."""
     import os
     from app.services.settings import write_gallerydl_config
+
+    # Validate every supplied path before writing any cookie/config file.
+    try:
+        for source_name in ("pixiv", "twitter", "iwara", "danbooru", "pinterest", "lofter", "weibo", "bilibili"):
+            block = getattr(data, source_name, None)
+            if block and getattr(block, "cookies_path", None):
+                block.cookies_path = str(resolve_cookie_path(block.cookies_path))
+            if block and getattr(block, "cookie_content", None) and block.cookie_content.strip():
+                resolve_cookie_path(f"cookies/{source_name}.txt")
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
 
     config, config_path = _load_config()
 
@@ -692,12 +589,13 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
         if cc and cc.strip():
             content = _convert_to_netscape_cookies(cc.strip(), source_name)
             os.makedirs(cookies_dir, exist_ok=True)
-            cookie_path = os.path.join(cookies_dir, f"{source_name}.txt")
+            cookie_path = resolve_cookie_path(getattr(source_data, "cookies_path", None) or f"cookies/{source_name}.txt")
+            cookie_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cookie_path, "w") as f:
                 f.write(content + "\n")
             # Auto-set cookies_path if not explicitly provided
             if not getattr(source_data, "cookies_path", None):
-                source_data.cookies_path = f"/gallerydl-config/cookies/{source_name}.txt"
+                source_data.cookies_path = str(cookie_path)
 
     if data.pixiv is not None:
         pixiv = extractors.setdefault("pixiv", {})
@@ -746,7 +644,10 @@ async def update_gallerydl_config(data: GalleryDLMultiConfig):
     pixiv_ugoira = extractors.get("pixiv", {}).get("ugoira")
     _rebuild_managed_postprocessors(config, pixiv_ugoira)
 
-    write_gallerydl_config(config, Path(config_path))
+    try:
+        write_gallerydl_config(config, Path(config_path))
+    except InvalidCookiePath as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_cookie_path", "message": str(exc)}) from exc
     return {"status": "ok", "message": "gallery-dl config updated", "path": config_path}
 
 

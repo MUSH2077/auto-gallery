@@ -661,8 +661,9 @@ async def _drain_pending_ledger(
                     )
                 ).scalar_one()
                 await checkpoint(lock_task=True)
-                recovery_job.status = "failed"
-                recovery_job.error_log = str(exc)[:4000]
+                from app.services.download_lifecycle import apply_download_state
+                await apply_download_state(db, recovery_job, "failed", error=str(exc)[:4000],
+                                           progress={"stage": "failed", "message": "Disk import publication failed"})
                 await db.commit()
                 stats["failed"] += len(importable_work_ids)
                 await report(source)
@@ -716,37 +717,8 @@ async def _drain_pending_ledger(
                 publisher_checkpoint=publisher_checkpoint,
             )
             if completion is not None and completion.should_finalize:
-                from app.services.download_finalization import (
-                    finalize_download_job,
-                )
-                from app.services.sync_outcome import build_sync_outcome
-
-                outcome = (
-                    build_sync_outcome(
-                        (
-                            "new_content"
-                            if completion.stats["works"] > 0
-                            else "no_changes"
-                        ),
-                        metadata_count=completion.total_groups,
-                        media_count=completion.stats["assets"],
-                    )
-                    if completion.status == "complete"
-                    else None
-                )
-                await finalize_download_job(
-                    db,
-                    completion.parent,
-                    status=completion.status,
-                    outcome=outcome,
-                    error=(
-                        completion.message
-                        if completion.status == "failed"
-                        else None
-                    ),
-                    message=completion.message,
-                    assets=completion.stats["assets"],
-                )
+                from app.services.download_finalization import finalize_import_parent
+                await finalize_import_parent(db, completion)
             else:
                 await checkpoint(lock_task=True)
                 await db.commit()
@@ -765,7 +737,7 @@ async def reconcile_downloads_to_db(
     publisher_attempt: str | None = None,
 ) -> dict:
     """Import on-disk download files (not yet imported) into the DB. Idempotent."""
-    from app.jobs.download import _enqueue_import
+    from app.services.import_intent import enqueue_import
 
     async def checkpoint(*, lock_task: bool = False) -> None:
         if publisher_checkpoint is None:
@@ -879,7 +851,7 @@ async def reconcile_downloads_to_db(
             parent_task_id=parent_task_id,
             stats=stats,
             progress_callback=progress_callback,
-            enqueue_import=_enqueue_import,
+            enqueue_import=enqueue_import,
             publisher_checkpoint=publisher_checkpoint,
             publisher_attempt=publisher_attempt,
         )
@@ -983,6 +955,15 @@ async def reconcile_downloads_to_db(
                 .limit(1)
             )).scalar_one_or_none()
             if active_job:
+                # Preserve artifact -> parent -> task order before eligibility.
+                await db.execute(select(StorageArtifact.id).where(StorageArtifact.download_job_id == active_job.id)
+                                 .order_by(StorageArtifact.id).with_for_update(of=StorageArtifact))
+                from app.services.download_lifecycle import lock_download
+                active_job = await lock_download(db, active_job.id)
+                if active_job is None:
+                    await db.rollback()
+                    stats["skipped"] += 1
+                    continue
                 pending_artifacts = int((await db.execute(
                     select(func.count(StorageArtifact.id)).where(
                         downloads_artifact_predicate(),
@@ -992,11 +973,9 @@ async def reconcile_downloads_to_db(
                 )).scalar() or 0)
                 if active_job.status == "downloaded" and pending_artifacts == 0:
                     await checkpoint()
-                    active_job.status = "complete"
-                    active_job.error_log = active_job.error_log or (
-                        "Closed by disk recovery after its artifact ledger was fully consumed"
-                    )
-                    await db.flush()
+                    from app.services.download_lifecycle import apply_download_state
+                    await apply_download_state(db, active_job, "complete", error=active_job.error_log or
+                        "Closed by disk recovery after its artifact ledger was fully consumed")
                 else:
                     logger.info(
                         "disk_import: skipping %s/%s because repository job %s is still %s",
@@ -1101,7 +1080,7 @@ async def reconcile_downloads_to_db(
                 enqueue_kwargs = {"new_json_paths": new_paths}
                 if publisher_checkpoint is not None:
                     enqueue_kwargs["publisher_checkpoint"] = publisher_checkpoint
-                import_job_id = await _enqueue_import(
+                import_job_id = await enqueue_import(
                     str(job.id),
                     **enqueue_kwargs,
                 )
@@ -1127,8 +1106,9 @@ async def reconcile_downloads_to_db(
                     )
                 ).scalar_one()
                 await checkpoint(lock_task=True)
-                job.status = "failed"
-                job.error_log = str(exc)[:4000]
+                from app.services.download_lifecycle import apply_download_state
+                await apply_download_state(db, job, "failed", error=str(exc)[:4000],
+                                           progress={"stage": "failed", "message": "Disk import publication failed"})
                 await checkpoint()
                 await db.commit()
                 stats["failed"] += 1

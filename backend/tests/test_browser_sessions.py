@@ -39,7 +39,7 @@ class FakeRedis:
 
 def _user():
     return SimpleNamespace(
-        id=7, username="alice", password_hash="hash-1", is_active=True,
+        id=7, credential_version=1, username="alice", password_hash="hash-1", is_active=True,
         is_admin=False, permissions=["tasks"], must_change_password=False,
         display_name="Alice", preferences={}, nsfw_visible=False,
         upload_quota_bytes=0, upload_used_bytes=0,
@@ -179,6 +179,7 @@ async def test_browser_upload_requires_permission_and_session_csrf(store, monkey
 
     user = _user()
     user.permissions = ["upload"]
+    user.upload_quota_bytes = None
 
     async def fake_authenticate(*_args):
         return user

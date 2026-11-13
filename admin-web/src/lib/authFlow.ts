@@ -1,5 +1,12 @@
 /** Shared browser login flow for the public login page and AuthProvider. */
 
+export class AuthLoginError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 export class AuthUserLookupError extends Error {
   readonly status: number;
 
@@ -14,12 +21,15 @@ export interface AuthUser {
   username: string;
   display_name: string | null;
   must_change_password: boolean;
+  is_admin?: boolean;
+  permissions?: string[];
   preferences?: Record<string, unknown> | null;
 }
 
 export function clearLegacyToken(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("ag_token");
+  // Legacy storage cleanup must not block cookie-based sessions.
+  try { localStorage.removeItem("ag_token"); } catch {}
   document.cookie = "ag_token=; path=/; max-age=0";
 }
 
@@ -63,7 +73,7 @@ export async function loginAndLoadUser(
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "Login failed");
+    throw new AuthLoginError(typeof body.detail === "string" ? body.detail : "Login failed", response.status);
   }
   // A failed lookup leaves the session cookie to be replaced by the next
   // successful login. Automatic logout could race with a newer login.

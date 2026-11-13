@@ -374,7 +374,13 @@ def test_clear_entity_data_invalidates_related_cache_domains(monkeypatch):
     async def fake_clear_search(_db, _entity):
         return None
 
-    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: None)
+    monkeypatch.setattr(admin_data, "_clear_files", lambda _paths: {"removed": 0, "failures": []})
+    async def no_uploads(_db):
+        return 0
+    async def no_pipeline(_db):
+        return []
+    monkeypatch.setattr(admin_data, "_release_media_clear_upload_quota", no_uploads)
+    monkeypatch.setattr(admin_data, "_cancel_cleared_pipeline", no_pipeline)
     monkeypatch.setattr(admin_data, "_clear_search_index", fake_clear_search)
     async def fake_clear_failed_rq_jobs(_db):
         return 0
@@ -672,7 +678,7 @@ def test_danbooru_import_invalidates_creator_subscription_caches(monkeypatch):
     )
     monkeypatch.setattr(danbooru_import.danbooru_svc, "is_downloadable_url", lambda _url: True)
     monkeypatch.setattr(danbooru_import.danbooru_svc, "_classify_url", lambda _url: "pixiv")
-    monkeypatch.setattr(danbooru_import, "find_existing_creator", fake_find_existing_creator)
+    monkeypatch.setattr(danbooru_import, "_match_artist_creator", fake_find_existing_creator)
     monkeypatch.setattr(danbooru_import, "get_subscription_defaults", fake_subscription_defaults)
     monkeypatch.setattr(CreatorService, "_request_creator_projection", fake_creator_projection)
     monkeypatch.setattr(creator_aliases, "backfill_creator_alias_batch", fake_alias_backfill)

@@ -5,7 +5,10 @@ import { api } from "@/lib/api";
 import type { PixivSourceConfig, TwitterSourceConfig, IwaraSourceConfig, DanbooruSourceConfig, PinterestSourceConfig, LofterSourceConfig, WeiboSourceConfig, BilibiliSourceConfig, GalleryDLSourceMeta, GalleryDLMultiConfig } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
-import { PageHeader, ErrorState, PageShell, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation, type AdminOperationController } from "@/lib/useAdminOperation";
 import { parseOptionalFiniteNumber } from "@/lib/task-actions";
@@ -150,14 +153,14 @@ function useGalleryTabs() {
   const t = useT();
   const toast = useToast();
   return [
-    { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv"), color: "border-[#0066FF]" },
-    { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter"), color: "border-[#6B7280]" },
-    { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara"), color: "border-[#EC4899]" },
-    { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru"), color: "border-[#B45309]" },
-    { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest"), color: "border-[#EF4444]" },
-    { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter"), color: "border-[#14B8A6]" },
-    { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo"), color: "border-[#F97316]" },
-    { key: "bilibili" as TabKey, label: t("gallerydl.tab.bilibili"), color: "border-[#06B6D4]" },
+    { key: "pixiv" as TabKey, label: t("gallerydl.tab.pixiv") },
+    { key: "twitter" as TabKey, label: t("gallerydl.tab.twitter") },
+    { key: "iwara" as TabKey, label: t("gallerydl.tab.iwara") },
+    { key: "danbooru" as TabKey, label: t("gallerydl.tab.danbooru") },
+    { key: "pinterest" as TabKey, label: t("gallerydl.tab.pinterest") },
+    { key: "lofter" as TabKey, label: t("gallerydl.tab.lofter") },
+    { key: "weibo" as TabKey, label: t("gallerydl.tab.weibo") },
+    { key: "bilibili" as TabKey, label: t("gallerydl.tab.bilibili") },
   ];
 }
 
@@ -224,13 +227,10 @@ function SelectField({ label, desc, value, onChange, options }: {
   const id = useId();
   const descId = `${id}-desc`;
   return (
-    <div>
+    <div className="gallery-settings-select">
       <label htmlFor={id} className="block text-sm font-medium mb-1">{label}</label>
       {desc && <p id={descId} className="text-xs text-muted mb-1">{desc}</p>}
-      <select id={id} aria-describedby={desc ? descId : undefined} value={value} onChange={(e) => onChange(e.target.value)}
-        className="select w-full">
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      <ToolbarSelect id={id} label={label} describedBy={desc ? descId : undefined} value={value} options={options} onValueChange={onChange} />
     </div>
   );
 }
@@ -352,8 +352,8 @@ function NamingReferencePanel({
           </div>
         )}
 
-        <div className="overflow-hidden rounded-md border border-border dark:border-border">
-          <table className="min-w-full divide-y divide-border text-left dark:divide-border">
+        <div className="gallerydl-naming-table overflow-x-auto rounded-md border border-border dark:border-border">
+          <table className="min-w-[600px] divide-y divide-border text-left dark:divide-border">
             <thead className="bg-white dark:bg-canvas">
               <tr>
                 <th className="px-3 py-2 text-xs font-semibold text-muted">{t("gallerydl.token")}</th>
@@ -391,7 +391,7 @@ function NamingReferencePanel({
   );
 }
 
-function initPixiv(d: any): PixivSourceConfig {
+function initPixiv(d: PixivSourceConfig): PixivSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? true,
     refresh_token: str(d?.refresh_token), cookies_path: str(d?.cookies_path),
@@ -408,7 +408,7 @@ function initPixiv(d: any): PixivSourceConfig {
   };
 }
 
-function initTwitter(d: any): TwitterSourceConfig {
+function initTwitter(d: TwitterSourceConfig): TwitterSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
@@ -422,7 +422,7 @@ function initTwitter(d: any): TwitterSourceConfig {
   };
 }
 
-function initIwara(d: any): IwaraSourceConfig {
+function initIwara(d: IwaraSourceConfig): IwaraSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
@@ -431,7 +431,7 @@ function initIwara(d: any): IwaraSourceConfig {
   };
 }
 
-function initDanbooru(d: any): DanbooruSourceConfig {
+function initDanbooru(d: DanbooruSourceConfig): DanbooruSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     username: str(d?.username), password: str(d?.password), api_key: str(d?.api_key),
@@ -441,7 +441,7 @@ function initDanbooru(d: any): DanbooruSourceConfig {
   };
 }
 
-function initPinterest(d: any): PinterestSourceConfig {
+function initPinterest(d: PinterestSourceConfig): PinterestSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     domain: str(d?.domain), stories: d?.stories ?? true,
@@ -451,7 +451,7 @@ function initPinterest(d: any): PinterestSourceConfig {
   };
 }
 
-function initLofter(d: any): LofterSourceConfig {
+function initLofter(d: LofterSourceConfig): LofterSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
@@ -459,7 +459,7 @@ function initLofter(d: any): LofterSourceConfig {
   };
 }
 
-function initWeibo(d: any): WeiboSourceConfig {
+function initWeibo(d: WeiboSourceConfig): WeiboSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     cookies_path: str(d?.cookies_path), cookie_content: str(d?.cookie_content),
@@ -470,7 +470,7 @@ function initWeibo(d: any): WeiboSourceConfig {
   };
 }
 
-function initBilibili(d: any): BilibiliSourceConfig {
+function initBilibili(d: BilibiliSourceConfig): BilibiliSourceConfig {
   return {
     auto_enable_on_import: d?.auto_enable_on_import ?? false,
     livephoto: d?.livephoto ?? true,
@@ -548,18 +548,18 @@ function GalleryDLConfigForm({
 
   const save = useMutation({
     mutationFn: () => {
-      const strip = (obj: Record<string, unknown>) => Object.fromEntries(
+      const strip = (obj: object) => Object.fromEntries(
         Object.entries(obj).filter(([, value]) => value !== "" && value !== null && value !== undefined),
       );
       return api.updateGalleryDLConfig({
-        pixiv: strip(pixiv as unknown as Record<string, unknown>),
-        twitter: strip(twitter as unknown as Record<string, unknown>),
-        iwara: strip(iwara as unknown as Record<string, unknown>),
-        danbooru: strip(danbooru as unknown as Record<string, unknown>),
-        pinterest: strip(pinterest as unknown as Record<string, unknown>),
-        lofter: strip(lofter as unknown as Record<string, unknown>),
-        weibo: strip(weibo as unknown as Record<string, unknown>),
-        bilibili: strip(bilibili as unknown as Record<string, unknown>),
+        pixiv: strip(pixiv),
+        twitter: strip(twitter),
+        iwara: strip(iwara),
+        danbooru: strip(danbooru),
+        pinterest: strip(pinterest),
+        lofter: strip(lofter),
+        weibo: strip(weibo),
+        bilibili: strip(bilibili),
       });
     },
     onSuccess: () => {
@@ -577,14 +577,25 @@ function GalleryDLConfigForm({
       <PageHeader title={t("gallerydl.title")} description={t("gallerydl.desc")} />
 
       {/* Tabs */}
-      <div className="mb-6 flex border-b border-border" role="tablist">
+      <div className="gallerydl-tabs mb-6" role="tablist" aria-label={t("gallerydl.title")}>
         {tabs.map((tab) => (
           <button key={tab.key}
+            type="button"
             onClick={() => setActiveTab(tab.key)}
             role="tab"
+            id={`gallerydl-tab-${tab.key}`}
+            aria-controls={`gallerydl-panel-${tab.key}`}
             aria-selected={activeTab === tab.key}
-            className={`px-5 py-3 text-sm font-medium border-b-2 -mb-px transition-colors
-              ${activeTab === tab.key ? `${tab.color} text-fg dark:text-white` : "border-transparent text-muted hover:text-fg"}`}>
+            tabIndex={activeTab === tab.key ? 0 : -1}
+            onKeyDown={(event) => {
+              const index = tabs.findIndex((item) => item.key === tab.key);
+              const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : -1;
+              if (next < 0) return;
+              event.preventDefault(); setActiveTab(tabs[next].key);
+              document.getElementById(`gallerydl-tab-${tabs[next].key}`)?.focus();
+            }}
+            className={`gallerydl-tab border-b-2 -mb-px px-5 py-3 text-sm font-medium transition-colors
+              ${activeTab === tab.key ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg"}`}>
             {tab.label}
           </button>
         ))}
@@ -598,7 +609,7 @@ function GalleryDLConfigForm({
       )}
 
       {/* Tab content */}
-      <div className="card p-6 space-y-5">
+      <div id={`gallerydl-panel-${activeTab}`} role="tabpanel" aria-labelledby={`gallerydl-tab-${activeTab}`} tabIndex={0} className="card p-6 space-y-5">
         {activeTab === "pixiv" && <PixivTab data={pixiv} onChange={setPixiv} />}
         {activeTab === "twitter" && <TwitterTab data={twitter} onChange={setTwitter} />}
         {activeTab === "iwara" && <IwaraTab data={iwara} onChange={setIwara} />}
@@ -658,7 +669,7 @@ function GalleryConnectionControl({
 
 function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: PixivSourceConfig) => void }) {
   const t = useT();
-  const set = (k: keyof PixivSourceConfig, v: any) => onChange({ ...data, [k]: v });
+  const set = <K extends keyof PixivSourceConfig>(k: K, v: PixivSourceConfig[K]) => onChange({ ...data, [k]: v });
   return (
     <>
       <div className="border-b border-border pb-3 mb-3">
@@ -718,7 +729,7 @@ function PixivTab({ data, onChange }: { data: PixivSourceConfig; onChange: (d: P
 
 function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (d: TwitterSourceConfig) => void }) {
   const t = useT();
-  const set = (k: keyof TwitterSourceConfig, v: any) => onChange({ ...data, [k]: v });
+  const set = <K extends keyof TwitterSourceConfig>(k: K, v: TwitterSourceConfig[K]) => onChange({ ...data, [k]: v });
   return (
     <>
       <div className="border-b border-border pb-3 mb-3">
@@ -779,7 +790,7 @@ function TwitterTab({ data, onChange }: { data: TwitterSourceConfig; onChange: (
 
 function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: IwaraSourceConfig) => void }) {
   const t = useT();
-  const set = (k: keyof IwaraSourceConfig, v: any) => onChange({ ...data, [k]: v });
+  const set = <K extends keyof IwaraSourceConfig>(k: K, v: IwaraSourceConfig[K]) => onChange({ ...data, [k]: v });
   return (
     <>
       <div className="border-b border-border pb-3 mb-3">
@@ -827,7 +838,7 @@ function IwaraTab({ data, onChange }: { data: IwaraSourceConfig; onChange: (d: I
 
 function DanbooruTab({ data, onChange }: { data: DanbooruSourceConfig; onChange: (d: DanbooruSourceConfig) => void }) {
   const t = useT();
-  const set = (k: keyof DanbooruSourceConfig, v: any) => onChange({ ...data, [k]: v });
+  const set = <K extends keyof DanbooruSourceConfig>(k: K, v: DanbooruSourceConfig[K]) => onChange({ ...data, [k]: v });
   return (
     <>
       <div className="border-b border-border pb-3 mb-3">

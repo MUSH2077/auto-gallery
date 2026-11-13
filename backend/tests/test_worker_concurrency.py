@@ -12,8 +12,14 @@ from worker_entrypoint import (
     RestartCircuit,
     _worker_command,
     build_worker_specs,
+    download_worker_environment,
     resolve_concurrency,
     resolve_download_concurrency,
+    _read_download_drain_token,
+    ManagedProcess,
+    PendingRestart,
+    _clear_restarts_on_download_drain_start,
+    _missing_worker_restarts,
 )
 
 
@@ -118,7 +124,6 @@ def test_supervisor_reports_actual_child_exit_and_forced_termination(monkeypatch
 
     monkeypatch.setattr(worker_entrypoint.sys, "argv", ["worker_entrypoint.py", "shutdown-test", "1"])
     monkeypatch.delenv("WORKER_EXTRA_QUEUES", raising=False)
-    monkeypatch.setattr(worker_entrypoint, "_register_resource_state_bridge", lambda: None)
     monkeypatch.setattr(worker_entrypoint, "_sweep_personal_auth_startup", lambda _: 0)
     monkeypatch.setattr(worker_entrypoint, "_publish_supervisor_status", lambda *_: None)
     monkeypatch.setattr(worker_entrypoint.subprocess, "Popen", lambda _: Process())
@@ -134,3 +139,152 @@ def test_supervisor_reports_actual_child_exit_and_forced_termination(monkeypatch
     assert [event for event in events if event.get("event") == "worker_started"] == [
         {"event":"worker_started", "pid":4242, "queues":["shutdown-test"]}
     ]
+
+
+def test_explicit_device_limit_overrides_only_automatic_download_limit():
+    from app.services.download_concurrency import resolve_download_concurrency as resolve
+
+    decision = resolve(4, "2", cap_value=4, automatic_device_limit=1, explicit_device_limit="4")
+
+    assert decision.configured == 4
+    assert decision.automatic_device_limit == 1
+    assert decision.explicit_device_limit == 4
+    assert decision.cap == 4
+    assert decision.effective == 4
+
+
+def test_empty_explicit_device_limit_uses_automatic_profile_limit():
+    from app.services.download_concurrency import resolve_download_concurrency as resolve
+
+    decision = resolve(4, None, cap_value=5, automatic_device_limit=2, explicit_device_limit="")
+
+    assert decision.explicit_device_limit is None
+    assert decision.cap == 2
+    assert decision.effective == 2
+
+
+def test_download_child_inherits_resolved_execution_slots(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_CONCURRENCY_CAP", "4")
+    env = download_worker_environment(["downloads", "downloads:danbooru"], 4)
+    assert env["DOWNLOAD_CONCURRENCY_CAP"] == "4"
+    assert env["DOWNLOAD_EXECUTION_CONCURRENCY"] == "4"
+    assert download_worker_environment(["imports"], 4) is None
+
+
+def test_execution_limit_is_safe_and_uses_explicit_device_override():
+    from app.services.download_concurrency import execution_limit
+
+    assert execution_limit() == 1
+    assert execution_limit(5, 5, 1, 4) == 4
+    assert execution_limit(5, 5, 2, "") == 2
+
+
+@pytest.mark.parametrize(('queue','count','extra'),[
+    ('operations',1,''),('operations',4,'maintenance'),
+    ('imports',1,'maintenance'),('imports',2,'discovery'),
+    ('imports',2,'maintenance,discovery'),('scheduled',2,''),
+])
+def test_shared_initialization_rejects_unsupported_queue_combinations(monkeypatch,queue,count,extra):
+    monkeypatch.setenv('WORKER_SHARED_INITIALIZATION','1')
+    monkeypatch.setenv('WORKER_EXTRA_QUEUES',extra)
+    monkeypatch.setattr(worker_entrypoint.sys,'argv',['worker_entrypoint.py',queue,str(count)])
+    monkeypatch.setattr(worker_entrypoint,'_sweep_personal_auth_startup',lambda _:0)
+    with pytest.raises(ValueError,match='Shared initialization requires'):
+        worker_entrypoint.main()
+
+
+def test_download_drain_token_is_scoped_to_download_supervisor(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    class Client:
+        def get(self, key):
+            assert key == worker_entrypoint.DOWNLOAD_DRAIN_KEY
+            return b"token-1"
+
+    monkeypatch.setattr(worker_entrypoint, "_status_client", Client())
+
+    assert _read_download_drain_token(["downloads", "downloads:danbooru"]) == "token-1"
+    assert _read_download_drain_token(["imports"]) is None
+
+
+def test_supervisor_does_not_restart_download_consumer_during_drain(monkeypatch, capsys):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    handlers = {}
+    statuses = []
+    started = []
+
+    class Client:
+        def get(self, key):
+            assert key == worker_entrypoint.DOWNLOAD_DRAIN_KEY
+            return b"token-1"
+
+    class Process:
+        pid = 4243
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -signal.SIGKILL
+
+        def wait(self, timeout):
+            return self.returncode if self.returncode is not None else 0
+
+    process = Process()
+    sleep_calls = {"count": 0}
+    clock = {"value": 0.0}
+    def sleep(_seconds):
+        sleep_calls["count"] += 1
+        process.returncode = 0
+        clock["value"] += 5.0
+        if sleep_calls["count"] >= 2:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    monkeypatch.setattr(worker_entrypoint, "_status_client", Client())
+    monkeypatch.setattr(worker_entrypoint, "_download_startup", lambda _value: {
+        "configured": 2, "cap": 2, "effective": 2, "removed_auth_configs": 0,
+    })
+    monkeypatch.setattr(worker_entrypoint.sys, "argv", ["worker_entrypoint.py", "downloads", "2"])
+    monkeypatch.setattr(worker_entrypoint.subprocess, "Popen", lambda *args, **kwargs: started.append(process) or process)
+    monkeypatch.setattr(worker_entrypoint.signal, "signal", lambda key, callback: handlers.update({key: callback}))
+    monkeypatch.setattr(worker_entrypoint.time, "sleep", sleep)
+    monkeypatch.setattr(worker_entrypoint.time, "monotonic", lambda: clock["value"])
+    monkeypatch.setattr(worker_entrypoint, "_publish_supervisor_status", lambda queues, payload: statuses.append(payload))
+
+    worker_entrypoint.main()
+
+    assert len(started) == 2
+    drained = [status for status in statuses if status["state"] == "drained"]
+    assert drained
+    assert drained[-1]["drain_token"] == "token-1"
+    assert drained[-1]["drain_ack"] is True
+    assert not any("restarting" in line for line in capsys.readouterr().err.splitlines())
+
+
+def test_drain_recovery_recreates_only_missing_worker_specs():
+    class Process:
+        def poll(self):
+            return None
+
+    specs = [(('downloads',), True), (('downloads',), False)]
+    live = [ManagedProcess(Process(), ('downloads',), with_scheduler=True)]
+    pending = []
+
+    missing = _missing_worker_restarts(specs, live, pending, due_at=12.0)
+
+    assert [(item.queues, item.with_scheduler) for item in missing] == [
+        (('downloads',), False),
+    ]
+
+
+def test_drain_start_discards_existing_crash_backoff_plans():
+    pending = [PendingRestart(5.0, ('downloads',), False)]
+
+    _clear_restarts_on_download_drain_start(
+        pending, drain_active=True, was_drain_active=False
+    )
+
+    assert pending == []

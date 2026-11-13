@@ -6,15 +6,18 @@ import { spawnSync } from "node:child_process";
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), "auto-gallery-openapi-"));
 const temporaryTypes = path.join(temporaryRoot, "types.generated.ts");
 const committedTypes = path.resolve("src/lib/api/types.generated.ts");
-const command = path.resolve("node_modules/.bin/openapi-typescript");
+// Invoke the JS entrypoint through the active Node runtime so this check is
+// portable across WSL, Unix, and Windows checkouts where .bin shims differ.
+const command = process.execPath;
+const commandArgs = [path.resolve("node_modules/openapi-typescript/bin/cli.js")];
 
 try {
-  const result = spawnSync(command, ["../docs/api/openapi.json", "-o", temporaryTypes], {
+  const result = spawnSync(command, [...commandArgs, "../docs/api/openapi.json", "-o", temporaryTypes], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
   if (result.status !== 0) {
-    process.stderr.write(result.stderr || result.stdout);
+    process.stderr.write(result.stderr || result.stdout || `openapi-typescript exited with ${result.status ?? "unknown"}\n`);
     process.exit(result.status ?? 1);
   }
 

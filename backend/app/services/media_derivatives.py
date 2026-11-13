@@ -34,13 +34,15 @@ from app.services.media_assets import browser_video_mime_type, render_video_deri
 from app.services.outbox_coordinator import mark_outbox_wake_pending
 from app.services.thumbnail import inspect_and_generate_thumbnail
 from app.services.work_import import WorkImportService
+from app.services.visual_image import PHASH_VERSION, prepare_small_visual_work, prepare_visual_work, save_sample
 
 logger = logging.getLogger(__name__)
 
-MEDIA_ALGORITHM_VERSION = "media-v1"
-PHASH_ALGORITHM_VERSION = "imagehash-phash-v1"
+MEDIA_ALGORITHM_VERSION = "media-visual-v3"
+PHASH_ALGORITHM_VERSION = PHASH_VERSION
 _LEASE_SECONDS = 30 * 60
 _REQUEST_SQL_BATCH_SIZE = 500
+_THUMBNAIL_PRIORITY_WINDOW = timedelta(seconds=20)
 MEDIA_DERIVATIVE_STALL_SECONDS = 5 * 60
 
 
@@ -241,17 +243,25 @@ def _video_candidate_condition():
 
 
 async def _next_resource_candidate() -> tuple[UUID, str] | None:
-    """Choose the oldest currently admissible image/video intent.
+    """Prefer missing previews within a bounded window, then preserve age order.
 
-    Looking at one candidate of each profile prevents a large-video intent
-    from permanently blocking smaller image work when only the 256 MiB
-    reservation fits above the host hard floor.  This is a read-only hint; the
-    exact row is still claimed with ``SKIP LOCKED`` after admission.
+    Looking at one candidate of each profile avoids letting an older image
+    or video hide another profile that fits the current memory and lock budget.
+    Selection shares the execution memory and resource requirements. The exact row is claimed with ``SKIP LOCKED`` after admission.
     """
 
     now = _now()
     video_condition = _video_candidate_condition()
-    candidates: list[tuple[UUID, str, datetime]] = []
+    # A time credit favors visible work without permanently starving older hashes.
+    priority_at = case(
+        (
+            Asset.thumb_sm_path.is_(None)
+            & MediaDerivativeOutbox.requested["thumbnail"].as_boolean().is_(True),
+            MediaDerivativeOutbox.available_at - _THUMBNAIL_PRIORITY_WINDOW,
+        ),
+        else_=MediaDerivativeOutbox.available_at,
+    ).label("priority_at")
+    candidates: list[tuple[UUID, str, datetime, datetime, UUID]] = []
     async with async_session() as db:
         for workload, condition in (
             ("image_derive", not_(video_condition)),
@@ -262,6 +272,8 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                     select(
                         MediaDerivativeOutbox.asset_id,
                         MediaDerivativeOutbox.available_at,
+                        priority_at,
+                        MediaDerivativeOutbox.id,
                     )
                     .join(Asset, Asset.id == MediaDerivativeOutbox.asset_id)
                     .where(
@@ -278,6 +290,7 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                         condition,
                     )
                     .order_by(
+                        priority_at,
                         MediaDerivativeOutbox.available_at,
                         MediaDerivativeOutbox.id,
                     )
@@ -285,28 +298,29 @@ async def _next_resource_candidate() -> tuple[UUID, str] | None:
                 )
             ).first()
             if row is not None:
-                candidates.append((row.asset_id, workload, row.available_at))
+                candidates.append(
+                    (row.asset_id, workload, row.priority_at, row.available_at, row.id)
+                )
     if not candidates:
         return None
 
-    from app.services.resource_pressure import (
-        get_resource_pressure_snapshot,
-        resource_profile_permit,
-    )
+    from app.services.resource_pressure import get_resource_pressure_snapshot
+
+    from app.services.heavy_io import HeavyIOUnavailable, collect_active_resource_leases
+    from app.services.media_admission import media_profile_admissible
 
     snapshot = await get_resource_pressure_snapshot()
+    leases = collect_active_resource_leases()
     admissible = [
         candidate
         for candidate in candidates
-        if resource_profile_permit(snapshot, candidate[1])[0]
+        if media_profile_admissible(snapshot, candidate[1], leases)
     ]
     if not admissible:
-        # Do not occupy the single operations worker while waiting on a video
-        # reservation.  The durable row remains pending and the 15-second
-        # outbox coordinator will re-evaluate both profiles; a newly arrived
-        # image can therefore make progress first.
-        return None
-    selected = min(admissible, key=lambda item: item[2])
+        # A durable intent exists, but none fits current admission. Preserve
+        # this distinction so the runner registers a resource-release retry.
+        raise HeavyIOUnavailable("media_resources_unavailable")
+    selected = min(admissible, key=lambda item: item[2:])
     return selected[0], selected[1]
 
 
@@ -340,6 +354,7 @@ async def _load_asset_descriptor(asset_id: UUID) -> dict[str, Any] | None:
             "duration": asset.duration,
             "sha256": asset.sha256,
             "phash": asset.phash,
+            "phash_version": asset.phash_version,
             "thumb_sm_path": asset.thumb_sm_path,
             "thumb_lg_path": asset.thumb_lg_path,
             "derivative_version": asset.derivative_version,
@@ -383,7 +398,8 @@ def _effective_value(
 
 
 def _validate_requested_result(
-    descriptor: dict[str, Any], request: dict[str, Any], values: dict[str, Any]
+    descriptor: dict[str, Any], request: dict[str, Any], values: dict[str, Any],
+    *, phash_applicable: bool = True,
 ) -> None:
     """Reject incomplete derivatives before the outbox can be completed."""
 
@@ -407,7 +423,7 @@ def _validate_requested_result(
     if requested.get("sha256") or requested.get("dedup"):
         if not _effective_value(descriptor, values, "sha256"):
             raise RuntimeError("requested sha256 was not produced")
-    if requested.get("phash") and not _effective_value(
+    if requested.get("phash") and phash_applicable and not _effective_value(
         descriptor, values, "phash"
     ):
         raise RuntimeError("requested perceptual hash was not produced")
@@ -424,6 +440,9 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         raise RuntimeError("asset mtime changed after derivative intent was recorded")
 
     requested = request["requested"]
+    if (requested.get("phash") and can_compute_phash(source.suffix)
+            and request["algorithm_version"] != MEDIA_ALGORITHM_VERSION):
+        raise RuntimeError("Perceptual fingerprint intent needs an algorithm upgrade")
     library_dir = Path(descriptor["library_dir"])
     library_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {
@@ -436,6 +455,31 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         and descriptor.get("derivative_source_size") == stat.st_size
         and descriptor.get("derivative_source_mtime_ns") == stat.st_mtime_ns
     )
+    suffix = source.suffix.lower()
+    needs_phash = requested.get("phash") and can_compute_phash(suffix) and (
+        not fingerprint_matches or not descriptor.get("phash")
+        or descriptor.get("phash_version") != PHASH_ALGORITHM_VERSION
+    )
+    work = prepare_visual_work(source) if needs_phash else None
+    if work is None and needs_phash and (
+        (requested.get("thumbnail") and (
+            not fingerprint_matches or not _derivative_file_ready(descriptor.get("thumb_sm_path"))
+        ))
+        or (requested.get("dimensions") and (
+            not fingerprint_matches or not descriptor.get("width") or not descriptor.get("height")
+        ))
+    ):
+        work = prepare_small_visual_work(source)
+    try:
+        return _derive_outputs(source, descriptor, request, result, fingerprint_matches, work, needs_phash)
+    finally:
+        if work is not None:
+            work.pixels.close()
+
+
+def _derive_outputs(source, descriptor, request, result, fingerprint_matches, work, needs_phash):
+    requested = request["requested"]
+    library_dir = Path(descriptor["library_dir"])
     suffix = source.suffix.lower()
     image_derivative_missing = (
         requested.get("thumbnail")
@@ -455,7 +499,7 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         not fingerprint_matches or image_derivative_missing
     ) and (requested.get("thumbnail") or requested.get("dimensions")):
         thumb, width, height = inspect_and_generate_thumbnail(
-            str(source), library_dir, f"{source.stem}.thumbnail"
+            str(source), library_dir, f"{source.stem}.thumbnail", **({"working": work} if work is not None else {})
         )
         if width is not None:
             result["width"] = width
@@ -502,17 +546,25 @@ def _derive_sync(descriptor: dict[str, Any], request: dict[str, Any]) -> dict[st
         not fingerprint_matches or not descriptor.get("sha256")
     ):
         result["sha256"] = WorkImportService.sha256(source)
-    if (
-        requested.get("phash")
-        and (not fingerprint_matches or not descriptor.get("phash"))
-        and can_compute_phash(suffix)
+    phash_applicable = True
+    if needs_phash:
+        result["phash"] = WorkImportService.phash(source, working=work, oriented=True)
+        phash_applicable = not (suffix == ".avif" and result["phash"] is None)
+        result["phash_version"] = PHASH_ALGORITHM_VERSION if phash_applicable else None
+        sha = result.get("sha256") or descriptor.get("sha256")
+        if work is not None and work.cache_sample and descriptor.get("asset_id") and sha:
+            # Expendable analysis cache. Failure does not invalidate fingerprints;
+            # the independent dedup task regenerates a missing sample.
+            try:
+                save_sample(source, UUID(str(descriptor["asset_id"])), sha, work)
+            except OSError:
+                logger.warning("Unable to cache visual sample for %s", source, exc_info=True)
+    current = source.stat()
+    if (current.st_size, current.st_mtime_ns) != (
+        result["derivative_source_size"], result["derivative_source_mtime_ns"]
     ):
-        # Preserve the deployed imagehash algorithm exactly; only its scheduling
-        # changes. ``phash_version`` prevents future algorithms from cross-
-        # comparing incompatible values.
-        result["phash"] = WorkImportService.phash(source)
-        result["phash_version"] = PHASH_ALGORITHM_VERSION
-    _validate_requested_result(descriptor, request, result)
+        raise RuntimeError("Image changed during media derivation")
+    _validate_requested_result(descriptor, request, result, phash_applicable=phash_applicable)
     return result
 
 
@@ -646,7 +698,13 @@ async def process_media_derivative_outbox(
     bounded_limit = max(1, limit)
     bounded_seconds = max(0.001, float(max_seconds))
     while claimed < bounded_limit and monotonic() - started < bounded_seconds:
-        candidate = await _next_resource_candidate()
+        from app.services.heavy_io import HeavyIOUnavailable
+
+        try:
+            candidate = await _next_resource_candidate()
+        except HeavyIOUnavailable:
+            resource_deferred = True
+            break
         if candidate is None:
             found_empty = True
             break

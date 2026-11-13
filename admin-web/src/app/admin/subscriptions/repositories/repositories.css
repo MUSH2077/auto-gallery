@@ -1,0 +1,20 @@
+/* Repository business surfaces share the approved gallery type and palette. */
+.gallery-ui .gallery-repository-page .repository-identity {max-width:900px;margin:0 auto 28px;text-align:center;display:grid;gap:12px;}
+.gallery-ui .gallery-repository-page .repository-identity p {display:flex;flex-wrap:wrap;gap:10px 20px;justify-content:center;overflow-wrap:anywhere;}
+.gallery-ui .gallery-repository-page .repository-health {display:flex;justify-content:center;flex-wrap:wrap;gap:10px;}
+.gallery-ui .gallery-repository-page .repository-tabs {display:flex;justify-content:center;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);}
+.gallery-ui .gallery-repository-page .repository-tabs button {min-height:44px;background:transparent;color:var(--ink);}
+.gallery-ui .gallery-repository-page .repository-tabs [aria-pressed=true] {border-bottom-color:var(--accent);}
+.gallery-ui .gallery-repository-page .repository-stats {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;padding-block:20px;border-block:1px solid var(--line);}
+.gallery-ui .gallery-repository-page .repository-stat {min-width:0;display:flex;flex-direction:column;gap:4px;}
+.gallery-ui .gallery-repository-page .repository-stat>div:first-child {font-family:var(--font-content);font-size:var(--type-body);line-height:var(--leading-body);}
+.gallery-ui .gallery-repository-page .repository-rows {border-block:1px solid var(--line);}
+.gallery-ui .gallery-repository-page .repository-config {border-block:1px solid var(--line);}
+.gallery-ui .gallery-repository-page .repository-config dd {font-family:var(--font-ui);font-size:var(--type-control);line-height:var(--leading-control);}
+.gallery-ui .gallery-repository-page .repository-work {border-bottom:1px solid var(--line);border-radius:0;background:transparent;}
+.gallery-ui .gallery-repository-page .repository-tag-chart {background:var(--surface);border-block:1px solid var(--line);}
+.gallery-ui .gallery-repository-page .repository-tag-chart [data-testid=tag-bubble-chart] {border:0;border-radius:0;background:transparent;}
+.gallery-ui .gallery-repository-page .bg-white {background:transparent;}
+.gallery-ui .gallery-repository-page .rounded-md {border-radius:4px;box-shadow:none;}
+.gallery-ui .gallery-business .business-repository-row {border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0;}
+@media(max-width:700px){.gallery-ui .gallery-repository-page .repository-stats {grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;}.gallery-ui .gallery-repository-page .repository-tabs {gap:0;}.gallery-ui .gallery-repository-page .repository-tabs button{padding-inline:8px;}.gallery-ui .gallery-repository-page .repository-identity{margin-bottom:20px;}}

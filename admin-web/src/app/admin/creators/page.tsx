@@ -1,22 +1,19 @@
 "use client";
-import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, useId, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, type CreatorSearchHit, type SearchQualifierToken, type SearchResponse } from "@/lib/api";
-import PageHeader from "@/components/PageHeader";
 import PageSection from "@/components/PageSection";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
-import HierarchyDeletionDialog from "@/components/HierarchyDeletionDialog";
-import Modal from "@/components/Modal";
-import FilterBar from "@/components/FilterBar";
+import HierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
+import {ToolbarSelect} from "@/features/gallery-ui/Controls";
 import SelectionBar from "@/components/SelectionBar";
-import PageShell from "@/components/PageShell";
-import PermissionGuard from "@/components/PermissionGuard";
+import { BusinessDangerZone, BusinessModal, BusinessPage } from "@/features/gallery-ui/BusinessPage";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { EntityRow } from "@/components/EntityList";
 import RowActionMenu from "@/components/RowActionMenu";
 import { SmartSearchInput, useSearchBatchComposer } from "@/components/SmartSearchInput";
 import CompactSelectionCheckbox from "@/components/CompactSelectionCheckbox";
-import ReferenceSortControl from "@/components/ReferenceSortControl";
 import ReferenceNameRail, { ReferenceListLayout } from "@/components/ReferenceNameRail";
 import VirtualReferenceList, {
   type VirtualReferenceListHandle,
@@ -31,15 +28,25 @@ import { useI18nFormat } from "@/lib/i18n-format";
 import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { Star } from "lucide-react";
-import DomainDangerZone from "@/components/DomainDangerZone";
+import { useCreatorFavorite } from "@/features/creators/useCreatorFavorite";
 import {
-  createReferenceListSession,
   legacyPageInitialIndex,
-  readReferenceListSession,
   referenceNameAnchorsAvailable,
-  referenceSessionStorageKey,
   referenceSortFromTokens,
 } from "@/lib/reference-list-state";
+import { useReferenceListLegacyNavigation, useReferenceListNavigation, useReferenceListSession, useReferenceListState } from "@/lib/useReferenceListNavigation";
+
+function CreatorFavoriteButton({ creator }: { creator: CreatorSearchHit }) {
+  const t = useT();
+  const favorite = useCreatorFavorite(creator.id, creator.is_favorite);
+  return <button type="button" onClick={favorite.toggle}
+    className={`btn-icon text-lg ${favorite.isFavorite ? "text-danger" : "text-muted hover:text-danger"}`}
+    title={favorite.isFavorite ? t("common.unfavorite") : t("common.favorite")}
+    aria-label={favorite.isFavorite ? t("common.unfavorite") : t("common.favorite")}
+    aria-pressed={favorite.isFavorite}>
+    <Star className="h-5 w-5" fill={favorite.isFavorite ? "currentColor" : "none"} aria-hidden="true" />
+  </button>;
+}
 
 type FilterMode = "all" | "active" | "inactive" | "has_danbooru" | "has_subscription" | "no_subscription" | "favorites";
 
@@ -50,6 +57,9 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
 }) {
   const t = useT();
   const toast = useToast();
+  const formId = useId();
+  const errorId = `${formId}-error`;
+  const errorDescription = error ? errorId : undefined;
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -86,31 +96,31 @@ function CreateForm({ isPending, error, onSubmit, onClose }: {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
-        <input value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
+        <label htmlFor={`${formId}-url`} className="block text-sm font-medium mb-1">{t("creators.source_url_label")}</label>
+        <input id={`${formId}-url`} aria-describedby={errorDescription} value={urlInput} onChange={(e) => handleUrlPaste(e.target.value)}
           className="input w-full font-mono"
           placeholder={t("creators.source_url_placeholder")} />
         <p className="mt-1 text-xs text-muted">{t("creators.source_url_hint")}</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("creators.name_placeholder")} />
+          <label htmlFor={`${formId}-name`} className="block text-sm font-medium mb-1">{t("creators.name_label")} <span className="text-red-400">*</span></label>
+          <input id={`${formId}-name`} required aria-describedby={errorDescription} value={name} onChange={(e) => setName(e.target.value)} className="input w-full" placeholder={t("creators.name_placeholder")} />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
+          <label htmlFor={`${formId}-display-name`} className="block text-sm font-medium mb-1">{t("creators.display_name_label")}</label>
+          <input id={`${formId}-display-name`} aria-describedby={errorDescription} value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="input w-full" placeholder={t("creators.display_name_placeholder")} />
         </div>
       </div>
-      <div><label className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
+      <div><label htmlFor={`${formId}-description`} className="block text-sm font-medium mb-1">{t("creators.description_label")}</label><textarea id={`${formId}-description`} aria-describedby={errorDescription} value={description} onChange={(e) => setDescription(e.target.value)} className="textarea w-full" rows={2} /></div>
       <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
-        <button onClick={submit} disabled={!name || isPending}
+        <button type="button" onClick={onClose} className="btn-ghost">{t("creators.cancel")}</button>
+        <button type="button" onClick={submit} disabled={!name || isPending}
           className="btn-primary">
           {isPending ? t("creators.creating") : t("creators.create")}
         </button>
       </div>
-      {error && <p className="text-sm text-danger dark:text-danger">{error.message}</p>}
+      {error && <p id={errorId} role="alert" className="text-sm text-danger dark:text-danger">{error.message}</p>}
     </div>
   );
 }
@@ -132,121 +142,34 @@ function CreatorsContent() {
   const legacyPage = sp.get("p");
   const legacyInitialIndex = legacyPageInitialIndex(legacyPage);
   const queryFingerprint = `creators:${search}`;
-  const sessionKey = referenceSessionStorageKey(user?.id ?? "current", pathname, queryFingerprint);
   const listRef = useRef<VirtualReferenceListHandle>(null);
   const initialVirtualIndexRef = useRef(legacyInitialIndex);
-  const pendingLegacyScrollRef = useRef<number | null>(legacyPage === null ? null : legacyInitialIndex);
 
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBatchDel, setConfirmBatchDel] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [searchMeta, setSearchMeta] = useState<SearchResponse | null>(null);
-  const [listState, setListState] = useState<VirtualReferenceListState<CreatorSearchHit>>({
+  const { listState, setListState, selected, selection, setSelected, onStateChange, restoreSelection, getSelectedOffsets } = useReferenceListState<CreatorSearchHit>({
     total: 0,
     loadedItems: [],
     loadedOffsets: [],
     loadedPages: [],
     visibleOffsets: [],
   });
-  const [storedSession, setStoredSession] = useState<{
-    key: string;
-    value: ReturnType<typeof readReferenceListSession>;
-  } | null>(null);
-  const restoredSession = storedSession?.key === sessionKey ? storedSession.value : null;
-  const sessionReady = storedSession?.key === sessionKey;
-  const previousQueryFingerprintRef = useRef(queryFingerprint);
-
-  useLayoutEffect(() => {
-    const queryChanged = previousQueryFingerprintRef.current !== queryFingerprint;
-    previousQueryFingerprintRef.current = queryFingerprint;
-    const saved = queryChanged
-      ? null
-      : readReferenceListSession(window.sessionStorage.getItem(sessionKey), queryFingerprint);
-    setStoredSession({
-      key: sessionKey,
-      value: saved,
-    });
-    setSelected(new Set(saved?.selectedIds || []));
-    if (queryChanged) {
+  const paramsString = sp.toString();
+  const { sessionKey, restoredSession, sessionReady, persistListSession } = useReferenceListSession({
+    userId: user?.id ?? "current", pathname, queryFingerprint, legacyPage,
+    total: listState.total, loadedOffsets: listState.requestedOffsets ?? listState.loadedOffsets, selected: selection, restoreSelection, getSelectedOffsets,
+    onQueryChange: () => {
       setSearchMeta(null);
       setListState({ total: 0, loadedItems: [], loadedOffsets: [], loadedPages: [], visibleOffsets: [] });
-      window.scrollTo({ top: 0 });
-    }
-  }, [queryFingerprint, sessionKey]);
-
-  const persistListSession = useCallback(() => {
-    if (!sessionReady) return;
-    window.sessionStorage.setItem(sessionKey, JSON.stringify(createReferenceListSession({
-      queryFingerprint,
-      scrollY: window.scrollY,
-      loadedOffsets: listState.loadedOffsets,
-      selectedIds: [...selected],
-    })));
-  }, [listState.loadedOffsets, queryFingerprint, selected, sessionKey, sessionReady]);
-
-  useEffect(() => {
-    window.addEventListener("pagehide", persistListSession);
-    return () => window.removeEventListener("pagehide", persistListSession);
-  }, [persistListSession]);
-
-  const restoredScrollKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!sessionReady || !listState.total || legacyPage !== null || restoredScrollKeyRef.current === sessionKey) return;
-    restoredScrollKeyRef.current = sessionKey;
-    const frame = window.requestAnimationFrame(() => window.scrollTo({ top: restoredSession?.scrollY || 0 }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [legacyPage, listState.total, restoredSession?.scrollY, sessionKey, sessionReady]);
-
-  // Local input for search field — debounced 300ms before writing to URL
-  const [inputVal, setInputVal] = useState(search);
-  const paramsString = sp.toString();
-  const navigationParamsRef = useRef(paramsString);
-  const committedParamsRef = useRef(paramsString);
-  const pendingParamsRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (committedParamsRef.current === paramsString) return;
-    committedParamsRef.current = paramsString;
-    if (pendingParamsRef.current.delete(paramsString)) return;
-    pendingParamsRef.current.clear();
-    navigationParamsRef.current = paramsString;
-    setInputVal(search);
-  }, [paramsString, search]);
-
-  useEffect(() => {
-    const restoreHistoryQuery = () => {
-      const params = new URLSearchParams(window.location.search);
-      pendingParamsRef.current.clear();
-      navigationParamsRef.current = params.toString();
-      setInputVal(params.get("q") ?? "");
-    };
-    window.addEventListener("popstate", restoreHistoryQuery);
-    return () => window.removeEventListener("popstate", restoreHistoryQuery);
-  }, []);
-
-  const updateParams = useCallback((updates: Record<string, string | null>, resetPage = true) => {
-    const p = new URLSearchParams(navigationParamsRef.current);
-    for (const [k, v] of Object.entries(updates)) {
-      if (v === null || v === "") p.delete(k); else p.set(k, v);
-    }
-    if (resetPage) p.delete("p");
-    const next = p.toString();
-    navigationParamsRef.current = next;
-    pendingParamsRef.current.add(next);
-    router.replace(`${pathname}?${next}`, { scroll: false });
-  }, [pathname, router]);
-
-  useEffect(() => {
-    if (inputVal === search && (new URLSearchParams(navigationParamsRef.current).get("q") ?? "") === search) return;
-    const timer = setTimeout(() => {
-      setSelected(new Set());
-      window.scrollTo({ top: 0 });
-      updateParams({ q: inputVal || null });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [inputVal, search, updateParams]);
+    },
+  });
+  const { inputVal, setInputVal, updateParams } = useReferenceListNavigation({
+    router, pathname, paramsString, search, setSelected,
+  });
+  useReferenceListLegacyNavigation({ legacyPage, legacyInitialIndex, total: listState.total, listRef, initialVirtualIndexRef, pathname, paramsString, router });
 
   const FILTERS: { key: FilterMode; label: string }[] = useMemo(() => [
     { key: "all", label: t("creators.filter_all") },
@@ -376,9 +299,11 @@ function CreatorsContent() {
   });
 
   const toggleSelect = (id: string) => {
-    const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelected(next);
+    setSelected((current) => {
+      const next = new Set(current);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   };
   const selectAll = () => {
     const loadedIds = creatorItems.map((creator) => creator.id);
@@ -390,11 +315,6 @@ function CreatorsContent() {
       return next;
     });
   };
-
-  const toggleFavorite = useMutation({
-    mutationFn: (id: string) => api.toggleCreatorFavorite(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.all }),
-  });
 
   const setSearchQuery = (next: string) => {
     setSelected(new Set());
@@ -430,55 +350,22 @@ function CreatorsContent() {
     && creatorItems.every((creator) => selected.has(creator.id));
   const someLoadedSelected = creatorItems.some((creator) => selected.has(creator.id));
 
-  useEffect(() => {
-    if (legacyPage === null || !listState.total) return;
-    let cleanupFrame = 0;
-    const scrollFrame = window.requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex(legacyInitialIndex);
-      cleanupFrame = window.requestAnimationFrame(() => {
-        initialVirtualIndexRef.current = 0;
-        const params = new URLSearchParams(sp.toString());
-        params.delete("p");
-        const suffix = params.toString();
-        router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(scrollFrame);
-      if (cleanupFrame) window.cancelAnimationFrame(cleanupFrame);
-    };
-  }, [legacyInitialIndex, legacyPage, listState.total, pathname, router, sp]);
-
-  useEffect(() => {
-    if (legacyPage !== null || !listState.total || pendingLegacyScrollRef.current === null) return;
-    const index = pendingLegacyScrollRef.current;
-    let settleFrame = 0;
-    const scrollFrame = window.requestAnimationFrame(() => {
-      settleFrame = window.requestAnimationFrame(() => {
-        listRef.current?.scrollToIndex(index);
-        pendingLegacyScrollRef.current = null;
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(scrollFrame);
-      if (settleFrame) window.cancelAnimationFrame(settleFrame);
-    };
-  }, [legacyPage, listState.total]);
-
   return (
-    <PageShell>
-      <PageHeader
-        title={t("creators.title")}
-        description={t("creators.count").replace("{count}", String(listState.total))}
-        secondaryActions={
+    <BusinessPage
+      title={t("creators.title")}
+      description={t("creators.count").replace("{count}", String(listState.total))}
+      className="gallery-creators-page"
+      actions={(
+        <>
           <button onClick={() => router.push("/admin/creators/duplicates")} className="btn-ghost">{t("creators.duplicates")}</button>
-        }
-        primaryAction={canCurate ? <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button> : undefined}
-      />
+          {canCurate && <button onClick={() => setShowCreate(true)} className="btn-primary">{t("creators.new")}</button>}
+        </>
+      )}
+    >
 
       {/* Toolbar */}
       <div data-page-primary-content>
-      <FilterBar>
+      <div className="business-toolbar" role="group" aria-label={t("creators.title")}>
         <SmartSearchInput
           value={inputVal}
           onChange={setInputVal}
@@ -487,29 +374,11 @@ function CreatorsContent() {
           placeholder={t("creators.search")}
           ariaLabel={t("creators.search")}
           showTokens={false}
-          className="w-full sm:w-72"
+          className="business-search"
         />
-        <div className="segmented-control max-w-full flex-wrap">
-          {FILTERS.map((f) => (
-            <button key={f.key} onClick={() => handleFilterChange(f.key)}
-              className={`segment ${filter === f.key ? "segment-active" : ""}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <ReferenceSortControl
-          value={sort}
-          labels={{
-            group: t("reference_list.sort_group"),
-            name: t("reference_list.sort_name"),
-            created: t("reference_list.sort_created"),
-            updated: t("reference_list.sort_updated"),
-            ascending: t("reference_list.ascending"),
-            descending: t("reference_list.descending"),
-          }}
-          onChange={handleSortChange}
-        />
-      </FilterBar>
+        <ToolbarSelect label={t("works.filter_button")} value={filter} onValueChange={value=>handleFilterChange(value as FilterMode)} options={FILTERS.map(f=>({value:f.key,label:f.label}))}/>
+        <ToolbarSelect label={t("reference_list.sort_group")} value={sort.field+"-"+sort.direction} onValueChange={handleSortChange} options={(["name","created","updated"] as const).flatMap(field=>(["asc","desc"] as const).map(direction=>({value:field+"-"+direction,label:t("reference_list.sort_"+field)+" · "+t(direction==="asc"?"reference_list.ascending":"reference_list.descending")})))}/>
+      </div>
       </div>
 
       <PageSection>
@@ -544,7 +413,7 @@ function CreatorsContent() {
       )}
 
       <ReferenceListLayout
-        rail={anchorsAvailable && Array.isArray(anchors.data?.items) ? (
+        rail={anchorsAvailable && anchors.data ? (
           <ReferenceNameRail
             items={anchors.data.items}
             ariaLabel={t("reference_list.anchors_label")}
@@ -568,7 +437,7 @@ function CreatorsContent() {
             initialIndex={initialVirtualIndexRef.current}
             initialOffsets={restoredSession?.loadedOffsets}
             estimateSize={84}
-            onStateChange={setListState}
+            onStateChange={onStateChange}
             onMetaChange={setSearchMeta}
             renderInitialLoading={() => (
               <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-subtle dark:bg-subtle animate-pulse" />)}</div>
@@ -614,13 +483,13 @@ function CreatorsContent() {
               <div className="entity-main">
                 <div className="entity-title-line">
                   <span className="entity-title">{c.display_name || c.name}</span>
-                  {c.display_name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
+                  {c.display_name && c.display_name!==c.name && <span className="truncate font-mono text-xs text-muted">{c.name}</span>}
                   <span
                     className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.is_active ? "bg-success" : "bg-border"}`}
                     title={c.is_active ? t("creators.filter_active") : t("creators.filter_inactive")}
                   />
-                  {(c as any).danbooru_artist_id && <span className="rounded-full bg-purple-100 px-2 py-0.5 font-mono text-[10px] text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">D#{String((c as any).danbooru_artist_id)}</span>}
-                  {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-[10px] text-success">{t("creators.sub_badge")}</span>}
+                  {c.danbooru_artist_id && <span className="rounded-full border border-accent/40 bg-subtle px-2 py-0.5 font-mono text-accent">D#{String(c.danbooru_artist_id)}</span>}
+                  {(c.subscription_count ?? 0) > 0 && <span className="rounded-full bg-success-subtle px-2 py-0.5 text-sm text-success">{t("creators.sub_badge")}</span>}
                 </div>
                 {c.description && <p className="entity-supporting">{c.description}</p>}
                 <MatchedIdentityBadge identity={c.matched_identity} />
@@ -632,15 +501,7 @@ function CreatorsContent() {
               </div>
               <div className="entity-actions" onClick={(event) => event.stopPropagation()}>
                 {canCurate && (
-                  <button
-                    type="button"
-                    onClick={() => toggleFavorite.mutate(c.id)}
-                    className={`btn-icon text-lg ${c.is_favorite ? "text-warning" : "text-muted hover:text-warning"}`}
-                    title={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
-                    aria-label={c.is_favorite ? t("common.unfavorite") : t("common.favorite")}
-                  >
-                    <Star className="h-5 w-5" fill={c.is_favorite ? "currentColor" : "none"} aria-hidden="true" />
-                  </button>
+                  <CreatorFavoriteButton creator={c} />
                 )}
                 {canCurate && (
                   <RowActionMenu
@@ -673,11 +534,11 @@ function CreatorsContent() {
       </ReferenceListLayout>
       </PageSection>
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
+      <BusinessModal open={showCreate} onClose={() => setShowCreate(false)} title={t("creators.new_creator_title")}>
         <CreateForm isPending={create.isPending} error={create.error} onSubmit={(data) => create.mutate(data)} onClose={() => setShowCreate(false)} />
-      </Modal>
+      </BusinessModal>
       {deleteId && (
-        <HierarchyDeletionDialog
+        <HierarchyDeletion
           open
           title={isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
           confirmationPhrase={creatorItems.find((creator) => creator.id === deleteId)?.display_name || creatorItems.find((creator) => creator.id === deleteId)?.name || deleteId}
@@ -692,7 +553,7 @@ function CreatorsContent() {
         />
       )}
       {confirmBatchDel && (
-        <HierarchyDeletionDialog
+        <HierarchyDeletion
           open
           title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
           confirmationPhrase={String(selected.size)}
@@ -706,12 +567,12 @@ function CreatorsContent() {
           error={(batchDel.error as Error)?.message || (batchDeletionPreview.error as Error)?.message}
         />
       )}
-      <DomainDangerZone
+      <BusinessDangerZone
         entity="creators"
         title={t("datamgmt.danger_clear_creators")}
         description={t("datamgmt.danger_clear_creators_desc")}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }
 

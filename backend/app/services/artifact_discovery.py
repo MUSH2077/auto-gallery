@@ -14,10 +14,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.services.image_utils import IMAGE_EXTS
 
-ASSET_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".zip", ".mp4", ".webm",
-}
+
+ASSET_EXTENSIONS = IMAGE_EXTS | {".zip", ".mp4", ".webm"}
 
 MetadataItem = tuple[Path, dict[str, Any]]
 
@@ -190,7 +190,13 @@ def media_files_for_group(
     for _, raw in items:
         num = raw.get("num")
         if num is None:
-            continue
+            # Danbooru emits one file per post without a `num` field. Our
+            # default {id}_{num} template renders that missing value as None;
+            # metadata still uses the remote filename, so match the post ID
+            # and extension explicitly rather than unrelated directory media.
+            if raw.get("category") != "danbooru":
+                continue
+            num = "None"
         stem = f"{source_work_id}_{num}"
         indexed_stems.add(stem)
         extension = str(raw.get("extension") or "").strip().lower()

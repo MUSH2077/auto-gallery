@@ -1,4 +1,4 @@
-"""Pure Meilisearch qualifier, filter, and sort compilation."""
+"""Pure qualifier, internal filter, and sort compilation."""
 
 from __future__ import annotations
 

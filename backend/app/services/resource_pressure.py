@@ -266,7 +266,26 @@ end
 return 1
 """
 
+_FENCED_LATCH_SET = """
+if redis.call("get", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("set", KEYS[2], ARGV[2], "ex", ARGV[3])
+return 1
+"""
+
+_FENCED_BASELINE_SET = """
+if redis.call("get", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("set", KEYS[2], ARGV[2], "ex", ARGV[3])
+return 1
+"""
+
 _CLEAR_PRESSURE_LATCH_LUA = """
+if ARGV[7] and ARGV[7] ~= "" and redis.call("get", KEYS[6]) ~= ARGV[7] then
+    return 0
+end
 local raw_latch = redis.call('GET', KEYS[1])
 if not raw_latch then
     return 0
@@ -858,19 +877,40 @@ class ResourcePressureMonitor:
         with self._lock:
             self._heavy_idle = bool(value)
 
-    def persist_baseline_if_due(self, redis_client=None) -> None:
-        """Persist at most every five minutes, keeping idle Redis writes tiny."""
+    def persist_baseline_if_due(
+        self,
+        redis_client=None,
+        *,
+        ownership_key: str | None = None,
+        ownership_token: str | None = None,
+    ) -> None:
+        """Persist at most every five minutes, fenced to the captured owner."""
 
         with self._lock:
             payload = self.baseline.persistence_payload()
         if payload is None:
             return
+        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
         try:
-            _redis_client(redis_client).set(
-                PRESSURE_BASELINE_KEY,
-                json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
-                ex=2 * PRESSURE_BASELINE_WINDOW_SECONDS,
-            )
+            client = _redis_client(redis_client)
+            if ownership_key and ownership_token:
+                persisted = client.eval(
+                    _FENCED_BASELINE_SET,
+                    2,
+                    ownership_key,
+                    PRESSURE_BASELINE_KEY,
+                    ownership_token,
+                    encoded,
+                    2 * PRESSURE_BASELINE_WINDOW_SECONDS,
+                )
+                if not persisted:
+                    return
+            else:
+                client.set(
+                    PRESSURE_BASELINE_KEY,
+                    encoded,
+                    ex=2 * PRESSURE_BASELINE_WINDOW_SECONDS,
+                )
         except Exception:
             logger.debug("Unable to persist resource pressure baseline", exc_info=True)
             return
@@ -917,12 +957,30 @@ class ResourcePressureMonitor:
             if marker is not None:
                 self._last_external_pause_marker = marker
 
-    def sample_with_previous_status(self) -> tuple[str, dict[str, Any]]:
+    def sample_with_previous_status(
+        self,
+        *,
+        foreground_override: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         with self._lock:
             self._hydrated = True
             previous_status = self.state_machine.status
             try:
                 sample = self.sampler()
+                if (
+                    foreground_override
+                    and int(foreground_override.get("sample_count") or 0) > 0
+                ):
+                    sample = replace(
+                        sample,
+                        foreground_p95_ms=foreground_override.get("p95_ms"),
+                        foreground_sample_count=int(
+                            foreground_override.get("sample_count") or 0
+                        ),
+                        foreground_sample_generation=int(
+                            foreground_override.get("sample_generation") or 0
+                        ),
+                    )
             except Exception as exc:  # noqa: BLE001 - fail-closed sampler boundary
                 logger.warning("Resource pressure sampling failed: %s", exc)
                 snapshot = self.state_machine.update(None, error=type(exc).__name__)
@@ -1235,7 +1293,13 @@ def read_resource_pressure_latch(redis_client=None) -> dict[str, Any] | None:
         return None
 
 
-def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool:
+def _refresh_pressure_latch(
+    snapshot: dict[str, Any],
+    redis_client=None,
+    *,
+    ownership_key: str | None = None,
+    ownership_token: str | None = None,
+) -> bool:
     """Persist paused state without adding a Redis/AOF write every 10 seconds."""
 
     try:
@@ -1258,11 +1322,25 @@ def _refresh_pressure_latch(snapshot: dict[str, Any], redis_client=None) -> bool
             or external_event_changed
             or ttl < PRESSURE_LATCH_TTL_SECONDS // 2
         ):
-            client.set(
-                PRESSURE_LATCH_KEY,
-                json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
-                ex=PRESSURE_LATCH_TTL_SECONDS,
-            )
+            encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+            if ownership_key and ownership_token:
+                fenced = client.eval(
+                    _FENCED_LATCH_SET,
+                    2,
+                    ownership_key,
+                    PRESSURE_LATCH_KEY,
+                    ownership_token,
+                    encoded,
+                    PRESSURE_LATCH_TTL_SECONDS,
+                )
+                if not fenced:
+                    return False
+            else:
+                client.set(
+                    PRESSURE_LATCH_KEY,
+                    encoded,
+                    ex=PRESSURE_LATCH_TTL_SECONDS,
+                )
         return True
     except Exception:
         logger.debug("Unable to refresh resource pressure latch", exc_info=True)
@@ -1273,6 +1351,8 @@ def _clear_pressure_latch(
     redis_client=None,
     *,
     expected_external_event_id: str | None = None,
+    ownership_key: str | None = None,
+    ownership_token: str | None = None,
 ) -> bool:
     """Atomically record controller recovery before removing its matching latch."""
 
@@ -1284,20 +1364,29 @@ def _clear_pressure_latch(
             )
             or ("", "", 0)
         )
-        cleared = client.eval(
-            _CLEAR_PRESSURE_LATCH_LUA,
-            5,
+        keys = [
             PRESSURE_LATCH_KEY,
             CGROUP_OOM_ACK_HASH_KEY,
             CGROUP_OOM_RECOVERED_HASH_KEY,
             CGROUP_OOM_ACK_SEEN_KEY,
             CGROUP_OOM_EVENT_ID_HASH_KEY,
+        ]
+        args = [
             str(expected_external_event_id or ""),
             CGROUP_OOM_ACK_RETENTION_SECONDS,
             int(time.time()),
             adoptable_event,
             adoptable_cgroup,
             adoptable_counter,
+        ]
+        if ownership_key and ownership_token:
+            keys.append(ownership_key)
+            args.append(ownership_token)
+        cleared = client.eval(
+            _CLEAR_PRESSURE_LATCH_LUA,
+            len(keys),
+            *keys,
+            *args,
         )
         return bool(int(cleared or 0))
     except Exception:
@@ -1305,7 +1394,14 @@ def _clear_pressure_latch(
         return False
 
 
-def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
+def sample_and_publish_resource_pressure(
+    redis_client=None,
+    *,
+    foreground_override: dict[str, Any] | None = None,
+    ownership_guard: Callable[[], bool] | None = None,
+    ownership_key: str | None = None,
+    ownership_token: str | None = None,
+) -> dict[str, Any]:
     # A short-lived shared snapshot is preferred because it contains the most
     # recent metrics.  The independent 24-hour latch survives backend downtime
     # and snapshot expiry, preventing a restart from resetting a paused guard.
@@ -1334,7 +1430,9 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
         _monitor.enforce_external_pause(inherited)
     else:
         _monitor.hydrate_paused_once(inherited)
-    previous_status, snapshot = _monitor.sample_with_previous_status()
+    previous_status, snapshot = _monitor.sample_with_previous_status(
+        foreground_override=foreground_override
+    )
     reservation = snapshot.setdefault("budget", {}).setdefault("reservation", {})
     reservation.update(
         mode=active_leases.get("mode", "dual_disk_lanes_v2"),
@@ -1349,16 +1447,29 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
     )
     if active_leases.get("error"):
         reservation["error"] = active_leases["error"]
-    _monitor.persist_baseline_if_due(redis_client=redis_client)
-    if snapshot.get("status") == "paused":
-        _refresh_pressure_latch(snapshot, redis_client=redis_client)
-    elif previous_status == "paused":
+    owns_shared_state = ownership_guard is None or ownership_guard()
+    if owns_shared_state:
+        _monitor.persist_baseline_if_due(
+            redis_client=redis_client,
+            ownership_key=ownership_key,
+            ownership_token=ownership_token,
+        )
+    if owns_shared_state and snapshot.get("status") == "paused":
+        _refresh_pressure_latch(
+            snapshot,
+            redis_client=redis_client,
+            ownership_key=ownership_key,
+            ownership_token=ownership_token,
+        )
+    elif owns_shared_state and previous_status == "paused":
         # The state machine can only make this transition after all recovery
         # thresholds remained satisfied for the full resume interval.
         latch_controller = (latched or {}).get("controller") or {}
         cleared = _clear_pressure_latch(
             redis_client=redis_client,
             expected_external_event_id=latch_controller.get("external_event_id"),
+            ownership_key=ownership_key,
+            ownership_token=ownership_token,
         )
         if not cleared:
             # A failed compare-clear means the sampled normal state is not
@@ -1392,8 +1503,27 @@ def sample_and_publish_resource_pressure(redis_client=None) -> dict[str, Any]:
                 if retained_controller.get(key) is not None:
                     snapshot_controller[key] = retained_controller[key]
             snapshot.setdefault("budget", {})["reservation"] = dict(reservation)
-            _refresh_pressure_latch(snapshot, redis_client=redis_client)
-    publish_resource_pressure_snapshot(snapshot, redis_client=redis_client)
+            _refresh_pressure_latch(
+                snapshot,
+                redis_client=redis_client,
+                ownership_key=ownership_key,
+                ownership_token=ownership_token,
+            )
+    if (
+        foreground_override
+        and int(foreground_override.get("sample_count") or 0) > 0
+    ):
+        snapshot.setdefault("foreground", {}).update(
+            sample_generation=int(foreground_override.get("sample_generation") or 0),
+            contributors=foreground_override.get("contributors") or {},
+        )
+    if owns_shared_state:
+        publish_resource_pressure_snapshot(
+            snapshot,
+            redis_client=redis_client,
+            ownership_key=ownership_key,
+            ownership_token=ownership_token,
+        )
     return snapshot
 
 
@@ -1457,12 +1587,29 @@ async def current_profile_slice_limits(
     )
 
 
-async def resource_pressure_monitor_loop() -> None:
+async def resource_pressure_monitor_loop(
+    *,
+    foreground_provider: Callable[[], dict[str, Any] | None] | None = None,
+    ownership_guard: Callable[[], bool] | None = None,
+    ownership_key: str | None = None,
+    ownership_token: str | None = None,
+) -> None:
     interval = max(1.0, settings.resource_pressure_sample_interval_seconds)
     previous_signature: tuple[str, tuple[str, ...]] | None = None
     last_summary_at = 0.0
     while True:
-        snapshot = await asyncio.to_thread(sample_and_publish_resource_pressure)
+        def sample_once():
+            # Provider and sampling execute in the same worker thread. Redis
+            # reads never block the API event loop.
+            foreground = foreground_provider() if foreground_provider else None
+            return sample_and_publish_resource_pressure(
+                foreground_override=foreground,
+                ownership_guard=ownership_guard,
+                ownership_key=ownership_key,
+                ownership_token=ownership_token,
+            )
+
+        snapshot = await asyncio.to_thread(sample_once)
         signature = (
             snapshot["status"],
             snapshot.get("controller_mode"),

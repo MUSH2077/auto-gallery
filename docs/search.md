@@ -78,9 +78,12 @@ Content-Type: application/json
 `GET /api/v1/search` returns `canonical_query`, parsed tokens, and grouped
 `{total, items}` results. Global groups are works, creators, tags,
 repositories, and subscriptions, trimmed by permission. `tasks` and
-`scheduler` use SQL adapters; local library entities use versioned
-Meilisearch indexes. A missing Meilisearch service returns `503`, not an empty
-result.
+`scheduler` use business-table SQL; library text uses versioned PostgreSQL
+search documents. An unavailable search index returns `503`, not an empty result.
+Words use NFKC/case normalization and underscore boundaries. Nonnumeric terms
+support prefixes and length-bounded typo matching; numbers match exactly and
+Chinese/Japanese terms support substrings. Each query obtains its exact total and page from
+one SQL statement, with an entity-ID sort tie-breaker.
 
 Creator and subscription browsing without a free-text term uses PostgreSQL as
 the authoritative path. Both scopes default to `sort:name-asc`; subscription
@@ -115,8 +118,10 @@ across searches.
 
 `GET /api/v1/search` 返回 `canonical_query`、解析 token，以及分组后的
 `{total, items}`。全局结果包含作品、创作者、标签、仓库和订阅，并按权限裁剪。
-任务和调度使用 SQL 适配器，本地图库实体使用版本化 Meilisearch 索引。
-Meilisearch 不可用时返回 `503`，而不是伪装成空结果。
+任务和调度查询业务表，图库文本查询使用版本化 PostgreSQL 搜索文档。
+索引不可用时返回 `503`，不会伪装成空结果。文字做 NFKC／大小写规范化，下划线是词边界；
+非数字词支持前缀和按词长限制的拼写容错，数字词精确匹配，中文和日文支持片段匹配。
+一条 SQL 同时取得精确总数和分页结果，排序同值时由实体 ID 确定顺序。
 
 不含自由文本的创作者与订阅浏览以 PostgreSQL 为权威路径，两者默认均为
 `sort:name-asc`；订阅按关联创作者的展示名排序，而不是可选的自定义订阅标题。

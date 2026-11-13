@@ -1,6 +1,8 @@
 import bcrypt as _bcrypt
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -18,6 +20,10 @@ ALGORITHM = "HS256"
 BCRYPT_MAX_PASSWORD_BYTES = 72
 
 bearer_scheme = HTTPBearer(auto_error=False)
+_password_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="password")
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 def hash_password(password: str) -> str:
@@ -36,10 +42,18 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(username: str, must_change_password: bool = False) -> str:
+async def async_hash_password(password: str) -> str:
+    return await asyncio.get_running_loop().run_in_executor(_password_workers, hash_password, password)
+
+
+async def async_verify_password(plain: str, hashed: str) -> bool:
+    return await asyncio.get_running_loop().run_in_executor(_password_workers, verify_password, plain, hashed)
+
+
+def create_access_token(user: "User") -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     return jwt.encode(
-        {"sub": username, "exp": expire, "pwd_chg_required": must_change_password},
+        {"sub": user.username, "uid": user.id, "cv": user.credential_version, "exp": expire},
         settings.secret_key,
         algorithm=ALGORITHM,
     )
@@ -64,7 +78,7 @@ def decode_access_token(token: str) -> Optional[str]:
 
 # ── Main auth dependency ──────────────────────────────────────────────────────
 
-async def get_admin_key(
+async def get_authenticated_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
@@ -73,11 +87,19 @@ async def get_admin_key(
         payload = decode_access_token_payload(credentials.credentials)
         if not payload or not payload.get("sub"):
             raise HTTPException(status_code=401, detail="Invalid or missing credentials")
-        if payload.get("pwd_chg_required") and request.url.path not in (
+        user_id, version = payload.get("uid"), payload.get("cv")
+        # Tokens issued before identity/version binding require a new login.
+        if type(user_id) is not int or user_id <= 0 or type(version) is not int or version <= 0:
+            raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+        user = await _load_active_user_by_id(user_id)
+        if user.credential_version != version:
+            raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+        if user.must_change_password and request.url.path not in (
             "/api/v1/auth/change-password", "/api/v1/auth/me"
         ):
             raise HTTPException(status_code=403, detail="Password change required")
-        return payload["sub"]
+        request.state.auth_user = user
+        return user
 
     if request.headers.get("authorization"):
         raise HTTPException(status_code=401, detail="Invalid or missing credentials")
@@ -106,7 +128,15 @@ async def get_admin_key(
     request.state.auth_user = user
     request.state.browser_session = browser_session
     request.state.browser_session_token = token
-    return user.username
+    return user
+
+
+async def get_admin_key(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Username adapter for existing operation actor labels."""
+    return (await get_authenticated_user(request, credentials)).username
 
 
 # Dependency alias
@@ -126,24 +156,12 @@ async def _load_active_user_by_id(user_id: int):
     return user
 
 
-async def _load_active_user(username: str):
-    from sqlalchemy import select
-    from app.database import async_session
-    from app.models.user import User
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
-    if user is None or not user.is_active:
-        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
-    return user
-
-
 async def require_docs_admin(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     """Authenticate API documentation using the shared auth resolver."""
-    username = await get_admin_key(request, credentials)
-    user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
+    user = await get_authenticated_user(request, credentials)
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Administrator access required")
     return user
@@ -154,8 +172,7 @@ def RequirePermission(module: str):
         request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        username = await get_admin_key(request, credentials)  # existing 401 + pwd-change logic
-        user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
+        user = await get_authenticated_user(request, credentials)
         if user.is_admin or module in (user.permissions or []):
             return user
         raise HTTPException(status_code=403, detail=f"Missing permission: {module}")
@@ -179,8 +196,7 @@ def RequireAnyPermission(*modules: str):
         request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     ):
-        username = await get_admin_key(request, credentials)
-        user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
+        user = await get_authenticated_user(request, credentials)
         if user.is_admin or any(module in (user.permissions or []) for module in required):
             return user
         raise HTTPException(status_code=403, detail=f"Missing any permission: {', '.join(required)}")
@@ -192,8 +208,7 @@ async def _admin_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
-    username = await get_admin_key(request, credentials)
-    user = getattr(request.state, "auth_user", None) or await _load_active_user(username)
+    user = await get_authenticated_user(request, credentials)
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
@@ -222,7 +237,7 @@ async def ensure_admin_user() -> None:
                 raise RuntimeError("ADMIN_PASSWORD must be set before bootstrapping the admin user.")
             admin = User(
                 username="admin",
-                password_hash=hash_password(bootstrap_password),
+                password_hash=await async_hash_password(bootstrap_password),
                 display_name="Administrator",
                 is_active=True,
                 is_admin=True,

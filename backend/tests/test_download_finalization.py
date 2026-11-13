@@ -48,9 +48,11 @@ def test_successful_finalization_commits_before_publish(monkeypatch):
     def publish(task_id, task_type, progress):
         events.append(("publish", progress))
 
-    monkeypatch.setattr(module, "DownloadJobRepository", Repo)
+    async def apply_state(db, target, status, *, error, **kwargs):
+        return await Repo(db).update_status(target, status, error)
+    monkeypatch.setattr(module, "apply_download_state", apply_state)
     monkeypatch.setattr(module, "mark_source_sync_success", mark_synced)
-    monkeypatch.setattr(module, "publish_progress", publish)
+    monkeypatch.setattr("app.services.download_lifecycle.publish_progress", publish)
     monkeypatch.setattr(
         "app.services.operation_attention.upsert_repository_sync_receipt",
         write_receipt,
@@ -60,6 +62,7 @@ def test_successful_finalization_commits_before_publish(monkeypatch):
         module.finalize_download_job(
             FakeDB(events),
             job,
+            locked=True,
             status="complete",
             outcome=outcome,
             error=None,
@@ -96,8 +99,10 @@ def test_failure_finalization_clears_stale_success_outcome(monkeypatch):
             target.status = status
             target.error_log = error
 
-    monkeypatch.setattr(module, "DownloadJobRepository", Repo)
-    monkeypatch.setattr(module, "publish_progress", lambda *_args: None)
+    async def apply_state(db, target, status, *, error, **kwargs):
+        return await Repo(db).update_status(target, status, error)
+    monkeypatch.setattr(module, "apply_download_state", apply_state)
+    monkeypatch.setattr("app.services.download_lifecycle.publish_progress", lambda *_args: None)
     monkeypatch.setattr(
         "app.services.operation_attention.upsert_repository_sync_receipt",
         lambda *_args, **_kwargs: asyncio.sleep(0),
@@ -107,6 +112,7 @@ def test_failure_finalization_clears_stale_success_outcome(monkeypatch):
         module.finalize_download_job(
             FakeDB([]),
             job,
+            locked=True,
             status="failed",
             error="auth failed",
             message="auth failed",

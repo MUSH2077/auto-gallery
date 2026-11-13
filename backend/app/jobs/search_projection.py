@@ -1,4 +1,4 @@
-"""RQ entry point for one bounded Meilisearch projection batch."""
+"""RQ entry point for one bounded PostgreSQL search projection batch."""
 
 from __future__ import annotations
 

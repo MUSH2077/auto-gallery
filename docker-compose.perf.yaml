@@ -1,0 +1,70 @@
+# Local performance environment: retain the production service topology,
+# commands, health checks and resource admission from docker-compose.yaml.
+# Steady service limits total 4032 MiB with a newly initialized perf.env.
+x-perf-labels: &perf-labels
+  com.auto-gallery.environment: local-performance
+
+services:
+  postgres:
+    restart: "no"
+    labels: *perf-labels
+    mem_limit: ${POSTGRES_MEM_LIMIT:-384M}
+    memswap_limit: ${POSTGRES_MEM_LIMIT:-384M}
+    cpus: ${POSTGRES_CPU_LIMIT:-2.0}
+  redis:
+    mem_limit: ${REDIS_MEM_LIMIT:-128M}
+    memswap_limit: ${REDIS_MEM_LIMIT:-128M}
+    restart: "no"
+    labels: *perf-labels
+    cpus: ${REDIS_CPU_LIMIT:-0.5}
+  meilisearch:
+    mem_limit: ${MEILI_MEM_LIMIT:-512M}
+    memswap_limit: ${MEILI_MEM_LIMIT:-512M}
+    restart: "no"
+    labels: *perf-labels
+    cpus: ${MEILI_CPU_LIMIT:-2.0}
+  migrate:
+    labels: *perf-labels
+    cpus: ${MIGRATE_CPU_LIMIT:-1.0}
+  backend:
+    mem_limit: 512M
+    memswap_limit: 512M
+    restart: "no"
+    labels: *perf-labels
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:-18818}:8000"
+    environment:
+      CORS_ORIGINS: http://localhost:${ADMIN_WEB_PORT:-23000},http://127.0.0.1:${ADMIN_WEB_PORT:-23000}
+      BROWSER_SESSION_ORIGINS: http://localhost:${ADMIN_WEB_PORT:-23000},http://127.0.0.1:${ADMIN_WEB_PORT:-23000}
+  worker-download:
+    mem_limit: 512M
+    memswap_limit: 512M
+    restart: "no"
+    labels: *perf-labels
+  worker-import:
+    mem_limit: 768M
+    memswap_limit: 768M
+    restart: "no"
+    labels: *perf-labels
+  worker-operations:
+    mem_limit: 512M
+    memswap_limit: 512M
+    restart: "no"
+    labels: *perf-labels
+  worker-discovery:
+    mem_limit: 256M
+    memswap_limit: 256M
+    restart: "no"
+    labels: *perf-labels
+  scheduler:
+    mem_limit: 256M
+    memswap_limit: 256M
+    restart: "no"
+    labels: *perf-labels
+  admin-web:
+    mem_limit: 192M
+    memswap_limit: 192M
+    restart: "no"
+    labels: *perf-labels
+    ports: !override
+      - "127.0.0.1:${ADMIN_WEB_PORT:-23000}:3000"

@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import type { CreatorRepository, RepositoryDetailResponse, RepositoryGraphNode, RepositoryRecentJob, RepositoryRecentWork, SchedulerDecisionItem } from "@/lib/api";
-import { Breadcrumb, EmptyState, ErrorState, HierarchyDeletionDialog, PageShell, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
+import { EmptyState, ErrorState, SourceBadge, SyncOutcomeBadge, SyncOutcomeNotice, TagBubbleChart, WorkMediaThumbnail } from "@/components";
+import { BusinessPage as PageShell, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import HierarchyDeletionDialog from "@/features/gallery-ui/HierarchyDeletion";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { scheduleModeLabel, schedulerDecisionLabel, statusLabel, useI18nFormat } from "@/lib/i18n-format";
@@ -53,9 +56,9 @@ function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?
 
 function StatCard({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+    <div className="repository-stat">
       <div className="truncate text-sm font-semibold text-fg">{value}</div>
-      <div className="mt-1 text-[11px] font-medium uppercase text-muted">{label}</div>
+      <div className="mt-1 text-sm font-medium text-muted">{label}</div>
       {hint && <div className="mt-0.5 text-xs text-placeholder dark:text-muted">{hint}</div>}
     </div>
   );
@@ -68,9 +71,9 @@ function JobsList({ jobs }: { jobs: RepositoryRecentJob[] }) {
     return <EmptyState title={t("repo_detail.no_jobs_title")} description={t("repo_detail.no_jobs_desc")} />;
   }
   return (
-    <div className="divide-y divide-border rounded-md border border-border bg-white dark:divide-border dark:border-border dark:bg-surface">
+    <div className="repository-rows divide-y divide-border">
       {jobs.map((job) => (
-        <div key={job.id} className="p-4">
+        <div key={job.id} className="py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -104,7 +107,7 @@ function WorksGrid({ works }: { works: RepositoryRecentWork[] }) {
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
       {works.map((work) => (
         <Link key={work.id} href={`/admin/works/${work.id}`}
-          className="group overflow-hidden rounded-md border border-border bg-white transition-colors hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
+          className="repository-work group overflow-hidden">
           <div className="aspect-[4/3] bg-subtle">
             {work.thumbnail_asset_id ? (
               <WorkMediaThumbnail assetId={work.thumbnail_asset_id} hasVideo={work.has_video} alt={work.title || ""} className="h-full w-full object-cover" />
@@ -156,6 +159,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
     ["commit_revert", t("repo_detail.graph_filter_revert")],
   ];
   if (graph.isLoading) return <div className="h-24 animate-pulse rounded-md border border-border bg-white dark:border-border dark:bg-surface" />;
+  if (graph.error) return <ErrorState message={(graph.error as Error).message} onRetry={() => void graph.refetch()} />;
   if (!graph.data) return null;
   return (
     <div className="space-y-4">
@@ -170,13 +174,7 @@ function RepositoryGraph({ repositoryId }: { repositoryId: string }) {
           <Link href={`${adminRoutes.curation}?subject_type=repository&subject_id=${repositoryId}`} className="text-sm text-accent hover:underline dark:text-accent">{t("repo_detail.open_full_history")}</Link>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1">
-        {graphFilters.map(([key, label]) => (
-          <button key={key} onClick={() => { setTrigger(key); setOffset(0); }} className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${trigger === key ? "border-accent bg-accent-subtle text-accent dark:border-accent dark:bg-accent-subtle dark:text-accent" : "border-border hover:bg-subtle dark:border-border dark:hover:bg-subtle"}`}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <div className="business-toolbar"><ToolbarSelect label={t("repo_detail.curation_graph")} value={trigger} onValueChange={value=>{setTrigger(value);setOffset(0);}} options={graphFilters.map(([value,label])=>({value,label}))}/></div>
       <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
         {graph.data.nodes.length === 0 ? (
           <EmptyState
@@ -286,7 +284,7 @@ function GitlleryRepositoryHistory({ repositoryId, hasProjectedContent }: { repo
         ) : status.error ? (
           <ErrorState message={(status.error as Error).message} onRetry={() => status.refetch()} />
         ) : repositoryStatus ? (
-          <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-white p-4 text-sm dark:border-border dark:bg-surface md:grid-cols-4">
+          <div className="repository-stats">
             <StatCard label={t("repo_detail.gitllery_repository")} value={repositoryStatus.creator_dir} />
             <StatCard label={t("repo_detail.gitllery_projection")} value={repositoryStatus.projection_mode || "—"} />
             <StatCard label={t("repo_detail.gitllery_integrity")} value={repositoryStatus.object_integrity_ok ? t("repo_detail.gitllery_ok") : t("repo_detail.gitllery_attention")} />
@@ -305,7 +303,7 @@ function GitlleryRepositoryHistory({ repositoryId, hasProjectedContent }: { repo
         ) : log.error ? (
           <ErrorState message={(log.error as Error).message} onRetry={() => log.refetch()} />
         ) : log.data?.entries.length ? (
-          <div className="divide-y divide-border rounded-md border border-border bg-white dark:divide-border dark:border-border dark:bg-surface">
+          <div className="repository-rows divide-y divide-border">
             {log.data.entries.map((entry) => (
               <div key={entry.commit} className="p-4 text-sm">
                 <div className="font-medium text-fg">{entry.message}</div>
@@ -336,14 +334,14 @@ function ConfigRows({ detail, decision }: { detail: RepositoryDetailResponse; de
     [t("repo_detail.next_due"), fmt.dateTime(decision?.next_due_at)],
   ];
   return (
-    <div className="rounded-md border border-border bg-white dark:border-border dark:bg-surface">
+    <dl className="repository-config">
       {rows.map(([label, value]) => (
         <div key={label} className="grid grid-cols-1 gap-1 border-b border-border px-4 py-3 text-sm last:border-b-0 dark:border-border md:grid-cols-[180px_1fr]">
           <dt className="text-muted">{label}</dt>
           <dd className="min-w-0 break-all font-mono text-xs text-fg">{value}</dd>
         </div>
       ))}
-    </div>
+    </dl>
   );
 }
 
@@ -358,7 +356,7 @@ function nextActionHint(detail: RepositoryDetailResponse, decision?: SchedulerDe
   return { tone: "neutral", text: "repo_detail.hint_wait_window" };
 }
 
-export default function RepositoryDetailPage() {
+function RepositoryDetailContent() {
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
@@ -369,14 +367,18 @@ export default function RepositoryDetailPage() {
   const canManageRepositories = has("subscriptions");
   const notify = useNotifications();
   const id = params.id as string;
-  const [tab, setTab] = useState<TabKey>("overview");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const tab: TabKey = rawTab === "content" || rawTab === "history" || rawTab === "settings" ? rawTab : "overview";
+  const setTab = (next: TabKey) => { const params = new URLSearchParams(searchParams.toString()); params.set("tab", next); router.replace(pathname + "?" + params.toString(), { scroll: false }); };
   const [tagPage, setTagPage] = useState(0);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const tagLimit = 50;
 
   const detail = useQuery({ queryKey: queryKeys.repositories.detail(id), queryFn: () => api.getRepository(id), refetchInterval: () => pollInterval(false), refetchIntervalInBackground: false });
-  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, staleTime: 60_000 });
+  const decisions = useQuery({ queryKey: [...queryKeys.schedulerDecisions, "repository", id], queryFn: api.schedulerDecisions, enabled:has("system"), staleTime: 60_000 });
   const repositoryTags = useQuery({
     queryKey: queryKeys.repositories.tags(id, tagPage),
     queryFn: () => api.getRepositoryTags(id, tagPage * tagLimit, tagLimit),
@@ -385,7 +387,7 @@ export default function RepositoryDetailPage() {
   const deletionPreview = useQuery({
     queryKey: ["deletion-preview", "repository", id],
     queryFn: () => api.getRepositoryDeletionPreview(id),
-    enabled: showDelete,
+    enabled: showDelete && canManageRepositories,
   });
 
   const repo = detail.data?.repository;
@@ -434,10 +436,10 @@ export default function RepositoryDetailPage() {
   });
 
   if (detail.isLoading) {
-    return <PageShell><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
+    return <PageShell className="gallery-repository-page"><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
   }
   if (detail.error) {
-    return <PageShell><ErrorState message={(detail.error as Error).message} onRetry={() => detail.refetch()} /></PageShell>;
+    return <PageShell className="gallery-repository-page"><ErrorState message={(detail.error as Error).message} onRetry={() => detail.refetch()} /></PageShell>;
   }
   if (!detail.data || !repo) return null;
 
@@ -455,57 +457,22 @@ export default function RepositoryDetailPage() {
   ];
 
   return (
-    <PageShell>
-      <Breadcrumb items={[
-        { label: t("subscriptions.title"), href: adminRoutes.subscriptions },
-        {
-          label: subscription.name || creator.display_name || creator.name,
-          href: adminRoutes.subscription(subscription.id),
-        },
-        { label: repoName(repo) },
-      ]} />
-
-      <header className="border-b border-border pb-5 dark:border-border">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <SourceBadge source={repo.source} />
-              <h1 className="min-w-0 truncate text-2xl font-semibold tracking-normal text-fg">{repoName(repo)}</h1>
-              <Pill tone={repo.is_enabled ? "good" : "neutral"}>{repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}</Pill>
-              <Pill tone={auth.tone}>{t(auth.labelKey)}</Pill>
-              <Pill tone={repo.url_valid ? "good" : "warn"}>{repo.url_valid ? t("repo_detail.valid_url") : t("repo.invalid_url")}</Pill>
-            </div>
-            <p className="mt-2 max-w-4xl truncate font-mono text-xs text-muted">{repo.source_url || t("repo.no_source_url")}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted">
-              <Link href={`/admin/creators/${creator.id}`} className="text-accent hover:underline dark:text-accent">{creator.display_name || creator.name}</Link>
-              <span>{provider.display_name}</span>
-              <span>{t("repo.last_sync", { time: fmt.relative(repo.last_synced_at, "repo.never_synced") })}</span>
-              {decision && <span>{schedulerDecisionLabel(t, decision.reason, decision.due)}</span>}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary disabled:opacity-50">
-              {running || sync.isPending ? t("repo.syncing") : t("repo.sync_now")}
-            </button>
-            {canManageRepositories && (
-              <button onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost disabled:opacity-50">
-                {repo.is_enabled ? t("repo.disable") : t("repo.enable")}
-              </button>
-            )}
-            {canManageRepositories && (
-              <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-                {t("subscription_detail.remove_source")}
-              </button>
-            )}
-            <Link href={`/admin/subscriptions/${subscription.id}`} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
-            {repo.source_url && <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="btn-ghost">{t("repo_detail.open_source")}</a>}
-          </div>
-        </div>
-      </header>
-
-      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-border" aria-label={t("repo_detail.sections")}>
+    <PageShell className="gallery-repository-page" title={repoName(repo)} actions={
+      <>
+        <button type="button" onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary" aria-busy={sync.isPending || undefined}>{running || sync.isPending ? t("repo.syncing") : t("repo.sync_now")}</button>
+        {canManageRepositories ? <><button type="button" onClick={() => toggle.mutate()} disabled={toggle.isPending} className="btn-ghost">{repo.is_enabled ? t("repo.disable") : t("repo.enable")}</button><button type="button" onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>{t("subscription_detail.remove_source")}</button></> : null}
+        <Link href={adminRoutes.subscription(subscription.id)} className="btn-ghost">{t("repo_detail.open_subscription")}</Link>
+        {repo.source_url ? <a href={repo.source_url} target="_blank" rel="noopener noreferrer" className="btn-ghost">{t("repo_detail.open_source")}</a> : null}
+      </>
+    }>
+      <div className="repository-identity">
+        <div className="repository-health"><SourceBadge source={repo.source}/><Pill tone={repo.is_enabled ? "good" : "neutral"}>{repo.is_enabled ? t("repo.enabled") : t("repo.disabled")}</Pill><Pill tone={auth.tone}>{t(auth.labelKey)}</Pill><Pill tone={repo.url_valid ? "good" : "warn"}>{repo.url_valid ? t("repo_detail.valid_url") : t("repo.invalid_url")}</Pill></div>
+        <p>{repo.source_url || t("repo.no_source_url")}</p>
+        <p><Link href={adminRoutes.creator(creator.id)}>{creator.display_name || creator.name}</Link><span>{provider.display_name}</span><span>{t("repo.last_sync", {time:fmt.relative(repo.last_synced_at,"repo.never_synced")})}</span>{decision ? <span>{schedulerDecisionLabel(t,decision.reason,decision.due)}</span> : null}</p>
+      </div>
+      <nav className="repository-tabs" aria-label={t("repo_detail.sections")}>
         {tabs.map((item) => (
-          <button key={item.key} onClick={() => setTab(item.key)}
+          <button type="button" key={item.key} aria-pressed={tab === item.key} onClick={() => setTab(item.key)}
             className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.key ? "border-danger font-semibold text-fg" : "border-transparent text-muted hover:text-fg dark:text-muted dark:hover:text-fg"}`}>
             {item.label}{item.count !== undefined && <span className="ml-2 rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted dark:bg-border dark:text-fg">{item.count}</span>}
           </button>
@@ -519,12 +486,12 @@ export default function RepositoryDetailPage() {
               <div className="font-semibold">{t("repo_detail.next_action")}</div>
               <div className="mt-1">{t(hint.text)}</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Link href={`${adminRoutes.jobs}?view=attention&q=${encodeURIComponent(id)}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
-                <Link href={adminRoutes.settingsSection("scheduler-defaults")} className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link>
+                <Link href={`${adminRoutes.jobs}?records=download&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-xs">{t("repo_detail.open_jobs")}</Link>
+                {has("system") ? <Link href={adminRoutes.settingsSection("scheduler-defaults")} className="btn-ghost text-xs">{t("repo_detail.open_scheduler")}</Link> : null}
                 <button onClick={() => sync.mutate()} disabled={!canSync || sync.isPending} className="btn-primary text-xs disabled:opacity-50">{t("repo.sync_now")}</button>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="repository-stats">
               <StatCard label={t("repo_detail.latest_job")} value={repo.latest_job ? statusLabel(t, repo.latest_job.status) : t("repo.no_jobs")} hint={repo.latest_job ? fmt.relative(repo.latest_job.created_at) : undefined} />
               <StatCard label={t("repo_detail.last_attempt")} value={fmt.relative(repo.last_attempted_at)} hint={fmt.dateTime(repo.last_attempted_at)} />
               <StatCard label={t("repo_detail.auth_status")} value={t(auth.labelKey)} hint={fmt.dateTime(repo.last_auth_checked_at)} />
@@ -560,7 +527,7 @@ export default function RepositoryDetailPage() {
               <h2 className="mb-3 text-base font-semibold">{t("repo_detail.sync_history_heading")}</h2>
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted">{t("repo_detail.jobs_filtered_desc")}</p>
-              <Link href={`${adminRoutes.jobs}?view=attention&q=${encodeURIComponent(id)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
+              <Link href={`${adminRoutes.jobs}?records=download&q=${encodeURIComponent(`kind:download repo:${id}`)}`} className="btn-ghost text-sm">{t("repo_detail.open_in_jobs")}</Link>
             </div>
               <div className="mt-3"><JobsList jobs={syncHistory} /></div>
             </section>
@@ -599,7 +566,7 @@ export default function RepositoryDetailPage() {
             )}
             {!!repositoryTags.data?.items.length && (
               <>
-                <div className="rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface sm:p-5">
+                <div className="repository-tag-chart">
                   <TagBubbleChart tags={repositoryTags.data.items} ariaLabel={t("repo_detail.tab_tags")} />
                 </div>
                 {repositoryTags.data.total > tagLimit && (
@@ -646,3 +613,5 @@ export default function RepositoryDetailPage() {
     </PageShell>
   );
 }
+
+export default function RepositoryDetailPage(){return <BusinessPermissionGuard module="library"><RepositoryDetailContent/></BusinessPermissionGuard>;}

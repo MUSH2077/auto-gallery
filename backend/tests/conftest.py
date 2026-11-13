@@ -120,6 +120,9 @@ def _provision_main_test_database() -> None:
         tmp_engine = create_async_engine(test_url)
         try:
             async with tmp_engine.begin() as c:
+                from sqlalchemy import text
+                await c.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                await c.execute(text("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch"))
                 await c.run_sync(Base.metadata.create_all)
         finally:
             await tmp_engine.dispose()
@@ -133,31 +136,42 @@ def _provision_main_test_database() -> None:
 _provision_main_test_database()
 
 
+async def access_token_for_user(username: str) -> str:
+    """Issue test credentials from the persisted account, including its version."""
+    from sqlalchemy import select
+    from app.auth import create_access_token
+    from app.database import async_session
+    from app.models.user import User
+
+    async with async_session() as db:
+        user = (await db.execute(select(User).where(User.username == username))).scalar_one()
+        return create_access_token(user)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _isolate_meilisearch_indexes():
-    """Keep every test search projection outside the production index names."""
-
+def _isolate_search_indexes():
+    """Dispose only this test process's PG index namespace."""
     yield
-
+    import asyncio
+    async def cleanup():
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import NullPool
+        engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
+        try:
+            async with engine.begin() as db:
+                for sql in (
+                    "DELETE FROM search_pg_documents WHERE storage_id IN (SELECT storage_id FROM search_pg_indexes WHERE uid LIKE :prefix)",
+                    "DELETE FROM search_pg_indexes WHERE uid LIKE :prefix",
+                    "DELETE FROM search_pg_tasks WHERE index_uid LIKE :prefix",
+                ):
+                    await db.execute(text(sql), {"prefix":_TEST_MEILI_INDEX_PREFIX+"%"})
+        finally:
+            await engine.dispose()
     try:
-        from meilisearch_python_sdk import Client as MeiliClient
-
-        client = MeiliClient(
-            os.environ.get("MEILI_URL", "http://meilisearch:7700"),
-            os.environ.get("MEILI_MASTER_KEY", ""),
-        )
-        for index in client.get_indexes():
-            uid = getattr(index, "uid", "")
-            if not uid.startswith(_TEST_MEILI_INDEX_PREFIX):
-                continue
-            task = client.index(uid).delete()
-            client.wait_for_task(
-                task.task_uid,
-                timeout_in_ms=120_000,
-                raise_for_status=True,
-            )
-    except Exception as exc:  # noqa: BLE001 - best effort when Meilisearch is absent
-        print(f"[conftest] test Meilisearch cleanup skipped ({exc})")
+        asyncio.run(cleanup())
+    except Exception as exc:
+        print(f"[conftest] test search cleanup skipped ({exc})")
 
 
 # ── Integration test fixtures (PostgreSQL required) ──────────────────────────

@@ -246,7 +246,7 @@ def _event(task_id, task_type="download") -> dict:
 async def test_broadcast_matches_rest_owner_legacy_and_permission_visibility():
     """Global Redis events must never cross durable REST task visibility."""
 
-    from sqlalchemy import delete
+    from sqlalchemy import delete, update
 
     from app.database import async_session, engine
     from app.models import User, UserSubscription
@@ -267,7 +267,7 @@ async def test_broadcast_matches_rest_owner_legacy_and_permission_visibility():
         for role, username in usernames.items():
             socket = RecordingWebSocket()
             sockets[role] = socket
-            await manager.connect(role, socket, username=username)
+            await manager.connect(role, socket, username=username, account=(rows[role].id, rows[role].credential_version))
             socket.sent.clear()
 
         # Publishers use both the domain subject id and the TaskRun id.
@@ -316,9 +316,23 @@ async def test_broadcast_matches_rest_owner_legacy_and_permission_visibility():
         await manager.broadcast(_event(ids["private_job"]))
         assert [role for role, socket in sockets.items() if socket.sent] == ["owner"]
 
+        # Rotating credentials revokes an established connection, even when
+        # permissions and the username still match.
+        async with async_session() as db:
+            await db.execute(update(User).where(User.id == ids["owner"]).values(credential_version=User.credential_version + 1))
+            await db.commit()
+        for socket in sockets.values():
+            socket.sent.clear()
+        await manager.broadcast(_event(ids["private_job"]))
+        assert all(socket.sent == [] for socket in sockets.values())
+
         async with async_session() as db:
             await db.execute(delete(User).where(User.id == ids["owner"]))
             await db.commit()
+            replacement = User(username=usernames["owner"], password_hash="test-only", is_admin=True, permissions=["tasks"])
+            db.add(replacement)
+            await db.commit()
+            assert replacement.id != ids["owner"]
         for socket in sockets.values():
             socket.sent.clear()
         await manager.broadcast(_event(ids["private_job"]))
@@ -360,7 +374,7 @@ async def test_subscribe_ack_requires_current_visible_task_without_existence_lea
 
         monkeypatch.setattr(
             ws_api, "consume_ws_ticket",
-            lambda ticket: username if ticket == "member-token" else None,
+            lambda ticket: ws_api.BearerTicket(rows["member"].id, rows["member"].credential_version) if ticket == "member-token" else None,
         )
         socket = RecordingWebSocket(
             token="member-token",
@@ -408,7 +422,7 @@ async def test_websocket_rejects_active_user_without_tasks_permission(
 
         monkeypatch.setattr(
             ws_api, "consume_ws_ticket",
-            lambda ticket: username if ticket == "no-tasks-ticket" else None,
+            lambda ticket: ws_api.BearerTicket(rows["no_tasks"].id, rows["no_tasks"].credential_version) if ticket == "no-tasks-ticket" else None,
         )
         socket = RecordingWebSocket(token="no-tasks-ticket")
         await ws_api.websocket_endpoint(socket)

@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
     create_access_token,
-    get_admin_key,
-    hash_password,
-    verify_password,
+    get_authenticated_user,
+    async_hash_password,
+    async_verify_password,
 )
 from app.database import get_db
 from app.models.user import User
@@ -59,17 +59,8 @@ class WebSocketTicketResponse(BaseModel):
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 async def get_current_user(
-    request: Request,
-    username: str = Depends(get_admin_key),
-    session: AsyncSession = Depends(get_db),
+    user: User = Depends(get_authenticated_user),
 ) -> User:
-    cached = getattr(request.state, "auth_user", None)
-    if cached is not None:
-        return cached
-    result = await session.execute(select(User).where(User.username == username, User.is_active == True))
-    user = result.scalars().first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
 
 
@@ -85,7 +76,7 @@ async def _authenticate_login(body: LoginRequest, request: Request, session: Asy
         )
     result = await session.execute(select(User).where(User.username == body.username, User.is_active == True))
     user = result.scalars().first()
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or not await async_verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     user.last_login_at = func.now()
     await session.commit()
@@ -111,18 +102,24 @@ def _session_unavailable() -> HTTPException:
 
 
 async def _change_password(body: ChangePasswordRequest, current_user: User, session: AsyncSession) -> User:
-    if not verify_password(body.current_password, current_user.password_hash):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     if len(body.new_password) < 6:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters")
     try:
-        new_password_hash = hash_password(body.new_password)
+        new_password_hash = await async_hash_password(body.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    result = await session.execute(select(User).where(User.id == current_user.id))
+    result = await session.execute(
+        select(User)
+        .where(User.id == current_user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     user = result.scalars().first()
+    if user is None or not user.is_active or not await async_verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     user.password_hash = new_password_hash
+    user.credential_version += 1
     user.must_change_password = False
     user.updated_at = datetime.now(timezone.utc)
     await session.commit()
@@ -136,7 +133,7 @@ async def login(body: LoginRequest, request: Request, session: AsyncSession = De
     user = await _authenticate_login(body, request, session)
     must_change_password = bool(user.must_change_password)
     return TokenResponse(
-        access_token=create_access_token(user.username, must_change_password=must_change_password),
+        access_token=create_access_token(user),
         must_change_password=must_change_password,
     )
 
@@ -212,9 +209,9 @@ async def update_my_preferences(
 
 
 @router.post("/ws-ticket", response_model=WebSocketTicketResponse)
-async def create_websocket_ticket(request: Request, username: str = Depends(get_admin_key)):
+async def create_websocket_ticket(request: Request, user: User = Depends(get_current_user)):
     try:
-        ticket, ttl = issue_ws_ticket(username, getattr(request.state, "browser_session_token", None))
+        ticket, ttl = issue_ws_ticket(user, getattr(request.state, "browser_session_token", None))
     except RedisError as exc:
         raise HTTPException(status_code=503, detail="Ticket service unavailable") from exc
     return WebSocketTicketResponse(ticket=ticket, expires_in=ttl)
@@ -230,7 +227,7 @@ async def change_password(
     if getattr(request.state, "browser_session", None) is not None:
         raise HTTPException(status_code=401, detail="Bearer credentials required")
     user = await _change_password(body, current_user, session)
-    token = create_access_token(user.username, must_change_password=False)
+    token = create_access_token(user)
     return {"ok": True, "access_token": token, "token_type": "bearer", "must_change_password": False}
 
 

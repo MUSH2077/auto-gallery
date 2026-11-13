@@ -1021,10 +1021,12 @@ async def test_metadata_only_adds_score_after_visual_gate(tmp_path, monkeypatch)
                 )
             )
             await db.commit()
-            rejected = await AssetReconciliation(db)._evaluate_pair(
-                assets[0],
-                unrelated,
-            )
+            from unittest.mock import AsyncMock
+            service = AssetReconciliation(db)
+            metadata_query = AsyncMock(side_effect=AssertionError("Rejected pair queried metadata"))
+            monkeypatch.setattr(service, "_metadata_evidence", metadata_query)
+            rejected = await service._evaluate_pair(assets[0], unrelated)
+            metadata_query.assert_not_awaited()
             assert rejected["hard_gate_passed"] is False
             assert rejected["metadata_score"] == 0
             assert rejected["total_score"] == 0
@@ -1068,3 +1070,31 @@ async def test_metadata_only_adds_score_after_visual_gate(tmp_path, monkeypatch)
         async with async_session() as db:
             await clear(db)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_metadata_reads_both_assets_in_one_query():
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    left, right, creator = uuid4(), uuid4(), uuid4()
+    posted = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = [
+        SimpleNamespace(asset_id=left, source="pixiv", posted_at=posted, creator_id=creator),
+        SimpleNamespace(asset_id=right, source="twitter", posted_at=posted + timedelta(hours=8), creator_id=creator),
+        SimpleNamespace(asset_id=right, source="manual", posted_at=None, creator_id=None),
+    ]
+    db = SimpleNamespace(execute=AsyncMock(return_value=rows))
+    facts = await AssetReconciliation(db)._metadata_evidence(left, right)
+    assert facts == {
+        "same_canonical_creator": True,
+        "min_posted_delta_hours": 8.0,
+        "score": 10.0,
+        "creator_bonus": 6.0,
+        "time_bonus": 4.0,
+        "left_sources": ["pixiv"],
+        "right_sources": ["manual", "x"],
+    }
+    db.execute.assert_awaited_once()
+    query = db.execute.call_args.args[0]
+    assert list(query.compile().params.values()) == [[left, right]]

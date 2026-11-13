@@ -1,32 +1,14 @@
 "use client";
-
 import Link from "next/link";
-import { useMemo } from "react";
-import {
-  AlertTriangle,
-  Box,
-  ChevronRight,
-  Database,
-  Download,
-  ImageOff,
-  Layers3,
-  RefreshCw,
-  Search,
-  Server,
-} from "lucide-react";
-
-import SourceBadge from "@/components/SourceBadge";
+import {WorkMediaThumbnail} from "@/components/MediaAssetRenderer";
+import {SyncOutcomeBadge} from "@/components/SyncOutcomeBadge";
 import StatusBadge from "@/components/StatusBadge";
-import { SyncOutcomeBadge } from "@/components/SyncOutcomeBadge";
-import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
-import ThreeUiArcCanvas from "@/components/ThreeUiArcCanvas";
-import { api, type SyncOutcome, type WorkbenchSummary } from "@/lib/api";
-import { useT } from "@/lib/i18n";
-import { useI18nFormat } from "@/lib/i18n-format";
-import { useStaggeredEntrance } from "@/lib/motion";
-import { adminRoutes } from "@/lib/adminRoutes";
-import { hasTaskAction } from "@/lib/task-actions";
-
+import {type SyncOutcome,type WorkbenchSummary} from "@/lib/api";
+import {useT} from "@/lib/i18n";
+import {useI18nFormat} from "@/lib/i18n-format";
+import {usePermissions} from "@/lib/usePermissions";
+import {adminRoutes} from "@/lib/adminRoutes";
+import {hasTaskAction} from "@/lib/task-actions";
 type DashboardActivity = {
   key: string;
   id: string;
@@ -101,200 +83,6 @@ function activityGroup(status: string): "active" | "failed" | "complete" | "othe
   return "other";
 }
 
-function toneDot(tone: StatusTone): string {
-  return {
-    ok: "bg-success",
-    info: "bg-accent",
-    danger: "bg-danger",
-    warning: "bg-warning",
-    muted: "bg-placeholder",
-  }[tone];
-}
-
-function DashboardStatusLink({
-  label,
-  value,
-  href,
-  tone,
-  testId,
-}: {
-  label: string;
-  value: string;
-  href: string;
-  tone: StatusTone;
-  testId: string;
-}) {
-  const t = useT();
-  return (
-    <Link
-      href={href}
-      data-testid={testId}
-      className="group flex min-h-[108px] min-w-0 flex-col justify-between rounded-lg border border-border bg-surface/90 p-3 outline-none transition-[border-color,background-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:bg-surface hover:shadow-md focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-accent/50 md:min-h-[112px] xl:aspect-square xl:rounded-full xl:p-4"
-    >
-      <div className="flex min-w-0 items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
-        <span>{label}</span>
-        <span className={`h-2 w-2 shrink-0 rounded-full ${toneDot(tone)}`} />
-      </div>
-      <strong className="mt-3 text-lg font-semibold leading-tight tabular text-fg">{value}</strong>
-      <span className="mt-2 inline-flex min-h-6 items-center gap-1 text-sm font-medium text-accent">
-        {t("dashboard.open")}
-        <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
-      </span>
-    </Link>
-  );
-}
-
-export function DashboardStatusStrip({
-  data,
-  refreshing,
-  onRefresh,
-}: {
-  data: WorkbenchSummary;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) {
-  const t = useT();
-  const fmt = useI18nFormat();
-  const activeJobs = data.queue.active_download_count + data.queue.active_import_count;
-  const failedJobs = data.queue.failed_download_count + data.queue.failed_import_count;
-
-  return (
-    <section
-      data-testid="dashboard-hero"
-      className="relative isolate overflow-hidden rounded-xl border border-border bg-surface px-5 py-6 shadow-sm sm:px-7 sm:py-7 xl:min-h-[300px]"
-      aria-label={t("dashboard.operational_status")}
-    >
-      <ThreeUiArcCanvas className="opacity-55 dark:opacity-35" />
-      <div className="relative z-10 grid gap-7 xl:grid-cols-[minmax(260px,.72fr)_minmax(0,1.5fr)] xl:items-center">
-        <div className="max-w-lg">
-          <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.13em] text-accent">
-            <span className={`h-2 w-2 rounded-full ${toneDot(failedJobs ? "warning" : "ok")}`} />
-            {t("dashboard.operational_status")}
-          </div>
-          <h2 className="mt-4 text-2xl font-semibold tracking-tight text-fg sm:text-3xl">{t("dashboard.title")}</h2>
-          <p className="mt-3 max-w-md text-sm leading-6 text-muted">{t("dashboard.workbench_desc")}</p>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={onRefresh}
-              disabled={refreshing}
-              aria-busy={refreshing}
-            >
-              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden />
-              {refreshing ? t("dashboard.refreshing") : t("common.refresh")}
-            </button>
-            <time className="text-xs tabular text-muted" dateTime={data.updated_at} aria-live="polite">
-              {t("dashboard.updated_label")} · {fmt.dateTime(data.updated_at)}
-            </time>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5 xl:items-center">
-          <DashboardStatusLink
-            label={t("dashboard.auto_sync")}
-            value={data.scheduler.enabled ? t("common.on") : t("common.off")}
-            href="/admin/scheduler"
-            tone={data.scheduler.enabled ? "ok" : "danger"}
-            testId="dashboard-status-scheduler"
-          />
-          <DashboardStatusLink
-            label={t("dashboard.queue")}
-            value={t("dashboard.active_count", { count: activeJobs })}
-            href="/admin/jobs"
-            tone={activeJobs > 0 ? "info" : "muted"}
-            testId="dashboard-status-jobs"
-          />
-          <DashboardStatusLink
-            label={t("dashboard.failed")}
-            value={String(failedJobs)}
-            href="/admin/jobs?q=status%3Afailed"
-            tone={failedJobs > 0 ? "danger" : "ok"}
-            testId="dashboard-status-failed"
-          />
-          <DashboardStatusLink
-            label={t("dashboard.stale")}
-            value={String(data.queue.stale_count)}
-            href="/admin/jobs?q=status%3Astale"
-            tone={data.queue.stale_count > 0 ? "warning" : "ok"}
-            testId="dashboard-status-stale"
-          />
-          <DashboardStatusLink
-            label={t("dashboard.disk")}
-            value={data.storage.disk_free_percent == null
-              ? "—"
-              : t("dashboard.disk_free_percent", { percent: data.storage.disk_free_percent })}
-            href="/admin/data-mgmt"
-            tone={data.storage.risk_level === "critical"
-              ? "danger"
-              : data.storage.risk_level === "warning" ? "warning" : "ok"}
-            testId="dashboard-status-storage"
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function RecentWorksPanel({ data }: { data: WorkbenchSummary }) {
-  const t = useT();
-  const fmt = useI18nFormat();
-  const works = data.recent.works.slice(0, 3);
-  const entrance = useStaggeredEntrance(works.map((work) => `dashboard-work:${work.id}`));
-
-  return (
-    <section className="min-w-0 sm:rounded-lg sm:border sm:border-border sm:bg-surface sm:p-5" aria-labelledby="dashboard-recent-works">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 id="dashboard-recent-works" className="text-base font-semibold text-fg sm:text-lg">{t("dashboard.recently_added_works")}</h2>
-        <Link href="/admin/works" className="shrink-0 text-sm font-medium text-accent hover:underline">
-          {t("dashboard.open_works_library")}
-        </Link>
-      </div>
-      {works.length ? (
-        <div className="grid auto-cols-[minmax(230px,82%)] grid-flow-col gap-3 overflow-x-auto pb-2 [scrollbar-width:thin] snap-x snap-mandatory sm:auto-cols-auto sm:grid-flow-row sm:grid-cols-3 sm:overflow-visible sm:pb-0">
-          {works.map((work, index) => {
-            const title = work.title || t("dashboard.untitled_work");
-            const motion = entrance(`dashboard-work:${work.id}`, index);
-            return (
-              <Link
-                key={work.id}
-                href={`/admin/works/${work.id}`}
-                className={`${motion.className} media-motion-card group min-w-0 snap-start overflow-hidden rounded-lg border border-border bg-bg outline-none hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/50`}
-                style={motion.style}
-                aria-label={t("common.open_item", { name: title })}
-              >
-                <div className="media-motion-visual aspect-[4/3] overflow-hidden border-b border-border bg-subtle">
-                  <WorkMediaThumbnail
-                    assetId={work.thumbnail_asset_id}
-                    hasVideo={work.has_video}
-                    alt=""
-                    eager
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-                <div className="p-3" id={work.thumbnail_asset_id ? `dashboard-work-${work.thumbnail_asset_id}` : undefined}>
-                  <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-fg">{title}</h3>
-                  <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-                    {work.source && <SourceBadge source={work.source} />}
-                    {work.creator_name && <span className="truncate text-xs text-muted">{work.creator_name}</span>}
-                  </div>
-                  <p className="mt-2 text-xs tabular text-muted">{fmt.relative(work.created_at)}</p>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-dashed border-border px-6 text-center">
-          <ImageOff className="h-8 w-8 text-muted" aria-hidden />
-          <p className="mt-3 text-sm font-medium text-fg">{t("dashboard.no_recent_works")}</p>
-          <p className="mt-1 max-w-sm text-xs leading-5 text-muted">{t("dashboard.no_recent_works_desc")}</p>
-        </div>
-      )}
-    </section>
-  );
-}
-
 function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): DashboardActivity[] {
   const downloads = data.recent.download_jobs.filter((job) => {
     const status = job.status.toLowerCase();
@@ -311,7 +99,7 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       detail: job.outcome ? t(`sync_outcome.${job.outcome.code}_desc`) : job.pipeline_stage || t("dashboard.activity_download"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
-      href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
+      href: `/admin/jobs?records=download&job=${encodeURIComponent(job.id)}`,
       progress: progress.percent,
       progressLabel: progress.label,
       outcome: job.outcome,
@@ -333,7 +121,7 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
       detail: job.progress_stage || t("dashboard.activity_import"),
       status: job.status,
       timestamp: job.updated_at || job.created_at,
-      href: `/admin/jobs?view=${FAILED_STATUSES.has(job.status.toLowerCase()) ? "attention" : "active"}&task=${job.id}`,
+      href: `/admin/jobs?records=import&import_job=${encodeURIComponent(job.id)}`,
       progress: progress.percent,
       progressLabel: progress.label,
       retryable: hasTaskAction(job, "retry"),
@@ -349,166 +137,30 @@ function buildActivities(data: WorkbenchSummary, t: ReturnType<typeof useT>): Da
     .slice(0, 8);
 }
 
-function ActivityRow({
-  activity,
-  canRetry,
-  retrying,
-  onRetry,
-  onRepeat,
-}: {
-  activity: DashboardActivity;
-  canRetry: boolean;
-  retrying: boolean;
-  onRetry: (activity: DashboardActivity) => void;
-  onRepeat: (activity: DashboardActivity) => void;
-}) {
-  const t = useT();
-  const fmt = useI18nFormat();
-  return (
-    <div className="flex min-w-0 flex-nowrap items-center gap-2 border-t border-border px-3 py-3 first:border-t-0 sm:gap-3">
-      <div className="w-20 shrink-0 sm:w-16">{activity.source ? <SourceBadge source={activity.source} /> : null}</div>
-      <Link
-        href={activity.href}
-        className="flex min-h-11 min-w-0 flex-1 flex-col justify-center rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
-        <span className="block truncate text-sm font-semibold text-fg hover:text-accent">
-          {activity.title}
-        </span>
-        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted">
-          <span className="truncate">{activity.detail}</span>
-          {activity.progressLabel && <span className="shrink-0 tabular">{activity.progressLabel}</span>}
-        </div>
-        {activity.progress !== null && activity.progress !== undefined && (
-          <div className="mt-2 h-1.5 max-w-52 overflow-hidden rounded-full bg-subtle" aria-hidden>
-            <div
-              className="h-full w-full rounded-full bg-accent transition-transform duration-slow ease-expo"
-              style={{ transform: `scaleX(${activity.progress / 100})`, transformOrigin: "left" }}
-            />
-          </div>
-        )}
-      </Link>
-      <div className="ml-auto flex min-h-11 shrink-0 items-center gap-1 sm:gap-2">
-        <div className="text-right">
-          <StatusBadge status={activity.status} className="py-0 text-[11px]" />
-          {activity.outcome && <span className="mt-1 block"><SyncOutcomeBadge outcome={activity.outcome} /></span>}
-          <p className="mt-1 text-[11px] tabular text-muted">{fmt.relative(activity.timestamp)}</p>
-        </div>
-        {activity.retryable && canRetry && (
-          <button
-            type="button"
-            className="btn-ghost min-h-11 px-2 text-xs sm:px-3"
-            disabled={retrying}
-            onClick={() => onRetry(activity)}
-          >
-            {retrying ? t("dashboard.retrying") : t("common.retry")}
-          </button>
-        )}
-        {activity.repeatable && canRetry && (
-          <button
-            type="button"
-            className="btn-ghost min-h-11 px-2 text-xs sm:px-3"
-            disabled={retrying}
-            onClick={() => onRepeat(activity)}
-          >
-            {t("jobs.repeat_sync")}
-          </button>
-        )}
-        <Link
-          href={activity.href}
-          className="btn-icon hidden min-h-11 min-w-11 border border-border sm:inline-flex"
-          aria-label={t("common.open_item", { name: activity.title })}
-        >
-          <ChevronRight className="h-4 w-4" aria-hidden />
-        </Link>
-      </div>
-    </div>
-  );
+
+export function DashboardStatusStrip({data,refreshing,onRefresh}:{data:WorkbenchSummary;refreshing:boolean;onRefresh:()=>void}){
+ const t=useT(),fmt=useI18nFormat();
+ const entries=[
+  [t("dashboard.auto_sync"),data.scheduler.enabled?t("common.on"):t("common.off"),"/admin/scheduler"],
+  [t("dashboard.queue"),t("dashboard.active_count",{count:data.queue.active_download_count+data.queue.active_import_count}),"/admin/jobs"],
+  [t("dashboard.failed"),fmt.number(data.queue.failed_download_count+data.queue.failed_import_count),"/admin/jobs?q=status%3Afailed"],
+  [t("dashboard.stale"),fmt.number(data.queue.stale_count),"/admin/jobs?q=status%3Astale"],
+  [t("dashboard.disk"),data.storage.disk_free_percent==null?"—":t("dashboard.disk_free_percent",{percent:data.storage.disk_free_percent}),"/admin/data-mgmt"]
+ ];
+ return <section className="business-dashboard-status" aria-label={t("dashboard.operational_status")}><dl>{entries.map(([label,value,href])=><div key={label}><dt><Link href={href}>{label}</Link></dt><dd><Link href={href}>{value}</Link></dd></div>)}</dl><div className="business-dashboard-refresh"><time dateTime={data.updated_at}>{t("dashboard.updated_label")} {fmt.dateTime(data.updated_at)}</time><button className="button" type="button" disabled={refreshing} aria-busy={refreshing||undefined} onClick={onRefresh}>{t(refreshing?"dashboard.refreshing":"common.refresh")}</button></div></section>;
 }
-
-export function ActivityPanel({
-  data,
-  canRetry,
-  retryingKey,
-  onRetry,
-  onRepeat,
-}: {
-  data: WorkbenchSummary;
-  canRetry: boolean;
-  retryingKey?: string | null;
-  onRetry: (activity: DashboardActivity) => void;
-  onRepeat: (activity: DashboardActivity) => void;
-}) {
-  const t = useT();
-  const activities = useMemo(() => buildActivities(data, t), [data, t]);
-  const grouped = {
-    active: activities.filter((activity) => activityGroup(activity.status) === "active"),
-    failed: activities.filter((activity) => activityGroup(activity.status) === "failed"),
-    complete: activities.filter((activity) => activityGroup(activity.status) === "complete"),
-  };
-  const entrance = useStaggeredEntrance(activities.map((activity) => activity.key));
-  let entranceIndex = 0;
-
-  return (
-    <section className="min-w-0 rounded-lg border border-border bg-surface p-4 sm:p-5" aria-labelledby="dashboard-live-activity">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 id="dashboard-live-activity" className="text-lg font-semibold text-fg">{t("dashboard.live_activity")}</h2>
-        <Link href="/admin/jobs" className="shrink-0 text-sm font-medium text-accent hover:underline">
-          {t("dashboard.open_all_jobs")}
-        </Link>
-      </div>
-      {activities.length ? (
-        <div className="overflow-hidden rounded-lg border border-border">
-          {(["failed", "active", "complete"] as const).map((group) => {
-            const rows = grouped[group];
-            if (!rows.length) return null;
-            return (
-              <div key={group} className="border-t border-border first:border-t-0">
-                <div className="flex items-center gap-2 bg-subtle px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                  <span className={`h-2 w-2 rounded-full ${
-                    group === "failed" ? "bg-danger" : group === "complete" ? "bg-success" : "bg-accent"
-                  }`} />
-                  {t(`dashboard.activity_group_${group}`)}
-                </div>
-                {rows.map((activity) => {
-                  const currentIndex = entranceIndex++;
-                  const motion = entrance(activity.key, currentIndex);
-                  return (
-                    <div key={activity.key} className={motion.className} style={motion.style}>
-                      <ActivityRow
-                        activity={activity}
-                        canRetry={canRetry}
-                        retrying={retryingKey === activity.key}
-                        onRetry={onRetry}
-                        onRepeat={onRepeat}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="flex min-h-56 items-center justify-center rounded-lg border border-dashed border-border px-6 text-center text-sm text-muted">
-          {t("dashboard.no_recent_activity")}
-        </div>
-      )}
-    </section>
-  );
+export function RecentWorksPanel({data}:{data:WorkbenchSummary}){
+ const t=useT(),fmt=useI18nFormat(),{has}=usePermissions();
+ if(!has("library"))return null;
+ return <section className="business-section" aria-labelledby="dashboard-recent-works"><div className="business-section-heading"><h2 id="dashboard-recent-works">{t("dashboard.recently_added_works")}</h2><Link className="text-link" href="/admin/works">{t("dashboard.open_works_library")}</Link></div>{data.recent.works.length?<div className="business-dashboard-works">{data.recent.works.slice(0,3).map(work=><article key={work.id}><Link href={"/admin/works?work="+encodeURIComponent(work.id)}><div className="business-dashboard-image"><WorkMediaThumbnail assetId={work.thumbnail_asset_id} hasVideo={work.has_video} alt={work.title||t("dashboard.untitled_work")} className="h-full w-full object-cover" eager/></div><h3>{work.title||t("dashboard.untitled_work")}</h3></Link><p>{work.creator_name} {work.source}</p><time dateTime={work.created_at||undefined}>{fmt.relative(work.created_at)}</time></article>)}</div>:<p className="state-view">{t("dashboard.no_recent_works")}</p>}</section>;
 }
-
-export function AttentionBanner({
-  data,
-  canRetry,
-  retrying,
-  onRetryFailedDownloads,
-}: {
-  data: WorkbenchSummary;
-  canRetry: boolean;
-  retrying: boolean;
-  onRetryFailedDownloads: () => void;
-}) {
-  const t = useT();
+export function ActivityPanel({data,canRetry,retryingKeys,onRetry,onRepeat}:{data:WorkbenchSummary;canRetry:boolean;retryingKeys?:ReadonlySet<string>;onRetry:(activity:DashboardActivity)=>void;onRepeat:(activity:DashboardActivity)=>void}){
+ const t=useT(),fmt=useI18nFormat(),{has}=usePermissions(),activities=buildActivities(data,t);
+ if(!has("tasks"))return null;
+ return <section className="business-section" aria-labelledby="dashboard-live-activity"><div className="business-section-heading"><h2 id="dashboard-live-activity">{t("dashboard.live_activity")}</h2><Link className="text-link" href="/admin/jobs">{t("dashboard.open_all_jobs")}</Link></div>{activities.length?activities.map(activity=><article className="business-row business-dashboard-activity" key={activity.key} data-activity-id={activity.id}><div><Link href={activity.href}>{activity.title}</Link><p>{activity.detail}</p>{activity.progress!=null?<progress max={100} value={activity.progress} aria-label={activity.title}/>:null}{activity.progressLabel?<span>{activity.progressLabel}</span>:null}</div><div className="business-dashboard-outcome"><StatusBadge status={activity.status}/>{activity.outcome?<SyncOutcomeBadge outcome={activity.outcome}/>:null}<time dateTime={activity.timestamp||undefined}>{fmt.relative(activity.timestamp)}</time></div><div className="business-row-actions">{canRetry&&activity.retryable?<button type="button" className="text-button" disabled={retryingKeys?.has(activity.key)} onClick={()=>onRetry(activity)}>{t(retryingKeys?.has(activity.key)?"dashboard.retrying":"common.retry")}</button>:null}{canRetry&&activity.repeatable?<button type="button" className="text-button" onClick={()=>onRepeat(activity)}>{t("jobs.repeat_sync")}</button>:null}</div></article>):<p className="state-view">{t("dashboard.no_recent_activity")}</p>}</section>;
+}
+export function AttentionBanner({data,canRetry,retrying,onRetryFailedDownloads}:{data:WorkbenchSummary;canRetry:boolean;retrying:boolean;onRetryFailedDownloads:()=>void}){
+ const t=useT();
   const authActionableCount = data.attention.auth_actionable_count ?? data.attention.auth_unhealthy_count;
   const issueCount = authActionableCount
     + data.attention.failed_download_count
@@ -530,86 +182,21 @@ export function AttentionBanner({
             ? t("dashboard.attention_storage")
             : t("dashboard.attention_scheduler");
   const href = data.attention.failed_import_count && !data.attention.failed_download_count
-    ? "/admin/jobs?tab=imports&q=kind%3Aimport%20status%3Afailed"
+    ? "/admin/jobs?q=kind%3Aimport+status%3Afailed"
     : authActionableCount && !data.attention.failed_download_count
       ? adminRoutes.schedulerAuth
       : data.attention.low_disk_warning && !data.attention.failed_download_count
         ? "/admin/data-mgmt"
         : data.attention.scheduler_disabled_warning && !data.attention.failed_download_count
           ? adminRoutes.settingsSection("scheduler-defaults")
-          : "/admin/jobs?view=attention";
+          : "/admin/jobs?scope=attention";
 
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-danger/50 bg-danger-subtle p-4 sm:flex-row sm:items-center" aria-labelledby="dashboard-attention-heading">
-      <AlertTriangle className="h-6 w-6 shrink-0 text-danger" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 id="dashboard-attention-heading" className="text-base font-semibold text-fg">{t("dashboard.attention_required")}</h2>
-          <span className="badge border-danger/30 bg-danger-subtle text-danger">
-            {t(issueCount === 1 ? "dashboard.issue_count_one" : "dashboard.issue_count", { count: issueCount })}
-          </span>
-        </div>
-        <p className="mt-1 text-sm text-muted">{primary}</p>
-      </div>
-      <div className="grid shrink-0 gap-2 sm:flex">
-        {data.attention.failed_download_count > 0 && canRetry && (
-          <button
-            type="button"
-            className="btn-primary min-h-11"
-            onClick={onRetryFailedDownloads}
-            disabled={retrying}
-          >
-            {retrying ? t("dashboard.retrying") : t("dashboard.retry_failed_downloads")}
-          </button>
-        )}
-        <Link href={href} className="btn-ghost min-h-11">{t("dashboard.view_attention")}</Link>
-      </div>
-    </section>
-  );
+
+ return <section className="business-section business-dashboard-attention" aria-labelledby="dashboard-attention-heading"><div><h2 id="dashboard-attention-heading">{t("dashboard.attention_required")}</h2><p>{primary}</p><p>{t(issueCount===1?"dashboard.issue_count_one":"dashboard.issue_count",{count:issueCount})}</p></div><div className="business-row-actions">{canRetry&&data.attention.failed_download_count>0?<button type="button" className="button" disabled={retrying} onClick={onRetryFailedDownloads}>{t(retrying?"dashboard.retrying":"dashboard.retry_failed_downloads")}</button>:null}<Link className="text-link" href={href}>{t("dashboard.view_attention")}</Link></div></section>;
 }
-
-const SERVICE_ICONS = {
-  backend: Server,
-  postgres: Database,
-  redis: Layers3,
-  meilisearch: Search,
-  "gallery-dl": Download,
-} as const;
-
-export function ServicesPanel({ health }: { health: WorkbenchSummary["health"] }) {
-  const t = useT();
-  const services = Object.entries(health)
-    .filter(([name]) => name !== "gallery-dl")
-    .slice(0, 4);
-  return (
-    <section className="rounded-lg border border-border bg-surface p-4 sm:p-5" aria-labelledby="dashboard-services">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 id="dashboard-services" className="text-lg font-semibold text-fg">{t("dashboard.services")}</h2>
-        <Link href="/admin/system" className="text-sm font-medium text-accent hover:underline">{t("dashboard.open_system_status")}</Link>
-      </div>
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border xl:grid-cols-4">
-        {services.map(([name, status]) => {
-          const Icon = SERVICE_ICONS[name as keyof typeof SERVICE_ICONS] || Box;
-          return (
-            <Link
-              key={name}
-              href="/admin/system"
-              className="group flex min-h-24 min-w-0 items-center gap-3 bg-surface p-3 outline-none transition-colors hover:bg-subtle focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted group-hover:text-fg">
-                <Icon className="h-5 w-5" strokeWidth={1.8} aria-hidden />
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold capitalize text-fg">{name}</span>
-                <StatusBadge status={status} className="mt-1 py-0 text-[10px]" />
-              </span>
-            </Link>
-          );
-        })}
-      </div>
-    </section>
-  );
+export function ServicesPanel({health}:{health:WorkbenchSummary["health"]}){
+ const t=useT();
+ return <details className="business-section business-dashboard-services"><summary>{t("dashboard.services")}</summary><div className="business-section-heading"><Link href="/admin/system" className="text-link">{t("dashboard.open_system_status")}</Link></div><dl>{Object.entries(health).map(([name,status])=><div key={name}><dt translate="no">{name}</dt><dd><StatusBadge status={status}/></dd></div>)}</dl></details>;
 }
-
-export type { DashboardActivity };
-export { fmtBytes };
+export type {DashboardActivity};
+export {fmtBytes};

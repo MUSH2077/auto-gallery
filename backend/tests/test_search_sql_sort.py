@@ -468,6 +468,160 @@ async def test_db_work_projection_returns_selected_thumbnail_dimensions(monkeypa
             await transaction.rollback()
 
 
+@pytest.mark.asyncio
+async def test_db_work_projection_bounds_previews_and_isolates_pages(monkeypatch):
+    first_id = uuid4()
+    second_id = uuid4()
+    async with async_session() as db:
+        transaction = await db.begin()
+        try:
+            first = Work(
+                id=first_id,
+                title="first page",
+                is_nsfw=False,
+                is_ai_generated=False,
+                is_favorite=False,
+            )
+            second = Work(
+                id=second_id,
+                title="second page",
+                is_nsfw=False,
+                is_ai_generated=False,
+                is_favorite=False,
+            )
+            db.add_all([first, second])
+            await db.flush()
+            first_source = WorkSource(
+                work_id=first.id,
+                source="pixiv",
+                source_work_id=str(first_id.int),
+            )
+            duplicate_source = WorkSource(
+                work_id=first.id,
+                source="x",
+                source_work_id=str(first_id.int + 1),
+            )
+            second_source = WorkSource(
+                work_id=second.id,
+                source="pixiv",
+                source_work_id=str(second_id.int),
+            )
+            db.add_all([first_source, duplicate_source, second_source])
+            await db.flush()
+
+            first_assets = [
+                Asset(
+                    file_path=f"/tmp/{first_id}-{index}",
+                    file_name=f"{first_id}-{index}.jpg",
+                    mime_type="image/jpeg",
+                    width=100 + index,
+                    height=200 + index,
+                )
+                for index in range(12)
+            ]
+            first_assets[1].mime_type = "video/mp4"
+            first_assets[1].file_name = f"{first_id}-1.mp4"
+            first_assets[2].mime_type = "image/gif"
+            first_assets[2].file_name = f"{first_id}-2.gif"
+            second_asset = Asset(
+                file_path=f"/tmp/{second_id}",
+                file_name=f"{second_id}.jpg",
+                mime_type="image/jpeg",
+                width=300,
+                height=400,
+            )
+            db.add_all([*first_assets, second_asset])
+            await db.flush()
+            db.add_all([
+                AssetSource(
+                    asset_id=asset.id,
+                    work_source_id=first_source.id,
+                    source="pixiv",
+                    source_asset_id=f"{first_id}-{index}",
+                    ordinal=index,
+                    role="video" if index == 1 else "page",
+                )
+                for index, asset in enumerate(first_assets)
+            ])
+            db.add_all([
+                AssetSource(
+                    asset_id=first_assets[0].id,
+                    work_source_id=duplicate_source.id,
+                    source="x",
+                    source_asset_id=f"{first_id}-duplicate",
+                    ordinal=0,
+                    role="page",
+                ),
+                AssetSource(
+                    asset_id=second_asset.id,
+                    work_source_id=second_source.id,
+                    source="pixiv",
+                    source_asset_id=str(second_id),
+                    ordinal=0,
+                    role="page",
+                ),
+            ])
+            await db.flush()
+
+            service = SearchService(db)
+            service._parallel_hydration = False
+
+            async def total(*_args, **_kwargs):
+                return 1
+
+            monkeypatch.setattr(service, "_cached_work_total", total)
+            first_result = await service._search_works_db(
+                parse_search_query(f"pid:pixiv/{first_id.int}", "works"),
+                {},
+                0,
+                30,
+            )
+            second_result = await service._search_works_db(
+                parse_search_query(f"pid:pixiv/{second_id.int}", "works"),
+                {},
+                0,
+                30,
+            )
+
+            first_item = first_result["items"][0]
+            second_item = second_result["items"][0]
+            first_preview_ids = first_item["preview_asset_ids"]
+            assert first_item["asset_count"] == 12
+            assert first_preview_ids == [str(asset.id) for asset in first_assets[:10]]
+            assert first_item["has_image"] is True
+            assert first_item["has_video"] is True
+            assert first_item["has_animation"] is True
+            assert set(first_preview_ids) <= {str(asset.id) for asset in first_assets}
+            assert second_item["asset_count"] == 1
+            assert second_item["preview_asset_ids"] == [str(second_asset.id)]
+            assert set(first_preview_ids).isdisjoint(second_item["preview_asset_ids"])
+            execute_calls = []
+            original_execute = db.execute
+
+            async def counted_execute(*args, **kwargs):
+                execute_calls.append(args[0])
+                return await original_execute(*args, **kwargs)
+
+            monkeypatch.setattr(db, "execute", counted_execute)
+            combined_result = await service._search_works_db(
+                parse_search_query(
+                    f"pid:pixiv/{first_id.int} pid:pixiv/{second_id.int}",
+                    "works",
+                ),
+                {},
+                0,
+                30,
+            )
+            assert {item["id"] for item in combined_result["items"]} == {
+                str(first_id), str(second_id),
+            }
+            # Page, sources, and the single bounded media aggregation query;
+            # assets and works do not trigger per-row database calls.
+            assert len(execute_calls) == 3
+        finally:
+            await transaction.rollback()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_meilisearch_heat_and_random_order_match_stable_contract():

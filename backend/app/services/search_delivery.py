@@ -1,7 +1,8 @@
-"""Prepare, submit, poll once, and version-CAS acknowledge a remote write.
+"""Prepare and deliver bounded search commands with version-CAS acknowledgement.
 
-No HTTP request holds a SQL transaction. Unknown submission outcomes remain
-fenced: Meili lacks idempotency keys, so blindly replaying can reorder writes.
+PostgreSQL document upserts/deletes use a short database permit and commit the
+document write, compatibility task, receipt and outbox acknowledgement together.
+Settings, rebuilds, swaps and remote backends retain the existing path.
 """
 from __future__ import annotations
 
@@ -13,7 +14,11 @@ import time
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import and_, exists, func, or_, select, text, update
+from sqlalchemy import and_, exists, func, or_, select, text, update, cast
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+from app.models import ImportCurationOutbox
+from app.services.search_index_definitions import WORKS_INDEX
 
 from app.config import settings
 from app.database import async_session
@@ -27,6 +32,8 @@ _SHORT_HTTP_TIMEOUT_SECONDS = 5.0
 _WRITE_COMPLETION_RESERVE_SECONDS = 3.0
 _MIN_PREPARED_WRITE_SECONDS = 8.0
 _PREPARED_BUDGET_RETRY_SECONDS = 30
+_POST_SUBMIT_CONFIRM_SECONDS = 0.25
+_POST_SUBMIT_POLL_INTERVAL_SECONDS = 0.05
 
 
 class _WriteBudgetUnavailable(TimeoutError):
@@ -102,24 +109,8 @@ def _exception_diagnostic(exc):
 
 
 async def request(client, method, path, deadline, payload=None):
-    headers = {"Authorization": f"Bearer {settings.meili_master_key}"}
-    kwargs = {"headers": headers}
-    if payload is not None:
-        kwargs["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode()
-        headers["Content-Type"] = "application/json"
-    url = settings.meili_url.rstrip("/") + path
-    if method.upper() in ("GET", "HEAD"):
-        kwargs["timeout"] = min(_SHORT_HTTP_TIMEOUT_SECONDS, remaining(deadline))
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response.json()
-    request_deadline = deadline - _WRITE_COMPLETION_RESERVE_SECONDS
-    request_budget = _write_request_budget(deadline)
-    kwargs["timeout"] = _write_request_timeout(request_budget)
-    async with asyncio.timeout_at(request_deadline):
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response.json()
+    from app.services.postgres_search_store import request as pg_request
+    return await pg_request(client, method, path, deadline, payload)
 
 
 async def _defer_prepared_for_budget(receipt, token, deadline, *, clear_marker=False):
@@ -138,6 +129,8 @@ async def _claim(deadline):
         row = (await db.execute(select(Receipt).where(ACTIVE).with_for_update())).scalar_one_or_none()
         if row is None:
             return None, None
+        from app.services.search_backend import require_backend
+        require_backend(row)
         if row.available_at > now() or (row.lease_until and row.lease_until > now()):
             return row, None
         row.lease_token = token
@@ -156,24 +149,34 @@ async def _save(receipt, token, deadline, **values):
 
 async def _prepare(limit, deadline):
     """Global transaction lock chooses one index/action before bounded hydration."""
-    from app.services.search import SearchService, WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    builders = {WORKS_INDEX: "_build_work_documents", CREATORS_INDEX: "_build_creator_documents", TAGS_INDEX: "_build_tag_documents",
-                REPOSITORIES_INDEX: "_build_repository_documents", SUBSCRIPTIONS_INDEX: "_build_subscription_documents", MEMBERSHIPS_INDEX: "_build_membership_documents"}
+    from app.services.search_projection import SearchProjection, PROJECTION_SPECS
     async with session(deadline) as db:
         if not (await db.execute(text("SELECT pg_try_advisory_xact_lock(73194218)"))).scalar_one():
             return None
         if (await db.execute(select(exists().where(ACTIVE)))).scalar_one():
             return None
-        ready = and_(Outbox.completed_at.is_(None), Outbox.available_at <= now(), or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()))
+        base_ready = and_(Outbox.completed_at.is_(None), Outbox.available_at <= now(), or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()))
+        # A work upsert is eligible only after its authoritative import curation
+        # intent completes. Non-work indexes and deletes remain independently
+        # drainable; this is a per-work filter, not a global barrier.
+        curation_ready = or_(
+            Outbox.index_uid != WORKS_INDEX,
+            Outbox.action == "delete",
+            ~exists().where(and_(
+                ImportCurationOutbox.work_id == cast(Outbox.entity_id, PG_UUID(as_uuid=True)),
+                ImportCurationOutbox.state != "complete",
+            )),
+        )
+        ready = and_(base_ready, curation_ready)
         head = (await db.execute(select(Outbox).where(ready).order_by(Outbox.available_at, Outbox.updated_at, Outbox.id).limit(1))).scalar_one_or_none()
         if head is None:
             return None
         rows = list((await db.execute(select(Outbox).where(ready, Outbox.index_uid == head.index_uid, Outbox.action == head.action)
                     .order_by(Outbox.available_at, Outbox.updated_at, Outbox.id).limit(max(1, min(500, limit))))).scalars())
         try:
-            if head.index_uid not in builders:
+            if head.index_uid not in PROJECTION_SPECS:
                 raise ValueError(f"Unsupported search outbox index {head.index_uid}")
-            docs = [] if head.action == "delete" else await getattr(SearchService(db), builders[head.index_uid])([UUID(row.entity_id) for row in rows])
+            docs = [] if head.action == "delete" else await SearchProjection(db).build(head.index_uid, [UUID(row.entity_id) for row in rows])
             by_id = {str(doc["id"]): doc for doc in docs}
             # Missing rows become deletions. Each remote receipt still contains
             # exactly one action, even when hydration exposes mixed outcomes.
@@ -202,11 +205,124 @@ async def _prepare(limit, deadline):
                 row.last_error = str(exc)[:4000]
             await db.commit()
             raise
-        receipt = Receipt(index_uid=head.index_uid, action=action, versions=[[str(row.id), row.version] for row in selected],
+        receipt = Receipt(backend=settings.search_backend, index_uid=head.index_uid, action=action, versions=[[str(row.id), row.version] for row in selected],
                           payload=payload, state="prepared", lease_token=str(uuid4()), lease_until=now() + timedelta(seconds=30))
         db.add(receipt)
         await db.commit()
         return receipt
+
+
+async def uses_database_permit(db, receipt=None, *, lock_index=False):
+    """Return whether one ordinary PG batch may use the atomic DB path."""
+    if settings.search_backend != "postgresql":
+        return False
+    from app.services import search_rebuild
+    from app.services.search_index_definitions import INDEX_SETTINGS
+    from app.services.postgres_search_store import INDEX_TABLE
+
+    if receipt is not None:
+        if (
+            receipt.backend != "postgresql"
+            or receipt.state != "prepared"
+            or receipt.rebuild_id
+            or receipt.action not in ("upsert", "delete")
+            or receipt.phase not in ("settings", "documents")
+        ):
+            return False
+        index_uid = receipt.index_uid
+    else:
+        ready = and_(
+            Outbox.completed_at.is_(None),
+            Outbox.available_at <= now(),
+            or_(Outbox.lease_until.is_(None), Outbox.lease_until <= now()),
+            or_(
+                Outbox.index_uid != WORKS_INDEX,
+                Outbox.action == "delete",
+                ~exists().where(and_(
+                    ImportCurationOutbox.work_id == cast(Outbox.entity_id, PG_UUID(as_uuid=True)),
+                    ImportCurationOutbox.state != "complete",
+                )),
+            ),
+        )
+        head = (await db.execute(
+            select(Outbox.index_uid, Outbox.action)
+            .where(ready)
+            .order_by(Outbox.available_at, Outbox.updated_at, Outbox.id)
+            .limit(1)
+        )).first()
+        if head is None or head.action not in ("upsert", "delete"):
+            return False
+        index_uid = head.index_uid
+
+    if await db.scalar(select(exists().where(search_rebuild.ACTIVE_BUILD))):
+        return False
+    if await db.scalar(select(search_rebuild.membership_bootstrap_due_condition())):
+        return False
+    suffix = " FOR UPDATE" if lock_index else ""
+    row = (await db.execute(
+        text(f"SELECT settings FROM {INDEX_TABLE} WHERE uid=:uid{suffix}"),
+        {"uid": index_uid},
+    )).first()
+    return bool(
+        row
+        and index_uid in INDEX_SETTINGS
+        and _contains_settings(dict(row.settings or {}), INDEX_SETTINGS[index_uid])
+    )
+
+
+async def _apply_database_receipt(receipt, token, deadline):
+    """Write documents, task history and CAS acknowledgements in one commit."""
+    from app.services import postgres_search_store as store
+
+    async with session(deadline) as db:
+        row = (await db.execute(
+            select(Receipt)
+            .where(Receipt.id == receipt.id, Receipt.lease_token == token)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if row is None:
+            raise RuntimeError("Search receipt execution lease lost")
+        if not await uses_database_permit(db, row, lock_index=True):
+            row.lease_until = None
+            await db.commit()
+            return result("deferred", delay=2)
+        if row.write_available_at and row.write_available_at > now():
+            row.lease_until = None
+            await db.commit()
+            return result("deferred", delay=(row.write_available_at - now()).total_seconds())
+        if row.lease_until is None or row.lease_until <= now():
+            raise RuntimeError("Search receipt execution lease expired")
+        if row.action == "upsert":
+            task = await store._write_documents_in_session(db, row.index_uid, row.payload)
+        else:
+            task = await store._delete_documents_in_session(db, row.index_uid, row.payload)
+        versions = list(row.versions)
+        if versions:
+            condition = or_(False, *(
+                and_(Outbox.id == UUID(identity), Outbox.version == version)
+                for identity, version in versions
+            ))
+            await db.execute(update(Outbox).where(condition).values(
+                completed_at=func.now(), lease_until=None, last_error=None,
+            ))
+        row.task_uid = int(task["taskUid"])
+        row.phase = "documents"
+        row.payload = []
+        row.state = "complete"
+        row.last_error = None
+        row.lease_until = None
+        row.lease_token = None
+        await db.flush()
+        from app.services.outbox_coordinator import _curation_projection_ready, _search_ready
+        successor_ready = bool(await db.scalar(select(_search_ready(now()))))
+        curation_waiting = bool(await _curation_projection_ready(db))
+        await db.commit()
+    return {
+        **result("ok", claimed=len(versions), processed=len(versions), action=receipt.action),
+        "more_likely": successor_ready,
+        "curation_waiting": curation_waiting,
+        "database_receipt_committed": True,
+    }
 
 
 async def _finalize(receipt, token, deadline, *, error=None):
@@ -232,6 +348,41 @@ async def _finalize(receipt, token, deadline, *, error=None):
     return result("error" if error else "ok", claimed=len(receipt.versions), processed=0 if error else len(receipt.versions), action=receipt.action)
 
 
+async def _confirm_new_task(client, task_uid, deadline):
+    # The task UID is already durable. Give fast remote writes a short chance
+    # to finish, while reserving the existing SQL/fence completion budget.
+    confirm_until = min(time.monotonic() + _POST_SUBMIT_CONFIRM_SECONDS,
+                        deadline - _WRITE_COMPLETION_RESERVE_SECONDS)
+    if confirm_until <= time.monotonic():
+        return None
+    try:
+        async with asyncio.timeout_at(confirm_until):
+            while True:
+                task = await request(client, "GET", f"/tasks/{task_uid}", confirm_until)
+                if task["status"] in ("succeeded", "failed", "canceled"):
+                    return task
+                await asyncio.sleep(_POST_SUBMIT_POLL_INTERVAL_SECONDS)
+    except Exception:
+        # A read failure cannot turn a known write into an ambiguous write.
+        # The durable pending receipt will use the ordinary polling path.
+        return None
+
+
+async def _terminal_result(receipt, token, task, deadline):
+    if task["status"] == "succeeded":
+        if receipt.phase == "settings":
+            await _save(receipt, token, deadline, state="prepared", phase="documents", task_uid=None,
+                        available_at=now(), lease_until=None, poll_count=0)
+            await durable(remote_flight.clear_marker, str(receipt.id))
+            return result("pending", delay=2)
+        return await _finalize(receipt, token, deadline)
+    if task["status"] in ("failed", "canceled"):
+        if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
+            return await _finalize(receipt, token, deadline)
+        return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
+    return None
+
+
 async def _advance(receipt, token, client, deadline):
     if receipt.state in ("submitting", "ambiguous"):
         marker = await durable(remote_flight.read_marker)
@@ -251,7 +402,7 @@ async def _advance(receipt, token, client, deadline):
             return await _defer_prepared_for_budget(receipt, token, deadline)
         settings_payload = None
         if receipt.phase == "settings":
-            from app.services.search import INDEX_SETTINGS
+            from app.services.search_index_definitions import INDEX_SETTINGS
             desired = INDEX_SETTINGS[receipt.index_uid]
             try:
                 actual = await request(client, "GET", f"/indexes/{receipt.index_uid}/settings", deadline)
@@ -304,46 +455,67 @@ async def _advance(receipt, token, client, deadline):
             await _save(receipt, token, deadline, state="ambiguous", lease_until=None, last_error=_exception_diagnostic(exc))
             return result("ambiguous")
         await durable(remote_flight.record_task, str(receipt.id), uid)
-        await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=2), lease_until=None)
-        return result("pending", delay=2, claimed=len(receipt.versions))
+        await _save(receipt, token, deadline, state="pending", task_uid=uid, available_at=now() + timedelta(seconds=1), lease_until=None)
+        receipt.task_uid = uid
+        task = await _confirm_new_task(client, uid, deadline)
+        if task is not None:
+            return await _terminal_result(receipt, token, task, deadline)
+        return result("pending", delay=1, claimed=len(receipt.versions))
     try:
         task = await request(client, "GET", f"/tasks/{receipt.task_uid}", deadline)
     except Exception as exc:
         await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=15), lease_until=None,
                     last_error=_exception_diagnostic(exc))
         return result("pending", delay=15)
-    if task["status"] == "succeeded":
-        if receipt.phase == "settings":
-            await _save(receipt, token, deadline, state="prepared", phase="documents", task_uid=None,
-                        available_at=now(), lease_until=None, poll_count=0)
-            await durable(remote_flight.clear_marker, str(receipt.id))
-            return result("pending", delay=2)
-        return await _finalize(receipt, token, deadline)
-    if task["status"] in ("failed", "canceled"):
-        if receipt.action == "drop" and (task.get("error") or {}).get("code") == "index_not_found":
-            return await _finalize(receipt, token, deadline)
-        return await _finalize(receipt, token, deadline, error=str(task.get("error") or task["status"]))
-    delay = min(15, 2 * 2 ** min(receipt.poll_count + 1, 3))
+    terminal = await _terminal_result(receipt, token, task, deadline)
+    if terminal is not None:
+        return terminal
+    delay = min(15, 2 ** min(receipt.poll_count + 1, 4))
     await _save(receipt, token, deadline, available_at=now() + timedelta(seconds=delay), lease_until=None, poll_count=receipt.poll_count + 1)
     return result("pending", delay=delay, claimed=len(receipt.versions))
 
 
 async def run_delivery_slice(*, limit=500, client=None):
+    """Run one bounded search slice, continuing only ordinary PG receipts."""
     deadline = time.monotonic() + 20
-    if client is None:
-        async with httpx.AsyncClient() as owned:
-            return await _run(limit, owned, deadline)
-    return await _run(limit, client, deadline)
+    if settings.search_backend != "postgresql":
+        return await _run(limit, client, deadline)
+    budget = {"remaining_units": max(1, int(limit)), "deadline": deadline}
+    aggregate = None
+    outcome = None
+    while budget["remaining_units"] > 0 and time.monotonic() < budget["deadline"]:
+        outcome = await _run(budget["remaining_units"], client, deadline, budget=budget)
+        if aggregate is None:
+            aggregate = {"claimed": 0, "processed": 0, "upserted": 0, "deleted": 0, "failed": 0, "continuation_receipts": 0}
+        for key in ("claimed", "processed", "upserted", "deleted", "failed"):
+            aggregate[key] += int(outcome.get(key) or 0)
+        committed = bool(outcome.get("database_receipt_committed"))
+        used = int(outcome.get("claimed") or 0)
+        aggregate["continuation_receipts"] += int(committed)
+        budget["remaining_units"] = max(0, budget["remaining_units"] - max(0, used))
+        if (
+            not committed or outcome.get("status") != "ok"
+            or not outcome.get("more_likely") or outcome.get("curation_waiting")
+            or outcome.get("successor_delay_seconds", 0) > 0 or used <= 0
+        ):
+            break
+    if outcome is None:
+        return result("idle")
+    result_value = dict(outcome)
+    if aggregate:
+        result_value.update(aggregate)
+    result_value["bounded_continuation"] = bool(aggregate and aggregate["continuation_receipts"] > 1)
+    return result_value
 
 
-async def _run_locked(limit, client, deadline):
+async def _run_locked(limit, client, deadline, budget=None):
     # Bound SQL/connect/HTTP scheduling, with no uncancellable worker threads
     # around HTTP. Marker persistence is deliberately completed before return.
     async with asyncio.timeout(remaining(deadline)):
         receipt, token = await _claim(deadline)
         if receipt:
             if token is None:
-                return result("pending", delay=max(2, (receipt.available_at - now()).total_seconds()))
+                return result("pending", delay=max(1, (receipt.available_at - now()).total_seconds()))
             if receipt.state == "prepared":
                 marker = await durable(remote_flight.read_marker)
                 if marker:
@@ -353,7 +525,7 @@ async def _run_locked(limit, client, deadline):
                     # A prior settings task is already terminal, or this marker
                     # preceded the submitting commit. Re-admit every new write.
                     await durable(remote_flight.clear_marker, str(receipt.id))
-                return await _admitted(limit, client, deadline, receipt, token)
+                return await _admitted(limit, client, deadline, receipt, token, budget=budget)
             return await _advance(receipt, token, client, deadline)
         marker = await durable(remote_flight.read_marker)
         if marker:
@@ -363,10 +535,10 @@ async def _run_locked(limit, client, deadline):
                 await durable(remote_flight.clear_marker, marker["owner"])
             else:
                 return result("ambiguous")
-        return await _admitted(limit, client, deadline)
+        return await _admitted(limit, client, deadline, budget=budget)
 
 
-async def _admitted(limit, client, deadline, receipt=None, token=None):
+async def _admitted(limit, client, deadline, receipt=None, token=None, *, budget=None):
     from app.services.heavy_io import adaptive_resource_slice
 
     async with session(deadline) as db:
@@ -376,28 +548,67 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
             await _save(receipt, token, deadline, lease_until=None)
         return result("deferred", delay=(write_after - now()).total_seconds())
     from app.services import search_rebuild
-    workload = "maintenance" if receipt and receipt.action == "swap" else await search_rebuild.active_workload(deadline)
+    pg_permit = False
+    if settings.search_backend == "postgresql":
+        async with session(deadline) as db:
+            pg_permit = await uses_database_permit(db, receipt)
+    workload = (
+        "pg_search_db"
+        if pg_permit
+        else "maintenance" if receipt and receipt.action == "swap"
+        else await search_rebuild.active_workload(deadline)
+    )
     cooldown = {}
+    slice_seconds = remaining(deadline)
+    if pg_permit and budget is not None:
+        slice_seconds = min(slice_seconds, budget["deadline"] - time.monotonic())
+        if slice_seconds <= 0:
+            if receipt:
+                await _save(receipt, token, deadline, lease_until=None)
+            return result("pending")
     async with adaptive_resource_slice(workload, "search-delivery", max_work_units=limit,
-                                      max_slice_seconds=remaining(deadline), cooldown_result=cooldown,
+                                      max_slice_seconds=slice_seconds, cooldown_result=cooldown,
                                       wait_for_capacity=False) as limits:
         if limits is None:
             if receipt:
                 await _save(receipt, token, deadline, lease_until=None)
+            if settings.search_backend == "postgresql" and workload in {"search_index", "pg_search_db"}:
+                return {**result("deferred"), "resource_deferred": True, "more_likely": False}
             return result("deferred", delay=2)
+        work_units = min(limit, limits.work_units)
+        if pg_permit and budget is not None:
+            if time.monotonic() >= budget["deadline"]:
+                if receipt:
+                    await _save(receipt, token, deadline, lease_until=None)
+                return result("pending")
+            budget["remaining_units"] = min(budget["remaining_units"], work_units)
+            if limits.slice_seconds:
+                budget["deadline"] = min(
+                    budget["deadline"], time.monotonic() + limits.slice_seconds,
+                )
+            # Finish an admitted atomic receipt under the original hard deadline.
+            # The shared soft deadline only stops starting another receipt.
         local_result = None
         if receipt is None:
             try:
-                next_item = await search_rebuild.prepare_next(min(limit, limits.work_units), deadline, client)
+                next_item = await search_rebuild.prepare_next(work_units, deadline, client)
             except (ValueError, RuntimeError) as exc:
                 await search_rebuild.fail_active(exc, deadline)
                 next_item = result("error")
             if isinstance(next_item, dict):
                 local_result = next_item
             else:
-                receipt = next_item or await _prepare(min(limit, limits.work_units), deadline)
+                receipt = next_item or await _prepare(work_units, deadline)
         if local_result is not None:
             outcome = local_result
+        elif pg_permit:
+            prepared = receipt or await _prepare(work_units, deadline)
+            if prepared is None:
+                outcome = await _checkpoint(client, deadline)
+            else:
+                outcome = await _apply_database_receipt(
+                    prepared, token or prepared.lease_token, deadline
+                )
         elif receipt is None:
             outcome = await _checkpoint(client, deadline)
         else:
@@ -409,16 +620,15 @@ async def _admitted(limit, client, deadline, receipt=None, token=None):
                     write_available_at=now() + timedelta(seconds=cooldown["seconds"]),
                 ))
                 await db.commit()
-        else:
+        if receipt is None or outcome.get("database_receipt_committed"):
             outcome["successor_delay_seconds"] = max(outcome["successor_delay_seconds"], cooldown["seconds"])
     return outcome
 
 
 async def _checkpoint(client, deadline):
     from app.models.repository_sync_receipt import SearchIndexState
-    from app.models import Work, Creator, Tag, SubscriptionSource, Subscription, UserSubscription
-    from app.services.search import WORKS_INDEX, CREATORS_INDEX, TAGS_INDEX, REPOSITORIES_INDEX, SUBSCRIPTIONS_INDEX, MEMBERSHIPS_INDEX
-    models = {WORKS_INDEX: Work, CREATORS_INDEX: Creator, TAGS_INDEX: Tag, REPOSITORIES_INDEX: SubscriptionSource, SUBSCRIPTIONS_INDEX: Subscription, MEMBERSHIPS_INDEX: UserSubscription}
+    from app.services.search_projection import PROJECTION_SPECS
+    models = {index: spec.model for index, spec in PROJECTION_SPECS.items()}
     async with session(deadline) as db:
         state = (await db.execute(select(SearchIndexState).where(
             checkpoint_due_condition(SearchIndexState),
@@ -449,14 +659,14 @@ def checkpoint_due_condition(model):
     )
 
 
-async def _run(limit, client, deadline):
+async def _run(limit, client, deadline, budget=None):
     from app.services.heavy_io import LocalHeavyIOLock, _local_lock_path
 
     writer = LocalHeavyIOLock(_local_lock_path().with_name("search-writer.lock"))
     if not writer.try_acquire():
         return result("busy", delay=2)
     try:
-        return await _run_locked(limit, client, deadline)
+        return await _run_locked(limit, client, deadline, budget=budget)
     finally:
         writer.release()
 

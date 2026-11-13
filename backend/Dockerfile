@@ -1,9 +1,5 @@
 ARG PYTHON_BASE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
-FROM ${PYTHON_BASE}
-
-ARG BUILD_REVISION=development
-LABEL org.opencontainers.image.revision="${BUILD_REVISION}"
-
+FROM ${PYTHON_BASE} AS runtime-base
 WORKDIR /app
 
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
@@ -26,46 +22,64 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
     && apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 update \
     && apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
     ffmpeg \
-    libvips-dev \
-    gcc \
+    libssl3 \
+    openssl \
+    libpcre2-8-0 \
+    liblzma5 \
+    libvips42 \
+    libmagickwand-6.q16-6 \
+    libmagickcore-6.q16-6-extra \
     postgresql-client-16 \
     && pg_dump --version | grep -Eq '^pg_dump \(PostgreSQL\) 16\.' \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+FROM runtime-base AS builder
+RUN apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 install -y --no-install-recommends gcc libvips-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-build.txt requirements.txt ./
 ARG PIP_INDEX_URL
-RUN if [ -n "$PIP_INDEX_URL" ]; then \
-      pip install --no-cache-dir --require-hashes -i "$PIP_INDEX_URL" -r requirements.txt; \
-    else \
-      pip install --no-cache-dir --require-hashes -r requirements.txt; \
-    fi
+RUN if [ -n "$PIP_INDEX_URL" ]; then export PIP_INDEX_URL; fi; \
+    pip install --no-cache-dir --require-hashes -r requirements-build.txt \
+    && pip wheel --no-cache-dir --no-build-isolation --no-deps --require-hashes -r requirements.txt --wheel-dir /wheels
+COPY pyproject.toml ./
+COPY gitllery_cli/ gitllery_cli/
+COPY gitllery_format/ gitllery_format/
+RUN pip wheel --no-cache-dir --no-build-isolation --no-deps . --wheel-dir /wheels
 
-# Patch gallery-dl twitter extractor: disable SearchTimeline fallback (query ID broken as of 2025)
-# After UserTweets pagination completes, return instead of falling back to broken search endpoint.
-RUN TWITTER_PY=$(python3 -c "import gallery_dl.extractor.twitter; print(gallery_dl.extractor.twitter.__file__)") && \
-    sed -i 's/^            state = reset = 2$/            return/' "$TWITTER_PY" && \
-    echo "Patched gallery-dl twitter.py: removed SearchTimeline fallback"
+FROM runtime-base AS runtime
+ARG BUILD_REVISION=development
+LABEL org.opencontainers.image.revision="${BUILD_REVISION}"
+COPY requirements.txt ./
+# Wheels were built from hash-verified dependencies; source-archive hashes do
+# not describe locally compiled wheels. Keep build artifacts out of image layers.
+RUN --mount=type=bind,from=builder,source=/wheels,target=/wheels \
+    pip install --no-cache-dir --no-index --no-deps /wheels/*.whl
 
-# ── Application source ────────────────────────────────────────────
-# CACHEBUST ensures Docker always copies the latest source code.
-# Without it, Docker may reuse a stale COPY layer even when files changed.
-ARG CACHEBUST=1
-COPY . .
+# Keep the deployed gallery-dl Twitter pagination patch.
+RUN TWITTER_PY=$(python3 -c "import gallery_dl.extractor.twitter; print(gallery_dl.extractor.twitter.__file__)") \
+    && sed -i 's/^            state = reset = 2$/            return/' "$TWITTER_PY"
 
-# Install the standalone Gitllery v1 CLI into /usr/local/bin. Runtime
-# dependencies are already hash-pinned in requirements.txt.
-RUN pip install --no-cache-dir --no-deps .
-
+COPY app/ app/
+COPY alembic/ alembic/
+COPY scripts/ scripts/
+COPY *.py alembic.ini ./
 RUN mkdir -p /downloads /library /gallerydl-config /app-config
-
-# Memory-conserving Python flags for NAS (7.5 GB RAM):
-# - PYTHONMALLOC=malloc: use system malloc (lower RSS than pymalloc for multi-process)
-# - PYTHONHASHSEED=0: disable hash randomization (saves a few KB per process)
 ENV PYTHONMALLOC=malloc \
     BUILD_REVISION=${BUILD_REVISION} \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 EXPOSE 8000
+CMD ["python", "api_entrypoint.py"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+FROM runtime AS test
+COPY requirements-dev.txt ./
+ARG PIP_INDEX_URL
+RUN if [ -n "$PIP_INDEX_URL" ]; then export PIP_INDEX_URL; fi; \
+    pip install --no-cache-dir --require-hashes -r requirements-dev.txt
+COPY tests/ tests/
+COPY pyproject.toml ./
+
+# A normal Docker build must produce the runtime-only image.
+FROM runtime AS production

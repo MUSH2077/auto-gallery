@@ -1,4 +1,4 @@
-"""Durable search delivery against isolated PostgreSQL and controlled HTTP."""
+"""Durable search delivery against isolated PostgreSQL and a controlled search-command port."""
 from copy import deepcopy
 import json
 from datetime import datetime, timedelta, timezone
@@ -15,8 +15,28 @@ from app.models.search_projection_outbox import SearchProjectionOutbox
 from app.services.search_projection_outbox import request_search_projection, DEFAULT_WORKS_INDEX_UID
 
 
+@pytest.fixture(autouse=True)
+def controlled_search_store(monkeypatch):
+    from app.services import search_delivery as delivery
+    native_request = delivery.request
+    async def controlled_store(client, method, path, deadline, payload=None):
+        # Unit tests inject a command store at the port; no production HTTP
+        # implementation is retained. Native integration uses client=None.
+        if client is None:
+            return await native_request(None, method, path, deadline, payload)
+        import asyncio, time
+        body = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode()
+        budget = deadline-time.monotonic()
+        async with asyncio.timeout(max(0,budget)):
+            response = await client.request(method, "http://controlled-search-store.invalid"+path,
+                content=body, headers={"Content-Type":"application/json"}, timeout=min(5.0,budget))
+            response.raise_for_status()
+            return response.json()
+    monkeypatch.setattr(delivery, "request", controlled_store)
+
+
 @pytest.fixture
-async def delivery(monkeypatch, tmp_path, request):
+async def delivery(monkeypatch, tmp_path, request, controlled_search_store):
     from app.services import search_delivery as delivery
     from app.services import heavy_io
     from contextlib import asynccontextmanager
@@ -122,13 +142,14 @@ async def enqueue_delete(identity=None):
     identity = identity or uuid4()
     async with async_session() as db:
         await request_search_projection(db, deleted_work_ids=[identity])
+        await db.execute(text("UPDATE search_projection_outbox SET available_at='2000-01-01 UTC'"))
         await db.commit()
     return identity
 
 
 async def ready_receipt():
     async with async_session() as db:
-        await db.execute(text("UPDATE search_delivery_receipts SET available_at=now()-interval '1 second', lease_until=NULL"))
+        await db.execute(text("UPDATE search_delivery_receipts SET available_at='2000-01-01 UTC', lease_until=NULL"))
         await db.commit()
 
 
@@ -140,12 +161,13 @@ async def test_pending_returns_without_ack_and_newer_mutation_survives(delivery)
         result = await delivery.run_delivery_slice(client=client)
         assert result["status"] == "pending"
         assert len(remote.writes) == 1
-        assert remote.polls == 0
+        first_confirmation_polls = remote.polls
+        assert first_confirmation_polls >= 1
         await enqueue_delete(identity)
         await ready_receipt()
         result = await delivery.run_delivery_slice(client=client)
         assert result["status"] == "pending"
-        assert remote.polls == 1
+        assert remote.polls == first_confirmation_polls + 1
         assert len(remote.writes) == 1
         await ready_receipt()
         remote.status = "succeeded"
@@ -193,6 +215,112 @@ async def test_remote_failure_retries_exact_versions_and_releases_marker(deliver
         assert row.attempts == 1
         assert row.available_at > datetime.now(timezone.utc)
     assert delivery.remote_flight.read_marker() is None
+
+
+@pytest.mark.asyncio
+async def test_fast_terminal_confirmation_acknowledges_one_write(delivery):
+    await enqueue_delete()
+    remote = Remote()
+    remote.status = "succeeded"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        result = await delivery.run_delivery_slice(client=client)
+
+    assert result["status"] == "ok"
+    assert len(remote.writes) == 1
+    assert remote.polls == 1
+    assert delivery.remote_flight.read_marker() is None
+    async with async_session() as db:
+        row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+        assert row.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_fast_terminal_confirmation_preserves_newer_mutation(delivery):
+    identity = await enqueue_delete()
+    calls = []
+    fallback = Remote()
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            calls.append(method)
+            request = httpx.Request(method, url)
+            if method == "POST":
+                return httpx.Response(202, json={"taskUid": 41}, request=request)
+            if "/tasks/" not in url:
+                response = fallback(request)
+                response.request = request
+                return response
+            if "/tasks/41" in url:
+                await enqueue_delete(identity)
+                return httpx.Response(200, json={"uid": 41, "status": "succeeded"}, request=request)
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+    # run_delivery_slice only requires the async request method; keeping the
+    # client local makes the newer outbox mutation occur before CAS ack.
+    result = await delivery.run_delivery_slice(client=Client())
+
+    assert result["status"] == "ok"
+    assert calls == ["GET", "POST", "GET"]  # settings read, one write, one task read
+    async with async_session() as db:
+        row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+        assert row.version == 2
+        assert row.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_fast_settings_confirmation_advances_phase_without_ack(monkeypatch):
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt(phase="settings", action="delete", index_uid=DEFAULT_WORKS_INDEX_UID)
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
+    calls = []
+
+    class Client:
+        async def request(self, method, url, **kwargs):
+            calls.append((method, url))
+            request = httpx.Request(method, url)
+            if url.endswith("/settings") and method == "GET":
+                return httpx.Response(200, json={}, request=request)
+            if method == "PATCH":
+                return httpx.Response(202, json={"taskUid": 41}, request=request)
+            if "/tasks/41" in url:
+                return httpx.Response(200, json={"uid": 41, "status": "succeeded"}, request=request)
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+    async def forbidden_finalize(*_args, **_kwargs):
+        raise AssertionError("settings completion must not acknowledge the source outbox")
+
+    monkeypatch.setattr(delivery, "_finalize", forbidden_finalize)
+    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 20)
+
+    assert outcome["status"] == "pending"
+    assert outcome["successor_delay_seconds"] == 2
+    assert receipt.state == "prepared"
+    assert receipt.phase == "documents"
+    assert receipt.task_uid is None
+    assert marker == {}
+    assert [method for method, _url in calls] == ["GET", "PATCH", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_canceled_known_task_retries_without_resubmitting(delivery):
+    await enqueue_delete()
+    remote = Remote()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        first = await delivery.run_delivery_slice(client=client)
+        assert first["status"] == "pending"
+        await ready_receipt()
+        remote.status = "canceled"
+        second = await delivery.run_delivery_slice(client=client)
+
+    assert second["status"] == "error"
+    assert len(remote.writes) == 1
+    assert delivery.remote_flight.read_marker() is None
+    async with async_session() as db:
+        row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+        assert row.attempts == 1
+        assert row.completed_at is None
 
 
 @pytest.mark.asyncio
@@ -374,160 +502,14 @@ def test_contains_settings_does_not_mutate_set_like_lists():
     assert desired == original_desired
 
 
-@pytest.mark.asyncio
-async def test_mutating_request_waits_beyond_five_seconds_for_task_uid(monkeypatch):
-    import asyncio
-    import time
-    from app.services import search_delivery as delivery
-
-    request_received = asyncio.Event()
-    response_finished = asyncio.Event()
-
-    async def delayed_response(reader, writer):
-        try:
-            await reader.readuntil(b"\r\n\r\n")
-            request_received.set()
-            await asyncio.sleep(5.2)
-            body = b'{"taskUid":22329}'
-            writer.write(
-                b"HTTP/1.1 202 Accepted\r\n"
-                b"Content-Type: application/json\r\n"
-                + f"Content-Length: {len(body)}\r\n".encode()
-                + b"Connection: close\r\n\r\n"
-                + body
-            )
-            await writer.drain()
-        except (ConnectionError, asyncio.IncompleteReadError):
-            pass
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            response_finished.set()
-
-    server = await asyncio.start_server(delayed_response, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    monkeypatch.setattr(delivery.settings, "meili_url", f"http://127.0.0.1:{port}")
-    started = time.monotonic()
-    try:
-        async with httpx.AsyncClient(trust_env=False) as client:
-            task = await delivery.request(
-                client,
-                "POST",
-                "/indexes/works/documents",
-                started + 10,
-                [{"id": "one"}],
-            )
-    finally:
-        server.close()
-        await server.wait_closed()
-        if request_received.is_set():
-            await asyncio.wait_for(response_finished.wait(), timeout=1)
-
-    assert task == {"taskUid": 22329}
-    assert request_received.is_set()
-    assert 5.0 < time.monotonic() - started < 9.0
 
 
-@pytest.mark.asyncio
-async def test_mutating_request_reserves_completion_with_short_connect_and_pool():
-    import time
-    from app.services import search_delivery as delivery
-
-    captured = {}
-
-    class Client:
-        async def request(self, method, url, **kwargs):
-            captured.update(method=method, timeout=kwargs["timeout"])
-            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
-
-    await delivery.request(Client(), "PATCH", "/indexes/works/settings", time.monotonic() + 20, {})
-
-    timeout = captured["timeout"]
-    assert captured["method"] == "PATCH"
-    assert isinstance(timeout, httpx.Timeout)
-    assert 0 < timeout.connect <= 5
-    assert 0 < timeout.pool <= 5
-    assert 16 < timeout.read <= 17
-    assert 16 < timeout.write <= 17
 
 
-@pytest.mark.asyncio
-async def test_mutating_request_rechecks_budget_after_payload_encoding(monkeypatch):
-    from app.services import search_delivery as delivery
-
-    clock = SimpleNamespace(value=100.0)
-    original_dumps = delivery.json.dumps
-    calls = 0
-
-    def slow_dumps(*args, **kwargs):
-        clock.value = 108.0
-        return original_dumps(*args, **kwargs)
-
-    class Client:
-        async def request(self, method, url, **_kwargs):
-            nonlocal calls
-            calls += 1
-            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
-
-    monkeypatch.setattr(delivery.time, "monotonic", lambda: clock.value)
-    monkeypatch.setattr(delivery.json, "dumps", slow_dumps)
-
-    with pytest.raises(TimeoutError, match="completion budget"):
-        await delivery.request(Client(), "POST", "/indexes/works/documents", 110.0, [{"id": "one"}])
-
-    assert calls == 0
 
 
-@pytest.mark.asyncio
-async def test_mutating_request_absolute_cutoff_keeps_inflight_write_ambiguous(monkeypatch):
-    import asyncio
-    import time
-    from app.services import search_delivery as delivery
-
-    receipt = _prepared_receipt()
-    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
-    phases = []
-    completed = False
-
-    class Client:
-        async def request(self, method, url, **kwargs):
-            nonlocal completed
-            timeout = kwargs["timeout"]
-            assert timeout.connect <= 5
-            assert timeout.pool <= 5
-            assert timeout.read > 0.5
-            assert timeout.write > 0.5
-            phases.append("pool")
-            await asyncio.sleep(0.5)
-            phases.append("read")
-            await asyncio.sleep(0.5)
-            completed = True
-            return httpx.Response(202, json={"taskUid": 41}, request=httpx.Request(method, url))
-
-    monkeypatch.setattr(delivery, "_MIN_PREPARED_WRITE_SECONDS", 0)
-
-    outcome = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 3.8)
-
-    assert phases == ["pool", "read"]
-    assert not completed
-    assert outcome["status"] == "ambiguous"
-    assert receipt.state == "ambiguous"
-    assert receipt.last_error.startswith("TimeoutError:")
-    assert marker == {"owner": str(receipt.id), "workload": "search_index", "task_uid": None}
 
 
-@pytest.mark.parametrize("remaining_seconds", [3, -1])
-@pytest.mark.asyncio
-async def test_mutating_request_without_completion_budget_is_not_issued(remaining_seconds):
-    import time
-    from app.services import search_delivery as delivery
-
-    class Client:
-        async def request(self, *_args, **_kwargs):
-            raise AssertionError("request must not be issued without completion budget")
-
-    with pytest.raises(TimeoutError, match="completion budget"):
-        await delivery.request(Client(), "DELETE", "/indexes/works", time.monotonic() + remaining_seconds)
 
 
 @pytest.mark.asyncio
@@ -641,6 +623,158 @@ async def test_pending_poll_keeps_short_get_timeout_and_known_uid(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_submit_confirmation_skips_get_without_reserved_budget():
+    import time
+    from app.services import search_delivery as delivery
+
+    calls = 0
+
+    class Client:
+        async def request(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("confirmation GET must not run without completion budget")
+
+    outcome = await delivery._confirm_new_task(
+        Client(), 41, time.monotonic() + delivery._WRITE_COMPLETION_RESERVE_SECONDS - 0.01
+    )
+
+    assert outcome is None
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_confirmation_cancellation_keeps_known_uid_fenced(delivery):
+    import asyncio
+
+    await enqueue_delete()
+    get_started = asyncio.Event()
+    release_get = asyncio.Event()
+    writes = 0
+    fallback = Remote()
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            nonlocal writes
+            request = httpx.Request(method, url)
+            if method == "POST":
+                writes += 1
+                return httpx.Response(202, json={"taskUid": 41}, request=request)
+            if "/tasks/" not in url:
+                response = fallback(request)
+                response.request = request
+                return response
+            get_started.set()
+            await release_get.wait()
+            return httpx.Response(200, json={"uid": 41, "status": "succeeded"}, request=request)
+
+    task = asyncio.create_task(delivery.run_delivery_slice(client=Client()))
+    await asyncio.wait_for(get_started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with async_session() as db:
+        row = (await db.execute(text(
+            "SELECT state, task_uid FROM search_delivery_receipts"
+        ))).one()
+        attempts = (await db.execute(text(
+            "SELECT attempts FROM search_projection_outbox"
+        ))).scalar_one()
+        assert row.state == "pending"
+        assert row.task_uid == 41
+        assert attempts == 0
+    marker = delivery.remote_flight.read_marker()
+    assert marker["task_uid"] == 41
+    assert writes == 1
+
+    release_get.set()
+    await ready_receipt()
+    assert (await delivery.run_delivery_slice(client=Client()))["status"] == "ok"
+    assert writes == 1
+
+
+@pytest.mark.asyncio
+async def test_fresh_confirmation_network_error_keeps_uid_and_recovers_without_post(delivery):
+    await enqueue_delete()
+    writes = 0
+    first_get = True
+    fallback = Remote()
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            nonlocal writes, first_get
+            request = httpx.Request(method, url)
+            if method == "POST":
+                writes += 1
+                return httpx.Response(202, json={"taskUid": 41}, request=request)
+            if "/tasks/" not in url:
+                response = fallback(request)
+                response.request = request
+                return response
+            if first_get:
+                first_get = False
+                raise httpx.ConnectError("temporary confirmation failure", request=request)
+            return httpx.Response(200, json={"uid": 41, "status": "succeeded"}, request=request)
+
+    client = Client()
+    first = await delivery.run_delivery_slice(client=client)
+    assert first["status"] == "pending"
+    assert first["successor_delay_seconds"] == 1
+    marker = delivery.remote_flight.read_marker()
+    assert marker["task_uid"] == 41
+    async with async_session() as db:
+        row = (await db.execute(text(
+            "SELECT state, task_uid FROM search_delivery_receipts"
+        ))).one()
+        attempts = (await db.execute(text(
+            "SELECT attempts FROM search_projection_outbox"
+        ))).scalar_one()
+        assert row.state == "pending"
+        assert row.task_uid == 41
+        assert attempts == 0
+
+    await ready_receipt()
+    assert (await delivery.run_delivery_slice(client=client))["status"] == "ok"
+    assert writes == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_confirmation_get_is_bounded_and_preserves_backoff(monkeypatch):
+    import asyncio
+    import time
+    from app.services import search_delivery as delivery
+
+    receipt = _prepared_receipt()
+    marker = _install_memory_delivery(monkeypatch, delivery, receipt)
+    monkeypatch.setattr(delivery, "_POST_SUBMIT_CONFIRM_SECONDS", 0.05)
+    monkeypatch.setattr(delivery, "_POST_SUBMIT_POLL_INTERVAL_SECONDS", 0.01)
+
+    class Client:
+        async def request(self, method, url, **_kwargs):
+            request = httpx.Request(method, url)
+            if method == "POST":
+                return httpx.Response(202, json={"taskUid": 41}, request=request)
+            await asyncio.sleep(1)
+            return httpx.Response(200, json={"uid": 41, "status": "processing"}, request=request)
+
+    started = time.monotonic()
+    first = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 20)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5
+    assert first["status"] == "pending"
+    assert first["successor_delay_seconds"] == 1
+    assert receipt.task_uid == 41
+    assert receipt.poll_count == 0
+    assert marker["task_uid"] == 41
+
+    second = await delivery._advance(receipt, "lease", Client(), time.monotonic() + 20)
+    assert second["status"] == "pending"
+    assert second["successor_delay_seconds"] == 2
+    assert receipt.poll_count == 1
+
+
+@pytest.mark.asyncio
 async def test_task_uid_marker_survives_pending_checkpoint_failure(monkeypatch):
     import time
     from app.services import search_delivery as delivery
@@ -688,13 +822,13 @@ async def test_task_identity_survives_crash_before_sql_response_commit(delivery,
 
 @pytest.mark.asyncio
 async def test_one_index_action_and_bounded_hydration_before_wire_cap(delivery, monkeypatch):
-    from app.services.search import SearchService
+    from app.services.search_projection import SearchProjection
     ids = [uuid4() for _ in range(501)]
     hydrated = []
-    async def documents(self, identities):
+    async def documents(self, index_uid, identities):
         hydrated.append(len(identities))
         return [{"id": str(identity), "title": "x" * 900_000} for identity in identities]
-    monkeypatch.setattr(SearchService, "_build_work_documents", documents)
+    monkeypatch.setattr(SearchProjection, "build", documents)
     async with async_session() as db:
         await request_search_projection(db, work_ids=ids, deleted_tag_ids=[uuid4()])
         await db.commit()
@@ -742,7 +876,7 @@ async def test_ready_probe_includes_crashed_receipt_without_counting_backlog(del
 
 
 @pytest.mark.asyncio
-async def test_real_meili_tag_upsert_and_delete(delivery):
+async def test_real_pg_tag_upsert_and_delete(delivery):
     import asyncio
     from app.models.tag import Tag
     from app.config import settings
@@ -753,7 +887,7 @@ async def test_real_meili_tag_upsert_and_delete(delivery):
         await db.commit()
     async with httpx.AsyncClient() as client:
         for _ in range(60):
-            outcome = await delivery.run_delivery_slice(client=client)
+            outcome = await delivery.run_delivery_slice()
             if outcome["status"] == "ok":
                 break
             assert outcome["status"] in ("pending", "idle")
@@ -761,21 +895,21 @@ async def test_real_meili_tag_upsert_and_delete(delivery):
             await ready_receipt()
         assert outcome["status"] == "ok"
         uid = settings.meili_index_prefix + "tags"
-        response = await client.get(f"{settings.meili_url}/indexes/{uid}/documents/{tag_id}", headers={"Authorization": f"Bearer {settings.meili_master_key}"})
-        assert response.status_code == 200
-        assert response.json()["normalized_name"] == f"delivery-{tag_id}"
+        async with async_session() as db:
+            value = await db.scalar(text("SELECT d.document FROM search_pg_documents d JOIN search_pg_indexes i USING(storage_id) WHERE i.uid=:uid AND d.entity_id=:id"), {"uid":uid,"id":str(tag_id)})
+        assert value["normalized_name"] == f"delivery-{tag_id}"
         async with async_session() as db:
             await request_search_projection(db, deleted_tag_ids=[tag_id])
             await db.commit()
         for _ in range(60):
-            outcome = await delivery.run_delivery_slice(client=client)
+            outcome = await delivery.run_delivery_slice()
             if outcome["status"] == "ok":
                 break
             await asyncio.sleep(.05)
             await ready_receipt()
         assert outcome["status"] == "ok"
-        response = await client.get(f"{settings.meili_url}/indexes/{uid}/documents/{tag_id}", headers={"Authorization": f"Bearer {settings.meili_master_key}"})
-        assert response.status_code == 404
+        async with async_session() as db:
+            assert not await db.scalar(text("SELECT count(*) FROM search_pg_documents d JOIN search_pg_indexes i USING(storage_id) WHERE i.uid=:uid AND d.entity_id=:id"), {"uid":uid,"id":str(tag_id)})
     async with async_session() as db:
         await db.execute(text("DELETE FROM tags WHERE id=:id"), {"id": tag_id})
         await db.commit()
@@ -858,11 +992,15 @@ async def test_controlled_120_second_remote_flight_releases_every_local_slice(de
     remote = Remote()
     async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
         await delivery.run_delivery_slice(client=client)
+        confirmation_polls = remote.polls
+        assert confirmation_polls >= 1
         for elapsed in range(15, 121, 15):
             await ready_receipt()
             started = time.monotonic()
             assert (await delivery.run_delivery_slice(client=client))["status"] == "pending"
             assert time.monotonic() - started < 20
+            assert remote.polls == confirmation_polls + 1
+            confirmation_polls = remote.polls
             # The remote duration is controlled by this clock: all 120 seconds
             # remain pending while local import transactions can complete.
             ingest = local_lock_for_workload("import_db")
@@ -874,7 +1012,7 @@ async def test_controlled_120_second_remote_flight_releases_every_local_slice(de
             finally:
                 ingest.release()
         assert len(remote.writes) == 1
-        assert remote.polls == 8
+        assert remote.polls == confirmation_polls
         await ready_receipt()
         remote.status = "succeeded"
         assert (await delivery.run_delivery_slice(client=client))["status"] == "ok"
@@ -1000,7 +1138,7 @@ async def test_submission_cooldown_never_delays_remote_poll(delivery, monkeypatc
     await enqueue_delete()
     async with httpx.AsyncClient(transport=httpx.MockTransport(Remote())) as client:
         outcome = await delivery.run_delivery_slice(client=client)
-    assert outcome["successor_delay_seconds"] == 2
+    assert outcome["successor_delay_seconds"] == 1
 
 
 @pytest.mark.asyncio
@@ -1018,7 +1156,7 @@ async def test_repeated_remote_failures_back_off_accumulated_attempts(delivery):
                 row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
                 assert row.attempts == attempt
                 assert (row.available_at - row.updated_at).total_seconds() == expected_delay
-                row.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                row.available_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
                 await db.commit()
 
 
@@ -1039,3 +1177,30 @@ def test_poll_coordinator_can_be_dequeued_under_pressure(monkeypatch):
         raise AssertionError("remote poll must be dequeued so it can release accounting")
     worker._wait_until_pressure_allows_dequeue = forbidden
     assert worker._dequeue_heavy_job(None, None, 1) == (job, queue)
+
+
+@pytest.mark.asyncio
+async def test_short_pending_confirmation_retains_bounded_backoff(delivery):
+    await enqueue_delete()
+    remote = Remote()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
+        submitted = await delivery.run_delivery_slice(client=client)
+        assert submitted["successor_delay_seconds"] == 1
+        confirmation_polls = remote.polls
+        assert confirmation_polls >= 1
+        for expected in (2, 4, 8, 15, 15):
+            await ready_receipt()
+            pending = await delivery.run_delivery_slice(client=client)
+            assert pending["status"] == "pending"
+            assert pending["successor_delay_seconds"] == expected
+            assert remote.polls == confirmation_polls + 1
+            confirmation_polls = remote.polls
+        assert len(remote.writes) == 1
+        assert delivery.remote_flight.read_marker()["task_uid"] == 41
+        await ready_receipt()
+        remote.status = "succeeded"
+        assert (await delivery.run_delivery_slice(client=client))["status"] == "ok"
+    async with async_session() as db:
+        row = (await db.execute(select(SearchProjectionOutbox))).scalar_one()
+        assert row.completed_at is not None
+        assert row.attempts == 0

@@ -75,6 +75,17 @@ class TestDetectNSFW:
         assert _detect_nsfw({"rating": "e"}, "unknown") is False
 
 
+def test_provider_specific_ai_signals_keep_generic_historical_fallbacks():
+    from app.providers import registry
+
+    pixiv = registry.get("pixiv")
+    danbooru = registry.get("danbooru")
+    assert pixiv.parse_work_flags({"illust_ai_type": 1, "description": "created by AI"})["is_ai_generated"] is True
+    assert danbooru.parse_work_flags({"rating": "s", "artist_commentary_desc": "AI art"})["is_ai_generated"] is True
+    assert pixiv.parse_work_flags({"illust_ai_type": 1})["is_ai_generated"] is False
+    assert danbooru.parse_work_flags({"rating": "s"})["is_ai_generated"] is False
+
+
 class TestUgoiraAssetHandling:
     def test_gif_is_previewable_asset_without_phash(self):
         assert ".gif" in ASSET_EXTENSIONS

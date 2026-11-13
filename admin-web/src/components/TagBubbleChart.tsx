@@ -363,8 +363,6 @@ export default function TagBubbleChart({
     if (!context) return;
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     context.clearRect(0, 0, viewport.width, viewport.height);
-    context.fillStyle = theme.surface;
-    context.fillRect(0, 0, viewport.width, viewport.height);
     const dark = theme.isDark;
 
     for (const node of layout.nodes) {
@@ -394,7 +392,7 @@ export default function TagBubbleChart({
         }
       }
     }
-  }, [hovered?.node.data.id, layout.nodes, theme.isDark, theme.surface, view, viewport.height, viewport.width]);
+  }, [hovered?.node.data.id, layout.nodes, theme.isDark, view, viewport.height, viewport.width]);
 
   const worldPoint = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -540,8 +538,10 @@ export default function TagBubbleChart({
           top: y - radius,
           width: radius * 2,
           height: radius * 2,
-          fontSize: `${Math.max(10, Math.min(18, radius * 0.24))}px`,
-          color: palette.text,
+          fontSize: `${Math.max(14, Math.min(18, radius * 0.24))}px`,
+          fontFamily: "var(--font-ui)",
+          fontWeight: 600,
+          color: "var(--ink)",
         } as CSSProperties;
         return (
           <Link
@@ -566,7 +566,7 @@ export default function TagBubbleChart({
               {node.data.normalized_name}
             </span>
             {radius >= 18 ? (
-              <span className="mt-0.5 text-[10px] font-medium opacity-70">{node.data.usage_count}</span>
+              <span className="mt-0.5 text-sm font-medium opacity-70">{node.data.usage_count}</span>
             ) : null}
           </Link>
         );

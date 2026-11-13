@@ -133,7 +133,7 @@ export default function RepositoryCard({
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       aria-label={t("repo.open_details")}
-      className="cursor-pointer rounded-md border border-border bg-white p-4 transition-colors hover:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:border-border dark:bg-surface dark:hover:border-accent/50 dark:focus:ring-accent/40"
+      className="business-repository-row cursor-pointer rounded-md border border-border bg-white p-4 transition-colors hover:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:border-border dark:bg-surface dark:hover:border-accent/50 dark:focus:ring-accent/40"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">

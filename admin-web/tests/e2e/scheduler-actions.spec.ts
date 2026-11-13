@@ -3,6 +3,7 @@ import { expect, test, type BrowserContext, type Route } from "@playwright/test"
 test.describe.configure({ timeout: 60_000 });
 
 type FixtureOptions = {
+  ticket?: (route: Route, read: number) => Promise<void>;
   post?: "accepted" | "conflict" | "network-once";
   language?: "en" | "zh";
   taskStates?: Array<Record<string, unknown>>;
@@ -95,6 +96,7 @@ async function installSchedulerFixtures(context: BrowserContext, options: Fixtur
     if (path === "/api/v1/auth/me") return json(route, systemUser);
     if (path === "/api/v1/auth/ws-ticket") {
       wsTicketReads += 1;
+      if (options.ticket) return options.ticket(route, wsTicketReads);
       return json(route, { detail: "fixture websocket unavailable" }, 503);
     }
     if (path === "/api/v1/system/queue-stats") return json(route, {
@@ -187,7 +189,7 @@ test("scheduler accepts a stable intent and restores durable partial progress af
   const fixture = await installSchedulerFixtures(context);
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/admin/scheduler");
-  await expect(page).toHaveTitle("auto-gallery Admin");
+  await expect(page).toHaveTitle("Auto Gallery");
   await expect(page.getByRole("heading", { level: 1, name: "Scheduler & Sync" })).toBeVisible();
   await page.getByRole("button", { name: "Sync all enabled sources" }).click();
 
@@ -475,4 +477,70 @@ test("scheduler plans page beyond 500 with bounded requests and global summary",
   expect(reads.every((read) => read.limit <= 500)).toBe(true);
   await expect(page.getByText("99", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("24", { exact: true }).first()).toBeVisible();
+});
+
+for (const failure of ["503", "network"] as const) {
+  test(`ticket recovery after ${failure} reconnects and refreshes real task queries`, async ({ context, page }) => {
+    const states: Array<Record<string, unknown>> = [{
+      id: "task-accepted", kind: "admin", operation_type: "subscription-sync-batch", status: "running",
+      progress_stage: "downloading", progress_current: 1, progress_total: 2,
+      result_data: { status: "pending", mode: "manual_all_enabled", candidate_count: 2, downloading_count: 1 },
+    }];
+    const fixture = await installSchedulerFixtures(context, {
+      taskStates: states,
+      ticket: (route, read) => read === 1
+        ? failure === "network" ? route.abort("connectionreset") : json(route, { detail: "temporary" }, 503)
+        : json(route, { ticket: "recovered-ticket" }),
+    });
+    let connections = 0;
+    let notify: (() => void) | undefined;
+    await context.routeWebSocket("**/api/v1/ws*", socket => {
+      connections++;
+      notify = () => socket.send(JSON.stringify({ type: "status_change", task_id: "task-accepted", new_status: "failed" }));
+    });
+    await page.clock.install();
+    await page.goto("/admin/scheduler");
+    await page.getByRole("button", { name: "Sync all enabled sources", exact: true }).click();
+    await expect.poll(fixture.taskReads).toBeGreaterThan(0);
+    await expect.poll(fixture.wsTicketReads).toBe(1);
+    await page.clock.runFor(5_100);
+    await expect.poll(() => connections).toBe(1);
+    await expect.poll(fixture.wsTicketReads).toBe(2);
+    const reads = fixture.taskReads();
+    states.push({ ...states[0], status: "failed", progress_stage: "failed",
+      result_data: { status: "partial_error", mode: "manual_all_enabled", candidate_count: 2,
+        succeeded_count: 1, failed_count: 1, skipped_count: 0 } });
+    notify!();
+    await expect.poll(fixture.taskReads).toBeGreaterThan(reads);
+    await expect(page.getByText("Batch finished with failed sources", { exact: true })).toBeVisible();
+  });
+}
+for (const status of [401, 403]) {
+  test(`ticket rejection ${status} does not loop`, async ({ context, page }) => {
+    const fixture = await installSchedulerFixtures(context, { ticket: route => json(route, { detail: "denied" }, status) });
+    await page.clock.install();
+    await page.goto("/admin/scheduler");
+    await expect.poll(fixture.wsTicketReads).toBe(1);
+    await page.clock.runFor(16_000);
+    expect(fixture.wsTicketReads()).toBe(1);
+    await expect(page.getByRole("heading", { level: 1, name: "Scheduler & Sync" })).toBeVisible();
+  });
+}
+
+test("logout stops pending ticket and reconnect work", async ({context,page}) => {
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ const fixture=await installSchedulerFixtures(context,{ticket:async route=>{await gate;await json(route,{ticket:"late-ticket"});}});
+ let loggedOut=false;
+ await context.route("**/api/v1/auth/me",route=>loggedOut?json(route,{detail:"Session expired"},401):json(route,systemUser));
+ await context.route("**/api/v1/auth/browser/logout",route=>{loggedOut=true;return json(route,{ok:true});});
+ let connections=0;await context.routeWebSocket("**/api/v1/ws*",()=>{connections++;});
+ await page.clock.install();
+ try {
+  await page.goto("/admin/scheduler");await expect.poll(fixture.wsTicketReads).toBe(1);
+  await page.locator(".gallery-account-trigger").click();
+  await page.getByRole("button",{name:/log.?out|sign.?out/i}).click();
+  await expect(page).toHaveURL(/\/admin\/login/);
+  release();await page.clock.runFor(16_000);
+  expect(fixture.wsTicketReads()).toBe(1);expect(connections).toBe(0);
+ }finally{release();}
 });

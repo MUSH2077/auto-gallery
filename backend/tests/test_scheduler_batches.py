@@ -371,7 +371,7 @@ async def test_http_permissions_and_system_only_batch_control(db):
     from httpx import ASGITransport, AsyncClient
     from app.api.admin import router as admin_router
     from app.api.tasks import router as task_router
-    from app.auth import create_access_token
+    from tests.conftest import access_token_for_user
     from app.models import User, TaskRun
 
     app = FastAPI()
@@ -383,7 +383,7 @@ async def test_http_permissions_and_system_only_batch_control(db):
         db.add(user)
         users[role] = user
     await db.commit()
-    headers = {role: {"Authorization": f"Bearer {create_access_token(user.username)}"} for role, user in users.items()}
+    headers = {role: {"Authorization": f"Bearer {await access_token_for_user(user.username)}"} for role, user in users.items()}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.post("/admin/scheduler/sync-now")).status_code == 401
         assert (await client.post("/admin/scheduler/sync-now", headers=headers["tasks"])).status_code == 403
@@ -1717,3 +1717,229 @@ async def test_retained_started_cleanup_recovers_counts_and_completed_receipts(d
     assert parent.result_data["cancelled_count"] == parent.result_data["succeeded_count"] == 1
     assert (await db.get(TaskRun, cleanup_id, populate_existing=True)).status == "complete"
     assert (await db.execute(select(RepositorySyncReceipt))).scalar_one().status == "complete"
+
+
+async def _owned_cleanup_item(db, *, delegated):
+    from app.models import DownloadJob, ImportJob, SubscriptionSource, TaskRun
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import scheduler_batches
+    from app.services.tasks import TaskService
+
+    source = await db.get(SubscriptionSource, (await seed(db))[0])
+    job = DownloadJob(subscription_id=source.subscription_id, subscription_source_id=source.id,
+                      source="pixiv", source_url=source.source_url,
+                      status="importing" if delegated else "enqueued")
+    db.add(job)
+    await db.flush()
+    parent_task = await TaskService(db).ensure_download_task(job)
+    child = None
+    if delegated:
+        child = ImportJob(download_job_id=job.id, status="running")
+        db.add(child)
+        await db.flush()
+        await TaskService(db).ensure_import_task(child)
+    await db.commit()
+    task_id = UUID((await admit(db))["task_id"])
+    await scheduler_batches.initialize_batch(db, task_id)
+    item = (await db.execute(select(SchedulerBatchItem))).scalar_one()
+    item.download_job_id, item.child_task_id, item.owns_download = job.id, parent_task.id, True
+    item.status = "importing" if delegated else "queued"
+    await db.commit()
+    cancelled = await scheduler_batches.cancel_batch(db, task_id, operator="test")
+    cleanup_id = UUID(cancelled["cleanup_task_id"])
+    cleanup = await db.get(TaskRun, cleanup_id)
+    identities = (item.id, job.id, child.id if child else None, cleanup_id, cleanup.attempts)
+    await db.rollback()
+    return identities
+
+
+async def _cancelled_domain_rows(db, identities):
+    """Compare real transaction rows, including audit and projection intents."""
+    from app.models import DownloadJob, ImportJob, RepositorySyncReceipt, TaskRun, TaskEvent, SearchIndexState
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.models.search_projection_outbox import SearchProjectionOutbox
+
+    item_id, job_id, child_id, _cleanup_id, _attempt = identities
+    subject_ids = [job_id] + ([child_id] if child_id else [])
+    task_ids = select(TaskRun.id).where(TaskRun.subject_id.in_(subject_ids))
+    statements = {
+        "download": select(DownloadJob.__table__).where(DownloadJob.id == job_id),
+        "imports": select(ImportJob.__table__).where(ImportJob.download_job_id == job_id),
+        "tasks": select(TaskRun.__table__).where(TaskRun.subject_id.in_(subject_ids)),
+        "events": select(TaskEvent.__table__).where(TaskEvent.task_run_id.in_(task_ids)),
+        "receipt": select(RepositorySyncReceipt.__table__).where(RepositorySyncReceipt.source_download_job_id == job_id),
+        "projection": select(SearchProjectionOutbox.__table__),
+        "index": select(SearchIndexState.__table__),
+        "item": select(SchedulerBatchItem.__table__).where(SchedulerBatchItem.id == item_id),
+    }
+    return {name: list((await db.execute(statement.order_by(statement.selected_columns.id))).mappings())
+            for name, statement in statements.items()}
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_cleanup_attempt_lost_after_cancel_application_rolls_back_all_rows(db, monkeypatch, delegated):
+    import asyncio
+    from app.database import async_session
+    from app.models import DownloadJob, ImportJob, TaskRun
+    from app.services import scheduler_batches
+    from app.services.operations import admin_operation_attempt_context, AdminOperationAttemptRejected
+    from app.services.redis_pubsub import TaskEventPublisher
+
+    identities = await _owned_cleanup_item(db, delegated=delegated)
+    item_id, job_id, child_id, cleanup_id, attempt = identities
+    before = await _cancelled_domain_rows(db, identities)
+    await db.rollback()
+    notifications = []
+    monkeypatch.setattr(TaskEventPublisher, "send_control", lambda *a, **k: notifications.append("control"))
+    monkeypatch.setattr(TaskEventPublisher, "publish_status_change", lambda *a, **k: notifications.append("status"))
+    real_fence = scheduler_batches.fence_current_admin_operation_transaction
+
+    async def supersede_cleanup():
+        async with async_session() as replacement:
+            task = await replacement.get(TaskRun, cleanup_id, with_for_update=True)
+            task.attempts = attempt + 1
+            task.meta = {**task.meta, "admin_dispatch": {**task.meta["admin_dispatch"], "attempt": attempt + 1}}
+            await replacement.commit()
+
+    async def fence_after_supersession(session, **kwargs):
+        assert (await session.get(DownloadJob, job_id)).status == "cancelled"
+        if child_id:
+            assert (await session.get(ImportJob, child_id)).status == "cancelled"
+        # Another committed transaction supersedes cleanup while its domain
+        # changes have been applied and before the final execution fence.
+        await asyncio.wait_for(asyncio.create_task(supersede_cleanup()), timeout=5)
+        return await real_fence(session, **kwargs)
+
+    monkeypatch.setattr(scheduler_batches, "fence_current_admin_operation_transaction", fence_after_supersession)
+    with admin_operation_attempt_context(cleanup_id, attempt), pytest.raises(AdminOperationAttemptRejected):
+        await scheduler_batches._cancel_batch_item(item_id, cleanup_id, {"operator": "cleanup", "note": "stop"})
+
+    assert await _cancelled_domain_rows(db, identities) == before
+    assert notifications == []
+    assert (await db.get(TaskRun, cleanup_id)).attempts == attempt + 1
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_current_cleanup_commits_domain_and_item_before_notifications(db, monkeypatch, delegated):
+    from app.database import async_session
+    from app.models import DownloadJob, ImportJob, RepositorySyncReceipt
+    from app.models.scheduler_batch import SchedulerBatchItem
+    from app.services import scheduler_batches
+    from app.services.operations import admin_operation_attempt_context
+    from app.services.redis_pubsub import TaskEventPublisher
+
+    identities = await _owned_cleanup_item(db, delegated=delegated)
+    item_id, job_id, child_id, cleanup_id, attempt = identities
+    events = []
+
+    def tracked_session():
+        session = async_session()
+        commit = session.commit
+
+        async def checked_commit():
+            await commit()
+            # Confirm visibility from another transaction, before notification.
+            async with async_session() as observer:
+                assert (await observer.get(DownloadJob, job_id)).status == "cancelled"
+                if child_id:
+                    assert (await observer.get(ImportJob, child_id)).status == "cancelled"
+                assert (await observer.get(SchedulerBatchItem, item_id)).status == "cancelled"
+                receipt = (await observer.execute(select(RepositorySyncReceipt).where(
+                    RepositorySyncReceipt.source_download_job_id == job_id))).scalar_one()
+                assert receipt.status == "cancelled"
+            events.append("commit")
+
+        monkeypatch.setattr(session, "commit", checked_commit)
+        return session
+
+    monkeypatch.setattr(scheduler_batches, "async_session", tracked_session)
+    controlled_id = str(child_id or job_id)
+
+    def control(identity, command, **kwargs):
+        assert events == ["commit"]
+        assert (identity, command, kwargs) == (controlled_id, "cancel", {"reason": "stop"})
+        events.append("control")
+
+    def status(identity, kind, old, new, **kwargs):
+        assert events == ["commit", "control"]
+        assert (identity, kind, old, new) == (controlled_id, "import" if child_id else "download", "running" if child_id else "enqueued", "cancelled")
+        assert kwargs == {"operator": "cleanup", "note": "stop"}
+        events.append("status")
+
+    monkeypatch.setattr(TaskEventPublisher, "send_control", control)
+    monkeypatch.setattr(TaskEventPublisher, "publish_status_change", status)
+    with admin_operation_attempt_context(cleanup_id, attempt):
+        await scheduler_batches._cancel_batch_item(item_id, cleanup_id, {"operator": "cleanup", "note": "stop"})
+    assert events == ["commit", "control", "status"]
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_cleanup_commit_failure_rolls_back_without_notifications(db, monkeypatch, delegated):
+    from app.database import async_session
+    from app.models import DownloadJob
+    from app.services import scheduler_batches
+    from app.services.operations import admin_operation_attempt_context
+    from app.services.redis_pubsub import TaskEventPublisher
+
+    identities = await _owned_cleanup_item(db, delegated=delegated)
+    item_id, job_id, _child_id, cleanup_id, attempt = identities
+    before = await _cancelled_domain_rows(db, identities)
+    await db.rollback()
+    notifications = []
+    monkeypatch.setattr(TaskEventPublisher, "send_control", lambda *a, **k: notifications.append("control"))
+    monkeypatch.setattr(TaskEventPublisher, "publish_status_change", lambda *a, **k: notifications.append("status"))
+
+    def failing_session():
+        session = async_session()
+
+        async def failed_commit():
+            assert (await session.get(DownloadJob, job_id)).status == "cancelled"
+            raise RuntimeError("injected commit failure")
+
+        monkeypatch.setattr(session, "commit", failed_commit)
+        return session
+
+    monkeypatch.setattr(scheduler_batches, "async_session", failing_session)
+    with admin_operation_attempt_context(cleanup_id, attempt), pytest.raises(RuntimeError, match="commit failure"):
+        await scheduler_batches._cancel_batch_item(item_id, cleanup_id, {"operator": "cleanup", "note": "stop"})
+    assert await _cancelled_domain_rows(db, identities) == before
+    assert notifications == []
+
+
+@pytest.mark.parametrize("entry", ["download", "import", "delegated_download"])
+async def test_standalone_cancel_preserves_response_and_metadata_after_commit(db, monkeypatch, entry):
+    from app.database import async_session
+    from app.models import DownloadJob, ImportJob
+    from app.services.task_engine import TaskEngine
+    from app.services.redis_pubsub import TaskEventPublisher
+
+    identities = await _owned_cleanup_item(db, delegated=entry != "download")
+    _item_id, job_id, child_id, _cleanup_id, _attempt = identities
+    events = []
+    monkeypatch.setattr(TaskEventPublisher, "send_control", lambda *a, **k: events.append(("control", a, k)))
+    monkeypatch.setattr(TaskEventPublisher, "publish_status_change", lambda *a, **k: events.append(("status", a, k)))
+    async with async_session() as session:
+        real_commit = session.commit
+
+        async def commit():
+            assert events == []
+            await real_commit()
+            events.append(("commit", (), {}))
+
+        monkeypatch.setattr(session, "commit", commit)
+        engine = TaskEngine(session)
+        target_id = child_id if entry == "import" else job_id
+        result = await (engine.cancel_import if entry == "import" else engine.cancel_download)(
+            target_id, operator="operator", note="stop")
+    expected = {"job_id": str(target_id), "status": "cancelled"}
+    if entry == "delegated_download":
+        expected["delegated_to"] = str(child_id)
+    assert result == expected
+    controlled_id = child_id or job_id
+    assert [event[0] for event in events] == ["commit", "control", "status"]
+    assert events[1][1:] == ((str(controlled_id), "cancel"), {"reason": "stop"})
+    assert events[2][1:] == ((str(controlled_id), "import" if child_id else "download", "running" if child_id else "enqueued", "cancelled"), {"operator": "operator", "note": "stop"})
+    row = await db.get(ImportJob if child_id else DownloadJob, controlled_id)
+    assert (row.status, row.user_note, row.operator_name, row.operator_action) == (
+        "cancelled", "stop", "operator", "cancel" if child_id else "cancelled")
+    assert (await db.get(DownloadJob, job_id)).status == "cancelled"

@@ -68,15 +68,14 @@
 
 ## 中等风险
 
-### 5. Meilisearch 索引一致性
+### 5. 搜索投影一致性
 
-**风险**：PostgreSQL 与异步 Meilisearch 投影可能漂移；Meilisearch 不可用时
-投影可能积压。
+**风险**：业务表与异步 PostgreSQL 搜索文档可能漂移；整理、资源许可或数据库写入等待时投影可能积压。
 
 **缓解措施**：
 - PostgreSQL 业务写入与合并式投影 outbox 意图位于同一事务，普通导入不等待
-  Meilisearch。
-- 单一有界消费者同一时间最多提交一个 Meilisearch 写任务，并提供重试、退避和
+  搜索文档写入。
+- 单一有界消费者同一时间最多提交一个 PostgreSQL 文档批次，并提供重试、退避和
   可观测的积压时长。
 - 全量重建使用版本化 staging、主键游标批次，并在原子交换前重放重建水位之后的
   outbox 变更。
@@ -286,7 +285,7 @@ gallery-dl 的 SQLite 归档文件追踪已下载的 URL。维护固定在 03:30
 | Worker 启动孤儿对账 | #4 | subscription_sync.py -- 僵死检测 |
 | `last_successful_auth` 在 subscription_source | #C（原 #7） | subscription_source 模型 |
 | `auth_healthy` 在 subscription_source | #C（原 #7） | subscription_source 模型 |
-| v1 管理员触发 Meilisearch 重建索引 | #5（原 #6） | CLAUDE.md -- 风险衍生决策 |
+| v1 管理员触发搜索重建索引 | #5（原 #6） | CLAUDE.md -- 风险衍生决策 |
 | gallery-dl 输出格式冒烟测试 | #2（原 #1） | 测试套件 |
 | X provider 显式禁用（占位符） | #A（原 #3） | x.py provider -- can_download=False |
 | pyvips 优先于 Pillow | #11 | CLAUDE.md -- 风险衍生决策 |
@@ -302,7 +301,7 @@ gallery-dl 的 SQLite 归档文件追踪已下载的 URL。维护固定在 03:30
 
 | 路径 | 异常后的结果与持久状态依据 | 回归依据 |
 |---|---|---|
-| 搜索索引校验与 Meilisearch（search.py） | 一致性校验失败时使用 PostgreSQL 权威结果。没有安全的 SQL 结果时，Meilisearch 故障明确返回不可用并计入熔断；数据库失败时只采用重新校验过的 Meilisearch 结果。 | 搜索算法、游标及索引一致性测试；发布前还须通过一次性环境基准。 |
+| 搜索投影（search.py） | 结构化列表查询业务表，文本查询使用版本化 PostgreSQL 文档，不可用时明确失败；当前授权与逐作品整理状态约束可见性。 | 搜索算法、游标、成员撤权、原生写入回滚与重建测试。 |
 | 导入领取、租约和结束（import_runner.py、import_execution.py） | 初始租约验证失败即停止执行。续租失败记录导入 ID，五秒后重试；丢失归属时不再派发旧执行的重试。主失败路径先提交有上限的重试意图再发布队列，或记录最终失败。 | 导入完成、归属和恢复测试。 |
 | 管理任务派发（operations.py、admin_dispatch_recovery.py） | PostgreSQL 每次最多选 25 个到期尝试。队列发布失败时保留带下次重试时间的持久意图，并记录任务 ID。补偿先提交任务失败，再尽力清理 Redis 状态和锁。 | 管理任务派发与调度恢复测试。 |
 

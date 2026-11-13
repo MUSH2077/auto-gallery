@@ -37,14 +37,6 @@ from app.services.asset_reconciliation import (
     structural_similarity,
     versioned_phash_distance,
 )
-from app.services.operations import (
-    AdminOperationAttemptRejected,
-    OPERATION_TTL_SECONDS,
-    current_admin_operation_attempt,
-    fence_current_admin_operation_transaction,
-    release_owned_operation_lock,
-    set_operation_status,
-)
 from app.services.heavy_io import adaptive_resource_slice, try_heavy_io_slot
 from app.services.outbox_coordinator import (
     clear_and_wake_outbox_successor,
@@ -57,8 +49,8 @@ from app.services.resource_pressure import (
 from app.services.queue_admission import checked_enqueue_in
 from app.services.redis_client import get_redis
 from app.services.stage_metrics import measure_stage
-from app.services.tasks import TaskService
 from app.services.work_import import WorkImportService
+from app.services.visual_image import PHASH_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -315,6 +307,8 @@ async def _run_quarantine(event: dict) -> None:
         structural_similarity,
         candidate_path,
         representative_path,
+        **({"shared": True} if asset.phash_version == representative.phash_version
+           == PHASH_VERSION else {}),
     )
     if ssim < ssim_limit:
         raise ValueError("SSIM no longer passes the visual gate")
@@ -463,6 +457,7 @@ async def process_asset_dedup_outbox(
 
     processed = 0
     failed = 0
+    resource_deferred = False
     successor_delay_seconds = 0.0
     bounded_limit = max(1, min(int(limit), 100))
     while processed + failed < bounded_limit:
@@ -473,11 +468,13 @@ async def process_asset_dedup_outbox(
             max_slice_seconds=20.0,
         )
         if not limits.allowed:
+            resource_deferred = True
             break
         slice_started = monotonic()
         completed_slice = False
         async with try_heavy_io_slot("asset-dedup-outbox", owner) as lease:
             if lease is None:
+                resource_deferred = True
                 break
             event = await _claim_outbox_event()
             if event is None:
@@ -501,6 +498,7 @@ async def process_asset_dedup_outbox(
         "processed": processed,
         "failed": failed,
         "more_likely": bool(processed or failed),
+        "resource_deferred": resource_deferred,
         "successor_delay_seconds": successor_delay_seconds,
     }
 
@@ -537,6 +535,7 @@ def _scan_payload(
 
 def _refresh_owned_scan_operation_lock(operation_job_id: str) -> bool:
     """Renew only the original operation's single-flight ownership."""
+    from app.services.operations import OPERATION_TTL_SECONDS
 
     redis = get_redis()
     try:
@@ -568,6 +567,10 @@ async def _run_scan(
     expected_generation: int,
 ) -> dict:
     """Run at most one image-derived scan slice and persist its keyset cursor."""
+    from app.services.operations import (
+        current_admin_operation_attempt,
+        fence_current_admin_operation_transaction,
+    )
 
     async with async_session() as db:
         scan = (
@@ -806,6 +809,9 @@ async def _update_running_scan_operation(
     *,
     successor_rq_job_id: str,
 ) -> None:
+    from app.services.tasks import TaskService
+    from app.services.operations import set_operation_status
+
     waiting = result.get("resource_state") == "waiting"
     phase = "waiting" if waiting else "scanning"
     label = (
@@ -853,6 +859,13 @@ async def _update_running_scan_operation(
 
 
 async def _complete_scan_operation(operation_job_id: str, result: dict) -> None:
+    from app.services.tasks import TaskService
+    from app.services.operations import (
+        current_admin_operation_attempt,
+        release_owned_operation_lock,
+        set_operation_status,
+    )
+
     progress = {"phase": "complete", "label": "Asset scan complete"}
     registered = current_admin_operation_attempt() is not None
     try:
@@ -927,6 +940,15 @@ async def _fail_scan_operation(
     operation_job_id: str,
     error: BaseException,
 ) -> None:
+    from app.services.tasks import TaskService
+    from app.services.operations import (
+        AdminOperationAttemptRejected,
+        current_admin_operation_attempt,
+        fence_current_admin_operation_transaction,
+        release_owned_operation_lock,
+        set_operation_status,
+    )
+
     if isinstance(error, AdminOperationAttemptRejected):
         return
     message = str(error)[:4000] or type(error).__name__
@@ -1004,8 +1026,10 @@ async def run_registered_asset_dedup_scan(
     options: dict,
 ) -> dict:
     """Run one scan slice and durably hand the next slice to TaskRun recovery."""
-
-    from app.services.operations import prepare_admin_operation_handoff
+    from app.services.operations import (
+        AdminOperationAttemptRejected,
+        prepare_admin_operation_handoff,
+    )
 
     scan_id = UUID(options["scan_id"])
     expected_generation = max(0, int(options.get("_scan_generation", 0)))

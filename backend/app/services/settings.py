@@ -218,6 +218,8 @@ def apply_gallerydl_defaults(config: dict | None) -> tuple[dict, bool]:
 
 
 def write_gallerydl_config(config: dict, path: Path | None = None) -> None:
+    from app.services.cookie_paths import normalize_cookie_paths
+    normalize_cookie_paths(config)
     path = path or gallerydl_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -324,8 +326,11 @@ def build_effective_gallerydl_config(
 ) -> dict:
     if user_config is None:
         user_config = load_gallerydl_config()
-    return merge_gallerydl_effective_config(
+    effective = merge_gallerydl_effective_config(
         source=source,
         provider_config=provider_config,
         user_config=user_config,
     )
+    from app.services.cookie_paths import normalize_cookie_paths
+    normalize_cookie_paths(effective)
+    return effective

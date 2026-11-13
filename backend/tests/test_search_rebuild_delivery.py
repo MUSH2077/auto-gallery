@@ -10,7 +10,7 @@ from app.database import async_session
 from app.models.tag import Tag
 from app.services.search import TAGS_INDEX
 from app.services.search_projection_outbox import request_search_projection
-from tests.test_search_delivery import delivery, ready_receipt  # noqa: F401
+from tests.test_search_delivery import controlled_search_store, delivery, ready_receipt  # noqa: F401
 
 
 class Meili:
@@ -229,7 +229,7 @@ async def test_swap_acknowledges_only_replayed_versions_after_crash(delivery, mo
 
 
 @pytest.mark.asyncio
-async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
+async def test_real_pg_rebuild_finishes_through_delayed_steps(delivery):
     import asyncio
     from app.services import search_rebuild
     from app.config import settings
@@ -240,17 +240,16 @@ async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
     started = await search_rebuild.start_rebuild((TAGS_INDEX,))
     async with httpx.AsyncClient() as client:
         for _ in range(100):
-            await delivery.run_delivery_slice(client=client)
+            await delivery.run_delivery_slice()
             status = await search_rebuild.rebuild_status(started["build_id"])
             if status["status"] != "pending":
                 break
             await ready_receipt()
             await asyncio.sleep(.05)
         assert status["status"] == "ok", status
-        response = await client.get(f"{settings.meili_url}/indexes/{TAGS_INDEX}/documents/{identity}",
-                                    headers={"Authorization": f"Bearer {settings.meili_master_key}"})
-        assert response.status_code == 200
-        assert response.json()["normalized_name"] == f"real-rebuild-{identity}"
+        async with async_session() as db:
+            value = await db.scalar(text("SELECT d.document FROM search_pg_documents d JOIN search_pg_indexes i USING(storage_id) WHERE i.uid=:uid AND d.entity_id=:id"), {"uid":TAGS_INDEX,"id":str(identity)})
+        assert value["normalized_name"] == f"real-rebuild-{identity}"
     async with async_session() as db:
         await db.execute(text("DELETE FROM tags WHERE id=:id"), {"id": identity})
         await db.commit()
@@ -259,7 +258,7 @@ async def test_real_meili_rebuild_finishes_through_delayed_steps(delivery):
 @pytest.mark.asyncio
 async def test_oversized_rebuild_document_fails_durably_without_remote_write(delivery, monkeypatch):
     from app.services import search_rebuild
-    from app.services.search import SearchService
+    from app.services.search_projection import SearchProjection
     from app.models.search_rebuild import SearchRebuild
     identity = uuid4()
     async with async_session() as db:
@@ -270,9 +269,9 @@ async def test_oversized_rebuild_document_fails_durably_without_remote_write(del
         build = await db.get(SearchRebuild, UUID(started["build_id"]))
         build.phase = "build"
         await db.commit()
-    async def oversized(self, ids):
+    async def oversized(self, index_uid, ids):
         return [{"id": str(ids[0]), "normalized_name": "x" * (4 * 1024 * 1024)}]
-    monkeypatch.setattr(SearchService, "_build_tag_documents", oversized)
+    monkeypatch.setattr(SearchProjection, "build", oversized)
     remote = Meili()
     try:
         async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
@@ -317,7 +316,8 @@ async def test_cancelled_owner_prevents_next_rebuild_write(delivery):
 @pytest.mark.asyncio
 async def test_all_six_indexes_share_one_ordered_swap(delivery):
     from app.services import search_rebuild
-    indexes = tuple(search_rebuild._specs())
+    from app.services.search_projection import PROJECTION_SPECS
+    indexes = tuple(PROJECTION_SPECS)
     remote = Meili()
     started = await search_rebuild.start_rebuild(indexes)
     async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as client:
@@ -429,7 +429,7 @@ def test_rebuild_prepared_receipt_has_execution_lease():
     from app.models.search_rebuild import SearchRebuild
     from app.services.search_rebuild import _receipt
     from app.services.search_delivery import now
-    receipt = _receipt(SearchRebuild(id=uuid4(), phase="build"), TAGS_INDEX, "upsert", [], {})
+    receipt = _receipt(SearchRebuild(backend="postgresql", id=uuid4(), phase="build"), TAGS_INDEX, "upsert", [], {})
     assert receipt.lease_token
     assert receipt.lease_until is not None
     assert 29 <= (receipt.lease_until - now()).total_seconds() <= 30

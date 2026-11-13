@@ -9,7 +9,7 @@ from hashlib import sha256
 from app.config import settings
 
 MEDIA_SIGNED_URL_TTL_SECONDS = 10 * 60
-SIGNED_MEDIA_SIZES = {"preview", "original", "poster", "stream"}
+SIGNED_MEDIA_SIZES = {"thumb", "preview", "original", "poster", "stream"}
 
 
 def _message(asset_id: str, size: str, expires: int) -> str:

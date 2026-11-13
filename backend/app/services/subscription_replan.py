@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.jobs.subscription_sync import (
+from app.services.subscription_schedule import (
     next_future_subscription_check_at,
     next_subscription_check_at,
 )

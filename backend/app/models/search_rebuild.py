@@ -10,6 +10,7 @@ class SearchRebuild(TimestampMixin, Base):
     __tablename__ = "search_rebuilds"
     __table_args__ = (Index("uq_search_rebuild_active", text("(true)"), unique=True,
                            postgresql_where=text("state NOT IN ('complete', 'failed')")),)
+    backend: Mapped[str] = mapped_column(String(16), default="postgresql", server_default="meilisearch")
     state: Mapped[str] = mapped_column(String(24), default="running")
     phase: Mapped[str] = mapped_column(String(24), default="settings")
     owner: Mapped[str | None] = mapped_column(String(64))

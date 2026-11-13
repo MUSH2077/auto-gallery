@@ -1,6 +1,7 @@
 export const REFERENCE_BATCH_SIZE = 50;
 export const REFERENCE_OVERSCAN = 8;
 export const REFERENCE_PREFETCH_ROWS = 10;
+export const REFERENCE_CACHED_PAGES = 32;
 
 export type ReferenceSortField = "name" | "created" | "updated";
 export type ReferenceSortDirection = "asc" | "desc";
@@ -23,6 +24,7 @@ export interface ReferenceListSession {
   scrollY: number;
   loadedOffsets: number[];
   selectedIds: string[];
+  selectedOffsets?: Record<string, number>;
 }
 
 const SORT_VALUES = new Set([
@@ -105,6 +107,7 @@ export function createReferenceListSession(input: {
   scrollY: number;
   loadedOffsets: readonly number[];
   selectedIds: readonly string[];
+  selectedOffsets?: Record<string, number>;
 }): ReferenceListSession {
   const loadedOffsets = [...new Set(input.loadedOffsets)]
     .filter(
@@ -114,11 +117,16 @@ export function createReferenceListSession(input: {
         && offset % REFERENCE_BATCH_SIZE === 0,
     )
     .sort((left, right) => left - right)
-    .slice(0, 32);
+    .slice(-REFERENCE_CACHED_PAGES);
   const selectedIds = [...new Set(input.selectedIds)]
     .filter(Boolean)
     .sort()
     .slice(0, 2_000);
+  const selectedOffsets = Object.fromEntries(selectedIds.flatMap(id => {
+    const offset = input.selectedOffsets?.[id];
+    return typeof offset === "number" && Number.isInteger(offset)
+      && offset >= 0 && offset % REFERENCE_BATCH_SIZE === 0 ? [[id, offset]] : [];
+  }));
   return {
     version: 1,
     queryFingerprint: input.queryFingerprint,
@@ -127,6 +135,7 @@ export function createReferenceListSession(input: {
       : 0,
     loadedOffsets,
     selectedIds,
+    ...(Object.keys(selectedOffsets).length ? { selectedOffsets } : {}),
   };
 }
 
@@ -151,6 +160,7 @@ export function readReferenceListSession(
       scrollY: value.scrollY,
       loadedOffsets: value.loadedOffsets,
       selectedIds: value.selectedIds,
+      selectedOffsets: value.selectedOffsets,
     });
   } catch {
     return null;

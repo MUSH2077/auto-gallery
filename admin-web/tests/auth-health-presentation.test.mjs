@@ -51,7 +51,7 @@ test("scheduler renders credential failures as a named attention reason", () => 
     "utf8",
   );
   const translations = readFileSync(
-    new URL("../src/lib/i18n.tsx", import.meta.url),
+    new URL("../src/lib/i18n-catalogs.ts", import.meta.url),
     "utf8",
   );
 

@@ -6,9 +6,12 @@ from uuid import uuid4
 import redis
 import pytest
 from rq import Worker
+from rq.exceptions import StopRequested
 from sqlalchemy import text
 
 from app.services.resource_aware_worker import (
+    DOWNLOAD_DRAIN_CHANNEL,
+    DOWNLOAD_DRAIN_KEY,
     ResourceAwareWorker,
     adaptive_wait_delay,
     redis_retry_delay,
@@ -952,6 +955,61 @@ def test_asset_dedup_coordinator_uses_child_owned_image_slices():
     assert ResourceAwareWorker._internal_slice_workload(job) == "image_derive"
 
 
+@pytest.mark.parametrize("metadata", [{}, {"resource_descriptor": "dedup-scan"}, {"registered_admin_operation": "asset-dedup-scan"}])
+def test_old_and_new_dedup_scans_keep_nonblocking_child_admission(metadata):
+    job = type("Job", (), {"func_name": "app.jobs.asset_dedup.run_asset_dedup_scan", "meta": metadata})()
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job)
+
+
+async def test_dedup_decision_publishes_explicit_descriptor_after_commit(monkeypatch):
+    from unittest.mock import AsyncMock
+    import rq
+    from app.api.admin import dedup
+    from app.schemas.asset_dedup import AssetDedupDecisionRequest
+
+    result = {"status": "pending"}
+    service = SimpleNamespace(decide=AsyncMock(return_value=result))
+    db = SimpleNamespace(commit=AsyncMock())
+    captured = []
+    monkeypatch.setattr(dedup, "AssetReconciliation", lambda actual_db: service)
+    monkeypatch.setattr(dedup, "get_redis", lambda: object())
+    monkeypatch.setattr(rq, "Queue", lambda **kw: object())
+    def enqueue(*args, **kwargs):
+        db.commit.assert_awaited_once()
+        captured.append(kwargs["meta"])
+    monkeypatch.setattr(dedup, "checked_enqueue", enqueue)
+    response = await dedup.decide_asset_dedup_case(
+        uuid4(), AssetDedupDecisionRequest(expected_revision=1, action="defer", idempotency_key="review-fixture"),
+        user=SimpleNamespace(id=1), db=db,
+    )
+    assert response is result
+    assert captured == [{"resource_descriptor": "asset-dedup-outbox"}]
+
+
+@pytest.mark.parametrize("critical,cgroup", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("metadata", [{}, {"resource_descriptor": "dedup-scan"}])
+def test_dedup_reservation_waits_in_child_but_parent_keeps_hard_gates(monkeypatch, critical, cgroup, metadata):
+    from app.services import resource_aware_worker as module
+    worker = _bare_worker()
+    worker.heartbeat = lambda: None
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._publish_pressure_state = lambda snapshot: {"hard_gate_active": cgroup}
+    job = SimpleNamespace(func_name="app.jobs.asset_dedup.run_asset_dedup_scan", meta=metadata)
+    monkeypatch.setattr(module, "get_resource_pressure_snapshot_sync", lambda **k: {"status": "paused" if critical else "normal", "controller_mode": "critical" if critical else "normal"})
+    monkeypatch.setattr(module, "resource_profile_permit", lambda *a: (False, {"reason": "memory_reservation"}))
+    monkeypatch.setattr(ResourceAwareWorker, "should_run_maintenance_tasks", False)
+    class Waiting(Exception):
+        pass
+    worker._wait_for_control_event = lambda *a: (_ for _ in ()).throw(Waiting())
+    def admit():
+        return worker._wait_until_pressure_allows_dequeue(1, workload="image_derive", hard_only=worker._job_uses_nonblocking_child_admission(job))
+    if critical or cgroup:
+        with pytest.raises(Waiting):
+            admit()
+    else:
+        assert admit()["active_profile"]["allowed"] is True
+
+
 def test_registered_admin_transport_preserves_child_owned_resource_profile():
     job = type(
         "Job",
@@ -974,6 +1032,7 @@ def test_registered_admin_transport_preserves_child_owned_resource_profile():
 @pytest.mark.parametrize(
     "operation_type",
     [
+        "admin-clear",
         "admin-integrity-scan",
         "admin-backup-estimate",
         "admin-backup-create",
@@ -1032,6 +1091,15 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
             redis_client=object(),
         )
     operations._enqueue_admin_rq(
+        "33333333-3333-4333-8333-333333333333",
+        1,
+        operation_type="admin-clear",
+        rq_job_id="admin-clear-rq",
+        queue_name="maintenance",
+        job_timeout=60,
+        redis_client=object(),
+    )
+    operations._enqueue_admin_rq(
         "22222222-2222-4222-8222-222222222222",
         1,
         operation_type="admin-rebuild",
@@ -1041,18 +1109,28 @@ def test_new_unsliced_admin_deliveries_do_not_publish_internal_slice_metadata(mo
         redis_client=object(),
     )
 
-    assert [entry[3]["meta"] for entry in published[:-1]] == [
+    assert [entry[3]["meta"] for entry in published[:-2]] == [
         {"registered_admin_operation": operation_type}
         for operation_type in operation_types
     ]
+    clear_meta = published[-2][3]["meta"]
+    assert clear_meta == {
+        "registered_admin_operation": "admin-clear",
+        "registered_admin_internal_profile": "maintenance",
+        "registered_admin_resource_profile": "maintenance",
+    }
+    clear_job = type("Job", (), {"meta": clear_meta})()
+    assert ResourceAwareWorker._internal_slice_workload(clear_job) is None
     assert published[-1][3]["meta"] == {
         "registered_admin_operation": "admin-rebuild",
         "registered_admin_internal_profile": "maintenance",
+        "registered_admin_resource_profile": "maintenance",
     }
 
 
 @pytest.mark.parametrize("raises", [False, True])
-def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises):
+@pytest.mark.parametrize("operation_type", ["admin-backup-create", "admin-clear"])
+def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monkeypatch, raises, operation_type):
     from app.services import resource_aware_worker
 
     worker = _bare_worker()
@@ -1069,7 +1147,7 @@ def test_unsliced_registered_admin_job_holds_parent_lock_through_workhorse(monke
             "func_name": "app.jobs.admin_operations.run_registered_admin_operation",
             "args": ("11111111-1111-4111-8111-111111111111", 1),
             "meta": {
-                "registered_admin_operation": "admin-backup-create",
+                "registered_admin_operation": operation_type,
                 "registered_admin_internal_profile": "maintenance",
             },
             "refresh": lambda self: None,
@@ -1132,6 +1210,83 @@ def test_outbox_slice_bounds_are_applied_before_fork():
     assert git.args == (1, 20.0)
 
 
+def test_explicit_descriptor_survives_function_rename_and_preserves_kwargs():
+    job = type("Job", (), {
+        "func_name": "app.jobs.renamed.run_slice",
+        "meta": {"resource_descriptor": "import-projection"},
+        "args": (500, 90.0),
+        "kwargs": {"attempt_token": "keep-me", "extra": True},
+    })()
+    queue = type("Queue", (), {"name": "operations"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "import_db"
+    assert ResourceAwareWorker._internal_slice_workload(job) == "import_db"
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is True
+    ResourceAwareWorker._bound_job_slice(job, "import_db")
+    assert job.args == (25, 20.0)
+    assert job.kwargs == {"attempt_token": "keep-me", "extra": True}
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_work_heat_owns_whole_job_admission_without_exclusive_maintenance(explicit):
+    job = type("Job", (), {
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "meta": {"resource_descriptor": "work-heat"} if explicit else {},
+        "args": ("manual",),
+    })()
+    queue = type("Queue", (), {"name": "maintenance"})()
+
+    assert ResourceAwareWorker._job_workload(job, queue) == "work_heat"
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+    assert ResourceAwareWorker._job_uses_nonblocking_child_admission(job) is False
+    ResourceAwareWorker._bound_job_slice(job, "work_heat")
+    assert job.args == ("manual",)
+
+
+def test_unclassified_maintenance_keeps_whole_job_exclusive_admission():
+    job = type("Job", (), {"func_name": "app.jobs.backup.run_backup", "meta": {}})()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    assert ResourceAwareWorker._job_workload(job, queue) == "maintenance"
+    assert ResourceAwareWorker._internal_slice_workload(job) is None
+
+
+def test_legacy_descriptor_adapter_and_parent_mode_remain_compatible():
+    legacy = type("Job", (), {
+        "func_name": "old.module.run_search_projection_outbox",
+        "meta": {},
+    })()
+    parent = type("Job", (), {
+        "func_name": "app.jobs.renamed.run",
+        "meta": {"resource_descriptor": "maintenance"},
+    })()
+    queue = type("Queue", (), {"name": "operations"})()
+
+    assert ResourceAwareWorker._job_workload(legacy, queue) == "search_index"
+    assert ResourceAwareWorker._internal_slice_workload(legacy) == "search_index"
+    assert ResourceAwareWorker._internal_slice_workload(parent) is None
+    assert ResourceAwareWorker._job_workload(parent, queue) == "maintenance"
+    import_queue = type("Queue", (), {"name": "imports"})()
+    assert ResourceAwareWorker._job_workload(parent, import_queue) == "maintenance"
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        ("run_clear_operation", "maintenance"),
+        ("run_library_rebuild_operation", "maintenance"),
+        ("run_disk_import_operation", "maintenance"),
+        ("run_creator_reenrich_operation", "maintenance"),
+        ("run_gitllery_rebuild_operation", "maintenance"),
+        ("run_asset_dedup_scan", "image_derive"),
+    ],
+)
+def test_all_legacy_child_function_names_keep_profile_semantics(marker, expected):
+    job = type("Job", (), {"func_name": f"old.module.{marker}", "meta": {}})()
+    queue = type("Queue", (), {"name": "operations"})()
+    assert ResourceAwareWorker._internal_slice_workload(job) == expected
+    assert ResourceAwareWorker._job_workload(job, queue) == expected
+
+
 def test_pressure_pauses_before_flock_or_dequeue(monkeypatch):
     from app.services import resource_aware_worker
 
@@ -1189,3 +1344,325 @@ def test_running_workhorse_heartbeat_resamples_worker_cgroup(monkeypatch):
 
     assert result == ("base-heartbeat", job)
     assert observed == [snapshot]
+
+
+def test_download_drain_lease_is_ignored_in_default_resident_mode(monkeypatch):
+    monkeypatch.delenv("DOWNLOAD_WORKER_LIFECYCLE", raising=False)
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    worker.connection = SimpleNamespace(get=lambda _key: b"drain-token")
+
+    worker._raise_if_shutdown_requested()
+
+
+def test_download_drain_lease_stops_only_download_consumers(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    worker.connection = SimpleNamespace(get=lambda key: b"drain-token" if key == DOWNLOAD_DRAIN_KEY else None)
+
+    with pytest.raises(StopRequested):
+        worker._raise_if_shutdown_requested()
+
+    worker.queues = [SimpleNamespace(name="imports")]
+    worker._raise_if_shutdown_requested()
+
+
+def test_download_drain_returns_claimed_job_before_workhorse(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    worker = _bare_worker()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+    eval_calls = []
+    worker.connection = SimpleNamespace(
+        get=lambda key: b"drain-token" if key == DOWNLOAD_DRAIN_KEY else None,
+        eval=lambda *args: eval_calls.append(args),
+    )
+    queue = SimpleNamespace(
+        name="downloads:danbooru",
+        key="rq:queue:downloads:danbooru",
+        redis_queues_keys=["rq:queues"],
+        intermediate_queue=SimpleNamespace(
+            key="rq:intermediate:downloads:danbooru",
+            get_first_seen_key=lambda job_id: f"rq:first:{job_id}",
+        ),
+    )
+    job = SimpleNamespace(id="drain-job", key="rq:job:drain-job")
+
+    monkeypatch.setattr(Worker, "execute_job", lambda *_args: pytest.fail("workhorse must not start"))
+
+    with pytest.raises(StopRequested):
+        worker.execute_job(job, queue)
+
+    assert eval_calls
+
+
+def test_download_drain_control_channel_is_subscribed_for_waiting_download_worker(monkeypatch):
+    monkeypatch.setenv("DOWNLOAD_WORKER_LIFECYCLE", "on_demand")
+    class PubSub:
+        def __init__(self):
+            self.channels = set()
+            self.closed = False
+
+        def subscribe(self, *channels):
+            self.channels.update(channels)
+
+        def get_message(self, *, timeout):
+            return {"type": "message", "data": "drain"}
+
+        def close(self):
+            self.closed = True
+
+    class Connection:
+        def __init__(self):
+            self.pubsubs = []
+
+        def pubsub(self, *, ignore_subscribe_messages):
+            assert ignore_subscribe_messages is True
+            pubsub = PubSub()
+            self.pubsubs.append(pubsub)
+            return pubsub
+
+        def get(self, key):
+            return None
+
+    worker = _bare_worker()
+    worker.connection = Connection()
+    worker.queues = [SimpleNamespace(name="downloads:danbooru")]
+
+    worker._wait_for_control_event(1.0, "download_network")
+
+    assert worker.connection.pubsubs[0].channels == {
+        "resource:control",
+        "resource:work:download_network",
+        DOWNLOAD_DRAIN_CHANNEL,
+    }
+
+
+
+def test_work_heat_profile_admission_parks_without_waiting(monkeypatch):
+    from app.services import work_heat_queue
+    from app.services.resource_aware_worker import _WorkHeatDeferred
+
+    worker = _bare_worker()
+    worker._raise_if_shutdown_requested = lambda: None
+    calls = []
+    worker._wait_until_pressure_allows_dequeue = lambda *args, **kwargs: (
+        calls.append(kwargs) or {
+            "active_profile": {"allowed": False, "reason": "background_yield_to_ingest"},
+        }
+    )
+    job = type("Job", (), {
+        "id": "heat-resource-wait",
+        "key": "rq:job:heat-resource-wait",
+        "created_at": "2026-10-29T00:00:00Z",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "args": ("manual",),
+        "meta": {},
+        "save_meta": lambda self: None,
+    })()
+    queue = type("Queue", (), {"name": "maintenance"})()
+    parked = []
+    monkeypatch.setattr(
+        work_heat_queue,
+        "defer_work_heat_for_resources",
+        lambda actual_job, actual_queue, **kwargs: parked.append(
+            (actual_job, actual_queue, kwargs)
+        ) or True,
+    )
+
+    with pytest.raises(_WorkHeatDeferred):
+        worker._profile_admission(job, "work_heat", queue)
+
+    assert calls == [{
+        "workload": "work_heat",
+        "job": job,
+        "owner": "heat-resource-wait",
+        "hard_only": False,
+        "wait_for_permit": False,
+    }]
+    assert parked == [(job, queue, {"reason": "background_yield_to_ingest"})]
+
+
+def test_work_heat_head_does_not_wait_for_pressure(monkeypatch):
+    worker = _bare_worker()
+    worker.queues = []
+    queue = type("Queue", (), {"name": "maintenance", "key": "rq:queue:maintenance"})()
+    job = type("Job", (), {
+        "id": "heat-head",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "meta": {"resource_descriptor": "work-heat"},
+        "args": ("manual",),
+    })()
+    queue.get_jobs = lambda offset=0, length=1: [job]
+    worker.queues = [queue]
+    worker.heartbeat = lambda *_args, **_kwargs: None
+    worker.set_state = lambda *_args, **_kwargs: None
+    worker._heavy_queues_have_jobs = lambda: True
+    worker._wait_for_control_event = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(ResourceAwareWorker, "should_run_maintenance_tasks", False)
+    monkeypatch.setattr(
+        ResourceAwareWorker,
+        "_workload_profile",
+        lambda self: "light",
+    )
+    monkeypatch.setattr(
+        Worker,
+        "dequeue_job_and_maintain_ttl",
+        lambda self, timeout, max_idle_time=None: (job, queue),
+    )
+    def fail_if_wait(*args, **kwargs):
+        raise AssertionError("work_heat head must not block before dequeue")
+    worker._wait_until_pressure_allows_dequeue = fail_if_wait
+
+    assert worker.dequeue_job_and_maintain_ttl(1, None) == (job, queue)
+
+
+
+def test_work_heat_park_failure_does_not_silently_drop_claim(monkeypatch):
+    from app.services import work_heat_queue
+
+    worker = _bare_worker()
+    worker._raise_if_shutdown_requested = lambda: None
+    worker._wait_until_pressure_allows_dequeue = lambda *args, **kwargs: {
+        "active_profile": {"allowed": False, "reason": "background_yield_to_ingest"},
+    }
+    job = type("Job", (), {
+        "id": "heat-park-failed",
+        "key": "rq:job:heat-park-failed",
+        "created_at": "2026-10-29T00:00:00Z",
+        "func_name": "app.jobs.work_heat.run_work_heat_recompute",
+        "args": ("manual",),
+        "meta": {},
+        "save_meta": lambda self: None,
+    })()
+    connection = type("Connection", (), {"hget": lambda self, *_args: b"2026-10-29T00:00:00Z", "lpos": lambda self, *_args: 0})()
+    queue = type("Queue", (), {
+        "name": "maintenance",
+        "connection": connection,
+        "intermediate_queue": type("Intermediate", (), {"key": "rq:intermediate"})(),
+    })()
+    monkeypatch.setattr(work_heat_queue, "defer_work_heat_for_resources", lambda *args, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="resource park failed"):
+        worker._profile_admission(job, "work_heat", queue)
+
+
+@pytest.mark.integration
+def test_work_heat_resource_park_frees_real_maintenance_worker():
+    """A real RQ claim parks heat and lets the following search job run."""
+    from rq import Queue, Retry
+    from rq.job import Job
+    from app.config import settings
+    from app.services.resource_aware_worker import ResourceAwareWorker
+    from app.jobs.work_heat import run_work_heat_recompute
+    from app.jobs.search_projection import run_search_projection_outbox
+
+    client = redis.Redis.from_url(settings.redis_url)
+    queue = Queue(name="maintenance", connection=client)
+    import_marker = "rq:queue:imports"
+    heat_id = "test-work-heat-resource-park"
+    search_id = "test-work-heat-following-search"
+    try:
+        client.delete(queue.key, import_marker)
+        client.rpush(import_marker, "pending-import-for-heat")
+        heat = queue.enqueue(
+            run_work_heat_recompute,
+            "manual",
+            job_id=heat_id,
+            retry=Retry(max=3, interval=[60, 300, 900]),
+            result_ttl=300,
+        )
+        initial_retry_count = heat.number_of_retries
+        initial_retries_left = heat.retries_left
+        search = queue.enqueue(
+            run_search_projection_outbox,
+            1,
+            job_id=search_id,
+            result_ttl=300,
+        )
+
+        worker = ResourceAwareWorker([queue], connection=client, name="test-work-heat-park")
+        worked = worker.work(burst=True, with_scheduler=False)
+
+        heat.refresh()
+        search.refresh()
+        assert worked is True
+        assert heat.get_status().value == "scheduled"
+        assert heat.number_of_retries == initial_retry_count
+        assert heat.retries_left == initial_retries_left
+        assert search.get_status().value == "finished"
+        assert client.lpos(queue.intermediate_queue.key, heat.id) is None
+    finally:
+        client.delete(queue.key, import_marker)
+        for job_id in (heat_id, search_id):
+            Job.fetch(job_id, connection=client).delete()
+        client.close()
+
+
+@pytest.mark.integration
+def test_work_heat_resource_park_does_not_bypass_business_retry(monkeypatch):
+    """A real business failure after resource promotion keeps its backoff."""
+    from rq import Queue, Retry
+    from rq.job import Job
+    from rq.registry import ScheduledJobRegistry
+    from app.config import settings
+    from app.jobs.search_projection import run_search_projection_outbox
+    from app.jobs.work_heat import run_work_heat_recompute
+    from app.services.resource_aware_scheduler import ResourceAwareScheduler
+    from app.services.resource_aware_worker import ResourceAwareWorker
+    from app.services.work_heat_queue import WORK_HEAT_RESOURCE_WAIT_MARKER
+
+    client = redis.Redis.from_url(settings.redis_url)
+    queue = Queue(name="maintenance", connection=client)
+    import_marker = "rq:queue:imports"
+    heat_id = "test-work-heat-business-retry"
+    heat = None
+    try:
+        client.delete(queue.key, import_marker)
+        client.rpush(import_marker, "pending-import-for-heat")
+        heat = queue.enqueue(
+            run_work_heat_recompute,
+            "manual",
+            job_id=heat_id,
+            retry=Retry(max=3, interval=[60, 300, 900]),
+            result_ttl=300,
+        )
+        initial_retries_left = heat.retries_left
+        worker = ResourceAwareWorker([queue], connection=client, name="test-work-heat-retry")
+        assert worker.work(burst=True, with_scheduler=False) is True
+        heat.refresh()
+        assert heat.get_status().value == "scheduled"
+        assert heat.retries_left == initial_retries_left
+        assert client.hget(heat.key, WORK_HEAT_RESOURCE_WAIT_MARKER)
+
+        client.delete(import_marker)
+        registry = ScheduledJobRegistry(queue=queue)
+        client.zadd(registry.key, {heat.id: 0})
+        scheduler = ResourceAwareScheduler([queue], connection=client, interval=1)
+        scheduler.acquire_locks()
+        try:
+            scheduler.prepare_registries()
+            scheduler.enqueue_scheduled_jobs()
+        finally:
+            scheduler.release_locks()
+
+        def fail_heat(_source):
+            raise ValueError("business failure")
+
+        monkeypatch.setattr("app.jobs.work_heat.run_work_heat_recompute", fail_heat)
+        assert ResourceAwareWorker([queue], connection=client, name="test-work-heat-retry-run").work(
+            burst=True, with_scheduler=False
+        ) is True
+        heat.refresh()
+        assert heat.get_status().value == "scheduled"
+        assert heat.retries_left == initial_retries_left - 1
+        assert client.hget(heat.key, WORK_HEAT_RESOURCE_WAIT_MARKER) is None
+        from rq.utils import current_timestamp
+        assert float(client.zscore(registry.key, heat.id)) >= current_timestamp() + 50
+    finally:
+        client.delete(queue.key, import_marker)
+        try:
+            Job.fetch(heat_id, connection=client).delete()
+        except Exception:
+            pass
+        client.close()

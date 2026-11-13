@@ -7,7 +7,8 @@ import { useToast } from "@/components/Toast";
 import { useNotifications } from "@/components/NotificationCenter";
 import { useT } from "@/lib/i18n";
 import { usePermissions } from "@/lib/usePermissions";
-import { Banner, PageHeader, PageShell, EmptyState, ErrorState, SourceBadge, PermissionGuard, SectionPanel } from "@/components";
+import { Banner, EmptyState, ErrorState, SourceBadge, SectionPanel } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { Check, Copy } from "lucide-react";
 import { writeClipboardText } from "@/lib/clipboard";
 import PaginatedCreatorSelect from "@/components/PaginatedCreatorSelect";
@@ -176,7 +177,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
                       className="text-accent hover:underline truncate max-w-md">{u.normalized_url}</a>
                   </div>
                   <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-                    <PaginatedCreatorSelect
+                    <PaginatedCreatorSelect presentation="gallery"
                       id={`danbooru-subscribe-creator-${i}`}
                       ariaLabel={t("danbooru.select_creator")}
                       value={selectedCreator}
@@ -244,7 +245,7 @@ function PreviewResult({ artist, links, onImport, importPending, onImportAll, im
           </div>
           <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
             <div className="min-w-0 flex-1">
-              <PaginatedCreatorSelect
+              <PaginatedCreatorSelect presentation="gallery"
                 id="danbooru-import-target-creator"
                 label={t("danbooru.target_creator")}
                 value={selectedCreator}
@@ -390,40 +391,7 @@ function DanbooruReferenceContent() {
   const mappingRefreshOperation = notify.operationJob?.kind === "danbooru-mapping-refresh" ? notify.operationJob : null;
   const mappingRefreshPending = refreshMappings.isPending || mappingRefreshOperation?.status === "running";
 
-  // Fallback: on mount, directly check if there's a stored batch job and fetch result.
-  // This handles edge cases where context state isn't restored after navigation.
-  const [directResult, setDirectResult] = useState<any>(null);
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem("danbooru_batch_job");
-      if (stored) {
-        const { jobId, startedAt } = JSON.parse(stored);
-        if (Date.now() - startedAt < 2 * 60 * 60 * 1000) {
-          api.getBatchImportStatus(jobId).then((data: any) => {
-            if (data?.result) setDirectResult(data.result);
-            else if (data?.status === "completed") {
-              // If completed but no result in response, keep polling once
-              setTimeout(() => {
-                api.getBatchImportStatus(jobId).then((d: any) => {
-                  if (d?.result) setDirectResult(d.result);
-                });
-              }, 2000);
-            }
-          }).catch(() => {});
-        }
-      }
-    } catch {}
-  }, []);
-
-  // Merge: prefer context batchJob, fall back to direct mount fetch
-  const candidateBatchResult = batchJob?.result || directResult;
-  const displayBatchResult = candidateBatchResult
-    && Array.isArray(candidateBatchResult.imported)
-    && Array.isArray(candidateBatchResult.low_confidence)
-    && Array.isArray(candidateBatchResult.not_found)
-    && Array.isArray(candidateBatchResult.errors)
-    ? candidateBatchResult
-    : null;
+  const displayBatchResult = batchJob?.result ?? null;
   const displayBatchProgress = batchJob?.progress;
 
   const enqueueBatch = useMutation({
@@ -516,22 +484,19 @@ function DanbooruReferenceContent() {
   }, [artist]);
 
   return (
-    <PageShell>
-      <PageHeader
-        title={t("danbooru.title")}
-        description={t("danbooru.desc")}
-        primaryAction={(
-          <button
+    <BusinessPage
+      title={t("danbooru.title")}
+      description={t("danbooru.desc")}
+      className="gallery-danbooru-page"
+      actions={<button
             type="button"
             className="btn-primary min-h-11"
             onClick={() => refreshMappings.mutate()}
             disabled={mappingRefreshPending}
           >
             {mappingRefreshPending ? t("danbooru.refreshing_all") : t("danbooru.refresh_all")}
-          </button>
-        )}
-      />
-
+          </button>}
+    >
       <div data-page-primary-content>
       <Banner tone="info" title={t("danbooru.search_info")} className="mb-6">
         <p className="text-accent">{t("danbooru.search_info_desc")}</p>
@@ -665,10 +630,10 @@ function DanbooruReferenceContent() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleBatchSubmit}
-                disabled={enqueueBatch.isPending || (!!batchJob?.jobId && !displayBatchResult) || !batchInput.trim()}
+                disabled={enqueueBatch.isPending || (batchJob?.status === "running") || !batchInput.trim()}
                 className="btn-primary"
               >
-                {enqueueBatch.isPending ? "..." : (!!batchJob?.jobId && !displayBatchResult) ? t("danbooru.processing") : t("danbooru.batch_import")}
+                {enqueueBatch.isPending ? "..." : (batchJob?.status === "running") ? t("danbooru.processing") : t("danbooru.batch_import")}
               </button>
               <span className="text-xs text-muted">
                 {batchInput.trim() ? `${batchInput.split(/[\n,]+/).filter((s: string) => /^\d+$/.test(s.trim())).length} ${t("danbooru.valid_ids")}` : ""}
@@ -716,8 +681,8 @@ function DanbooruReferenceContent() {
                 </div>
 
                 {/* Per‑result rows */}
-                {[...displayBatchResult.imported, ...displayBatchResult.low_confidence].map((r: any, i: number) => {
-                  const isLowConf = displayBatchResult.low_confidence.includes(r);
+                {[...displayBatchResult.imported, ...displayBatchResult.low_confidence].map((r, i) => {
+                  const isLowConf = "url_count" in r;
                   return (
                     <details key={i} className="bg-subtle border rounded p-2 text-xs">
                       <summary className="cursor-pointer flex items-center gap-2">
@@ -730,7 +695,7 @@ function DanbooruReferenceContent() {
                         )}
                       </summary>
                       <div className="mt-1 pl-6 text-muted space-y-0.5">
-                        {r.downloadable_urls && r.downloadable_urls.length > 0 && (
+                        {!isLowConf && r.downloadable_urls && r.downloadable_urls.length > 0 && (
                           <div>{t("danbooru.sources_label")} {r.downloadable_urls.join(", ")}</div>
                         )}
                         {isLowConf && r.message && <div className="text-warning">{r.message}</div>}
@@ -746,12 +711,12 @@ function DanbooruReferenceContent() {
                       {t("danbooru.not_found_group", { count: displayBatchResult.not_found.length })}
                     </summary>
                     <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
-                      {displayBatchResult.not_found.map((r: any, i: number) => (
+                      {displayBatchResult.not_found.map((r, i) => (
                         <div key={i}>Pixiv {r.pixiv_id}{r.message ? ` — ${r.message}` : ""}</div>
                       ))}
                     </div>
                     <div className="mt-2">
-                      <CopyButton text={displayBatchResult.not_found.map((r: any) => r.pixiv_id).join("\n")} />
+                      <CopyButton text={displayBatchResult.not_found.map((r) => r.pixiv_id).join("\n")} />
                     </div>
                   </details>
                 )}
@@ -763,12 +728,12 @@ function DanbooruReferenceContent() {
                       {t("danbooru.errors_group", { count: displayBatchResult.errors.length })}
                     </summary>
                     <div className="mt-2 space-y-1 pl-4 max-h-36 overflow-y-auto font-mono text-danger">
-                      {displayBatchResult.errors.map((r: any, i: number) => (
+                      {displayBatchResult.errors.map((r, i) => (
                         <div key={i}>Pixiv {r.pixiv_id}{r.error ? ` — ${r.error}` : ""}</div>
                       ))}
                     </div>
                     <div className="mt-2">
-                      <CopyButton text={displayBatchResult.errors.map((r: any) => r.pixiv_id).join("\n")} />
+                      <CopyButton text={displayBatchResult.errors.map((r) => r.pixiv_id).join("\n")} />
                     </div>
                   </details>
                 )}
@@ -834,7 +799,7 @@ function DanbooruReferenceContent() {
           selectedCreator={selectedCreator} setSelectedCreator={setSelectedCreator}
           importName={importName} setImportName={setImportName} />
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
 

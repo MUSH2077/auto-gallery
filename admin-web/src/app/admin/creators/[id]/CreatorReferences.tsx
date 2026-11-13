@@ -47,7 +47,7 @@ export default function CreatorReferences({
 
       {references.pixiv.length ? (
         <div>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Pixiv</h4>
+          <h4 className="mb-2 text-sm font-semibold text-muted">Pixiv</h4>
           <div className="space-y-2">
             {references.pixiv.map((identity) => (
               <article key={identity.source_creator_id} className="rounded-lg border border-border bg-subtle p-3">
@@ -93,7 +93,7 @@ export default function CreatorReferences({
                       </a>
                     </div>
                     {identity.status === "fallback" ? (
-                      <p className="mt-2 text-[11px] text-warning">{t("creator_detail.pixiv_reference_fallback")}</p>
+                      <p className="mt-2 text-sm text-warning">{t("creator_detail.pixiv_reference_fallback")}</p>
                     ) : null}
                   </div>
                 </div>
@@ -105,7 +105,7 @@ export default function CreatorReferences({
 
       {references.danbooru ? (
         <div>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Danbooru</h4>
+          <h4 className="mb-2 text-sm font-semibold text-muted">Danbooru</h4>
           <div className="rounded-lg border border-border bg-subtle p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">

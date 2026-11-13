@@ -574,6 +574,7 @@ def test_heat_recompute_request_coalesces_queued_work_and_follows_running_work(
     assert running == {"created": 1, "coalesced": 0, "errors": 0}
     assert queued_calls[0][2] == "pixiv"
     assert queued_calls[0][3]["job_id"] == "work-heat-pixiv-followup"
+    assert queued_calls[0][3]["meta"] == {"resource_descriptor": "work-heat"}
     assert queued_calls[0][3]["depends_on"].dependencies == ["work-heat-pixiv"]
     assert queued_calls[0][3]["depends_on"].allow_failure is True
 
@@ -587,6 +588,7 @@ def test_heat_recompute_request_coalesces_queued_work_and_follows_running_work(
     assert followup_running == {"created": 1, "coalesced": 0, "errors": 0}
     assert completed_primary.deleted is True
     assert queued_calls[0][3]["job_id"] == "work-heat-pixiv"
+    assert queued_calls[0][3]["meta"] == {"resource_descriptor": "work-heat"}
     assert queued_calls[0][3]["depends_on"].dependencies == [
         "work-heat-pixiv-followup"
     ]

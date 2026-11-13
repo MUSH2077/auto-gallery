@@ -4,27 +4,27 @@ set -euo pipefail
 verify_scope="${VERIFY_SCOPE:-full}"
 case "$verify_scope" in
   core)
-    services=(postgres redis meilisearch backend admin-web)
+    services=(postgres redis backend admin-web)
     application_services=(backend admin-web)
     ;;
   import)
-    services=(postgres redis meilisearch backend admin-web worker-import worker-operations)
+    services=(postgres redis backend admin-web worker-import worker-operations)
     application_services=(backend admin-web worker-import worker-operations)
     ;;
   full)
-    services=(postgres redis meilisearch backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
-    application_services=(backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)
+    services=(postgres redis backend admin-web worker-download worker-import worker-operations scheduler)
+    application_services=(backend admin-web worker-download worker-import worker-operations scheduler)
     ;;
   *)
     echo "Unsupported VERIFY_SCOPE: $verify_scope" >&2
     exit 2
     ;;
 esac
-protected_services=(postgres redis meilisearch migrate)
+protected_services=(postgres redis migrate)
 resources_only="${VERIFY_RESOURCES_ONLY:-0}"
 
 env_file="${COMPOSE_ENV_FILE:-.env}"
-default_enforced_profiles="download_network,import_db,image_derive,video_derive,search_index,maintenance"
+default_enforced_profiles="download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat"
 expected_enforced_profiles="${VERIFY_EXPECT_ENFORCED_PROFILES-$default_enforced_profiles}"
 
 if [[ -f "$env_file" ]]; then
@@ -41,6 +41,26 @@ compose() {
     docker compose "$@"
   fi
 }
+
+if [[ "$verify_scope" == "full" ]]; then
+  compose_config="$(compose config --format json)"
+  resolved_worker_services_output="$(
+    printf '%s' "$compose_config" | python3 scripts/runtime-services.py
+  )" || {
+    echo "Runtime verification could not resolve effective worker services" >&2
+    exit 1
+  }
+  mapfile -t resolved_worker_services <<<"$resolved_worker_services_output"
+  discovery_runtime_state="$(compose ps worker-discovery --format '{{.State}}')" || {
+    echo "Runtime verification could not inspect discovery service state" >&2
+    exit 1
+  }
+  if printf '%s\n' "${resolved_worker_services[@]}" | grep -qx 'worker-discovery' ||
+     [[ "$discovery_runtime_state" == "running" ]]; then
+    services+=(worker-discovery)
+    application_services+=(worker-discovery)
+  fi
+fi
 
 require_service_ok() {
   local service="$1"
@@ -242,10 +262,17 @@ from app.models.user import User
 
 async def verify_docs() -> None:
     async with async_session() as db:
-        username = (
-            await db.execute(select(User.username).where(User.is_admin.is_(True)).limit(1))
-        ).scalar_one()
-    token = create_access_token(username, must_change_password=False)
+        user = (
+            await db.execute(
+                select(User)
+                .where(User.is_admin.is_(True), User.is_active.is_(True))
+                .order_by(User.must_change_password, User.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            raise RuntimeError("Runtime verification requires an active administrator")
+        token = create_access_token(user)
     async with httpx.AsyncClient(
         base_url="http://admin-web:3000",
         cookies={"ag_token": token},
@@ -262,11 +289,27 @@ async def verify_docs() -> None:
                 f"Legacy ag_token cookie still opened a business API ({business.status_code})"
             )
         client.headers["Authorization"] = f"Bearer {token}"
+        identity = await client.get("/api/v1/auth/me")
+        identity.raise_for_status()
+        current = identity.json()
+        if current["id"] != user.id:
+            raise RuntimeError("Runtime verification authenticated a different account")
+        password_change_required = current["must_change_password"]
+        expected_status = 403 if password_change_required else 200
         for path in (
             "/api/docs",
             "/api/redoc",
             "/api/openapi.json",
             "/api/asyncapi.yaml",
+            "/api/v1/system/storage",
+        ):
+            response = await client.get(path)
+            if response.status_code != expected_status:
+                raise RuntimeError(
+                    f"Runtime access check {path} returned {response.status_code}, "
+                    f"expected {expected_status}"
+                )
+        for path in (
             "/api-docs/swagger-ui-bundle.js",
             "/api-docs/redoc.standalone.js",
         ):
@@ -283,13 +326,18 @@ async def verify_docs() -> None:
                     f"Legacy API docs redirect {legacy} returned "
                     f"{response.status_code} -> {response.headers.get('location')}"
                 )
-        business = await client.get("/api/v1/system/storage")
-        business.raise_for_status()
+        if password_change_required:
+            print(
+                "ok: first-login password change blocks documentation and business access; "
+                "authenticated documentation verification pending. "
+                "Change the administrator password through login, then rerun verify-runtime.sh."
+            )
+        else:
+            print("ok: authenticated offline API documentation")
 
 
 asyncio.run(verify_docs())
 PY
-echo "ok: authenticated offline API documentation"
 
 compose exec -T admin-web wget -q -O /dev/null http://127.0.0.1:3000/admin/login
 echo "ok: admin-web login page"
@@ -324,7 +372,10 @@ if [[ "$verify_scope" == "full" ]]; then
   rq_download_hostname="$(current_container_hostname worker-download)"
   rq_import_hostname="$(current_container_hostname worker-import)"
   rq_operations_hostname="$(current_container_hostname worker-operations)"
-  rq_discovery_hostname="$(current_container_hostname worker-discovery)"
+  rq_discovery_hostname=""
+  if printf "%s\n" "${application_services[@]}" | grep -qx "worker-discovery"; then
+    rq_discovery_hostname="$(current_container_hostname worker-discovery)"
+  fi
   rq_scheduler_hostname="$(current_container_hostname scheduler)"
 
   compose exec -T \
@@ -356,17 +407,19 @@ for worker in Worker.all(connection=connection):
             ),
         }
     )
+expected_hostnames = {
+    "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
+    "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
+    "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
+    "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
+}
+if os.environ.get("VERIFY_RQ_DISCOVERY_HOSTNAME"):
+    expected_hostnames["discovery"] = os.environ["VERIFY_RQ_DISCOVERY_HOSTNAME"]
 print(
     json.dumps(
         {
             "observed_at": datetime.now(timezone.utc).isoformat(),
-            "expected_hostnames": {
-                "download": os.environ["VERIFY_RQ_DOWNLOAD_HOSTNAME"],
-                "import": os.environ["VERIFY_RQ_IMPORT_HOSTNAME"],
-                "operations": os.environ["VERIFY_RQ_OPERATIONS_HOSTNAME"],
-                "discovery": os.environ["VERIFY_RQ_DISCOVERY_HOSTNAME"],
-                "scheduler": os.environ["VERIFY_RQ_SCHEDULER_HOSTNAME"],
-            },
+            "expected_hostnames": expected_hostnames,
             "workers": workers,
         },
         separators=(",", ":"),

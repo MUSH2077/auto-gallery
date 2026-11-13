@@ -247,30 +247,9 @@ async def _persist_invalid_dispatch(
         return
 
     _set_dispatch_state(task, IMPORT_DISPATCH_INVALID, error=error)
-    if job.status == "enqueued":
-        transition_import_job(job, "failed", message)
-        apply_import_progress(job, "failed", message, publish=False)
-    await TaskService(db).update_task(
-        task,
-        status="failed",
-        progress=job.progress_data,
-        error=message,
-        meta=task.meta,
-        rq_job_id=task.rq_job_id,
-    )
-
-    # Invalid durable publication is one terminal child outcome. Shared disk
-    # import parents derive their state under the same sibling/publication lock
-    # as every other exit; ordinary one-child parents retain explicit failure.
-    from app.services.import_lifecycle import project_import_pipeline_state
-
-    await project_import_pipeline_state(
-        db,
-        job,
-        status="failed",
-        error=message,
-        reason_code="import_dispatch_invalid",
-    )
+    from app.services.import_lifecycle import apply_import_state
+    await apply_import_state(db, parent, job, task, "failed", message=message,
+                             progress={"stage": "failed", "message": message}, reason_code="import_dispatch_invalid")
     await db.commit()
 
 
@@ -319,6 +298,10 @@ def _enqueue_import_rq(
         "job_id": rq_job_id,
         "job_timeout": int(job_timeout),
         "description": f"import task={import_job_id}",
+        # Explicit resource metadata lets resource-aware workers classify the
+        # import without inspecting the function name or argument layout.
+        # Keep the legacy function and args unchanged for persisted RQ jobs.
+        "meta": {"resource_descriptor": "import-maintenance"},
     }
     if delay_seconds is not None and delay_seconds > 0:
         return checked_enqueue_in(

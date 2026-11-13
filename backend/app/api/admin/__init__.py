@@ -26,5 +26,4 @@ async def clear_entity(entity: str, db):
 
 
 def _validate_backup_filename(filename: str):
-    backup.BACKUP_DIR = BACKUP_DIR
-    return backup._validate_backup_filename(filename)
+    return backup._validate_backup_filename(filename, backup_root=BACKUP_DIR)

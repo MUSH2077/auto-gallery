@@ -64,9 +64,17 @@ class TaskRead(TaskCapabilities):
     model_config = {"extra": "allow"}
 
 
+class TaskSummary(BaseModel):
+    all: int = 0
+    attention: int = 0
+    running: int = 0
+    waiting: int = 0
+
+
 class TaskPage(BaseModel):
     items: list[TaskRead]
     total: int
+    summary: TaskSummary | None = None
     model_config = {"extra": "allow"}
 
 

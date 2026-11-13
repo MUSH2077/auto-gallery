@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import os
 import random
 import time
 from datetime import datetime, timezone
 
 import redis
 from rq import Worker
+from rq.defaults import DEFAULT_LOGGING_DATE_FORMAT, DEFAULT_LOGGING_FORMAT
 from rq.exceptions import StopRequested
 from rq.worker import WorkerStatus
 
@@ -36,11 +39,20 @@ from app.services.resource_pressure import (
     touch_cgroup_oom_kill_ack,
     workload_profile_name,
 )
+from app.services.resource_descriptors import descriptor_for_job
+from app.services.download_resource_wait import (
+    clear_marker as clear_download_resource_marker,
+    register_after_retry_for_registry,
+    is_download_queue,
+)
 
 REDIS_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 REDIS_CONNECTION_ERRORS = (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError)
 HEAVY_QUEUE_NAMES = frozenset({"imports", "operations", "maintenance"})
 RESOURCE_WORK_CHANNEL_PREFIX = "resource:work:"
+DOWNLOAD_DRAIN_KEY = "worker:download:drain:v1"
+DOWNLOAD_DRAIN_CHANNEL = "worker:download:drain:control"
+DOWNLOAD_WORKER_LIFECYCLE_ENV = "DOWNLOAD_WORKER_LIFECYCLE"
 IDLE_WAIT_MIN_SECONDS = 2.0
 IDLE_WAIT_MAX_SECONDS = 30.0
 WORKER_STATE_HEARTBEAT_SECONDS = 30.0
@@ -104,6 +116,10 @@ def adaptive_wait_delay(attempt: int, *, jitter: bool = True) -> float:
     return max(IDLE_WAIT_MIN_SECONDS, min(IDLE_WAIT_MAX_SECONDS, base * random.uniform(0.85, 1.15)))
 
 
+class _WorkHeatDeferred(Exception):
+    """A work-heat job was parked without counting an execution failure."""
+
+
 class ResourceAwareWorker(Worker):
     """Pause before dequeueing; an already-running job is never interrupted."""
 
@@ -120,6 +136,55 @@ class ResourceAwareWorker(Worker):
             # migration/code is present; RQ metadata remains the fallback.
             register_resource_state_callback(None)
         super().__init__(*args, **kwargs)
+
+    def bootstrap(self, *args, **kwargs):
+        # Model registration and relationship configuration are process-local.
+        # Do this once in the real RQ parent, before workhorse forks. This does
+        # not establish or share a database connection with those children.
+        import app.models  # noqa: F401
+        from sqlalchemy.orm import configure_mappers
+
+        configure_mappers()
+        # RQ forks long-lived schedulers and short-lived workhorses after this
+        # point. Cyclic GC can dirty long-lived preload pages through
+        # per-object bookkeeping, turning shared memory into private copies.
+        # Collect initialization garbage once, then leave that static graph
+        # out of future collections. New task objects remain collectable;
+        # normal GC stays enabled in both the consumer and its children.
+        gc.collect()
+        gc.freeze()
+        return super().bootstrap(*args, **kwargs)
+
+    def _start_scheduler(
+        self,
+        burst: bool = False,
+        logging_level: str | None = "INFO",
+        date_format: str = DEFAULT_LOGGING_DATE_FORMAT,
+        log_format: str = DEFAULT_LOGGING_FORMAT,
+    ):
+        from app.services.resource_aware_scheduler import ResourceAwareScheduler
+
+        # RQ has no scheduler-class factory here. Preserve its startup/lock
+        # lifecycle, using the notification-aware scheduler for promotion.
+        self.scheduler = ResourceAwareScheduler(
+            self.queues,
+            connection=self.connection,
+            logging_level=logging_level if logging_level is not None else self.log.level,
+            date_format=date_format,
+            log_format=log_format,
+            serializer=self.serializer,
+        )
+        self.scheduler.acquire_locks()
+        if self.scheduler.acquired_locks:
+            if burst:
+                try:
+                    self.scheduler.register_birth()
+                    self.scheduler.enqueue_scheduled_jobs()
+                finally:
+                    self.scheduler.release_locks()
+                    self.scheduler.register_death()
+            else:
+                self.scheduler.start()
 
     def _publish_pressure_state(self, snapshot: dict) -> dict[str, object]:
         """Publish a low-write worker view and close worker-local cgroup gaps.
@@ -454,31 +519,14 @@ class ResourceAwareWorker(Worker):
                 # handlers never acquire child slices, so the parent must own
                 # the maintenance lease and POSIX lock for the whole workhorse.
                 return None
-        registered_profile = metadata.get("registered_admin_internal_profile")
+        registered_profile = (
+            metadata.get("registered_admin_resource_profile")
+            or metadata.get("registered_admin_internal_profile")
+        )
         if registered_profile:
             return str(registered_profile)
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        profiles = (
-            ("run_clear_operation", "maintenance"),
-            ("run_library_rebuild_operation", "maintenance"),
-            ("run_disk_import_operation", "maintenance"),
-            ("run_gitllery_rebuild_operation", "maintenance"),
-            ("run_creator_reenrich_operation", "maintenance"),
-            ("run_gitllery_sync_operation", "git_projection"),
-            ("run_curation_backfill_operation", "import_db"),
-            ("run_search_reindex_operation", "search_index"),
-            ("import_runner.run_import_job", "import_db"),
-            ("run_asset_dedup_scan", "image_derive"),
-            ("run_asset_dedup_outbox", "image_derive"),
-            ("run_media_derivative_outbox", "image_derive"),
-            ("run_gitllery_projection_outbox", "git_projection"),
-            ("run_import_projection_outbox", "import_db"),
-            ("run_search_projection_outbox", "search_index"),
-        )
-        for name, profile in profiles:
-            if name in func_name:
-                return profile
-        return None
+        descriptor = descriptor_for_job(job)
+        return descriptor.child_profile if descriptor else None
 
     @classmethod
     def _job_workload(cls, job, queue) -> str:
@@ -489,6 +537,9 @@ class ResourceAwareWorker(Worker):
             # Admission still uses the real profile, while execute_job avoids
             # taking a parent lease for internally sliced coordinators.
             return internal_profile
+        descriptor = descriptor_for_job(job)
+        if descriptor is not None:
+            return descriptor.profile
         explicit = metadata.get("resource_profile") or metadata.get("workload_profile")
         if explicit:
             return str(explicit)
@@ -506,48 +557,18 @@ class ResourceAwareWorker(Worker):
         metadata = getattr(job, "meta", None) or {}
         if metadata.get("registered_admin_operation") == "asset-dedup-scan":
             return True
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        return any(
-            name in func_name
-            for name in (
-                "run_asset_dedup_scan",
-                "run_asset_dedup_outbox",
-                "run_media_derivative_outbox",
-                "run_gitllery_projection_outbox",
-                "run_import_projection_outbox",
-                "run_search_projection_outbox",
-            )
-        )
+        descriptor = descriptor_for_job(job)
+        return bool(descriptor and descriptor.nonblocking_child)
 
     @staticmethod
     def _bound_job_slice(job, workload: str) -> None:
         """Clamp outbox work in-memory before the workhorse fork."""
-
-        del workload
-        func_name = str(getattr(job, "func_name", "") or "").lower()
-        args = list(getattr(job, "args", ()) or ())
-        if "media_derivatives" in func_name:
-            args = [
-                min(int(args[0]), 1) if args else 1,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "run_asset_dedup_outbox" in func_name:
-            args = [1]
-        elif "import_projection" in func_name:
-            args = [
-                min(int(args[0]), 25) if args else 25,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "gitllery_projection" in func_name:
-            args = [
-                min(int(args[0]), 1) if args else 1,
-                min(float(args[1]), 20.0) if len(args) > 1 else 20.0,
-            ]
-        elif "search_projection" in func_name:
-            args = [min(int(args[0]), 500) if args else 500]
-        else:
+        descriptor = descriptor_for_job(job)
+        if descriptor is None or descriptor.bind_slice is None:
             return
-        job.args = tuple(args)
+        job.args = descriptor.bind_slice(
+            tuple(getattr(job, "args", ()) or ()), descriptor.default_units, 20.0
+        )
 
     def _apply_profile_slice(self, job, workload: str, snapshot: dict) -> None:
         """Apply enforce-mode AIMD and worker-local soft feedback to one slice."""
@@ -558,7 +579,9 @@ class ResourceAwareWorker(Worker):
         if not isinstance(profile, dict) or "work_units" not in profile:
             return
 
-        func_name = str(getattr(job, "func_name", "") or "").lower()
+        descriptor = descriptor_for_job(job)
+        if descriptor is None or descriptor.bind_slice is None:
+            return
         args = list(getattr(job, "args", ()) or ())
         try:
             units = max(1, int(profile.get("work_units") or 1))
@@ -579,26 +602,7 @@ class ResourceAwareWorker(Worker):
             if slice_seconds is not None:
                 slice_seconds = max(1.0, slice_seconds * 0.5)
 
-        if "media_derivatives" in func_name:
-            current_seconds = float(args[1]) if len(args) > 1 else 20.0
-            args = [
-                1,
-                min(current_seconds, slice_seconds) if slice_seconds else current_seconds,
-            ]
-        elif "import_projection" in func_name or "gitllery_projection" in func_name:
-            default_units = 1 if "gitllery_projection" in func_name else 25
-            current_units = int(args[0]) if args else default_units
-            current_seconds = float(args[1]) if len(args) > 1 else 20.0
-            args = [
-                min(current_units, units),
-                min(current_seconds, slice_seconds) if slice_seconds else current_seconds,
-            ]
-        elif "search_projection" in func_name:
-            current_units = int(args[0]) if args else 500
-            args = [min(current_units, units)]
-        else:
-            return
-        job.args = tuple(args)
+        job.args = descriptor.bind_slice(tuple(args), units, slice_seconds)
 
     def _close_control_pubsub(self) -> None:
         pubsub = getattr(self, "_resource_control_pubsub", None)
@@ -610,10 +614,48 @@ class ResourceAwareWorker(Worker):
             except Exception:
                 self.log.debug("Unable to close resource control subscriber", exc_info=True)
 
+    def _is_download_worker(self) -> bool:
+        """Return whether this consumer owns one or more download queues."""
+
+        return any(
+            self._is_heavy_queue(queue)
+            and (
+                str(getattr(queue, "name", "")) == "downloads"
+                or str(getattr(queue, "name", "")).startswith("downloads:")
+            )
+            for queue in getattr(self, "queues", ())
+        )
+
+    def _download_lifecycle_enabled(self) -> bool:
+        return (
+            str(os.environ.get(DOWNLOAD_WORKER_LIFECYCLE_ENV, "resident"))
+            .strip()
+            .lower()
+            == "on_demand"
+        )
+
+    def _download_drain_requested(self) -> bool:
+        """Read the short-lived host-controller drain lease.
+
+        A missing or unreadable lease keeps the resident worker behaviour. The
+        controller only acknowledges a drain after every consumer has exited,
+        so a Redis read failure cannot make it stop the container prematurely.
+        """
+
+        if not self._is_download_worker() or not self._download_lifecycle_enabled():
+            return False
+        try:
+            return self.connection.get(DOWNLOAD_DRAIN_KEY) is not None
+        except REDIS_CONNECTION_ERRORS:
+            return False
+
     def _raise_if_shutdown_requested(self) -> None:
         if getattr(self, "_stop_requested", False) or getattr(
             self, "_shutdown_requested_date", None
         ) is not None:
+            self._close_control_pubsub()
+            raise StopRequested()
+        if self._download_drain_requested():
             self._close_control_pubsub()
             raise StopRequested()
 
@@ -633,6 +675,8 @@ class ResourceAwareWorker(Worker):
                     RESOURCE_CONTROL_CHANNEL,
                     f"{RESOURCE_WORK_CHANNEL_PREFIX}{workload}",
                 )
+                if self._is_download_worker() and self._download_lifecycle_enabled():
+                    pubsub.subscribe(DOWNLOAD_DRAIN_CHANNEL)
                 self._resource_control_workload = workload
             # An accepted job marks the worker busy, so RQ's warm signal sets
             # a flag instead of raising. Observe it without resampling pressure.
@@ -668,6 +712,7 @@ class ResourceAwareWorker(Worker):
         job=None,
         owner: str | None = None,
         hard_only: bool = False,
+        wait_for_permit: bool = True,
     ) -> dict:
         """Remain alive but idle until this profile receives a permit."""
 
@@ -740,6 +785,8 @@ class ResourceAwareWorker(Worker):
                 return snapshot
 
             wait_reason = str(permit.get("reason") or "resource_pressure")
+            if not wait_for_permit:
+                return snapshot
             if job is not None and owner is not None and wait_reason != last_job_reason:
                 self._set_job_resource_meta(job, workload, "waiting", wait_reason)
                 _set_resource_state_sync(
@@ -884,7 +931,10 @@ class ResourceAwareWorker(Worker):
                 peeked_job, peeked_queue = self._peek_heterogeneous_head()
                 if peeked_job is not None and peeked_queue is not None:
                     peeked_workload = self._job_workload(peeked_job, peeked_queue)
-                    if self._internal_slice_workload(peeked_job) != "search_index":
+                    if (
+                        peeked_workload != "work_heat"
+                        and self._internal_slice_workload(peeked_job) not in ("search_index", "pg_search_db")
+                    ):
                         self._wait_until_pressure_allows_dequeue(
                             interval,
                             workload=peeked_workload,
@@ -982,12 +1032,43 @@ class ResourceAwareWorker(Worker):
         except Exception:
             pass
 
-    def _profile_admission(self, job, workload: str):
+    def _profile_admission(self, job, workload: str, queue=None):
         """Wait without a lock, then hold one profile lease for this slice."""
 
         owner = self._job_owner(job)
         publisher_attempt = self._job_publisher_attempt(job)
-        if self._internal_slice_workload(job) == "search_index":
+
+        def defer_work_heat(reason: str) -> None:
+            if workload != "work_heat":
+                return
+            from app.services.work_heat_queue import (
+                _job_created_at_raw,
+                defer_work_heat_for_resources,
+            )
+            actual_queue = queue or getattr(self, "_resource_admission_queue", None)
+            connection = getattr(actual_queue, "connection", None)
+            expected_created_at = _job_created_at_raw(job)
+            parked = defer_work_heat_for_resources(job, actual_queue, reason=reason)
+            if not parked:
+                intermediate = getattr(actual_queue, "intermediate_queue", None)
+                job_id = str(getattr(job, "id", ""))
+                current_created_at = (
+                    connection.hget(job.key, "created_at")
+                    if connection is not None else None
+                )
+                if isinstance(current_created_at, bytes):
+                    current_created_at = current_created_at.decode("utf-8", "replace")
+                still_claimed = bool(
+                    connection is not None
+                    and intermediate is not None
+                    and connection.lpos(intermediate.key, job_id) is not None
+                    and current_created_at == expected_created_at
+                )
+                if still_claimed:
+                    raise RuntimeError("work_heat resource park failed while job remained claimed")
+            raise _WorkHeatDeferred
+
+        if self._internal_slice_workload(job) in ("search_index", "pg_search_db"):
             # A remote poll releases an already reserved workload even under
             # pressure. The child applies heavy admission only for new writes.
             self._active_profile_snapshot = {}
@@ -1000,8 +1081,13 @@ class ResourceAwareWorker(Worker):
                 job=job,
                 owner=owner,
                 hard_only=self._job_uses_nonblocking_child_admission(job),
+                wait_for_permit=workload != "work_heat",
             )
             self._raise_if_shutdown_requested()
+            if workload == "work_heat":
+                permit = snapshot.get("active_profile") or {}
+                if not permit.get("allowed", False):
+                    defer_work_heat(str(permit.get("reason") or "resource_pressure"))
             nonblocking_child = self._job_uses_nonblocking_child_admission(job)
             if (
                 workload_profile_name(workload) != "maintenance"
@@ -1012,6 +1098,7 @@ class ResourceAwareWorker(Worker):
                 except REDIS_CONNECTION_ERRORS:
                     maintenance_pending = True
                 if maintenance_pending:
+                    defer_work_heat("maintenance_pending")
                     self._set_job_resource_meta(
                         job,
                         workload,
@@ -1061,6 +1148,7 @@ class ResourceAwareWorker(Worker):
                     workload,
                 )
                 if reservation_bytes > reservation_capacity:
+                    defer_work_heat("profile_memory_reserve_live")
                     lease_reason = "profile_memory_reserve_live"
                     self._set_job_resource_meta(job, workload, "waiting", lease_reason)
                     _set_resource_state_sync(
@@ -1088,6 +1176,7 @@ class ResourceAwareWorker(Worker):
                 )
                 if not asyncio.run(lease.try_acquire()):
                     lease_reason = lease.denial_reason or "profile_lease_busy"
+                    defer_work_heat(lease_reason)
                     self._set_job_resource_meta(job, workload, "waiting", lease_reason)
                     _set_resource_state_sync(
                         owner,
@@ -1108,6 +1197,7 @@ class ResourceAwareWorker(Worker):
             if not local_acquired:
                 if lease is not None:
                     asyncio.run(lease.release())
+                defer_work_heat("profile_lock_busy")
                 self._set_job_resource_meta(job, workload, "waiting", "profile_lock_busy")
                 _set_resource_state_sync(
                     owner,
@@ -1135,8 +1225,30 @@ class ResourceAwareWorker(Worker):
             )
             return local_lock, lease, owner
 
+    def handle_job_retry(self, job, queue, retry, started_job_registry, execution):
+        """Let RQ persist the retry, then mark only resource-deferred downloads."""
+
+        result = super().handle_job_retry(
+            job, queue, retry, started_job_registry, execution
+        )
+        if is_download_queue(str(getattr(queue, "name", ""))):
+            clear_download_resource_marker(self.connection, job)
+            register_after_retry_for_registry(
+                self.connection,
+                job,
+                retry,
+                registry=queue.scheduled_job_registry,
+                queue_name=str(queue.name),
+            )
+        return result
+
     def execute_job(self, job, queue):
         """Select and hold only the concrete job's profile for one slice."""
+
+        if is_download_queue(str(getattr(queue, "name", ""))):
+            # A marker is advisory and must not survive a new execution or a
+            # normal platform/business retry.
+            clear_download_resource_marker(self.connection, job)
 
         if not self._is_heavy_queue(queue):
             return super().execute_job(job, queue)
@@ -1144,6 +1256,9 @@ class ResourceAwareWorker(Worker):
         workload = self._job_workload(job, queue)
         publisher_attempt = self._job_publisher_attempt(job)
         internally_sliced = self._internal_slice_workload(job) is not None
+        if workload == "work_heat":
+            from app.services.work_heat_queue import clear_work_heat_resource_wait
+            clear_work_heat_resource_wait(self.connection, job)
         # RQ has popped this still-QUEUED job but not prepared an execution.
         # Make signals cooperative while acquiring leases. At a wait boundary
         # a stop returns ownership atomically, without reviving cancelled jobs.
@@ -1152,7 +1267,12 @@ class ResourceAwareWorker(Worker):
             self.set_state(WorkerStatus.BUSY)
             self._raise_if_shutdown_requested()
             self._bound_job_slice(job, workload)
-            local_lock, lease, owner = self._profile_admission(job, workload)
+            self._resource_admission_queue = queue
+            try:
+                local_lock, lease, owner = self._profile_admission(job, workload)
+            except _WorkHeatDeferred:
+                self.set_state(WorkerStatus.IDLE)
+                return None
         except StopRequested:
             self.connection.eval(
                 """
@@ -1173,6 +1293,7 @@ class ResourceAwareWorker(Worker):
             raise
         finally:
             self._resource_admission_active = False
+            self._resource_admission_queue = None
         profile_snapshot = getattr(self, "_active_profile_snapshot", {})
         slice_started = time.monotonic()
         inherited_profile = workload_profile_name(workload)
@@ -1202,6 +1323,14 @@ class ResourceAwareWorker(Worker):
                 workload=workload,
                 publisher_attempt=publisher_attempt,
             )
+            try:
+                from app.services.outbox_coordinator import wake_resource_deferred_outboxes
+
+                wake_resource_deferred_outboxes()
+            except Exception:
+                # A completed domain job stays successful; durable outboxes
+                # retain the original scheduler recovery path.
+                self.log.warning("Resource-release outbox wake failed", exc_info=True)
             # Batch shrinking limits peak cost but cannot lower the sustained
             # rate of a permanently backlogged queue.  Sleep only after the
             # workhorse exits and both Redis/POSIX leases are released.

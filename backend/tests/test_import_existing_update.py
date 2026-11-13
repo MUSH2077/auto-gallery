@@ -55,9 +55,11 @@ def _pixiv_raw(page: int) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("new_extension", ["jpg", "avif"])
 async def test_existing_work_metadata_and_new_page_are_idempotently_imported(
     tmp_path,
     monkeypatch,
+    new_extension,
 ):
     from app.config import settings
     from app.database import async_session, engine
@@ -92,7 +94,7 @@ async def test_existing_work_metadata_and_new_page_are_idempotently_imported(
     p0_json.write_text(json.dumps(_pixiv_raw(0)), encoding="utf-8")
     p1_json.write_text(json.dumps(_pixiv_raw(1)), encoding="utf-8")
     (work_dir / "148166622_p0.jpg").write_bytes(b"old-page")
-    (work_dir / "148166622_p1.jpg").write_bytes(b"new-page")
+    (work_dir / f"148166622_p1.{new_extension}").write_bytes(b"new-page")
 
     try:
         async with async_session() as db:

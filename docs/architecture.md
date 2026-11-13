@@ -4,6 +4,12 @@
 
 auto-gallery is a layered Docker Compose application that downloads media from multiple sources, imports metadata into a canonical PostgreSQL database, and serves it through a FastAPI backend and Next.js admin interface.
 
+## Backend Image Boundaries
+
+One Dockerfile provides a build stage, a production image and a test image. Build tools and libvips headers compile pyvips in API mode and package Gitllery; only runtime wheels and libraries enter production. The test target adds development dependencies on the same runtime layer. Normal Compose builds select `production`; API, migrations, workers and performance measurements use that image.
+
+The production lock retains NumPy for pHash/SSIM. ImageHash/SciPy/PyWavelets are test references, and pytest/Ruff/type/coverage tooling stays in the development lock. The retired Meilisearch SDK is absent; migration ownership fields remain. Runtime libvips/image codecs, FFmpeg, PostgreSQL 16 client tools, curl and certificates remain available. Candidate builds use these same Dockerfile targets, so dependency changes are tested in the resulting production image rather than hidden by an older base image.
+
 ## Layer Diagram
 
 ```
@@ -32,7 +38,7 @@ auto-gallery is a layered Docker Compose application that downloads media from m
        │            │              │
 ┌──────▼────────────▼──────────────▼──────────────┐
 │  Data Layer                                      │
-│  PostgreSQL ── Redis ── Meilisearch              │
+│  PostgreSQL ── Redis                            │
 │  ┌──────────┐ ┌──────┐ ┌─────────────┐          │
 │  │ /downloads│ │/lib │ │ /gallerydl  │          │
 │  │           │ │rary │ │ -config     │          │
@@ -42,26 +48,147 @@ auto-gallery is a layered Docker Compose application that downloads media from m
 
 ## Maintained Module Boundaries
 
-- `SearchService` remains the backend search interface.
-  `search_language.py` parses queries; `search_pagination.py` owns stable
-  cursors and sort rules; `search_filters.py` compiles Meilisearch filters;
-  `search_projection_fields.py` builds deterministic index fields. The
-  service still coordinates SQL/Meilisearch execution and index delivery.
+- `SearchService` remains the search interface. `search_language.py` parses queries;
+  `search_pagination.py` owns stable cursors and sorting; `search_filters.py` builds
+  internal filter expressions and `search_projection_fields.py` builds index fields.
+  `postgres_search_query.py` executes library text searches in PostgreSQL;
+  `postgres_search_store.py` owns documents, logical indexes and bounded writes;
+  `postgres_search_client.py` bridges existing synchronous callers to async database work.
+  Normal operation neither starts nor calls Meilisearch; `SEARCH_BACKEND` is `postgresql`.
+  `search_index_definitions.py` defines indexes and `search_projection.py` hydrates
+  documents for incremental delivery and full rebuilds. Alembic creates the tables
+  and `pg_trgm`/`fuzzystrmatch` extensions; requests do not run schema DDL.
+  Receipts and rebuilds retain backend ownership and cannot be claimed across backends.
+  See [deployment configuration](deployment-profiles.md#postgresql-search--postgresql-搜索)
+  for cutover, rebuild and rollback. `subscription_schedule.py` owns calendar policy;
+  scheduler search and the dashboard share `scheduler_decisions.py` eligibility rules.
+- `models/postgres_search.py` defines `search_pg_indexes`, `search_pg_documents`
+  and `search_pg_tasks`. Alembic installs their PostgreSQL extensions and GIN
+  indexes. Receipt/rebuild backend columns preserve command origin; their database
+  default identifies writes from older images as `meilisearch`.
 - `search_sql_filters.py` isolates SQL work-projection eligibility and qualifier
   compilation from the SearchService execution path.
+- `search_work_page.py` owns the reusable SQLAlchemy statement for page asset
+  hydration. Each request binds its own work IDs; assets shared by several
+  source links are counted once, and ordered preview IDs remain bounded to ten
+  per work. Text queries obtain exact totals and pages in one PostgreSQL statement,
+  with entity ID as the final sort tie-breaker. Authorization uses current database memberships and visibility.
+- `api/media.py` resolves the requested asset, its representative and the final
+  storage state with one query. Authentication, signed URLs, ETag/304 responses,
+  quarantined-file handling and purged-file rejection retain their existing
+  behavior.
 - `import_runner.py` processes work slices, while `import_execution.py`
-  owns the claim, lease and terminal parent projection boundary. A retry
-  must retain the same durable task ownership and idempotent result.
+  owns the claim, lease and completion workflow. `import_lifecycle.py` locks
+  and rereads parent, child and TaskRun before token arbitration, control
+  commands and parent aggregation. Artifact locks, when required, come first.
+  `import_intent.py` owns artifact assignment and durable publication intent:
+  prepare never commits; publication follows the caller's commit. Download,
+  upload, disk import and recovery share this implementation; old worker
+  function names remain forwarding adapters for persisted RQ records.
+- `danbooru_import.persist_danbooru_artist` owns resolved artist persistence for
+  single, Pixiv-ID batch and URL batch imports. Sources are unique by URL;
+  resolvable identities, aliases and search intents are applied in the caller's
+  transaction. Entrypoints fence the attempt before commit and invalidate caches
+  afterward; batch confidence and per-item result policies stay at the edges.
+- `download_lifecycle.py` owns download state application and explicit TaskRun,
+  receipt and search projections. Control, worker failure/retry, stale and invalid
+  dispatch paths reuse it after their existing eligibility checks and locks.
+  Workers fence writes with the RQ ID and TaskRun attempt captured at claim;
+  repositories no longer create or update TaskRun implicitly. Callers commit
+  before publishing durable status notifications. `download_finalization.py`
+  shares parent outcome mapping across import completion, publication close
+  and recovery, using the existing bounded-child aggregation.
+  Shared subscription and membership search documents exclude private job and
+  TaskRun state. Nonterminal private transitions therefore update the job and
+  TaskRun without registering an unchanged shared search projection. Public
+  transitions and every terminal transition retain search registration and the
+  existing receipt policy; source, work and asset mutations keep their own
+  projection registration.
+  Cancellation application (`TaskEngine.apply_cancel_download/import`) does not
+  commit or notify, including download-to-import delegation. Standalone control
+  endpoints commit and then notify; scheduler cleanup stages both cancellation
+  and its batch item, fences the cleanup attempt, commits once and then notifies.
 - `operations.py` coordinates admin task publication and compensation;
   `admin_dispatch_recovery.py` selects bounded due PostgreSQL dispatch
   intents for recovery without trusting Redis queue state as the authority.
+- Each admin operation definition links its handler, normalized result policy
+  and resource admission profile. `admin_operation_handlers.py` implements
+  business execution, while the RQ worker owns attempt fencing and heartbeat.
+  `backup.py`, `integrity.py` and `connectivity.py` under services provide the
+  capabilities independently of HTTP routers. File publication still requires
+  the durable attempt fence before exposing a backup or restore candidate.
+- HTTP and CLI favorite/tag changes use the same curation command transaction
+  for domain rows, audit history and search outbox. Tag input uses the existing
+  CLI casefold rule; historical tag rows are not rewritten. Purge takes the
+  curation ordering lock before row locks and rereads eligibility before file
+  deletion, so a committed restore cannot be purged from a stale ORM snapshot.
+  HTTP and CLI trash/restore share eligibility, mutation and audit construction
+  after the ordering lock and state reread. Entry policies preserve CLI noop
+  auditing and HTTP duplicate/missing-ID handling; purge keeps its own file flow.
+- `gitllery/payload.py` shares segment commit format mapping across outbox and
+  direct projection/rebuild. Global and repository parents remain distinct;
+  callers still read the repository parent under the projection lock.
 - `resource_pressure.py` coordinates sampling, state and shared snapshots
   delegated to `resource_pressure_sampling.py`,
   `resource_pressure_state.py` and `resource_pressure_snapshot.py`.
+- `resource_descriptors.py` describes child-owned admission and bounded outbox
+  slices. New enqueue producers attach an explicit descriptor; legacy RQ
+  names are interpreted only by the compatibility adapter. Registered admin
+  profiles never bind task-ID/attempt arguments. Parent admission, child
+  leases, pressure thresholds and worker exit behavior remain separate.
+- `api/client.ts` normalizes response errors for both fetch and XHR uploads.
+  Upload progress stays with XHR; CSRF and request-session checks protect 401
+  handling, and network/timeout failures retain a transport-error category.
+- `i18n.tsx` is the sole translation Context and Provider, for alias and relative
+  imports alike. Build scripts read the data-only `i18n-catalogs.ts` source;
+  the runtime loads generated locale JSON separately and fences delayed loads.
 - The Jobs page keeps URL state in `jobsRoute.ts` and
   `useJobsRouteState.ts`, and pure task-tree grouping in `jobTree.ts`.
-  The page consumes these contracts to render accessible desktop and mobile
-  views with polling fallback when WebSocket is unavailable.
+  Rows, drawers and batches use `taskCommands.ts` through `useTaskCommand.ts`
+  for action dispatch, repeat-sync intent handling and cache invalidation.
+  Generated OpenAPI task types are
+  refined only for dictionary fields used by views. `operationMonitor.ts`
+  owns ordinary admin-operation recovery and polling, `operationRefresh.ts`
+  owns resource invalidation, and NotificationCenter consumes the resulting
+  state for display. When a page and the global monitor show the same operation,
+  both observe `admin-operation-task` keyed by TaskRun identity; the page disables
+  its polling and completion callback while the global monitor owns them.
+  Untracked page operations retain their page owner. Missing operations stop on
+  404/410. Retry acceptance reactivates this monitor using known task context
+  and the existing minimal response, fences late queries and resets completion
+  handling for the new attempt without changing the TaskRun identity.
+  `batchImportMonitor.ts` adapts batch responses to the same monitor and owns
+  recovery; the Danbooru page only consumes normalized state. Legacy records
+  retain their storage key and two-hour recovery window. A missing final result
+  is confirmed by bounded query retries and then ends with an error.
+  Creators and subscriptions share `useReferenceListNavigation.ts` hooks for
+  navigation, sessions, loaded-row selection and legacy pagination recovery;
+  each page retains its filters, data requests and business commands.
+
+## Request Scheduling and Interactive Lists
+
+HTTP queue statistics, creator-count caching, workbench Redis health, proxy status and rebuild status
+run synchronous Redis operations in threads through `redis_budget.py`.
+HTTP operations use a 0.4-second Redis command deadline and a 0.6-second caller
+wait limit; unavailable optional reads return their existing fallback shape.
+Workbench executable discovery also runs in a thread so slow PATH lookups do
+not block the event loop.
+Background dequeue timeouts remain unchanged. Password hashing and verification
+use at most two dedicated threads per API process, retaining bcrypt cost,
+rate limits, account locks and credential-version updates.
+
+Reference lists keep at most 32 observed pages and enable queries only for the
+current virtual window and nearby prefetch/restoration pages. Evicted page
+queries are garbage-collected; their disappearance does not erase selections.
+Only confirmed page data can remove a selected ID belonging to that page.
+Sessions retain known selected-ID page offsets independently of the cached
+page window; selections from legacy sessions without an owner remain pending.
+Subscription summaries use one membership batch for visibility and private
+state overlays. Dialogs and the command palette share focus containment and
+background isolation; asset fetch failures expose retry and retain existing
+media instead of presenting an empty result.
+Scroll locks and inert background elements retain their original state until
+the last dialog owner releases them, regardless of cleanup order on navigation.
 
 ## Domain Model
 
@@ -137,9 +264,9 @@ Every provider implements:
 
 Providers never access the database. They receive raw metadata dicts and return data dicts. The service layer handles persistence.
 
-## Job Queue (RQ + Redis Stream)
+## Job Queue (RQ)
 
-auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis Stream for event-driven imports. Key design choices:
+auto-gallery uses RQ for downloads, imports and discovery, with an operations queue for administration. PostgreSQL job, lease and artifact records own recovery; Redis carries execution and live notifications. Key design choices:
 
 - **Why RQ**: Simpler than Celery, uses Redis already in the stack. `download_job`/`import_job` database tables are the source of truth; the queue backend is replaceable.
 - **Per-source download queues**: Each source has its own RQ queue (`downloads:pixiv`, `downloads:danbooru`, etc.) for isolation — one slow source never blocks another. The `worker-download` container listens on all source queues.
@@ -147,9 +274,9 @@ auto-gallery uses RQ (Redis Queue) for downloads and batch imports, plus Redis S
   `discovery` child queue. The scheduler only admits due remote accounts;
   provider pagination and cursor checkpoints run in the child worker. Jobs
   carry opaque task/account IDs and never credential material.
-- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL and a single RQ import pipeline claims work with leases, enabling restart-safe recovery without competing consumers.
+- **Durable RQ imports**: Download artifacts are recorded in PostgreSQL. Bounded RQ import consumers claim attempts with execution tokens and claim work identities with artifact leases, enabling restart-safe recovery without duplicate ownership. Consumers share bounded ingest slices rather than holding one lock across the whole job.
 - **Job timeout**: `job_timeout=7200` (2 hours) on all enqueue calls to prevent RQ from killing long-running downloads (default is 180s).
-- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `TaskEngine` (`services/task_engine.py`) is the single authority that validates every transition.
+- **State machine** (canonical source: `backend/app/models/task_state.py`): `enqueued → downloading → downloaded → importing → complete`, with `paused`, `cancelled`, `failed`, and `stale` reachable from the non-terminal states. Old status strings (`pending` → `enqueued`) are accepted via a backward-compat map. A `downloaded → complete` short-circuit exists for jobs whose download produced no new metadata (all content already in the archive), so they never get stuck waiting on an import. Paused jobs skip execution; `cancelled` is terminal but keeps the DB record for audit. Stale detection uses Redis heartbeat keys (`task:{job_id}:heartbeat_ts` with 90s TTL) — if the key is absent and the job is past its retry grace period, it's marked stale. Partial import recovery on timeout/failure. `task_state.py` defines legal transitions; `TaskEngine` coordinates controls and import commands use locked arbitration and aggregation in `import_lifecycle.py`.
 - **Adaptive timeouts**: Retry count increments the stall and deadline timeouts (1.0x → 1.5x → 2.0x) to give later attempts more headroom.
 - **Proxy pre-flight**: Before launching gallery-dl, the worker runs DNS resolution + proxy connectivity checks (non-blocking diagnostics).
 
@@ -160,7 +287,7 @@ Downloads, imports, and admin operations (backup, reindex, disk import) are all 
 - **`task_run`** (`models/task_run.py`): one row per trackable unit of work. `kind` (`download` / `import` / `admin`) and `subject_type` + `subject_id` loosely reference the authoritative domain row (`download_job`, `import_job`, …) — there is no FK, so a task can outlive or precede its domain record. Carries display fields (`title`, `source`, `source_url`), a progress snapshot (`progress_current`/`progress_total`/`progress_data`), `priority`, `attempts`, and `last_heartbeat_at` for stale detection. `parent_task_id` groups batch/child runs.
 - **`task_event`**: append-only audit trail of status transitions for a run; cascade-deleted with its parent (`ON DELETE CASCADE`).
 - **`TaskService`** (`services/tasks.py`): the write path — creates runs, records events, normalizes statuses, and merges download/import domain rows into the unified list.
-- **`TaskEngine`** (`services/task_engine.py`): the single authority for valid state transitions (pause / resume / cancel / retry / priority / batch-by-filter), publishing changes over Redis pub/sub for live WebSocket updates.
+- **`TaskEngine`** (`services/task_engine.py`): the control-request entrypoint (pause / resume / cancel / retry / priority / batch-by-filter), delegating import commands to the lifecycle module, publishing changes over Redis pub/sub for live WebSocket updates.
 - **Authoritative payloads stay in domain tables**: `task_run` is the envelope; `download_jobs` / `import_jobs` remain the source of truth for their own fields. Clearing tasks (Data Management) deletes `task_runs` **and** the domain job tables together.
 
 ## Data Flow
@@ -183,7 +310,6 @@ Scheduler (timezone-aware, configurable interval or daily schedule)
         → subprocess.Popen(["gallery-dl", ...], shell=False)
             with stall detection polling loop
         → Files land in DOWNLOAD_ROOT/{source}/{creator_name}/{source_work_id}/
-        → FileIndex registration (SQLite)
         → Job status = downloaded
         → PostgreSQL storage_artifacts → RQ import job
 ```
@@ -192,47 +318,79 @@ Key download details:
 - `--write-metadata`: Required flag — without it, import runner has no JSON metadata to parse.
 - `--range`: Limits download to the most recent N posts for incremental syncs. Configurable per subscription.
 - **Scheduler**: Timezone-aware via the `TIMEZONE` env var (defaults to UTC). Supports interval mode (sync every N hours) or scheduled mode (sync at specific times daily).
-- **Stall detection**: Polling loop checks progress every 4s; kills gallery-dl if no file output for `stall_timeout` seconds (default 120s, after 30s grace period). Adaptive timeout on retries.
+- **Completion and stall detection**: Wait for the gallery-dl process with a timeout of at most 5 seconds, bounded by the remaining overall deadline. An early exit proceeds directly to process-group cleanup and file finalization; a wait timeout resumes the progress, pause/cancel and stall checks. Kill gallery-dl if no file output appears for `stall_timeout` seconds (default 120s, after a 30s grace period). Retries retain adaptive timeouts.
 - **Three-layer timeout**: (1) gallery-dl internal `--retries`/`--abort`, (2) stall detection kills frozen subprocess, (3) overall deadline timeout.
 
 ### Import Flow
 
-**Event-driven (primary):**
-```
-Download job completes → storage_artifacts batch UPSERT
-  → worker-import claims work with a lease
-  → FileIndex.query() finds new files by work_id (O(log n), not rglob)
-  → Provider.parse_work_source() → group files by source_work_id
-  → Provider.parse_source_creator() → upsert source_creator
-  → Provider.parse_work_source() → upsert work_source
-  → Create Asset + AssetSource from image files in work directory
-  → Provider.parse_source_tags() → upsert tags + work_source_tags
-  → Generate thumbnails (pyvips WebP) in LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → Write metadata.json to LIBRARY_ROOT/{source}/{creator_name}/{source_work_id}/
-  → FileIndex.mark_imported()
-  → mark artifact work done/failed
-```
+Download execution records files in the PostgreSQL `storage_artifacts` ledger.
+`import_intent.py` creates and publishes durable RQ import intent; `worker-import`
+claims the current attempt and processes bounded work groups under a lease.
+Provider metadata is mapped to creators, work sources, assets and tags, and
+ledger states record progress for recovery. Media derivative requests are
+persisted for background processing; import completion does not synchronously
+generate every thumbnail. Files remain in DOWNLOAD_ROOT, while metadata and
+derivatives live in LIBRARY_ROOT. JSON cleanup follows successful import.
 
-**Batch import (RQ, for Danbooru reference):**
-```
-Worker picks up import_job from imports queue
-  → FileIndex.query_unimported() → new files since last scan
-  → Same parse → upsert → thumbnail → metadata.json pipeline
-  → Job status = complete
-```
+Import may attempt a first-card preview outside SQL transactions. For the first
+actual image preview in each import job, `resource_reservation_busy` permits one
+resource-event wait with a 50 ms budget followed by a full admission retry. The wait
+holds no SQL transaction, heavy-resource permit or file lock; pressure,
+maintenance, task control and ownership checks still apply on retry. Other
+rejections, including hard memory pressure, and videos or later works receive no
+extra wait. An unsuccessful attempt retains the durable media request for
+background completion, without adding a queue or consumer. More inline previews
+increase transient CPU and memory demand during import.
 
-Key details:
-- JSON metadata files are deleted after processing; image files remain in DOWNLOAD_ROOT.
-- FileIndex (SQLite) replaces rglob scans — O(log n) lookups by work_id instead of O(n) filesystem traversal.
-- Consumer group `import-workers` ensures at-least-once delivery: if a consumer crashes mid-import, the pending message is reclaimed by another consumer.
+Creator refresh collects subscriptions and repositories with one LEFT JOIN and combines identity and normalized-URL work dependencies with UNION; subscriptions without repositories remain in scope. Membership fanout combines subscription, creator and repository conditions, using UUID array parameters and 500-row keyset pages so overlapping members discovered through those scopes are enqueued once per action. Independent requests still advance outbox versions, deletes retain precedence, and dependencies captured before creator deletion still refresh surviving works and delete reference documents.
+
+Bulk import writes media, import-curation and search outbox rows in the same
+transaction as the imported records. It registers one wake intent per outbox
+kind; only the outer transaction's successful commit publishes those wakes.
+Rollback, including savepoint rollback, does not publish the rolled-back
+intent. Notification failure leaves the committed outbox rows available for
+recovery. Import completion does not imply thumbnail or search readiness; each
+background result must be observed separately.
+
+When a media resource-deferred marker already exists and background work is
+blocked by import priority, a subsequent commit coalesces the media wake while
+still publishing other kinds. The marker is renewed with a compare-and-set and
+resource availability is rechecked after publication; resource-release wakes
+and timer recovery continue to deliver the durable work. Unknown or changed
+marker state retains normal media publication.
+
+Outbox wake ownership and its RQ job are published in one Redis transaction.
+Immediate publication includes the queue entry; delayed publication includes
+both the job and its scheduled-registry entry. Concurrent publishers recheck a
+changed owner instead of reclaiming a marker while its job is still being
+saved. Capacity admission remains in place, and immediate queue notifications
+are sent after the transaction commits. A lost transaction reply keeps the
+owner for durable RQ-status reconciliation; queued wake markers still have no
+TTL, and resource protection and timer recovery remain unchanged.
+
+After a successful media, import-projection, deduplication or search slice
+reports no more work, its owned marker is released before a final bounded
+deadline check. Already-due or near-future work within 60 seconds retains a
+delayed continuation; this also covers search generation
+verification and resource-deferred records whose availability time has not
+arrived. The check never claims work early or bypasses worker admission and
+leases. Far-future cleanup uses the existing fallback, and a failed or timed-out
+check does not turn a completed slice into a failed task. The Redis/SQL check
+shares a 500 ms budget and leaves no pooled connection in the forking parent.
+
+Danbooru reference batches are separate administrative operations. Their
+single, Pixiv-ID and URL entries use `persist_danbooru_artist`, and validate the
+current operation attempt before committing each entry. They do not consume a
+Redis Stream or bypass the media-import lease.
 
 ### Danbooru Reference Flow
 ```
 Admin triggers Danbooru artist import
   → Fetch Danbooru artist page
   → Parse artist tags, related URLs
-  → Create creator_link suggestions (status=pending)
-  → Admin reviews: approve → bind to creator, reject → discard
+  → Match resolvable identities, artist IDs and active source links
+  → Reject conflicting ownership or apply shared persistence rules
+  → Validate the current operation attempt, commit, then invalidate caches
 ```
 
 ## Reliability & Recovery
@@ -244,36 +402,126 @@ Because gallery-dl writes directly to disk and the download → import handoff s
 - **Creator auto-relink** (`services/creator_reconcile.py`): each subscription-sync scan links orphaned `source_creators` (`creator_id IS NULL`) to their subscription's creator by identity match. It mirrors `import_runner`'s auto-link rules, so an ambiguous bookmark/repost feed is never mislinked.
 - **Worker startup orphan reconciliation**: on startup, jobs stuck in `downloading`/`importing` are marked `stale`, and on-disk directories with no matching job are picked up for import.
 
+A completed disk-import administrator task means scanning and child publication have finished; its publication count is not a work count. Actual results require checking all child imports and their download parents. Global and source-scoped replays share the same classification: unchanged existing works are successful idempotent results, so zero new works does not mean total failure. Counts distinguish new or updated works, unchanged existing works and work groups skipped due to processing errors. Terminal progress counts all three as processed groups. A below-threshold skip rate completes with a skip notice; all-failed runs and rates at or above the configured threshold still fail. Both classified terminal outcomes retain statistics and total groups, while artifact errors remain available. Bounded parent results retain the child statuses and aggregate counts.
+
+Platform downloads and disk imports share image extensions, including AVIF artifacts classified as `image` with asset MIME `image/avif`. Originals are retained and previews use WebP. Static AVIF uses SHA-256 and versioned pHash fingerprints. AVIF sequences preview the first frame and use whole-file SHA-256 for exact deduplication, without a first-frame pHash. Thumbnails prefer libvips, with a Pillow first-frame fallback when libvips cannot open AVIF. Application Pillow AVIF decoding uses one thread and preserves media admission and atomic thumbnail writes. Disk import can register previously omitted files; existing works use the append-asset/idempotent update path.
+
+Visual fingerprints use a pure-NumPy real-FFT implementation of the DCT-II on a 32×32 Pillow LANCZOS grayscale sample. There is no SciPy compatibility fallback, and bit-for-bit equality with earlier pHash values is not promised; the version boundary is explicit so production records can be recomputed. Extremely elongated, single-frame, non-interlaced 8-bit RGB/RGBA PNGs that cannot use the proportional work image retain sequential grayscale sampling to bound memory. Other PNG layouts and image formats retain their original path, including Pillow decompression-bomb checks. Without a shared work image, thumbnails wider than 400 pixels use the libvips file entry point so JPEG decoding can shrink on load; dimensions, orientation, alpha and atomic writes retain their existing policy. SSIM applies EXIF orientation in place and reuses already-RGB pixels while preserving the 256×256 resize, score formula and decision thresholds.
+
+### Search and Asset Deduplication Completion
+
+Ordinary PostgreSQL document updates use a separate `pg_search_db` permit with
+192 MiB reserved in the shared RAM budget. Single-writer exclusion, import
+priority, maintenance/file barriers and unfinished remote-task protection still
+apply. When resources allow, database writes can run alongside image processing
+and deduplication without holding their background file-processing permit. Only
+ordinary upsert/delete batches with ready index settings, no active rebuild and
+no pending membership bootstrap use this path.
+
+Document changes, the successful task record, receipt completion and version-matched
+outbox `(id, version)` acknowledgement commit in one short transaction. Failure
+rolls back all of them; an older batch cannot acknowledge a newer outbox version.
+Eligibility and the execution lease are rechecked inside the transaction. Changed
+eligibility releases the lease and defers reclassification to a new admission.
+Rebuilds, settings changes and other deliveries retain the staged path below.
+
+Ordinary PostgreSQL delivery may continue ready receipts within one workhorse without waiting for new work. Cumulative item and soft-time budgets bound the slice; each receipt reacquires admission and commits independently. Delivery yields the maintenance consumer when domain curation is ready. An admitted atomic receipt completes within the original hard deadline; the soft budget prevents starting another. Deferral, cooldown and staged-delivery rules remain unchanged.
+
+After delivery receives a remote taskUid, it persists the task identity in the
+remote resource marker and commits a pending SQL receipt before confirmation.
+It then gives the task at most 250 ms to finish, with 50 ms between status
+reads, reserving the existing three seconds for SQL acknowledgement and durable
+marker cleanup. HTTP confirmation holds no SQL transaction. A completed settings
+task advances to the document phase without acknowledging the source mutation
+or submitting another write under the same admission.
+
+If this short window ends, its status read fails, or the completion reserve
+leaves no confirmation budget, the known task remains pending and the first
+successor is scheduled after one second. Subsequent unfinished-task polls back
+off through 2, 4, 8 and 15 seconds; network errors in that ordinary polling path
+still wait 15 seconds. Durable receipts, version-matched acknowledgement,
+remote resource markers and ambiguous-write recovery retain their existing
+rules. Remote completion, local acknowledgement and the next submission remain
+separate milestones.
+
+Delayed confirmation releases the local worker and limits polling for slow
+remote tasks. The short window trades a bounded local wait and extra status
+reads for lower latency when the remote task finishes quickly. This is a
+performance optimization of that scheduling policy.
+
+Asset candidates must pass the SHA/visual gate before loading creator and publication metadata; visually rejected candidates skip those scoring queries. Accepted pairs load both assets in one source-relationship query, partition rows by asset ID, and retain the existing scoring. Candidate source filtering and the locked scope recheck remain independent. Representative selection, work/source relationships and original-file checks before hardlinking or quarantine retain their existing rules. A future quarantine-retention purge is separate from the current batch's immediate completion.
+
+The dedup outbox loads dependencies on the paths that use them: scan administration in scan entry points, curation while applying a group, and case media links and commit response schemas in their presentation paths. RQ function identities, curation audit and response structures retain their existing definitions. After models register, the actual RQ parent configures ORM mappings before its first workhorse fork. Children establish independent database connections; startup preparation and resident-memory costs are measured separately.
+
+`worker_entrypoint.py` defaults to launching RQ consumers in independent interpreters. The actual consumer registers the TaskRun resource-state bridge in `ResourceAwareWorker` before workhorse forks. The supervisor does not repeat that registration or load business services and ORM solely for it. Before download consumers start, one short-lived interpreter validates the credential tmpfs, removes abandoned authentication configurations, reads database concurrency and resolves deployment/device limits. The helper reads only `system_settings.download_defaults` through the existing asyncpg driver, without loading the ORM or general settings service. A missing row or concurrency field keeps the stored-settings default of 3; an unavailable database keeps the existing CLI/default fallback. It returns only startup values, then exits so configuration dependencies do not stay in the supervisor. Credential-storage validation failure stops startup. A failed database read or a five-second query timeout retains the CLI/default fallback; the supervisor reaps the helper on its fifteen-second deadline or an interrupt. Scheduled-supervisor control-plane work and consumer mapper preparation, admission and durable state publication retain their existing behavior.
+
+Controlled deployments through `scripts/deploy.sh` select the optional discovery worker from the resolved Compose environment: the worker is required when either backend or scheduler has private-members support and at least one provider preview gate enabled. Automatic omission applies to discovery admission that is already disabled in the running backend and scheduler; if either live producer is still enabled, deployment refuses the transition before mutation. Closing an enabled live feature requires a separate admission-disable and drain procedure. Download, import, operations and the scheduler remain in the background service set. When discovery is disabled, deployment checks queued, active, scheduled/deferred/retry work and persistent unfinished discovery TaskRuns, including discovery's `waiting` state. Pending work or an unreadable probe prevents the transition; the check is repeated after the old producers stop and the new core is healthy. A fresh or stopped environment defers the first probe only when no discovery worker or scheduler is running. Existing rollback and task-isolation protections remain in place.
+
+`verify-runtime.sh` uses the same service selection and also checks an already-running discovery worker; discovery is the only optional RQ registration role. This automatic selection belongs to the controlled deploy path. A bare `docker compose up -d` still starts all defined services; manual Compose operation must select the intended service set explicitly. Disabling remote-follow discovery does not disable ordinary platform downloads or the scheduler's recovery duties.
+
+On Linux, `worker-operations` and `worker-import` can opt into shared initialization with `WORKER_SHARED_INITIALIZATION=1` in that service's environment (for example, a Compose override). It requires at least two consumers of the main queue. Operations accepts no extra queues; imports may also retain its independent `maintenance` consumer, which shares initialization pages but keeps its own queue, process and queue-scoped scheduler. With the flag unset, all configurations retain the default launch mode; enabling it for an unsupported queue/count combination is a startup error. A dedicated `forkserver` preloads RQ definitions, models and configured mappings without creating database/Redis connections, business threads or resource leases. Each independently supervised consumer inherits those pages, then runs the existing RQ CLI entry in its own interpreter, with its own connections, TaskRun callback and signal handlers. RQ still forks separate task workhorses and its queue-scoped scheduler. In shared mode the scheduler follows its consumer with a Linux parent-death signal, including a parent check after signal setup, so an orphan scheduler cannot retain multiprocessing pipes and block supervisor exit; admission, memory reservations, locks and OOM protection are unchanged. This uses a local multiprocessing context, not a global start-method change. Linux pidfds track actual consumer lifetime even if the template's status pipes fail. Losing the template stops the consumer group and exits unsuccessfully for the existing container restart policy, rather than creating a second template alongside live consumers. The usual restart backoff and graceful shutdown also apply. Shared pages can become private as they are written, and the extra template/resource-tracker processes count toward the service memory budget; fewer consumers do not imply the same net saving.
+
+In shared mode, both the image and import services preload the connection-free resource-policy and task-state bridge definitions. The independent maintenance consumer attached to the import service inherits the same definitions. The supervisor resolves the common service environment before the template imports settings, so consumers inherit the effective configuration rather than caching values before a later per-consumer override. Callback registration, live clients and resource acquisition still happen in each consumer or its workhorses. A factory serves one common configuration; it does not accept different environments for individual consumers.
+
+After configuring mappings, the real RQ parent collects temporary initialization garbage and freezes the initialized object graph before scheduler and workhorse forks. Cyclic GC then skips those long-lived objects, preserving shared pages; automatic collection remains enabled for subsequently created task objects. Freezing changes GC tracking, not object mutability or reference-count deallocation. Task payloads and results are created after this startup step. Mapper preparation still creates no database connection, and workhorses establish their own connections.
+
+Subscription scanning, Pixiv ranking, heat expiry and heat recomputation publishers enqueue stable RQ function paths; task execution resolves the handlers. Job identities, arguments, retries and dependency handling retain their existing behavior.
+
+Heat recomputation stays on the `maintenance` queue but carries a `work-heat` descriptor using the `work_heat` resource profile. Persisted jobs without the descriptor are recognized by their existing function path. After admission, the RQ parent retains the 256 MiB memory reservation, the shared maintenance barrier and the background/profile leases. When resources are unavailable, it parks the original job for recovery and yields the maintenance consumer instead of blocking domain curation and search. Heat recomputation therefore does not take the exclusive storage barrier that rejects foreground uploads. True maintenance jobs retain their exclusive barrier; source-level coalescing, follow-up dependencies and retries are unchanged. Deployments with an explicit `RESOURCE_GOVERNANCE_ENFORCED_PROFILES` list must include `work_heat` for this category to participate in soft adaptive enforcement; critical resource admission remains enforced independently of that list.
+
+Resource-aware workers use `ResourceAwareScheduler` for due-task promotion. It delegates promotion and locking to RQ, then sends a best-effort hint through the existing queue work channel for each due queue. Worker timeout checks remain the recovery path when a hint is lost, and queue records remain authoritative. Remote-task confirmation/backoff, resource admission and completion recovery retain their existing rules.
+
+Downloads deferred before platform execution by a busy archive, download slot, maintenance barrier or insufficient memory retain the ordinary 10-second RQ Retry with explicit resource-wait context. Only after RQ commits its scheduled state, retry count and execution cleanup does the worker register an independent field in the same job hash, bound to that retry and its original score. The existing download scheduler consumes release/registration hints on `resource:control` and retains its periodic checks. For queues whose scheduling locks it owns, it atomically verifies the state, retry count, marker and original score before advancing the same job; only RQ's existing promotion path enqueues it.
+
+Readiness probes retain the legacy network token, actual slot limit, RAM reservations, maintenance/admission file locks, archive Redis key and POSIX source lock. Execution still passes through normal download admission. Each pass advances at most one job per archive while independent archives remain eligible in parallel. Starting a delivery or returning an ordinary Retry clears old markers. Unmarked scheduled jobs, platform rate limits and business backoff retain their deadlines; lost notifications fall back to periodic scheduling and the original retry time. Domain claims and `rq_job_id` checks continue to reject cancelled, paused or replaced downloads.
+
+### Background Outbox Recovery
+
+An empty queue and a resource-denied task are different outcomes. Media and
+asset-dedup runners report resource deferral so the coordinator can record a
+waiting token without marking the durable work complete. PostgreSQL outbox
+rows remain authoritative; Redis wake owners and waiting tokens are recovery
+hints.
+
+When domain curation has completed and only file metadata awaits resources, the waiting token carries a phase hint. Opportunistic recovery skips that phase while no background turn is available and retains the token. New curation still publishes after commit; a clear-owner readiness recheck that finds new curation bypasses the hint while retaining actual admission checks. Legacy tokens, queue drain, background opportunities and scheduled recovery remain effective.
+
+After a worker releases its resources, its parent checks deferred outboxes.
+The scheduled supervisor also consumes `resource:control` notifications while
+workers are idle. Its startup and reconnection checks cover waiting work that
+predates the current connection. Media selection and recovery use the same
+memory requirements and resource checks as execution; recovery never bypasses
+memory protection, locks, delayed availability or an active remote-search
+reservation.
+
+Recovery inspection and publication have a bounded time budget. A timeout
+retains waiting work, and a failed notification does not turn an already
+completed domain job into a failure. The existing approximately 60-second
+fallback scan remains available when notifications or Redis waiting hints are
+lost. These mechanisms reduce unnecessary waiting after resources recover;
+they do not guarantee execution while resources remain unavailable. See the
+[operational recovery guide](RUNBOOK.md#background-outbox-recovery).
+
 ## Gitllery — On-Disk Curation History
 
-A one-way, git-isomorphic projection of the authoritative curation DAG (`curation_commits` + `curation_changes`, plus the `*_curation_state` tables) onto disk, per source-creator. **PostgreSQL stays authoritative** — the on-disk repo is a read-optimized mirror, never a write path back into the DB. Written best-effort, synchronously, after each curation commit (e.g. `purge`, `revert`, `curate_creator`); failures are swallowed and logged (`project_commit_safe`) so a disk-write hiccup never breaks the curation API response. Catch-up and verification close any gap.
+PostgreSQL curation commits and changes remain authoritative. Curation writes
+durable projection intent in the same transaction; `gitllery_outbox.py` plans
+repository targets and projects them asynchronously in bounded slices. Disk
+failure leaves retryable intent and does not undo the committed domain change.
+Outbox leases, attempt checks and projection locks protect replay and ordering.
 
-- **Layout**: `LIBRARY_ROOT/{source}/{creator_dir}/.gitllery/` — sibling of that creator's existing library files, never the library root itself (path containment via `Path.relative_to`, same rule as the rest of `LIBRARY_ROOT`). Contains:
-  - `HEAD` — symbolic ref, always `ref: refs/heads/main`
-  - `refs/heads/main` — current commit hash
-  - `objects/{aa}/{rest}` — content-addressed object store, git-style 2-char shard prefix
-  - `logs/HEAD` — append-only reflog (one JSON line per `set_head`: old/new hash, actor, timestamp, message)
-  - `index.json` — materialized worktree state for fast status checks (`head`, `tree`, `tree_entries`, `entities`)
-  - `config.json` — repo metadata (`schema_version`, `repository_id`, `source`, `creator_id`, `source_creator_id`, `creator_dir`, hash/compression algorithm)
-  - `description` — human-readable label written at init
+The active Gitllery v1 format stores a `manifest.json`, `config.json` and
+compressed, content-addressed `segments/` under each repository's `.gitllery`.
+Publishing writes segments before atomically advancing the manifest. Global
+commit parents and repository parents have distinct meanings; payload mapping
+is shared by incremental projection and builds. Older object/index formats
+remain compatibility readers rather than the current write protocol.
 
-- **Object model**: every object is canonical JSON (sorted keys, compact separators) compressed with zlib, addressed by the sha256 of the *uncompressed* canonical bytes.
-  - **blob** — one entity-state snapshot (`subject_type`, `subject_id`, `state`)
-  - **tree** — worktree manifest: map of `{subject_type}/{subject_id}` → blob hash
-  - **commit** — one projected curation commit: `tree` hash, repo-local `parent` hash (linked list, not the DB commit's parent), `db_commit_id` (links back to `curation_commits.id`), actor/message/trigger/dedupe_key/reverts/occurred_at/stats, and the full list of changes applied
-
-- **Operations** (`GitlleryService`, `backend/app/services/gitllery/`):
-  - **`status`** — per-repository `behind` (pending DB commits not yet projected), `object_integrity_ok` (hash-chain verification from HEAD through tree and blobs), and `drift` (entity states where the on-disk snapshot disagrees with current `*_curation_state`, e.g. a `visibility`/`storage_state` changed outside the projection)
-  - **`reconcile`** — runs catch-up projection (`project_pending`) for missing commits, then returns the refreshed `status`
-  - **`backfill`** — ensures every source-creator repo exists, then projects the entire curation DAG from scratch (used for first-sync / historical seeding)
-  - Per-repository writes are serialized with a Redis lock (`gitllery:{repository_id}`) so concurrent projection attempts never race on the same `.gitllery` directory
-
-- **API**: all endpoints live under the curation router (`RequireAdmin`), at `/api/v1/curation/gitllery/...`:
-  - `GET /gitllery/status`, `GET /repositories/{repository_id}/gitllery/status`
-  - `POST /gitllery/reconcile`, `POST /gitllery/backfill`
-  - `GET /repositories/{repository_id}/gitllery/log`
-
-  The admin-web **GitlleryPanel** surfaces clean/behind state and a one-click reconcile action.
+`services/gitllery/builds.py` manages rebuild, verification and publication;
+`services/gitllery/rebuild.py` reads history for reconstruction. Maintenance
+commands under `/api/v1/curation/gitllery/` use existing administrative
+operations and resource admission. The admin Gitllery panel displays status
+and initiates these commands; API requests do not synchronously write every
+repository or treat disk as a replacement for the live database.
 
 ## Authentication
 
@@ -294,9 +542,40 @@ Disabled users, forced password change, and module permissions apply to both.
 default is 10080 minutes, while the Compose default is 1440 minutes. Browser
 users sign in again when migrating from legacy `ag_token` storage.
 
+Bearer credentials carry the immutable user ID (`uid`) and credential version
+(`cv`); the username is an actor label, never the authorization lookup key.
+Password reset and both password-change endpoints increment the version in the
+same transaction as the password hash. Authentication checks the current active
+and forced-password-change state. Deploy the additive `0159bc20de46` migration
+before the application; previous username-only Bearer tokens require a new
+login. WebSocket tickets and event forwarding retain the account ID/version,
+so an existing connection cannot inherit a replacement account's access.
+Admin demotion, disabling and deletion serialize the last-active-admin check
+and mutation with one transaction-scoped advisory lock.
+
 LAN HTTP remains supported for local access. Its cookies are exposed to anyone
 who can observe that connection; use the HTTPS reverse-proxy entry for
 transport protection.
+
+## API process runtime
+
+The backend starts through `backend/api_entrypoint.py`, which launches the
+native Uvicorn worker supervisor. `API_WORKER_CONCURRENCY` defaults to one and
+accepts values from one through four. The launcher divides the total API
+budgets for one backend container before importing the application: the database budget is 8 steady plus
+4 overflow connections in total, divided per process by floor (`1 = 8 + 4`,
+`2 = 4 + 2`, `4 = 2 + 1`), and the total search concurrency is 4 (retaining the `MEILI_SEARCH_CONCURRENCY` configuration name),
+divided per process with a minimum of one. Direct multi-worker Uvicorn startup
+bypasses this allocation and is not a supported deployment path.
+
+`API_THREAD_POOL_SIZE` defaults to a total of 16 blocking-thread slots and is divided by floor (1 = 16, 2 = 8, 4 = 4). The cap is applied separately to the asyncio default executor and the AnyIO thread limiter; these are independent pools, so 16 is not their combined thread limit. API1 still applies its 16-slot cap while bypassing the Redis lease.
+
+Each API process can run the foreground request and WebSocket paths, while one
+Redis lease owner runs the singleton maintenance group. Recovery, resource
+state and health are published through shared snapshots with owner fencing;
+other processes read the shared health state. Foreground latency samples are
+aggregated at a low frequency, and ordinary request handling performs no Redis
+I/O for this aggregation.
 
 ## Backup System
 
@@ -362,13 +641,21 @@ NAS host paths are mapped in `docker-compose.yaml` only.
 ├── docker/                             # Persistent volumes
 │   ├── postgres/                       # PostgreSQL data
 │   ├── redis/                          # Redis data
-│   └── meilisearch/                    # Meilisearch data
+│   └── meilisearch/                    # Legacy rollback data; inactive in normal operation
 │
 └── backup/                             # Backups
     ├── db/                             # PostgreSQL dumps
     ├── config/                         # Config backups
     └── metadata/                       # metadata.json copies
 ```
+
+Download consumers remain resident by default and read the expiring drain lease only with explicit `DOWNLOAD_WORKER_LIFECYCLE=on_demand`. While draining they stop claiming, return jobs caught during admission to their queues, and finish running work. The supervisor suppresses respawns and acknowledges the matching token only after consumers exit. Cancelling or expiring the lease reaps exited consumers before restoring only missing specs; intentional drain exits do not enter crash backoff. Unreadable Redis state never acknowledges a stop. Other queues and the default resident mode retain their behavior.
+
+The optional foreground controller runs on a Linux/WSL Docker host. Set the opt-in mode, deploy and verify the normal stack, then run `python3 scripts/download-runtime.py --project <compose-project> --compose-file <compose-file>` under a restarting host service manager. It does not mount the Docker socket in the API container or change concurrency, archive locks, resource admission, or database budgets. Its default idle grace is 300 seconds; the first job after a stop pays worker cold-start latency.
+
+A lightweight Redis bridge inside the existing backend subscribes to `resource:work:download_network` and checks all download queues every two seconds, including a scan on startup/reconnect. Notifications are hints: the durable download dispatch outbox and its existing recovery still publish jobs. Runnable, inflight, and dependency-waiting work keeps downloads resident. Future scheduled retries may remain in Redis while stopped; the host starts the download consumers and their queue-scoped schedulers ten seconds before the earliest deadline. Both the host process and bridge memory count against net savings. The controller defaults to a persistent `docker exec` CLI pipe. On a local Unix Docker endpoint, `--bridge-transport unix` uses the Engine exec stream directly and avoids that persistent CLI process; unsupported endpoints retain the CLI path, and status events report the transport actually used. It follows the current Docker context or endpoint, keeps Redis credentials inside the backend, and continues to use the CLI for container lifecycle operations.
+
+The controller requires the current drain token acknowledgement and rechecks queue state before stopping the container. A job arriving during stop stays queued and triggers another start. Normal SIGINT/SIGTERM restores resident downloads; stop the controller normally before deployment, rollback, or existing all-service verification. A forcibly killed controller cannot restart a stopped container from inside that container: host supervision must restart it and rescan durable queues. Do not enable this mode without host supervision.
 
 Personal account authentication overlays are not part of the NAS tree. The
 download worker writes them under `/run/auto-gallery-secrets`, a dedicated
@@ -384,6 +671,81 @@ nonpersistent tmpfs, and validates that boundary before use.
 - **Video playback**: An authorized asset-scoped ticket grants two-hour access to `/media/stream/{asset_id}`. The endpoint serves the original MP4/WebM with HTTP Range support; no transcoding, HLS, audio-only playback, or ugoira ZIP playback is performed.
 - **metadata.json**: Written per-work during import. Contains work_id, source, source_work_id, title, posted_at, creator, assets array.
 - **source_work_id**: The platform-specific work ID (e.g. Pixiv artwork ID "38362603"). Used as the directory name in both downloads/ and library/. Links the two storage trees.
+
+## File, Upload and Rollback Boundaries
+
+Cookie file configuration uses `services/cookie_paths.py`. Relative paths are
+rooted at `GALLERYDL_CONFIG_ROOT`; absolute paths inside that root, historical
+`/gallerydl-config/...` container paths and `/cookies/...` shorthand remain
+supported. Resolved symlinks must stay inside the root. Configuration reads,
+writes and effective download configs reject escapes with a diagnostic error,
+rather than starting an unconfigured download.
+
+Manual uploads accept at most 20 files, 500 MiB per file and 1 GiB of file data,
+with a separate 2 MiB multipart allowance. Web uploads stream through the
+dedicated `/api/upload` API handler to the existing backend endpoint.
+Multipart parsing is disabled, and Node streams preserve backpressure. This
+avoids Next.js external rewrite body cloning and its default 10 MiB truncation;
+the frontend `/api/v1/upload` URL also routes internally to that handler.
+Authentication, Origin, CSRF, backend status and Retry-After are preserved,
+and client disconnects cancel upstream transfers. File, batch, total request
+and account quota failures have distinct 413 codes. The page checks combined
+uploads against the 20-file and 1 GiB budgets and only stops subsequent files
+on a quota failure.
+
+`UploadRoute` counts received bytes
+before multipart parsing, including absent or misleading Content-Length.
+Copying enforces file, batch and remaining quota budgets. Final usage is charged
+by a quota-conditioned database UPDATE in the same transaction as jobs and
+artifacts; concurrent uploads and purge releases do not use stale accounting.
+Failed copying owns temporary cleanup; failed moves or saves roll back usage
+and remove the current work directory. Committed files/jobs retain their charge
+while durable import intent handles later processing.
+
+Personal uploads without an explicit target creator reuse their database identity
+when the creator, subscription, manual source and aliases are complete and
+consistent. The service verifies those records on each upload and refreshes
+alias observation timestamps in one upsert; it does not cache identity state
+across requests. Incomplete or changed identities, and uploads targeting an
+explicit creator, follow the general identity-provisioning path. This reduces
+repeated identity-maintenance queries while retaining the atomic user quota
+update. `save_upload` owns and commits this save transaction; only after that
+commit does it call `enqueue_import` to publish the durable import intent. That
+UPDATE uses RETURNING to obtain and refresh the current user without a second
+query while holding the quota lock. Identity resolution and file metadata use
+the returned account, including when authentication supplies an object from
+another session. Quota, identity, job, artifact and projection writes retain
+their transaction and lock order.
+For a complete personal identity with an enabled source, alias upserts refresh
+observation times and compare returned row IDs and semantic fields. Timestamp-only
+observations do not repeat creator and dependent-work projection fanout. Concurrent
+alias changes or replacements, source re-enablement, initial provisioning, repairs
+and explicit creator uploads retain projection registration. Exact database alias
+search still uses observation times; import-time work and asset projections remain.
+
+Foreground upload copying, persistence and import publication hold the shared
+POSIX maintenance barrier. Registered clear operations retain its exclusive
+parent-side lock through the workhorse; an upload during maintenance returns
+`503 / maintenance_in_progress` with Retry-After. Media clear preserves `.locks`,
+keeps ownership and charge facts until file deletion succeeds, cancels pending
+pipeline jobs through the existing lifecycle, and releases only the removed
+uploads' charges. File failure returns `status=partial` and a per-path report;
+the registered task becomes failed. Database records and charges remain for
+retry, although some files may already be gone. Retry the same clear after
+fixing the filesystem error. File deletion cannot be undone if the later
+database commit fails; retained database facts allow that failed clear to retry.
+
+HTTP purge also holds the shared barrier from asset eligibility and quota
+release through file removal, commit and result retrieval, and returns the same
+503 during maintenance. Clear and purge cannot interleave to return one charge
+twice.
+
+Offline restore and deployment rollback stop writers and query Compose for
+running, restarting or paused containers before switching files, databases,
+Redis data or application images. Failed stop/inspection blocks compensation
+and foreground restart. The offline journal records blocked components; the
+deployment receipt records `paused`. Operators fix the stop failure and rerun
+the existing rollback command, preserving its schema-forward policy.
 
 ## Environment Variables
 
@@ -451,7 +813,7 @@ Endpoints include:
 - `POST /clear/{entity}` — clear all records of a given entity type (`jobs`/`all` also clear `task_runs`)
 - `GET /dedup` / `PUT /dedup` — deduplication settings
 - `GET /merge-candidates` — deprecated compatibility alias returning pending asset-reconciliation cases; new clients use `/api/v1/admin/dedup/cases`
-- `POST /reindex` — trigger full Meilisearch reindex
+- `POST /reindex` — trigger a PostgreSQL index rebuild from authoritative rows
 
 ### `/api/v1/creators`
 Creator CRUD, count, timeline, duplicate detection, merge, favorite, source-account binding, creator links.
@@ -550,8 +912,27 @@ Endpoints include:
 - `POST /merge` — merge two tags into one
 
 ### `/api/v1/search`
-Canonical compound search across Meilisearch-backed library entities and
-SQL-backed operational collections.
+
+Post-import curation and search coordination use the existing `maintenance` consumer;
+media and deduplication remain on `operations`. Domain curation uses short database-completion
+admission, sharing single-writer exclusion with ordinary PostgreSQL indexing rather
+than waiting for a background file-processing turn during ingestion. Its committed
+transaction publishes search intent. File-metadata work retains separate background
+admission, ingestion priority and memory protection. Work upserts wait
+for their own curation; deletes and other entity indexes are not globally blocked.
+Memory protection, queue priorities, file locks and periodic recovery remain in force.
+Ordinary PostgreSQL incremental delivery commits documents, the command record,
+receipt completion and version-matched outbox acknowledgement together. Staged
+delivery retains its existing lease and marker recovery protocol. Full rebuilds populate an independent storage generation and
+atomically swap logical indexes. Command retention is bounded and protects records
+referenced by unfinished receipts.
+
+Canonical compound search uses PostgreSQL search documents for library text and
+business tables for operational collections and structured work lists. Text uses
+NFKC/case normalization and underscore word boundaries; nonnumeric words support
+prefixes, length-bounded spelling distance and adjacent transpositions. Numeric
+tokens match exactly; Chinese/Japanese text supports substring matching. These rules do not
+attempt to reproduce every fuzzy hit of the former engine.
 
 Endpoints include:
 - `GET /` — grouped works, creators, tags, repositories, subscriptions, tasks, or scheduler decisions
@@ -591,8 +972,139 @@ Endpoints:
 Controlled media file serving. Not prefixed with `/api/v1`.
 
 Endpoints:
-- `GET /thumb/{asset_id}` — 400px WebP thumbnail from LIBRARY_ROOT
+- `GET /thumb/{asset_id}` — private 400px WebP thumbnail from LIBRARY_ROOT; active session/Bearer authentication or an asset-and-purpose-scoped signed ticket is required before reading or requesting derivatives
 - `GET /preview/{asset_id}` — original file from DOWNLOAD_ROOT, requires a short-lived signed URL
 - `GET /poster/{asset_id}` — large derived WebP video poster, requires a signed URL
 - `GET /stream/{asset_id}` — original MP4/WebM with HTTP Range support, requires an asset-scoped playback ticket
 - `GET /original/{asset_id}` — original file from DOWNLOAD_ROOT (for download)
+
+
+### Bounded download execution
+
+Download consumers and their execution slots share one concurrency resolver.
+The persisted 1–5 setting remains restart-applied; deployment and device limits
+cap the consumers. An explicit device download limit affects downloads only,
+while the automatic profile continues sizing other queues and publication.
+Each child inherits its supervisor's effective count, preventing a larger
+consumer pool from accidentally sharing one execution slot.
+
+Redis reserves each download's memory atomically against all resource profiles.
+A short POSIX admission mutex and fixed slot locks retain the execution limit
+when coordination keys disappear or the configured pool shrinks. The legacy
+single network token conflicts with new slots while its Redis identity exists;
+old-version processes must be stopped before the upgrade. Single-slot defaults
+retain their profile memory reserve; parallel mode reserves at least 256 MiB.
+Same-platform jobs retain shared-archive exclusivity, including local file locks.
+Failure to determine archive identity defers the job before claim or subprocess
+start. If cancellation arrives during Redis acquisition, the operation completes
+and releases its owned keys before cancellation propagates. The existing
+process-group cleanup precedes release of the source lock and slot. See
+[deployment configuration](deployment-profiles.md#download-worker-concurrency--下载并发).
+
+### Bounded import consumers
+
+`IMPORT_WORKER_CONCURRENCY` selects 1–4 import consumers, with one as the default.
+An explicit `worker_entrypoint.py imports N` argument overrides the environment;
+changing the environment requires recreating the import service. The independent
+maintenance consumer is counted separately in supervisor queue statistics.
+
+Execution claims retain the DownloadJob → ImportJob → TaskRun lock order and a
+current execution token. Work claims use a representative metadata artifact,
+`FOR UPDATE SKIP LOCKED` and a lease for the source/work identity. Every bounded
+claim and database phase still takes the shared ingest reservation and POSIX
+locks; resource waits hold no SQL transaction. Concurrent consumers can overlap
+job preparation and waiting, while the database slices remain serialized by
+resource admission. Batch commits own domain rows and subsequent media, curation
+and search outboxes together. Recovery and stale-token fencing remain independent
+of the selected consumer count. See
+[import deployment configuration](deployment-profiles.md#import-worker-concurrency--导入并发).
+
+### Parallel image execution
+
+`MEDIA_WORKER_CONCURRENCY` sets the image execution slot limit and the Compose
+operations consumer count, from 1 through 8 with a default of 1. Ordinary and
+large images share the same pool. Redis admits slot ownership and aggregate
+memory reservations atomically; shared POSIX barriers and independent slot
+locks retain the local limit when Redis coordination keys disappear. The
+existing database claim and version checks prevent duplicate computation or
+stale result submission for the same asset.
+
+For due media requests whose asset has no small-thumbnail path, a requested
+thumbnail receives a 20-second credit in selection order. The original
+`available_at` and lease conditions still determine eligibility; the credit
+allows older fingerprint work to regain precedence as new previews arrive.
+Image and video candidates use the same ordering before selection among
+admissible profiles. Existing memory reservations, resource barriers and
+claim-version checks still govern execution.
+
+Parallel mode reserves at least 768 MiB per image. Memory pressure or another
+active resource profile can admit fewer images than the configured limit.
+Video, indexing, deduplication, maintenance and unfinished remote search writes
+retain their exclusive barriers. Media wake jobs own distinct bounded slots;
+shrinking the pool preserves live owners while preventing successors above the
+new limit. Image algorithms, source verification and result lease checks
+retain their existing versions and rules.
+
+Apply the same setting to the API and Python worker roles. See
+[deployment profiles](deployment-profiles.md#image-worker-concurrency--图片处理并行数)
+for connection and thread budgets. Select a limit using the device's CPU,
+available memory and measured workload rather than assuming one value suits
+every deployment.
+
+### Shared visual working pixels
+
+Media derivation keeps the shared working-image path for eligible static images
+of at least 16 million pixels requiring a new pHash. It materializes an image
+with an edge no larger than 1024 pixels, applies EXIF orientation to the reduced
+pixels, and reuses them for pHash, a 256×256 RGB analysis sample, and a missing
+card thumbnail when sufficient pixels are available. The process-wide libvips
+cache ceiling remains 64 MiB. Existing first-card thumbnails are reused and
+elongated images retain the existing thumbnail policy. Images over a 4:1 aspect ratio and unsupported static-image layouts keep direct sampling.
+
+Only when the same media task needs a pHash and is missing a card or dimensions,
+a single-frame RGB JPEG or RGB/RGBA PNG without PNG color-key transparency may
+share its full-size Pillow image within that task, provided the original width
+is over 400 pixels and the area is at most 8 million pixels. This avoids a second
+decode and loading libvips solely for that card. The Pillow card preserves its
+embedded ICC profile when encoding WebP. Images with an existing first
+card, larger images, CMYK JPEGs and other layouts keep their existing paths.
+This bounded working image preserves direct pHash sampling and is closed when
+the task's derivation returns or raises; it does not eagerly create an SSIM sample. A
+`WorkingImage` that is already RGB is sampled without another RGB copy; direct
+source sampling releases the decoded image before loading the numeric library.
+Analysis samples for other images remain on-demand SSIM work using the existing
+direct resize.
+
+The fingerprint version is `numpy-phash-oriented-adaptive-v3` and the media
+version is `media-visual-v3`. Reuse requires matching fingerprint and source
+versions; earlier pHash values must be recomputed and different pHash versions
+are never compared. Visual candidates use oriented display aspect ratios;
+stored source dimensions, exact SHA256 deduplication and representative
+selection remain unchanged.
+
+Analysis samples remain lossless RGB bytes in 1024 fixed slots under
+`library/.visual-samples`, totaling approximately 193 MiB. Headers bind version,
+asset ID, source size/mtime, existing SHA256 and display dimensions. Collisions,
+missing files and stale headers are cache misses; replacement is atomic.
+The 1024 working image is never persisted. Each reconciliation keeps at most
+16 MiB of sample bytes; float arrays are temporary. SSIM keeps its existing
+256×256 sample, formula, thresholds and cache behavior. Asset deletion cleans up
+its owned slot. Quarantine still verifies original SHA256 and regenerates
+fresh samples from originals; the cache cannot replace this check.
+
+For an existing library, stop scheduler and pipeline workers during upgrade,
+then run a temporary import-worker container with the new code and its media budget:
+
+```sh
+docker compose run --rm --no-deps worker-import python -m app.services.visual_fingerprint_rebuild --enqueue --process
+```
+
+It batches intents through the media outbox and processes one admitted asset
+at a time; rerunning resumes an interrupted upgrade. With no flags it reports
+status only. Resume consumers once `remaining_available` and `pending_fingerprints` are both zero and processing has no failures, then request
+a global dedup scan through the existing administration entry point.
+Unavailable purged/quarantined historical members retain old fingerprints and
+groups and are counted separately as `unavailable_historical`; available
+representatives are upgraded. Existing evidence is preserved; new evidence
+uses `numpy-phash-oriented-adaptive-v3` and `media-visual-v3`. The upgrade does
+not rebuild or delete existing groups.

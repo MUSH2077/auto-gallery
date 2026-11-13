@@ -1,12 +1,13 @@
 """Manual upload API — thin route: parse multipart, stream to temp files,
-hand off to ManualUploadService. All validation/business logic lives in the
-service (app/services/manual_upload.py)."""
+hand off to ManualUploadService. Transport budgets and temporary files belong
+to this route; persistent validation and accounting belong to the service."""
 from __future__ import annotations
 
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,11 +15,43 @@ from app.api.deps import DBSession
 from app.auth import RequirePermission
 from app.config import settings
 from app.models.user import User
-from app.services.manual_upload import ManualUploadService, QuotaExceededError, UploadFileInput
+from app.services.heavy_io import HeavyIOUnavailable, storage_write_barrier
+from app.services.manual_upload import (
+    ManualUploadService, QuotaExceededError, UploadFileInput,
+    MAX_UPLOAD_FILES, MAX_FILE_SIZE_BYTES, MAX_BATCH_SIZE_BYTES, MAX_REQUEST_SIZE_BYTES,
+)
 
 _require_upload = RequirePermission("upload")
 
-router = APIRouter(dependencies=[_require_upload])
+class UploadRequest(Request):
+    def form(self, **kwargs):
+        return super().form(**{**kwargs, "max_files": MAX_UPLOAD_FILES, "max_fields": 10, "max_part_size": 64 * 1024})
+
+
+class UploadRoute(APIRoute):
+    """Count received bytes before FastAPI's multipart parser runs."""
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def bounded(request: Request):
+            length = request.headers.get("content-length")
+            if length and length.isdecimal() and int(length) > MAX_REQUEST_SIZE_BYTES:
+                raise HTTPException(status_code=413, detail={"code": "upload_request_too_large", "message": "Upload request exceeds the byte limit"})
+            received = 0
+
+            async def receive():
+                nonlocal received
+                message = await request.receive()
+                received += len(message.get("body", b""))
+                if received > MAX_REQUEST_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail={"code": "upload_request_too_large", "message": "Upload request exceeds the byte limit"})
+                return message
+
+            return await handler(UploadRequest(request.scope, receive))
+        return bounded
+
+
+router = APIRouter(dependencies=[_require_upload], route_class=UploadRoute)
 
 
 class UploadResponse(BaseModel):
@@ -29,7 +62,7 @@ class UploadResponse(BaseModel):
     quota_bytes: int | None
 
 
-async def _stream_to_temp(upload: UploadFile, tmp_dir: Path) -> Path:
+async def _stream_to_temp(upload: UploadFile, tmp_dir: Path, *, byte_limit: int = MAX_FILE_SIZE_BYTES) -> Path:
     """Stream an UploadFile to a temp file under DOWNLOAD_ROOT.
 
     Placing the temp file on the same filesystem as DOWNLOAD_ROOT lets the
@@ -39,14 +72,25 @@ async def _stream_to_temp(upload: UploadFile, tmp_dir: Path) -> Path:
     suffix = Path(upload.filename or "").suffix
     fd, tmp_name = tempfile.mkstemp(suffix=suffix, dir=str(tmp_dir))
     tmp_path = Path(tmp_name)
+    delivered = False
     try:
         with open(fd, "wb") as out:
+            if upload.size is not None and upload.size > byte_limit:
+                raise QuotaExceededError("Upload exceeds the file or remaining batch budget")
+            copied = 0
             while True:
-                chunk = await upload.read(1024 * 1024)
+                chunk = await upload.read(min(1024 * 1024, byte_limit - copied + 1))
                 if not chunk:
                     break
+                copied += len(chunk)
+                if copied > byte_limit:
+                    raise QuotaExceededError("Upload exceeds the file or remaining batch budget")
                 out.write(chunk)
+        await upload.close()
+        delivered = True
     finally:
+        if not delivered:
+            tmp_path.unlink(missing_ok=True)
         await upload.close()
     return tmp_path
 
@@ -61,6 +105,24 @@ async def upload_files(
     db: AsyncSession = DBSession,
     user: User = _require_upload,
 ):
+    try:
+        async with storage_write_barrier():
+            return await _receive_upload_files(files, title, tags, is_nsfw, creator_id, db, user)
+    except HeavyIOUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "maintenance_in_progress",
+                "message": "Storage maintenance is in progress; retry the upload later",
+            },
+            headers={"Retry-After": "10"},
+        ) from exc
+
+
+async def _receive_upload_files(
+    files: list[UploadFile], title: str | None, tags: str | None,
+    is_nsfw: bool, creator_id: str | None, db: AsyncSession, user: User,
+) -> UploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
 
@@ -69,9 +131,29 @@ async def upload_files(
 
     temp_inputs: list[UploadFileInput] = []
     try:
+        remaining_batch = MAX_BATCH_SIZE_BYTES
+        remaining_quota = (
+            max(0, user.upload_quota_bytes - user.upload_used_bytes)
+            if user.upload_quota_bytes is not None else None
+        )
         for f in files:
-            tmp_path = await _stream_to_temp(f, tmp_dir)
+            budgets = [
+                (MAX_FILE_SIZE_BYTES, "upload_file_too_large"),
+                (remaining_batch, "upload_batch_too_large"),
+            ]
+            if remaining_quota is not None:
+                budgets.append((remaining_quota, "upload_quota_exceeded"))
+            byte_limit, error_code = min(budgets, key=lambda item: item[0])
+            try:
+                tmp_path = await _stream_to_temp(f, tmp_dir, byte_limit=byte_limit)
+            except QuotaExceededError as exc:
+                exc.code = error_code
+                raise
             temp_inputs.append(UploadFileInput(temp_path=tmp_path, original_name=f.filename or "upload"))
+            size = tmp_path.stat().st_size
+            remaining_batch -= size
+            if remaining_quota is not None:
+                remaining_quota -= size
 
         try:
             result = await ManualUploadService().save_upload(
@@ -85,8 +167,6 @@ async def upload_files(
                     "creator_id": creator_id,
                 },
             )
-        except QuotaExceededError as e:
-            raise HTTPException(status_code=413, detail=str(e))
         except PermissionError as e:
             raise HTTPException(status_code=403, detail=str(e))
         except ValueError as e:
@@ -99,6 +179,8 @@ async def upload_files(
             used_bytes=result.used_bytes,
             quota_bytes=result.quota_bytes,
         )
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=413, detail={"code": exc.code, "message": str(exc)}) from exc
     finally:
         # Files the service successfully moved into DOWNLOAD_ROOT no longer
         # exist at temp_path (os.replace already relocated them); this only

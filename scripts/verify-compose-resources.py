@@ -16,7 +16,6 @@ MIB = 1024 * 1024
 PROTECTED_SERVICE_NAMES = (
     "postgres",
     "redis",
-    "meilisearch",
     "migrate",
 )
 
@@ -45,7 +44,8 @@ def compose_config(
             "SECRET_KEY": "compose-verification-secret-key-32-bytes",
             "ADMIN_PASSWORD": "compose-verification",
             "RESOURCE_GOVERNANCE_MODE": "enforce",
-            "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance",
+            "SEARCH_BACKEND": "postgresql",
+            "RESOURCE_GOVERNANCE_ENFORCED_PROFILES": "download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat",
             "RESOURCE_MEMORY_RESERVE_MODE": "auto",
         }
     )
@@ -77,7 +77,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def verify_resource_limits(services: dict) -> None:
-    for name in PROTECTED_SERVICE_NAMES:
+    for name in (*PROTECTED_SERVICE_NAMES, *(("meilisearch",) if "meilisearch" in services else ())):
         service = services[name]
         memory = int(service["mem_limit"])
         require(memory >= 64 * MIB, f"{name}: mem_limit is too small")
@@ -135,6 +135,8 @@ def verify_runtime_resource_contract(config: dict) -> None:
         directory = Path(raw_dir)
         fixture_path = directory / "inspect.json"
         inspect_log = directory / "inspect.log"
+        compose_path = directory / "compose.json"
+        compose_path.write_text(json.dumps(config), encoding="utf-8")
         fixture_path.write_text(json.dumps(fixtures), encoding="utf-8")
         docker = directory / "docker"
         docker.write_text(
@@ -146,6 +148,10 @@ import sys
 fixtures = json.load(open(os.environ["RUNTIME_CONTRACT_FIXTURE"], encoding="utf-8"))
 args = sys.argv[1:]
 if args and args[0] == "compose":
+    if "config" in args:
+        with open(os.environ["RUNTIME_CONTRACT_COMPOSE"], encoding="utf-8") as source:
+            print(source.read())
+        raise SystemExit(0)
     if "ps" in args:
         service = args[args.index("ps") + 1]
         if "-q" in args:
@@ -188,6 +194,7 @@ raise SystemExit(2)
                 "PATH": f"{directory}:{env['PATH']}",
                 "COMPOSE_ENV_FILE": str(directory / "absent.env"),
                 "RUNTIME_CONTRACT_FIXTURE": str(fixture_path),
+                "RUNTIME_CONTRACT_COMPOSE": str(compose_path),
                 "RUNTIME_CONTRACT_LOG": str(inspect_log),
                 "VERIFY_RESOURCES_ONLY": "1",
                 "VERIFY_SCOPE": "full",
@@ -368,6 +375,8 @@ def verify_io_override(config: dict) -> None:
         "worker-import": (30, 15),
     }
     for name, (read_mib, write_mib) in expected.items():
+        if name == "meilisearch" and name not in services:
+            continue
         limits = services[name]["blkio_config"]
         read = limits["device_read_bps"][0]
         write = limits["device_write_bps"][0]

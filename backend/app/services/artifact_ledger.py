@@ -15,9 +15,10 @@ from sqlalchemy.orm import aliased
 from app.models.storage_artifact import StorageArtifact
 from app.models.import_job import ImportJob
 from app.models.work_source import WorkSource
+from app.services.image_utils import IMAGE_EXTS
 
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+IMAGE_EXTENSIONS = IMAGE_EXTS
 VIDEO_EXTENSIONS = {".mp4", ".webm"}
 
 

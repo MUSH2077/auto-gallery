@@ -57,12 +57,6 @@ async def subscription_summaries(
     if not ordered_ids:
         return {"items": [], "updated_at": now}
 
-    config = await get_scheduler_config(db)
-    subscriptions = list((await db.execute(
-        select(Subscription).where(Subscription.id.in_(ordered_ids))
-    )).scalars())
-    by_id = {subscription.id: subscription for subscription in subscriptions}
-
     memberships_by_subscription: dict[UUID, UserSubscription] = {}
     bindings_by_source: dict[UUID, UserSubscriptionSource] = {}
     if user_id is not None:
@@ -75,6 +69,11 @@ async def subscription_summaries(
         memberships_by_subscription = {
             membership.subscription_id: membership for membership in memberships
         }
+        # The same batch owns visibility and the private summary overlay.
+        # Administrative status does not imply membership in private rows.
+        ordered_ids = [subscription_id for subscription_id in ordered_ids if subscription_id in memberships_by_subscription]
+        if not ordered_ids:
+            return {"items": [], "updated_at": now}
         membership_ids = [membership.id for membership in memberships]
         if membership_ids:
             bindings = list((await db.execute(
@@ -85,6 +84,12 @@ async def subscription_summaries(
             bindings_by_source = {
                 binding.subscription_source_id: binding for binding in bindings
             }
+
+    config = await get_scheduler_config(db)
+    subscriptions = list((await db.execute(
+        select(Subscription).where(Subscription.id.in_(ordered_ids))
+    )).scalars())
+    by_id = {subscription.id: subscription for subscription in subscriptions}
 
     source_rows = list((await db.execute(
         select(SubscriptionSource)

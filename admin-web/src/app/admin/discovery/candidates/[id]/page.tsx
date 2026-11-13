@@ -2,16 +2,16 @@
 
 import { Suspense } from "react";
 
-import { PageShell, PermissionGuard } from "@/components";
+import { BusinessPage, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useT } from "@/lib/i18n";
 import RemoteCreatorDetailPage from "./RemoteCreatorDetailPage";
 
 function DetailFallback() {
   const t = useT();
   return (
-    <PageShell className="max-w-[96rem]">
+    <BusinessPage title={t("discovery.creator_details")} className="gallery-discovery">
       <div className="h-72 animate-pulse rounded-2xl bg-subtle" aria-label={t("common.loading")} />
-    </PageShell>
+    </BusinessPage>
   );
 }
 

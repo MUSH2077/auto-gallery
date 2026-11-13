@@ -49,6 +49,7 @@ rollback_status="checking_schema"
 current_revision="unknown"
 schema_retained="unknown"
 old_migrate_ran="false"
+writer_stop_confirmed="false"
 
 write_receipt() {
     local temporary="$ROLLBACK_DIR/rollback-receipt.env.tmp"
@@ -58,6 +59,7 @@ write_receipt() {
         printf 'ROLLBACK_CURRENT_ALEMBIC_REVISION=%s\n' "$current_revision"
         printf 'ROLLBACK_SCHEMA_RETAINED=%s\n' "$schema_retained"
         printf 'ROLLBACK_OLD_MIGRATE_RAN=%s\n' "$old_migrate_ran"
+        printf 'ROLLBACK_WRITER_STOP_CONFIRMED=%s\n' "$writer_stop_confirmed"
         printf 'ROLLBACK_APPLICATION_GIT_HEAD=%s\n' "$PREDEPLOY_GIT_HEAD"
     } >"$temporary"
     chmod 600 "$temporary"
@@ -67,7 +69,12 @@ write_receipt() {
 record_failure() {
     local exit_code=$?
     trap - ERR
-    rollback_status="failed"
+    if [[ "$rollback_status" == "stopping_writers" ]]; then
+        rollback_status="paused"
+        echo "Writer stop or status confirmation failed (exit $exit_code); rollback paused." >&2
+    else
+        rollback_status="failed"
+    fi
     write_receipt
     exit "$exit_code"
 }
@@ -99,15 +106,31 @@ case "$current_revision" in
         ;;
 esac
 
-rollback_status="restoring_application"
+rollback_status="stopping_writers"
 write_receipt
 
 # Keep heavy workers stopped. Restore only the foreground application while
 # operators establish whether the previous image tolerates the retained schema.
-docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+timeout 180 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
     --env-file "$ROLLBACK_DIR/.env.predeploy" \
     -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
-    stop -t 120 migrate backend admin-web worker-download worker-import worker-operations worker-discovery scheduler || true
+    stop -t 120 migrate backend admin-web worker-download worker-import worker-operations worker-discovery scheduler
+
+active_writers="$(timeout 30 docker compose --project-directory "$PROJECT_ROOT" -p auto-gallery \
+    --env-file "$ROLLBACK_DIR/.env.predeploy" \
+    -f "$ROLLBACK_DIR/docker-compose.candidate.yaml" \
+    ps --all --quiet --status running --status restarting --status paused \
+    migrate backend admin-web worker-download worker-import worker-operations worker-discovery scheduler)"
+if [[ -n "$active_writers" ]]; then
+    rollback_status="paused"
+    write_receipt
+    trap - ERR
+    echo "Writer containers remain active after stop; application rollback is paused: $active_writers" >&2
+    exit 1
+fi
+writer_stop_confirmed="true"
+rollback_status="restoring_application"
+write_receipt
 
 docker image tag "$BACKEND_ROLLBACK_TAG" auto-gallery-backend:latest
 docker image tag "$ADMIN_ROLLBACK_TAG" auto-gallery-admin-web:latest

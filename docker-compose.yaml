@@ -8,12 +8,18 @@ x-build-metadata: &build-metadata
   BUILD_REVISION: ${BUILD_REVISION:-development}
 
 x-application-env: &application-env
+  SEARCH_BACKEND: postgresql
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autogallery}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-autogallery}
   REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
   MEILI_URL: http://meilisearch:7700
   MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
   SECRET_KEY: ${SECRET_KEY}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY:-1}
+  IMPORT_WORKER_CONCURRENCY: ${IMPORT_WORKER_CONCURRENCY:-1}
+  DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
+  # Empty keeps the automatic device-profile download limit.
+  DOWNLOAD_DEVICE_CONCURRENCY_LIMIT: ${DOWNLOAD_DEVICE_CONCURRENCY_LIMIT:-}
 
 x-worker-env: &worker-env
   DOWNLOAD_ROOT: /downloads
@@ -25,7 +31,7 @@ x-worker-env: &worker-env
   RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
   RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
   RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
-  RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+  RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat}
   RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
   RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
   RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
@@ -35,6 +41,10 @@ x-worker-env: &worker-env
   GITLLERY_ACTIVE_VERIFIED_GENERATION: ${GITLLERY_ACTIVE_VERIFIED_GENERATION:-}
   DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-1}
   DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-1}
+  VIPS_CONCURRENCY: ${VIPS_CONCURRENCY:-1}
+  OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-1}
+  OMP_NUM_THREADS: ${OMP_NUM_THREADS:-1}
+  MKL_NUM_THREADS: ${MKL_NUM_THREADS:-1}
 
 services:
   postgres:
@@ -126,7 +136,8 @@ services:
     logging: *default-logging
 
   meilisearch:
-    image: getmeili/meilisearch:v1.12@sha256:c9fac23131cca4db95173d41cc50fd5639121ee381795528fdd7522d7978a7b8
+    profiles: [legacy-search]
+    image: getmeili/meilisearch:v1.54.3@sha256:e68913ab7d6f5b159529e472cfd362ce3c741fafd3c127961b2142abbe41b3c9
     environment:
       <<: *build-metadata
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
@@ -182,17 +193,21 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: production
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         BUILD_REVISION: ${BUILD_REVISION:-development}
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
-    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/$${site}.txt; done && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "mkdir -p /gallerydl-config/cookies && for site in pixiv twitter iwara danbooru pinterest lofter weibo bilibili; do touch /gallerydl-config/cookies/$${site}.txt; done && exec python api_entrypoint.py"
     ports:
       - "${BACKEND_PORT:-8818}:8000"
     environment:
       <<: [*build-metadata, *application-env]
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}
       MEILI_SEARCH_TIMEOUT_SECONDS: ${MEILI_SEARCH_TIMEOUT_SECONDS:-3}
+      API_WORKER_CONCURRENCY: ${API_WORKER_CONCURRENCY:-1}
+      MEILI_SEARCH_CONCURRENCY: ${MEILI_SEARCH_CONCURRENCY:-4}
+      API_THREAD_POOL_SIZE: ${API_THREAD_POOL_SIZE:-16}
       REMOTE_CREDENTIAL_KEY: ${REMOTE_CREDENTIAL_KEY:-}
       REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED: ${REMOTE_DISCOVERY_PRIVATE_MEMBERS_ENABLED:-false}
       REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED: ${REMOTE_DISCOVERY_PIXIV_PREVIEW_ENABLED:-false}
@@ -215,7 +230,7 @@ services:
       RESOURCE_GOVERNANCE_MODE: ${RESOURCE_GOVERNANCE_MODE:-enforce}
       RESOURCE_DEVICE_PROFILE: ${RESOURCE_DEVICE_PROFILE:-auto}
       RESOURCE_GOVERNANCE_MAX_SCALE: ${RESOURCE_GOVERNANCE_MAX_SCALE:-1.0}
-      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance}
+      RESOURCE_GOVERNANCE_ENFORCED_PROFILES: ${RESOURCE_GOVERNANCE_ENFORCED_PROFILES:-download_network,import_db,image_derive,video_derive,search_index,maintenance,work_heat}
       RESOURCE_MEMORY_RESERVE_MODE: ${RESOURCE_MEMORY_RESERVE_MODE:-auto}
       RESOURCE_MEMORY_RESERVE_RATIO: ${RESOURCE_MEMORY_RESERVE_RATIO:-0.15}
       RESOURCE_MEMORY_RESERVE_MIN_MB: ${RESOURCE_MEMORY_RESERVE_MIN_MB:-384}
@@ -277,6 +292,7 @@ services:
       REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED: ${REMOTE_DISCOVERY_BILIBILI_AUTO_IMPORT_ENABLED:-false}
       PERSONAL_AUTH_TMP_ROOT: /run/auto-gallery-secrets
       DOWNLOAD_CONCURRENCY_CAP: ${DOWNLOAD_CONCURRENCY_CAP:-1}
+      DOWNLOAD_WORKER_LIFECYCLE: ${DOWNLOAD_WORKER_LIFECYCLE:-resident}
       DOWNLOAD_QUEUE_MAX_PENDING: ${DOWNLOAD_QUEUE_MAX_PENDING:-100}
       DOWNLOAD_STAGING_ENABLED: ${DOWNLOAD_STAGING_ENABLED:-1}
     volumes:
@@ -309,10 +325,10 @@ services:
   worker-import:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    # Single import worker: pyvips thumbnail bursts are the biggest memory
-    # spike, so queue concurrency and adaptive slice budgets remain conservative.
+    # Import defaults to one; imports and maintenance own separate pools,
+    # while batch resource rules remain unchanged.
     # Promote delayed import retries from the imports scheduled registry.
-    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports 1 --with-scheduler
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py imports --with-scheduler
     environment:
       <<: [*build-metadata, *application-env, *worker-env]
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}
@@ -353,7 +369,7 @@ services:
   worker-operations:
     image: ${BACKEND_IMAGE:-auto-gallery-backend:latest}
     pull_policy: never
-    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations 1 --with-scheduler
+    command: nice -n 10 ionice -c 2 -n 7 python worker_entrypoint.py operations ${MEDIA_WORKER_CONCURRENCY:-1} --with-scheduler
     environment:
       <<: [*build-metadata, *application-env, *worker-env]
       MEILI_INDEX_PREFIX: ${MEILI_INDEX_PREFIX:-}

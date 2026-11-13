@@ -116,6 +116,9 @@ class BilibiliProvider(BaseProvider):
             "raw_metadata": raw_metadata,
         }
 
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://space.bilibili.com/{source_creator_id}"
+
     def parse_work_source(self, raw_metadata: dict) -> dict:
         article_id = str(raw_metadata.get("opus_id") or raw_metadata.get("id") or "")
         user = raw_metadata.get("user", {})

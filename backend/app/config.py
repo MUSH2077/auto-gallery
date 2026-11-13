@@ -1,8 +1,11 @@
 from urllib.parse import urlparse
+from typing import Literal
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 DEFAULT_ADMIN_PASSWORD = "change-me-admin"
+MAX_MEDIA_WORKER_CONCURRENCY = 8
 
 
 def _is_placeholder(value: str | None) -> bool:
@@ -23,6 +26,7 @@ class Settings(BaseSettings):
     build_revision: str = "development"
     database_url: str = "postgresql+asyncpg://autogallery:changeme@postgres:5432/autogallery"
     redis_url: str = "redis://:changeme@redis:6379/0"
+    search_backend: Literal["postgresql"] = "postgresql"
     meili_url: str = "http://meilisearch:7700"
     meili_master_key: str = ""
     meili_index_prefix: str = ""
@@ -66,6 +70,22 @@ class Settings(BaseSettings):
     # desired concurrency; this cap prevents a stale/high UI setting from
     # recreating a download storm on any device class.
     download_concurrency_cap: int = 1
+    # Optional per-device download override. Empty means use the automatic
+    # capability profile; this setting does not change other profile budgets.
+    download_device_concurrency_limit: int | None = Field(default=None, ge=1, le=5)
+    # Internal value inherited by a running download child from its supervisor.
+    download_execution_concurrency: int = Field(default=1, ge=1, le=5)
+    # Import consumers are independently configurable. Keep the default
+    # conservative because import jobs share the same container with the
+    # maintenance consumer and can trigger image-processing work.
+    import_worker_concurrency: int = Field(default=1, ge=1, le=4)
+    # API processes share one backend-container connection budget; the launcher
+    # divides DB_POOL_SIZE/DB_MAX_OVERFLOW before importing Settings.
+    api_worker_concurrency: int = Field(default=1, ge=1, le=4)
+    # Shared cap for all API processes; search services consume this budget.
+    meili_search_concurrency: int = Field(default=4, ge=1, le=4)
+    # Budget for each independent API blocking-thread pool, divided per process.
+    api_thread_pool_size: int = Field(default=16, ge=1, le=64)
     download_queue_max_pending: int = 100
     download_dispatch_recovery_interval_seconds: float = 60.0
     download_dispatch_recovery_grace_seconds: float = 180.0
@@ -111,6 +131,8 @@ class Settings(BaseSettings):
     resource_budget_base_write_mb_per_second: float = 10.0
     resource_governance_mode: str = "shadow"  # shadow | enforce
     resource_device_profile: str = "auto"  # auto | compact | standard | performance
+    # Bound independent image jobs; video and other background jobs remain exclusive.
+    media_worker_concurrency: int = Field(default=1, ge=1, le=MAX_MEDIA_WORKER_CONCURRENCY)
     # Optional rollout allowlist for soft AIMD enforcement. An empty value in
     # enforce mode preserves the historical all-profiles behavior; deploy
     # tooling always sets an explicit list during staged rollout.
@@ -152,6 +174,13 @@ class Settings(BaseSettings):
     memory_log_interval_seconds: int = 60
 
     model_config = {"env_prefix": "", "case_sensitive": False}
+
+    @field_validator("download_device_concurrency_limit", mode="before")
+    @classmethod
+    def _empty_download_device_limit_is_none(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

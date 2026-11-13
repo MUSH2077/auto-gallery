@@ -1,5 +1,4 @@
-import { assertBackupArchiveResponse, request, requestBlob, ApiError, clearAuthOn401 } from "./client";
-import { csrfToken } from "@/lib/authFlow";
+import { assertBackupArchiveResponse, request, requestBlob, uploadWithProgress } from "./client";
 import { remoteDiscoveryApi, worksApi } from "./endpoints";
 import type * as T from "./types";
 export * from "./client";
@@ -11,38 +10,18 @@ export * from "./endpoints";
 // handling (session cookie, CSRF value and 401 redirect) instead of
 // duplicating it silently.
 function uploadWorks(form: FormData, onProgress?: (pct: number) => void): Promise<T.UploadResponse> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/v1/upload");
-    xhr.timeout = 10 * 60 * 1000; // 10 min — large files over LAN
-    const csrf = csrfToken();
-    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
-    if (onProgress) {
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
-      };
-    }
-    xhr.ontimeout = () => reject(new ApiError(0, "Upload timed out"));
-    xhr.onload = () => {
-      let body: any = {};
-      try { body = JSON.parse(xhr.responseText); } catch { /* empty/non-JSON body */ }
-      if (xhr.status === 401) {
-        clearAuthOn401(csrf);
-        reject(new ApiError(401, "Session expired — redirecting to login"));
-        return;
-      }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(body as T.UploadResponse);
-      } else {
-        reject(new ApiError(xhr.status, body.detail || `${xhr.status} ${xhr.statusText}`));
-      }
-    };
-    xhr.onerror = () => reject(new ApiError(0, "Network error"));
-    xhr.send(form);
-  });
+  return uploadWithProgress<T.UploadResponse>(form, "/api/upload", onProgress);
 }
 
 // ── API ──
+
+function getAdminOperation<TResult = Record<string, unknown>>(id: string) {
+  return request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${id}`);
+}
+
+function getDownloadJobImports(jobId: string) {
+  return request<T.ImportJob[]>(`/api/v1/download-jobs/${jobId}/imports`);
+}
 
 export const api = {
   ...remoteDiscoveryApi,
@@ -84,8 +63,10 @@ export const api = {
   queueStats: () => request<T.QueueStatsResponse>("/api/v1/system/queue-stats"),
 
   // Unified task runs
-  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; visibility?: "actionable" | "all"; offset?: number; limit?: number }) => {
+  listTasks: (params?: { kind?: string; status?: string; operation_type?: string; source?: string; q?: string; include_account?: boolean; visibility?: "actionable" | "all"; scope?: "all" | "attention" | "running" | "waiting"; include_summary?: boolean; offset?: number; limit?: number }) => {
     const q = new URLSearchParams();
+    if (params?.scope) q.set("scope", params.scope);
+    if (params?.include_summary) q.set("include_summary", "true");
     if (params?.kind) q.set("kind", params.kind);
     if (params?.status) q.set("status", params.status);
     if (params?.operation_type) q.set("operation_type", params.operation_type);
@@ -357,8 +338,7 @@ export const api = {
   repeatTask: (id: string, requestId: string) =>
     request<T.RepeatSyncAccepted>(`/api/v1/tasks/${id}/repeat-sync`, { method: "POST", body: JSON.stringify({ request_id: requestId }) }),
 
-  getDownloadJobImports: (jobId: string) =>
-    request<any[]>(`/api/v1/download-jobs/${jobId}/imports`),
+  getDownloadJobImports,
 
   clearDownloadJobs: (statuses: string[]) =>
     request<T.TaskBulkClearResult>(`/api/v1/download-jobs/clear`, { method: "POST", body: JSON.stringify({ statuses }) }),
@@ -378,8 +358,7 @@ export const api = {
   batchDownloadJobs: (ids: string[], action: string) =>
     request<T.TaskBulkResult>("/api/v1/download-jobs/batch", { method: "POST", body: JSON.stringify({ ids, action }) }),
 
-  listDownloadJobImports: (jobId: string) =>
-    request<{ id: string; download_job_id: string; status: string; error_log?: string }[]>(`/api/v1/download-jobs/${jobId}/imports`),
+  listDownloadJobImports: getDownloadJobImports,
 
   // Repositories
   getRepository: (id: string) =>
@@ -670,12 +649,7 @@ export const api = {
   getStorageBreakdown: () =>
     request<T.StorageBreakdownResponse>("/api/v1/admin/storage-breakdown"),
   startIntegrityCheck: () => request<T.AdminOperationAccepted>("/api/v1/admin/integrity-check", { method: "POST" }),
-  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<{
-    issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
-    db_stats: Record<string, number>;
-    checked_at: string;
-    message?: string;
-  }>>("/api/v1/admin/integrity-check/latest"),
+  getLatestIntegrityCheck: () => request<T.AdminOperationSnapshotResponse<T.IntegrityResult>>("/api/v1/admin/integrity-check/latest"),
   clearEntity: (entity: T.ClearEntity, confirmation: string) =>
     request<{ status: string; message: string; deleted?: Record<string, number> }>(`/api/v1/admin/clear/${entity}`, {
       method: "POST",
@@ -728,22 +702,8 @@ export const api = {
       `/api/v1/admin/operations/clear/latest?entity=${encodeURIComponent(entity)}`,
     ),
 
-  getAdminOperationStatus: (jobId: string) =>
-    request<{
-      task_id?: string | null;
-      job_id: string;
-      rq_job_id?: string | null;
-      status: "queued" | "enqueued" | "running" | "complete" | "failed";
-      operation_type: "admin-clear" | "danbooru-import-all" | string;
-      progress?: { phase?: string; label?: string; current?: number; total?: number };
-      result?: any;
-      error?: string;
-      meta?: Record<string, any>;
-      updated_at?: number;
-    }>(`/api/v1/admin/operations/${jobId}`),
-
-  getAdminOperationTask: <TResult = Record<string, unknown>>(taskId: string) =>
-    request<T.AdminOperationStatus<TResult>>(`/api/v1/admin/operations/${taskId}`),
+  getAdminOperationStatus: getAdminOperation,
+  getAdminOperationTask: getAdminOperation,
 
   retryAdminOperation: (taskId: string) =>
     request<T.AdminOperationAccepted>(`/api/v1/admin/operations/${taskId}/retry`, { method: "POST" }),
@@ -816,21 +776,10 @@ export const api = {
     }>("/api/v1/reference/danbooru/mappings/refresh", { method: "POST" }),
 
   getDanbooruMappingRefreshStatus: (jobId: string) =>
-    request<{
-      task_id?: string | null;
-      job_id: string;
-      rq_job_id?: string | null;
-      status: "queued" | "enqueued" | "running" | "complete" | "failed";
-      operation_type: "danbooru-mapping-refresh";
-      progress?: { phase?: string; label?: string; current?: number; scanned?: number; total?: number };
-      result?: {
-        scanned: number; total: number; found: number; not_found: number;
-        errors: number; skipped: number; aborted: boolean;
-      };
-      error?: string;
-      meta?: Record<string, any>;
-      updated_at?: number;
-    }>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
+    request<T.AdminOperationPollResponse<{
+      scanned: number; total: number; found: number; not_found: number;
+      errors: number; skipped: number; aborted: boolean;
+    }>>(`/api/v1/reference/danbooru/mappings/refresh/${jobId}`),
 
   getDanbooruArtist: (artistId: number) =>
     request<{
@@ -1122,9 +1071,11 @@ export const queryKeys = {
     storage: ["system", "storage"] as const,
     queueStats: ["system", "queue-stats"] as const,
     systemInfo: ["system", "info"] as const,
+    storageBreakdown: ["system", "storage-breakdown"] as const,
     integrityCheck: ["system", "integrity-check"] as const,
   },
   backups: {
+    all: ["backups"] as const,
     list: ["backups", "list"] as const,
     estimate: ["backups", "estimate"] as const,
   },
@@ -1141,31 +1092,6 @@ export const queryKeys = {
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-
-export interface AuthTokenResponse {
-  access_token: string;
-  token_type: string;
-  must_change_password: boolean;
-}
-
-export interface AuthUser {
-  id: number;
-  username: string;
-  display_name: string | null;
-  is_active: boolean;
-  must_change_password: boolean;
-}
-
-export async function authLogin(username: string, password: string): Promise<AuthTokenResponse> {
-  return request<AuthTokenResponse>("/api/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  });
-}
-
-export async function authMe(): Promise<AuthUser> {
-  return request<AuthUser>("/api/v1/auth/me");
-}
 
 export async function authChangePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean; must_change_password: boolean }> {
   return request<{ ok: boolean; must_change_password: boolean }>("/api/v1/auth/browser/change-password", {

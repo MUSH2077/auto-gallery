@@ -1189,7 +1189,7 @@ export interface paths {
         put?: never;
         /**
          * Reindex Search
-         * @description Enqueue a full Meilisearch reindex — a whole-library walk that belongs
+         * @description Enqueue a full PostgreSQL search reindex — a whole-library walk that belongs
          *     in a worker, not inline in the backend process.
          */
         post: operations["post_api_v1_admin_search_reindex"];
@@ -4022,7 +4022,7 @@ export interface paths {
         put?: never;
         /**
          * Reindex Works
-         * @description Queue a full Meilisearch rebuild on the protected import worker.
+         * @description Queue a full PostgreSQL search rebuild on the protected worker.
          *
          *     This compatibility endpoint used to run the whole-library scan inside the
          *     backend request process, bypassing the NAS pressure and heavy-I/O gates.
@@ -4958,7 +4958,7 @@ export interface paths {
         };
         /**
          * Thumb
-         * @description Serve thumbnail — no auth needed (embedded in <img> tags on admin-web).
+         * @description Serve a private thumbnail via browser/Bearer auth or a scoped ticket.
          *
          *     Thumbnails are content-addressed by asset id and never change. Keep them in
          *     the signed-in browser cache, but out of shared intermediary caches.
@@ -9349,6 +9349,7 @@ export interface components {
         TaskPage: {
             /** Items */
             items: components["schemas"]["TaskRead"][];
+            summary?: components["schemas"]["TaskSummary"] | null;
             /** Total */
             total: number;
         } & {
@@ -9455,6 +9456,29 @@ export interface components {
             updated_at?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** TaskSummary */
+        TaskSummary: {
+            /**
+             * All
+             * @default 0
+             */
+            all: number;
+            /**
+             * Attention
+             * @default 0
+             */
+            attention: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Waiting
+             * @default 0
+             */
+            waiting: number;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -21315,6 +21339,8 @@ export interface operations {
                 q?: string | null;
                 include_account?: boolean;
                 visibility?: "actionable" | "all";
+                scope?: "all" | "attention" | "running" | "waiting";
+                include_summary?: boolean;
                 offset?: number;
                 limit?: number;
             };
@@ -23383,7 +23409,10 @@ export interface operations {
     };
     get_media_thumb_asset_id: {
         parameters: {
-            query?: never;
+            query?: {
+                expires?: string | null;
+                token?: string | null;
+            };
             header?: never;
             path: {
                 asset_id: string;

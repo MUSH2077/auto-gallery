@@ -1,5 +1,5 @@
 import { request } from "../client";
-import type { CurationCommit, RemoteWorkState, Work } from "../types";
+import type { CurationCommit, RemoteWorkState, Work, WorkSourceData } from "../types";
 import type { DerivativeStatus, MediaAssetData } from "../../media";
 
 export interface WorkAsset extends MediaAssetData {
@@ -24,6 +24,18 @@ export interface MediaDerivativeProgress {
   stall_after_seconds: number;
 }
 
+// The sources endpoint exposes generic JSON; validate its consumed fields once.
+function isWorkSource(value: unknown): value is WorkSourceData {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string"
+    && typeof record.source === "string"
+    && ["source_work_id", "source_url", "title", "description", "posted_at"]
+      .every(key => record[key] == null || typeof record[key] === "string")
+    && (record.raw_metadata == null
+      || (typeof record.raw_metadata === "object" && !Array.isArray(record.raw_metadata)));
+}
+
 export const worksApi = {
   resolveManualUploadWork: (sourceWorkId: string) => request<{ items: Work[]; total: number }>(
     `/api/v1/works?q=${encodeURIComponent(`pid:manual/${sourceWorkId}`)}&offset=0&limit=2`,
@@ -39,7 +51,11 @@ export const worksApi = {
   toggleWorkFavorite: (id: string) =>
     request<Work>(`/api/v1/works/${id}/favorite`, { method: "POST" }),
 
-  getWorkSources: (id: string) => request<unknown[]>(`/api/v1/works/${id}/sources`),
+  getWorkSources: async (id: string): Promise<WorkSourceData[]> => {
+    const data = await request<unknown>(`/api/v1/works/${id}/sources`);
+    if (!Array.isArray(data) || !data.every(isWorkSource)) throw new Error("Invalid work sources response");
+    return data;
+  },
 
   getWorkRemoteState: (id: string) => request<RemoteWorkState>(`/api/v1/works/${id}/remote-state`),
 

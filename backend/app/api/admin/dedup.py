@@ -122,6 +122,7 @@ async def decide_asset_dedup_case(
         100,
         job_timeout=3600,
         result_ttl=86400,
+        meta={"resource_descriptor": "asset-dedup-outbox"},
     )
     return result
 

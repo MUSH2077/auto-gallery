@@ -2,7 +2,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys, ProxySettings } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";

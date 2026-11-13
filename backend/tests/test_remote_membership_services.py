@@ -6,10 +6,97 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete
 
 
 PREFIX = "remote_membership_test_"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1, 10, 50])
+async def test_subscription_summary_authorization_is_one_batch(size):
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import event
+    from app.auth import create_access_token
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription, UserSubscription
+
+    selects = []
+    creator_ids = []
+    def capture(_connection, _cursor, statement, *_args):
+        if statement.startswith("SELECT user_subscriptions.") and "FROM user_subscriptions" in statement:
+            selects.append(statement)
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "summary_batch")
+            creators = [Creator(name=PREFIX + "summary_batch_" + uuid4().hex) for _ in range(size)]
+            db.add_all(creators)
+            await db.flush()
+            creator_ids = [creator.id for creator in creators]
+            subscriptions = [Subscription(creator_id=creators[index].id, name=str(index)) for index in range(size)]
+            db.add_all(subscriptions)
+            await db.flush()
+            db.add_all([UserSubscription(user_id=user.id, subscription_id=sub.id) for sub in subscriptions])
+            await db.commit()
+            ids = [str(sub.id) for sub in subscriptions]
+            token = create_access_token(user)
+        event.listen(engine.sync_engine, "before_cursor_execute", capture)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/subscriptions/summaries", params={"ids": ",".join(ids)}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200, response.text
+        assert [item["subscription_id"] for item in response.json()["items"]] == ids
+        assert len(selects) == 1, selects
+    finally:
+        if event.contains(engine.sync_engine, "before_cursor_execute", capture):
+            event.remove(engine.sync_engine, "before_cursor_execute", capture)
+        async with async_session() as db:
+            await _clear(db)
+            await db.execute(delete(Subscription).where(Subscription.creator_id.in_(creator_ids)))
+            await db.execute(delete(Creator).where(Creator.id.in_(creator_ids)))
+            await db.commit()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_subscription_summary_filters_private_ids_and_deduplicates(admin):
+    from httpx import ASGITransport, AsyncClient
+    from app.auth import create_access_token
+    from app.database import async_session, engine
+    from app.main import app
+    from app.models import Creator, Subscription, UserSubscription
+
+    creator_ids = []
+    try:
+        async with async_session() as db:
+            await _clear(db)
+            user = await _seed_user(db, "summary_scope", admin=admin)
+            creators = [Creator(name=PREFIX + "scope_" + uuid4().hex) for _ in range(3)]
+            db.add_all(creators)
+            await db.flush()
+            creator_ids = [creator.id for creator in creators]
+            subscriptions = [Subscription(creator_id=creators[index].id, name=str(index)) for index in range(3)]
+            db.add_all(subscriptions)
+            await db.flush()
+            db.add_all([UserSubscription(user_id=user.id, subscription_id=subscriptions[index].id, is_active=index == 0) for index in range(2)])
+            await db.commit()
+            ids = [str(sub.id) for sub in subscriptions]
+            token = create_access_token(user)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/subscriptions/summaries", params={"ids": ",".join([ids[1], ids[2], ids[0], ids[1], str(uuid4())])}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200, response.text
+        assert [item["subscription_id"] for item in response.json()["items"]] == [ids[1], ids[0]]
+    finally:
+        async with async_session() as db:
+            await _clear(db)
+            await db.execute(delete(Subscription).where(Subscription.creator_id.in_(creator_ids)))
+            await db.execute(delete(Creator).where(Creator.id.in_(creator_ids)))
+            await db.commit()
+        await engine.dispose()
 
 
 async def _clear(db) -> None:
@@ -268,11 +355,11 @@ def test_public_subscription_and_source_schemas_expose_private_overlay_fields():
     } <= set(SubscriptionSourceRead.model_fields)
 
 
-def _headers(username: str) -> dict[str, str]:
-    from app.auth import create_access_token
+async def _headers(username: str) -> dict[str, str]:
+    from tests.conftest import access_token_for_user
 
     return {
-        "Authorization": f"Bearer {create_access_token(username, must_change_password=False)}"
+        "Authorization": f"Bearer {await access_token_for_user(username)}"
     }
 
 
@@ -317,8 +404,8 @@ async def test_public_subscription_routes_use_current_membership_and_canonical_i
             second_name = second.username
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            first_headers = _headers(first_name)
-            second_headers = _headers(second_name)
+            first_headers = await _headers(first_name)
+            second_headers = await _headers(second_name)
 
             response = await client.get("/api/v1/subscriptions", headers=first_headers)
             assert response.status_code == 200, response.text
@@ -453,7 +540,7 @@ async def test_post_existing_source_uses_authoritative_enable_transition():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            headers = _headers(user_name)
+            headers = await _headers(user_name)
             unchanged_enabled = await client.post(
                 f"/api/v1/subscriptions/{subscription_id}/sources",
                 json={**payload, "is_enabled": True},
@@ -623,7 +710,7 @@ async def test_subscription_search_intersects_membership_before_pagination(monke
             response = await client.get(
                 "/api/v1/subscriptions",
                 params={"q": "Search", "offset": 17, "limit": 1},
-                headers=_headers(first_name),
+                headers=await _headers(first_name),
             )
         assert response.status_code == 200, response.text
         assert [item["id"] for item in response.json()] == [str(owned_id)]
@@ -686,16 +773,16 @@ async def test_repository_detail_is_member_filtered_and_overlays_private_source_
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             first_response = await client.get(
-                f"/api/v1/repositories/{source_id}", headers=_headers(first_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(first_name)
             )
             second_response = await client.get(
-                f"/api/v1/repositories/{source_id}", headers=_headers(second_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(second_name)
             )
             outsider_response = await client.get(
-                f"/api/v1/repositories/{source_id}", headers=_headers(outsider_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(outsider_name)
             )
             outsider_tags = await client.get(
-                f"/api/v1/repositories/{source_id}/tags", headers=_headers(outsider_name)
+                f"/api/v1/repositories/{source_id}/tags", headers=await _headers(outsider_name)
             )
         assert first_response.status_code == 200, first_response.text
         assert first_response.json()["repository"]["is_enabled"] is True
@@ -708,13 +795,13 @@ async def test_repository_detail_is_member_filtered_and_overlays_private_source_
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             removed = await client.delete(
-                f"/api/v1/repositories/{source_id}", headers=_headers(first_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(first_name)
             )
             first_after = await client.get(
-                f"/api/v1/repositories/{source_id}", headers=_headers(first_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(first_name)
             )
             second_after = await client.get(
-                f"/api/v1/repositories/{source_id}", headers=_headers(second_name)
+                f"/api/v1/repositories/{source_id}", headers=await _headers(second_name)
             )
         assert removed.status_code == 200, removed.text
         assert first_after.status_code == 404
@@ -823,7 +910,7 @@ async def test_task_and_download_lists_hide_other_users_private_triggers():
             first_task_id = first_task.id
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            headers = _headers(first_name)
+            headers = await _headers(first_name)
             tasks_response = await client.get(
                 "/api/v1/tasks", params={"include_account": "true"}, headers=headers
             )
@@ -1003,7 +1090,7 @@ async def test_legacy_task_visibility_follows_download_and_import_membership_sub
             first_name = first.username
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            headers = _headers(first_name)
+            headers = await _headers(first_name)
             for params in ({"include_account": "true"}, {"q": "Legacy"}):
                 response = await client.get("/api/v1/tasks", params=params, headers=headers)
                 assert response.status_code == 200, response.text
@@ -1150,19 +1237,19 @@ async def test_null_trigger_tasks_reuse_explicit_parent_job_owner_on_shared_subs
                 response = await client.get(
                     "/api/v1/tasks",
                     params={"q": "Explicit Owner Legacy"},
-                    headers=_headers(username),
+                    headers=await _headers(username),
                 )
                 assert response.status_code == 200, response.text
                 assert {item["title"] for item in response.json()["items"]} == expected_titles
             for task_id in task_ids:
                 assert (
                     await client.get(
-                        f"/api/v1/tasks/{task_id}", headers=_headers(owner_name)
+                        f"/api/v1/tasks/{task_id}", headers=await _headers(owner_name)
                     )
                 ).status_code == 200
                 assert (
                     await client.get(
-                        f"/api/v1/tasks/{task_id}", headers=_headers(peer_name)
+                        f"/api/v1/tasks/{task_id}", headers=await _headers(peer_name)
                     )
                 ).status_code == 404
     finally:
@@ -1212,7 +1299,7 @@ async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users()
             names = (ordinary.username, system_user.username, admin.username)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            ordinary_headers = _headers(names[0])
+            ordinary_headers = await _headers(names[0])
             for endpoint in (
                 "/api/v1/tasks?include_account=true",
                 "/api/v1/tasks?q=Global%20Scheduler",
@@ -1232,7 +1319,7 @@ async def test_global_scheduler_batch_is_visible_only_to_system_or_admin_users()
             ).status_code == 403
 
             for username in names[1:]:
-                headers = _headers(username)
+                headers = await _headers(username)
                 detail = await client.get(f"/api/v1/tasks/{task_id}", headers=headers)
                 assert detail.status_code == 200, detail.text
                 listed = await client.get(
@@ -1341,7 +1428,7 @@ async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped()
             )
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            owner_headers = _headers(owner_name)
+            owner_headers = await _headers(owner_name)
             owner_list = await client.get(
                 "/api/v1/tasks",
                 params={"q": "Scoped Trigger Batch"},
@@ -1369,7 +1456,7 @@ async def test_locatorless_subscription_batches_with_triggers_are_owner_scoped()
             ).status_code == 404
 
             for username in unrelated_names:
-                headers = _headers(username)
+                headers = await _headers(username)
                 listed = await client.get(
                     "/api/v1/tasks",
                     params={"q": "Scoped Trigger Batch"},
@@ -1452,7 +1539,7 @@ async def test_falsey_meta_locators_do_not_create_global_subscription_batches():
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             for username in (ordinary_name, *privileged_names):
-                headers = _headers(username)
+                headers = await _headers(username)
                 falsey_list = await client.get(
                     "/api/v1/tasks",
                     params={"q": "Falsey Locator Batch"},
@@ -1475,7 +1562,7 @@ async def test_falsey_meta_locators_do_not_create_global_subscription_batches():
                         )
                     ).status_code == 404
 
-            ordinary_headers = _headers(ordinary_name)
+            ordinary_headers = await _headers(ordinary_name)
             assert (
                 await client.get(
                     f"/api/v1/tasks/{json_null_global.id}", headers=ordinary_headers
@@ -1494,7 +1581,7 @@ async def test_falsey_meta_locators_do_not_create_global_subscription_batches():
                 )
             ).status_code == 403
 
-            system_headers = _headers(privileged_names[0])
+            system_headers = await _headers(privileged_names[0])
             global_list = await client.get(
                 "/api/v1/tasks",
                 params={"q": "JSON Null Locator Global Batch"},
@@ -1618,7 +1705,7 @@ async def test_import_job_routes_and_global_reconciliation_are_owner_scoped():
             }
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            headers = _headers(first_name)
+            headers = await _headers(first_name)
             listed = await client.get("/api/v1/import-jobs", headers=headers)
             assert listed.status_code == 200, listed.text
             assert listed.json()["total"] == 1
@@ -1727,7 +1814,7 @@ async def test_subscription_query_accepts_real_dict_search_hits(monkeypatch):
             response = await client.get(
                 "/api/v1/subscriptions",
                 params={"q": "Dict"},
-                headers=_headers(username),
+                headers=await _headers(username),
             )
         assert response.status_code == 200, response.text
         assert len(response.json()) == 1
@@ -1815,7 +1902,7 @@ async def test_search_assist_and_scheduler_use_private_source_bindings_before_pa
             shared_source_id = shared_source.id
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            headers = _headers(first_name)
+            headers = await _headers(first_name)
             assist = await client.post(
                 "/api/v1/search/assist",
                 json={
@@ -1940,7 +2027,7 @@ async def test_subscription_summary_selects_latest_receipt_only_from_owned_sourc
             response = await client.get(
                 "/api/v1/subscriptions/summaries",
                 params={"ids": str(subscription_id)},
-                headers=_headers(first_name),
+                headers=await _headers(first_name),
             )
         assert response.status_code == 200, response.text
         latest = response.json()["items"][0]["latest_state"]

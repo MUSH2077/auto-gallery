@@ -5,7 +5,10 @@ import { useT } from "@/lib/i18n";
 import { useParams, useRouter } from "next/navigation";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, CalendarScheduleRule, CreatorRepository, queryKeys, SubscriptionSource as SS, ProviderInfo } from "@/lib/api";
-import { CalendarScheduleEditor, defaultCalendarRule, PageHeader, PageShell, StatusBadge, Modal, ConfirmDialog, ErrorState, EmptyState, HierarchyDeletionDialog, RepositoryCard } from "@/components";
+import { CalendarScheduleEditor, defaultCalendarRule, StatusBadge, ErrorState, EmptyState, RepositoryCard } from "@/components";
+import { BusinessPage, BusinessModal, BusinessConfirm } from "@/features/gallery-ui/BusinessPage";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
+import BusinessHierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
 import { useToast } from "@/components/Toast";
 import { calendarScheduleRuleLabel, scheduleModeLabel, useI18nFormat } from "@/lib/i18n-format";
 import { usePermissions } from "@/lib/usePermissions";
@@ -46,19 +49,22 @@ function AddSourceForm({ subId, onClose }: { subId: string; onClose: () => void 
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_field")}</label>
-        <select value={source} onChange={(e) => handleSourceChange(e.target.value)} className="select w-full">
-          {sources.data?.sources?.filter((s: ProviderInfo) => s.capabilities.can_download || s.capabilities.can_import_local).map((s: ProviderInfo) => <option key={s.source_name} value={s.source_name}>{s.display_name} ({s.source_name})</option>)}
-        </select>
+        <ToolbarSelect
+          label={t("subscription_detail.source_field")}
+          value={source}
+          onValueChange={handleSourceChange}
+          options={(sources.data?.sources || []).filter((item: ProviderInfo) => item.capabilities.can_download || item.capabilities.can_import_local).map((item: ProviderInfo) => ({ value: item.source_name, label: item.display_name + " (" + item.source_name + ")" }))}
+        />
         <p className="mt-1 text-xs text-muted">{t("subscription_detail.multi_source_hint")}</p>
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_creator_id")}</label>
-        <input value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="input w-full" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
+        <label htmlFor="subscription-source-creator" className="block text-sm font-medium mb-1">{t("subscription_detail.source_creator_id")}</label>
+        <input id="subscription-source-creator" name="source_creator_id" autoComplete="off" value={sourceCreatorId} onChange={(e) => handleIdChange(e.target.value)} className="input w-full" placeholder={t("subscription_detail.source_creator_id_placeholder")} />
         <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_creator_id_hint")}</p>
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1">{t("subscription_detail.source_url_field")}</label>
-        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="input w-full font-mono" placeholder={urlHint} />
+        <label htmlFor="subscription-source-url" className="block text-sm font-medium mb-1">{t("subscription_detail.source_url_field")}</label>
+        <input id="subscription-source-url" name="source_url" type="url" autoComplete="off" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} className="input w-full font-mono" placeholder={urlHint} />
         <p className="mt-1 text-xs text-muted">{t("subscription_detail.source_url_hint")} {urlHint}</p>
       </div>
       <div className="flex justify-end gap-3 pt-2">
@@ -75,7 +81,7 @@ export default function SubscriptionDetailPage() {
   const t = useT();
   const toast = useToast();
   const fmt = useI18nFormat();
-  const { isAdmin } = usePermissions();
+  const { isAdmin, has } = usePermissions();
   const notify = useNotifications();
   const id = params.id as string;
 
@@ -89,10 +95,11 @@ export default function SubscriptionDetailPage() {
     ),
     refetchIntervalInBackground: false,
   });
-  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), staleTime: 60_000 });
+  const jobs = useQuery({ queryKey: [...queryKeys.downloadJobs.all, "subscription", id], queryFn: () => api.listDownloadJobs({ subscription_id: id, limit: 50 }), enabled:has("tasks"), staleTime: 60_000 });
   const decisions = useInfiniteQuery({
     queryKey: [...queryKeys.schedulerDecisions, "subscription", id],
     queryFn: ({ pageParam }) => api.schedulerDecisionsForSubscriptions([id], pageParam, 100),
+    enabled: has("system"),
     initialPageParam: 0,
     getNextPageParam: (last) => last.next_offset ?? undefined,
     staleTime: 60_000,
@@ -101,7 +108,7 @@ export default function SubscriptionDetailPage() {
   const creator = useQuery({
     queryKey: queryKeys.creators.detail(sub.data?.creator_id || ""),
     queryFn: () => api.getCreator(sub.data!.creator_id),
-    enabled: !!sub.data?.creator_id,
+    enabled: !!sub.data?.creator_id && has("library"),
   });
   const [showAddSource, setShowAddSource] = useState(false);
   const [editing, setEditing] = useState(false); const [editName, setEditName] = useState("");
@@ -223,8 +230,8 @@ export default function SubscriptionDetailPage() {
     return value ? (value.display_name || value.name) : creatorId.slice(0, 8);
   };
 
-  if (sub.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/4 rounded bg-subtle dark:bg-subtle" /><div className="h-32 rounded bg-subtle dark:bg-subtle" /></div></PageShell>;
-  if (sub.error) return <PageShell><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></PageShell>;
+  if (sub.isLoading) return <BusinessPage title={t("subscriptions.title")} className="gallery-subscriptions-page"><div className="state-view" role="status">{t("common.loading")}</div></BusinessPage>;
+  if (sub.error) return <BusinessPage title={t("subscriptions.title")} className="gallery-subscriptions-page"><ErrorState message={(sub.error as Error).message} onRetry={() => sub.refetch()} /></BusinessPage>;
   if (!sub.data) return null;
   const s = sub.data;
   const schedule = summaries.data?.items[0]?.schedule;
@@ -261,19 +268,17 @@ export default function SubscriptionDetailPage() {
   };
 
   return (
-    <PageShell>
-      <PageHeader title={s.name || (s.creator_display_name || s.creator_name || getCreatorName(s.creator_id))} description={s.creator_display_name || s.creator_name ? `${t("subscription_detail.creator")} ${s.creator_display_name || s.creator_name}` : undefined}>
-        <div className="flex gap-2">
-          {!s.is_active ? (
-            <button onClick={() => update.mutate({ is_active: true })} disabled={update.isPending} className="btn-ghost">{t("creator_detail.restore")}</button>
-          ) : (
-            <button onClick={() => { setDeleteFiles(false); setShowDeleteSubscription(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-              {t("subscriptions.remove_title")}
-            </button>
-          )}
-          <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditRule(s.schedule_rule || defaultCalendarRule()); setEditing(true); }} className="btn-primary">{t("subscription_detail.edit")}</button>
-        </div>
-      </PageHeader>
+    <BusinessPage title={s.name || s.creator_display_name || s.creator_name || getCreatorName(s.creator_id)} description={s.creator_display_name || s.creator_name ? t("subscription_detail.creator") + " " + (s.creator_display_name || s.creator_name) : undefined} className="gallery-subscriptions-page gallery-subscription-detail" actions={<div className="business-heading-actions">
+      {!s.is_active ? (
+        <button onClick={() => update.mutate({ is_active: true })} disabled={update.isPending} className="button">{t("creator_detail.restore")}</button>
+      ) : (
+        <button onClick={() => { setDeleteFiles(false); setShowDeleteSubscription(true); }} className={isAdmin ? "button danger" : "button"}>
+          {t("subscriptions.remove_title")}
+        </button>
+      )}
+      <button onClick={() => { setEditName(s.name || ""); setEditMode(s.schedule_mode || "inherit"); setEditInterval(s.sync_interval_hours || 24); setEditRule(s.schedule_rule || defaultCalendarRule()); setEditing(true); }} className="button primary">{t("subscription_detail.edit")}</button>
+    </div>}>
+
 
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
         <div className="card p-3"><div className="text-lg font-semibold text-fg">{detailStats.enabled}/{detailStats.total}</div><div className="text-xs uppercase text-muted">{t("subscriptions.col_sources")}</div></div>
@@ -303,11 +308,11 @@ export default function SubscriptionDetailPage() {
                 {!s.schedule_mode || s.schedule_mode === "inherit" ? (
                   <span className="text-muted">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</span>
                 ) : s.schedule_mode === "manual" ? (
-                  <span className="text-orange-600">{t("subscription_detail.strategy_manual")}</span>
+                  <span className="text-warning">{t("subscription_detail.strategy_manual")}</span>
                 ) : s.schedule_mode === "calendar" ? (
-                  <span className="text-purple-600">{t("subscription_detail.strategy_calendar")} · {t(`subdefaults.${s.schedule_rule?.frequency || "daily"}`)}</span>
+                  <span className="text-accent">{t("subscription_detail.strategy_calendar")} · {t(`subdefaults.${s.schedule_rule?.frequency || "daily"}`)}</span>
                 ) : (
-                  <span className="text-blue-600">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
+                  <span className="text-accent">{t("subscription_detail.strategy_interval")} · {s.sync_interval_hours}h</span>
                 )}
               </dd></div>
               <div className="flex gap-2"><dt className="w-28 text-muted">{t("subscription_detail.last_synced")}</dt><dd className="text-xs">{s.last_synced_at ? fmt.dateTime(s.last_synced_at) : t("subscription_detail.never_synced")}</dd></div>
@@ -330,7 +335,7 @@ export default function SubscriptionDetailPage() {
               <div className="space-y-2">
                 {sources.data.map((ss: SS) => (
                   <RepositoryCard key={ss.id} repo={toRepo(ss)}
-                    onSync={() => startSync.mutate(ss.id)}
+                    onSync={has("library") ? () => startSync.mutate(ss.id) : undefined}
                     onToggle={() => setToggleId(ss.id)}
                     onDelete={() => { setDeleteFiles(false); setDeleteSsId(ss.id); }}
                     syncPending={startSync.isPending}
@@ -341,7 +346,7 @@ export default function SubscriptionDetailPage() {
             ) : (
               <EmptyState title={t("subscription_detail.no_sources")} description={t("subscription_detail.no_sources_desc")} />
             )}
-            {startSync.error && <p className="text-red-600 text-sm mt-2">{(startSync.error as Error).message}</p>}
+            {startSync.error && <p className="text-danger text-sm mt-2">{(startSync.error as Error).message}</p>}
             {decisions.isLoading && <p role="status" className="mt-2 text-xs text-muted">{t("subscriptions.decisions_loading")}</p>}
             {decisions.error && <ErrorState message={(decisions.error as Error).message} onRetry={() => decisions.refetch()} />}
             {decisions.data && <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted">
@@ -362,32 +367,36 @@ export default function SubscriptionDetailPage() {
         </div>
       </div>
 
-      <Modal open={editing} onClose={() => setEditing(false)} title={t("subscription_detail.edit_title")}>
+      <BusinessModal open={editing} onClose={() => setEditing(false)} title={t("subscription_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
+          <div><label htmlFor="subscription-edit-name" className="block text-sm font-medium mb-1">{t("subscription_detail.name_field")}</label><input id="subscription-edit-name" name="name" autoComplete="off" value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
           <div>
             <label className="block text-sm font-medium mb-1">{t("subscription_detail.sync_strategy")}</label>
-            <select value={editMode} onChange={(e) => setEditMode(e.target.value as typeof editMode)}
-              className="select w-full">
-              <option value="inherit">{t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText })}</option>
-              <option value="interval">{t("subscription_detail.strategy_interval")}</option>
-              <option value="calendar">{t("subscription_detail.strategy_calendar")}</option>
-              <option value="manual">{t("subscription_detail.strategy_manual")}</option>
-            </select>
+            <ToolbarSelect
+              label={t("subscription_detail.sync_strategy")}
+              value={editMode}
+              onValueChange={(value) => setEditMode(value as typeof editMode)}
+              options={[
+                { value: "inherit", label: t("subscriptions.schedule_inherited", { schedule: effectiveScheduleText }) },
+                { value: "interval", label: t("subscription_detail.strategy_interval") },
+                { value: "calendar", label: t("subscription_detail.strategy_calendar") },
+                { value: "manual", label: t("subscription_detail.strategy_manual") },
+              ]}
+            />
             <p className="mt-1 text-xs text-muted">{t("subscription_detail.strategy_desc")}</p>
           </div>
           {editMode === "interval" && (
             <div>
-              <label className="block text-sm font-medium mb-1">{t("subdefaults.sync_interval")}</label>
+              <label htmlFor="subscription-edit-interval" className="block text-sm font-medium mb-1">{t("subdefaults.sync_interval")}</label>
               <div className="flex w-fit items-center gap-1">
-                <input type="number" min={1} max={168} value={editInterval}
+                <input id="subscription-edit-interval" name="sync_interval_hours" type="number" min={1} max={168} value={editInterval}
                   onChange={(e) => setEditInterval(parseInt(e.target.value) || 24)}
                   className="input w-16 px-2 py-1.5 text-center font-mono" />
                 <span className="pr-2 text-xs text-muted">{t("subscription_detail.hours", { count: editInterval })}</span>
               </div>
             </div>
           )}
-          {editMode === "calendar" && <CalendarScheduleEditor value={editRule} onChange={setEditRule} />}
+          {editMode === "calendar" && <CalendarScheduleEditor presentation="gallery" value={editRule} onChange={setEditRule} />}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("subscription_detail.cancel")}</button>
             <button onClick={() => update.mutate({
@@ -399,11 +408,11 @@ export default function SubscriptionDetailPage() {
           </div>
           {update.error && <p className="text-sm text-danger dark:text-danger">{(update.error as Error).message}</p>}
         </div>
-      </Modal>
+      </BusinessModal>
 
-      <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("subscription_detail.add_source_title")}><AddSourceForm subId={id} onClose={() => setShowAddSource(false)} /></Modal>
-      {toggleId && <ConfirmDialog open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? t("subscription_detail.disable_source_title") : t("subscription_detail.enable_source_title")} message={t("subscription_detail.toggle_source_msg")} onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
-      <HierarchyDeletionDialog
+      <BusinessModal open={showAddSource} onClose={() => setShowAddSource(false)} title={t("subscription_detail.add_source_title")}><AddSourceForm subId={id} onClose={() => setShowAddSource(false)} /></BusinessModal>
+      {toggleId && <BusinessConfirm open title={sources.data?.find((ss: SS) => ss.id === toggleId)?.is_enabled ? t("subscription_detail.disable_source_title") : t("subscription_detail.enable_source_title")} message={t("subscription_detail.toggle_source_msg")} onConfirm={() => { const ss = sources.data?.find((s: SS) => s.id === toggleId); if (ss) toggleSource.mutate({ ssId: toggleId, enabled: !ss.is_enabled }); }} onCancel={() => setToggleId(null)} isPending={toggleSource.isPending} error={(toggleSource.error as Error)?.message} />}
+      <BusinessHierarchyDeletion
         open={showDeleteSubscription}
         title={t("subscriptions.remove_title")}
         message={t("subscriptions.remove_message")}
@@ -417,7 +426,7 @@ export default function SubscriptionDetailPage() {
         isPending={deleteSubscription.isPending}
         error={(deleteSubscription.error as Error)?.message || (subscriptionDeletionPreview.error as Error)?.message}
       />
-      <HierarchyDeletionDialog
+      <BusinessHierarchyDeletion
         open={!!deleteSsId}
         title={t("subscription_detail.remove_source")}
         message={t("subscription_detail.remove_source_message")}
@@ -434,6 +443,6 @@ export default function SubscriptionDetailPage() {
         isPending={deleteSource.isPending}
         error={(deleteSource.error as Error)?.message || (repositoryDeletionPreview.error as Error)?.message}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }

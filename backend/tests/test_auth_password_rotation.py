@@ -1,4 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+import asyncio
+import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -19,17 +23,46 @@ from app.auth import (
 from app.config import settings
 
 
-def test_access_token_contains_password_rotation_flag() -> None:
-    token = create_access_token("admin", must_change_password=True)
+def _account(username="admin", must_change_password=False):
+    return SimpleNamespace(id=7, credential_version=1, username=username, must_change_password=must_change_password)
+
+
+def test_access_token_binds_account_identity_and_version() -> None:
+    token = create_access_token(_account(must_change_password=True))
     payload = decode_access_token_payload(token)
 
     assert payload is not None
     assert payload.get("sub") == "admin"
-    assert payload.get("pwd_chg_required") is True
+    assert payload.get("uid") == 7
+    assert payload.get("cv") == 1
+    assert "password_hash" not in payload
+
+
+@pytest.mark.asyncio
+async def test_password_calculation_uses_at_most_two_workers(monkeypatch):
+    from app import auth
+    active = peak = 0
+    lock = threading.Lock()
+    loop_thread = threading.get_ident()
+    def expensive_hash(_password):
+        nonlocal active, peak
+        assert threading.get_ident() != loop_thread
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.04)
+            return "hashed"
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(auth, "hash_password", expensive_hash)
+    assert await asyncio.gather(*[auth.async_hash_password("fixture") for _ in range(6)]) == ["hashed"] * 6
+    assert peak == 2
 
 
 def test_decode_access_token_still_returns_username() -> None:
-    token = create_access_token("alice", must_change_password=False)
+    token = create_access_token(_account("alice"))
 
     assert decode_access_token(token) == "alice"
 
@@ -97,8 +130,14 @@ async def test_admin_dependency_rejects_expired_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_dependency_rejects_force_password_change_token() -> None:
-    token = create_access_token("admin", must_change_password=True)
+async def test_admin_dependency_rejects_current_forced_password_change(monkeypatch) -> None:
+    from app import auth
+    user = _account()
+    token = create_access_token(user)
+    user.must_change_password = True
+    async def load(_id):
+        return user
+    monkeypatch.setattr(auth, "_load_active_user_by_id", load)
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -108,13 +147,26 @@ async def test_admin_dependency_rejects_force_password_change_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_dependency_accepts_normal_token() -> None:
-    token = create_access_token("admin", must_change_password=False)
+async def test_admin_dependency_accepts_normal_token(monkeypatch) -> None:
+    from app import auth
+    user = _account()
+    async def load(_id):
+        return user
+    monkeypatch.setattr(auth, "_load_active_user_by_id", load)
+    token = create_access_token(user)
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
     username = await get_admin_key(_make_request("/api/v1/works"), credentials)
 
     assert username == "admin"
+
+
+@pytest.mark.asyncio
+async def test_username_only_credentials_require_a_new_login():
+    token = jwt.encode({"sub": "admin", "exp": datetime.now(timezone.utc) + timedelta(minutes=1)}, settings.secret_key, algorithm=ALGORITHM)
+    with pytest.raises(HTTPException) as rejected:
+        await get_admin_key(_make_request("/api/v1/auth/me"), HTTPAuthorizationCredentials(scheme="Bearer", credentials=token))
+    assert rejected.value.status_code == 401
 
 
 @pytest.mark.asyncio

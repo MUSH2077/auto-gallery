@@ -16,19 +16,33 @@ compose() {
 }
 
 [[ -f "$TEST_ROOT/.auto-gallery-test-root" ]]
-compose up -d postgres redis meilisearch migrate backend worker-operations
+compose up -d postgres redis migrate backend worker-operations worker-import
 
-echo "fault: Meilisearch unavailable must degrade search without failing readiness"
-compose stop -t 15 meilisearch
-compose exec -T backend python - <<'PY'
-import httpx
-ready = httpx.get("http://localhost:8000/api/v1/system/ready", timeout=15)
-assert ready.status_code == 200, ready.text
-health = httpx.get("http://localhost:8000/api/v1/system/health", timeout=15)
-health.raise_for_status()
-assert health.json()["status"] in {"ok", "degraded"}
-PY
-compose start meilisearch
+echo "fault: PostgreSQL unavailable must fail readiness and recover"
+trap 'compose start postgres >/dev/null 2>&1 || true' EXIT
+compose stop -t 15 postgres
+compose exec -T backend python - <<'PY_CHECK'
+import time, httpx
+for _ in range(30):
+    response = httpx.get("http://localhost:8000/api/v1/system/ready",timeout=15)
+    if response.status_code == 503:
+        break
+    time.sleep(.5)
+else:
+    raise AssertionError("readiness stayed green while PostgreSQL was stopped")
+PY_CHECK
+compose start postgres
+compose exec -T backend python - <<'PY_CHECK'
+import time, httpx
+for _ in range(60):
+    response = httpx.get("http://localhost:8000/api/v1/system/ready",timeout=15)
+    if response.status_code == 200:
+        break
+    time.sleep(.5)
+else:
+    raise AssertionError("readiness failed to recover with PostgreSQL")
+PY_CHECK
+trap - EXIT
 
 echo "fault: Redis noeviction must reject writes without deleting queue data"
 used="$(compose exec -T redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli --no-auth-warning INFO memory' | awk -F: '/used_memory:/ {gsub(/\r/,"",$2); print $2}')"

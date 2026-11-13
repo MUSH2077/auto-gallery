@@ -196,114 +196,70 @@ export interface ResourcePressureSnapshot {
   };
 }
 
-export interface TaskRun {
-  id: string;
-  kind: "download" | "import" | "admin" | string;
-  operation_type?: string | null;
-  subject_type?: string | null;
-  subject_id?: string | null;
-  parent_task_id?: string | null;
-  triggering_user_subscription_id?: string | null;
-  triggering_remote_account_id?: string | null;
-  status: string;
-  resource_state?: "running" | "waiting" | "yielded" | string | null;
-  resource_reason?: string | null;
-  attention_state?: "none" | "open" | "resolved" | "acknowledged" | string;
-  reason_code?: string | null;
-  acknowledged_at?: string | null;
-  resolved_at?: string | null;
-  compactable_at?: string | null;
-  queue_name?: string | null;
-  rq_job_id?: string | null;
-  title?: string | null;
-  source?: string | null;
-  source_url?: string | null;
-  progress_stage?: string | null;
-  progress_current?: number | null;
-  progress_total?: number | null;
+/** Generated network fields plus the structured dictionaries consumed by task views. */
+export type TaskRunSchema = components["schemas"]["TaskRead"];
+// Remove only the extension index signature before refining dictionary fields.
+type SchemaFields<T> = { [K in keyof T as string extends K ? never : K]: T[K] };
+type TaskRunFields = SchemaFields<TaskRunSchema>;
+export type TaskRun = Omit<TaskRunFields, "progress_data" | "result_data" | "meta" | "events"> & {
   progress_data?: Record<string, any> | null;
   result_data?: Record<string, any> | null;
-  error_log?: string | null;
   meta?: Record<string, any> | null;
-  enqueued_at?: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-  last_heartbeat_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  available_actions?: components["schemas"]["TaskRead"]["available_actions"];
-  disabled_reasons?: components["schemas"]["TaskRead"]["disabled_reasons"];
-  events?: {
+  events?: Array<{
     id: number;
     event_type: string;
     from_status?: string | null;
     to_status?: string | null;
     message?: string | null;
-    payload?: Record<string, any> | null;
+    payload?: Record<string, unknown> | null;
     created_at?: string | null;
-  }[];
-}
+  }>;
+};
 
-export interface SyncOutcome {
-  code: "new_content" | "no_changes" | "no_content";
-  metadata_count: number;
-  media_count: number;
-  completed_at: string;
-}
+export type SyncOutcome = components["schemas"]["SyncOutcomeRead"];
 
-export interface TaskRunListResponse {
-  total: number;
+export type TaskListSummary = { all: number; attention: number; running: number; waiting: number };
+export type TaskRunListResponse = Omit<SchemaFields<components["schemas"]["TaskPage"]>, "items"> & {
+  summary?: TaskListSummary | null;
   items: TaskRun[];
+};
+
+export type AdminOperationAccepted = components["schemas"]["AdminOperationAccepted"];
+
+/** Structured operation dictionaries used by the monitoring view. */
+export interface OperationProgress {
+  phase?: string;
+  label?: string;
+  current?: number;
+  total?: number;
+  percent?: number;
 }
 
-export interface AdminOperationAccepted {
-  task_id: string;
-  job_id: string;
-  status: "enqueued";
-  operation_type: string;
-}
-
-export interface AdminOperationStatus<TResult = Record<string, unknown>> {
-  task_id: string;
-  job_id: string;
+export type AdminOperationStatus<TResult = Record<string, unknown>> = components["schemas"]["AdminOperationRead"] & {
   rq_job_id?: string | null;
-  status: "enqueued" | "running" | "recovering" | "paused" | "complete" | "failed" | "stale" | "cancelled" | string;
-  operation_type: string;
-  progress?: {
-    phase?: string;
-    label?: string;
-    current?: number;
-    total?: number;
-    percent?: number;
-  } | null;
+  progress?: OperationProgress | null;
   result?: TResult | null;
   error?: string | null;
   reason_code?: string | null;
+  meta?: Record<string, unknown> | null;
   updated_at?: number | string | null;
-}
+};
 
-export interface AdminOperationSnapshot<TResult = Record<string, unknown>> {
-  task_id: string;
-  job_id?: string | null;
-  status: "complete";
-  operation_type: string;
-  progress?: AdminOperationStatus<TResult>["progress"];
+export type AdminOperationPollResponse<TResult = Record<string, unknown>> = AdminOperationStatus<TResult>;
+
+export type AdminOperationSnapshot<TResult = Record<string, unknown>> = Omit<components["schemas"]["AdminOperationSnapshot"], "result" | "progress"> & {
   result: TResult;
-  completed_at: string;
-}
+  progress?: OperationProgress | null;
+};
 
-export interface AdminOperationCurrent {
-  task_id: string;
-  job_id?: string | null;
-  status: "enqueued" | "running" | "recovering" | "paused" | "failed" | "stale" | "cancelled";
-  operation_type: string;
-  progress?: AdminOperationStatus["progress"];
-}
+export type AdminOperationCurrent = Omit<components["schemas"]["AdminOperationCurrent"], "progress"> & {
+  progress?: OperationProgress | null;
+};
 
-export interface AdminOperationSnapshotResponse<TResult = Record<string, unknown>> {
-  snapshot: AdminOperationSnapshot<TResult> | null;
+export type AdminOperationSnapshotResponse<TResult = Record<string, unknown>> = Omit<components["schemas"]["AdminOperationSnapshotResponse"], "snapshot" | "current"> & {
+  snapshot?: AdminOperationSnapshot<TResult> | null;
   current?: AdminOperationCurrent | null;
-}
+};
 
 export interface RestoreUploadSession {
   upload_id: string;
@@ -971,33 +927,10 @@ export interface RepositoryGraphNode {
   changes_summary: { action: string; count: number }[];
 }
 
-export interface ImportJob {
-  id: string;
-  download_job_id: string;
-  status: string;
-  error_log?: string | null;
-  created_at: string;
-  updated_at?: string;
-  priority: number;
-  user_note?: string | null;
-  operator_name?: string | null;
-  operator_action?: string | null;
-  import_retry_count: number;
-  max_import_retries: number;
-  progress_stage?: string | null;
-  progress_works_done?: number | null;
-  progress_works_total?: number | null;
+export type ImportJobSchema = components["schemas"]["ImportJobRead"];
+export type ImportJob = Omit<ImportJobSchema, "progress_data"> & {
   progress_data?: JobProgress | null;
-  // Parent download-job context (resolved server-side, aligns with download rows)
-  source?: string | null;
-  source_url?: string | null;
-  subscription_id?: string | null;
-  subscription_name?: string | null;
-  creator_id?: string | null;
-  creator_name?: string | null;
-  available_actions?: components["schemas"]["ImportJobRead"]["available_actions"];
-  disabled_reasons?: components["schemas"]["ImportJobRead"]["disabled_reasons"];
-}
+};
 
 export interface RepositoryGraphEdge {
   from_id: string;
@@ -1220,44 +1153,17 @@ export interface TaskControlResponse {
   cleanup_task_id?: string;
 }
 
-export interface DownloadJob {
-  id: string;
-  subscription_id: string;
-  subscription_source_id?: string;
-  creator_id?: string | null;
-  creator_name?: string | null;
-  subscription_name?: string | null;
-  source: string;
-  source_url: string;
-  status: string;
-  retry_count: number;
-  error_log?: string;
-  gallerydl_config_path?: string | null;
-  download_dir?: string | null;
-  manifest?: Record<string, unknown> | null;
-  created_at: string;
-  updated_at: string;
-  priority?: number;
-  user_note?: string | null;
-  operator_name?: string | null;
-  operator_action?: string | null;
-  last_heartbeat_at?: string | null;
-  worker_pid?: number | null;
-  pipeline_stage?: string | null;
+export type DownloadJobSchema = components["schemas"]["DownloadJobRead"];
+export type DownloadJob = Omit<DownloadJobSchema, "progress_data" | "conflict_details"> & {
   progress_data?: JobProgress | null;
-  outcome?: SyncOutcome | null;
-  reason_code?: string | null;
-  conflict_details?: Array<{
+  conflict_details: Array<{
     relative_path: string;
-    file_type: "metadata" | "media" | string;
+    file_type: string;
     classification: string;
     staged_sha256?: string;
     canonical_sha256?: string;
   }>;
-  retryable?: boolean;
-  available_actions?: components["schemas"]["DownloadJobRead"]["available_actions"];
-  disabled_reasons?: components["schemas"]["DownloadJobRead"]["disabled_reasons"];
-}
+};
 
 export interface JobProgress {
   stage?: string;
@@ -2034,3 +1940,41 @@ export type ImportFromDiskRequest = Omit<
   // openapi-typescript currently marks a defaulted boolean as required.
   reset_ledger?: components["schemas"]["ImportFromDiskRequest"]["reset_ledger"];
 };
+
+
+export interface WorkSourceData {
+  id: string;
+  source: string;
+  source_work_id?: string | null;
+  source_url?: string | null;
+  title?: string | null;
+  description?: string | null;
+  posted_at?: string | null;
+  raw_metadata?: Record<string, unknown> | null;
+}
+
+export interface IntegrityIssueItem {
+  id?: string;
+  path?: string;
+  file_name?: string;
+  name?: string;
+  file_count?: number;
+  asset_id?: string;
+  source?: string;
+  source_work_id?: string;
+}
+
+export interface IntegrityIssue {
+  type: string;
+  severity: string;
+  count: number;
+  description: string;
+  items: IntegrityIssueItem[];
+}
+
+export interface IntegrityResult {
+  issues: IntegrityIssue[];
+  db_stats: Record<string, number>;
+  checked_at: string;
+  message?: string;
+}

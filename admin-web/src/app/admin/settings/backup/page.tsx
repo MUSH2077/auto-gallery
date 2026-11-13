@@ -6,12 +6,13 @@ import type { RestoreReceipt, RestoreUploadSession, RestoreValidationResult } fr
 import { useT } from "@/lib/i18n";
 import { sha256Blob } from "@/lib/sha256";
 import { useStaggeredEntrance } from "@/lib/motion";
-import ConfirmDialog from "@/components/ConfirmDialog";
+import { BusinessConfirm as ConfirmDialog } from "@/features/gallery-ui/BusinessPage";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
-import PageHeader from "@/components/PageHeader";
-import PageShell from "@/components/PageShell";
-import PermissionGuard from "@/components/PermissionGuard";
+import { SettingsPageHeader as PageHeader } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+
 import RowActionMenu from "@/components/RowActionMenu";
 import { useToast } from "@/components/Toast";
 import { useI18nFormat } from "@/lib/i18n-format";

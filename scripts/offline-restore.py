@@ -43,6 +43,7 @@ PHASES = (
     "receipt_success",
 )
 WRITERS = (
+    "migrate",
     "scheduler",
     "worker-download",
     "worker-import",
@@ -418,12 +419,20 @@ class RestoreRunner:
     def _save_journal(self) -> None:
         atomic_json(self.journal_path, self.journal)
 
+    def foreground_services(self) -> tuple[str, ...]:
+        """Restore old images with their old service; native PG needs no sidecar."""
+        config = json.loads(self.compose("config", "--format", "json").stdout)
+        environment = config["services"]["backend"].get("environment") or {}
+        return tuple(name for name in FOREGROUND
+                     if name != "meilisearch" or environment.get("SEARCH_BACKEND") != "postgresql")
+
     def compose(
         self,
         *args: str,
         input_path: Path | None = None,
         output_path: Path | None = None,
         check: bool = True,
+        timeout: int = 900,
     ) -> subprocess.CompletedProcess:
         stdin = input_path.open("rb") if input_path else None
         stdout = output_path.open("wb") if output_path else subprocess.PIPE
@@ -436,7 +445,7 @@ class RestoreRunner:
                 stdout=stdout,
                 stderr=subprocess.PIPE,
                 check=check,
-                timeout=900,
+                timeout=timeout,
             )
         finally:
             if stdin:
@@ -725,7 +734,16 @@ class RestoreRunner:
 
     def stop_writers(self) -> None:
         self.enter("stop_writers")
-        self.compose("stop", "-t", "120", *WRITERS)
+        self._stop_and_confirm_writers()
+
+    def _stop_and_confirm_writers(self) -> None:
+        self.compose("stop", "-t", "120", *WRITERS, "admin-web", timeout=180)
+        active = self.compose(
+            "ps", "--all", "--quiet", "--status", "running",
+            "--status", "restarting", "--status", "paused", *WRITERS, "admin-web", timeout=30,
+        )
+        if active.stdout.strip():
+            raise RestoreHostError("Writer containers remain active after stop; data switching is paused")
 
     def freeze_inputs(self) -> None:
         """Copy post-stop, revalidated bytes into host-owned restore storage."""
@@ -1688,7 +1706,7 @@ END
 
     def restart_foreground(self) -> None:
         self.enter("restart_foreground")
-        self.compose("up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND)
+        self.compose("up", "-d", "--wait", "--wait-timeout", "180", *self.foreground_services())
 
     def restart_background(self) -> None:
         self.enter("restart_background")
@@ -1783,8 +1801,13 @@ END
 
         attempt(
             "stop_writers",
-            lambda: self.compose("stop", "-t", "120", *WRITERS, "admin-web"),
+            self._stop_and_confirm_writers,
         )
+        if outcomes["stop_writers"]["status"] != "complete":
+            for name in ("files", "database", "redis", "foreground"):
+                outcomes[name] = {"status": "blocked", "error": "Writer stop has not been confirmed"}
+                self._transition_rollback_component(name, "blocked", error=outcomes[name]["error"])
+            return outcomes
         attempt("files", self._rollback_files)
         if self.journal.get("switch_attempted"):
             attempt("database", self._rollback_database)
@@ -1801,7 +1824,7 @@ END
         attempt(
             "foreground",
             lambda: self.compose(
-                "up", "-d", "--wait", "--wait-timeout", "180", *FOREGROUND
+                "up", "-d", "--wait", "--wait-timeout", "180", *self.foreground_services()
             ),
         )
         return outcomes
@@ -2697,12 +2720,12 @@ def main() -> int:
                         else "recovery_failed"
                     ),
                     phase=failed_phase,
-                    rollback_performed=True,
+                    rollback_performed=outcomes.get("stop_writers", {}).get("status") == "complete",
                     rollback_status=rollback_status,
                     diagnostic=(
                         "Foreground services only; background writers remain stopped."
                         if foreground_running
-                        else "Foreground recovery failed; background writers remain stopped."
+                        else "Recovery is incomplete; inspect rollback components before restarting any writers."
                     ),
                     error=f"Restore failed during {failed_phase}: {type(exc).__name__}",
                     rollback_components=outcomes,

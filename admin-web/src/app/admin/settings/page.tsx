@@ -2,11 +2,13 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
-import { PageHeader, PageShell, ErrorState, ConfirmDialog, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { BusinessConfirm as ConfirmDialog, BusinessDangerZone as DomainDangerZone, BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import Link from "next/link";
-import DomainDangerZone from "@/components/DomainDangerZone";
+
 import { useRouter } from "next/navigation";
 import { useNotifications } from "@/components/NotificationCenter";
 import { usePermissions } from "@/lib/usePermissions";

@@ -6,15 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, AssetDedupCase, queryKeys } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
 import { useStaggeredEntrance } from "@/lib/motion";
-import {
-  ConfirmDialog,
-  EmptyState,
-  ErrorState,
-  PageHeader,
-  PageShell,
-  PermissionGuard,
-  SourceBadge,
-} from "@/components";
+import { EmptyState, ErrorState, SourceBadge } from "@/components";
+import { BusinessPage, BusinessConfirm, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -302,21 +295,10 @@ function DedupContent() {
   }, [scan.canRetry, scan.isActive, scan.isRetrying, scan.isStarting, scan.snapshot, scan.task?.progress?.current, t]);
 
   return (
-      <PageShell>
-        <PageHeader
-          title={t("asset_dedup.title")}
-          description={t("asset_dedup.desc")}
-          meta={cases.data ? t("asset_dedup.filtered_count", { count: cases.data.total }) : undefined}
-        >
-          <button
-            type="button"
-            onClick={() => scan.canRetry ? scan.retry() : scan.start()}
-            disabled={!scan.canStart && !scan.canRetry}
-            className="btn-primary min-h-11"
-          >
-            {scanLabel}
-          </button>
-        </PageHeader>
+      <BusinessPage title={t("asset_dedup.title")} description={t("asset_dedup.desc")} className="gallery-governance-page gallery-dedup-page" actions={
+        <button type="button" onClick={() => scan.canRetry ? scan.retry() : scan.start()} disabled={!scan.canStart && !scan.canRetry} className="btn-primary min-h-11">{scanLabel}</button>
+      }>
+
 
         {(scan.taskId || scan.snapshot || scan.isStarting || scan.isLatestLoading || scan.latestError) && (
           <AdminOperationStatus controller={scan} />
@@ -332,6 +314,7 @@ function DedupContent() {
           {t("asset_dedup.policy")}
         </div>
 
+        {cases.data && <p role="status" aria-live="polite" className="mb-3 text-center">{t("asset_dedup.filtered_count", { count: cases.data.total })}</p>}
         <div
           className="mb-5 flex gap-2 overflow-x-auto"
           role="tablist"
@@ -345,6 +328,14 @@ function DedupContent() {
                 type="button"
                 role="tab"
                 aria-selected={status === value}
+                tabIndex={status === value ? 0 : -1}
+                onKeyDown={(event) => {
+                  const index = DEDUP_STATUSES.indexOf(value);
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? DEDUP_STATUSES.length - 1 : event.key === "ArrowRight" ? (index + 1) % DEDUP_STATUSES.length : event.key === "ArrowLeft" ? (index + DEDUP_STATUSES.length - 1) % DEDUP_STATUSES.length : -1;
+                  if (next < 0) return;
+                  event.preventDefault(); setPage(0); selectStatus(DEDUP_STATUSES[next]);
+                  document.getElementById(`dedup-tab-${DEDUP_STATUSES[next]}`)?.focus();
+                }}
                 aria-controls="dedup-cases-panel"
                 onClick={() => {
                   setPage(0);
@@ -501,7 +492,7 @@ function DedupContent() {
         )}
         </div>
 
-        <ConfirmDialog
+        <BusinessConfirm
           open={!!confirm}
           title={t(confirm?.action === "separate" ? "asset_dedup.separate_confirm_title" : "asset_dedup.confirm_title")}
           message={t(confirm?.action === "separate" ? "asset_dedup.separate_confirm_message" : "asset_dedup.confirm_message")}
@@ -518,14 +509,14 @@ function DedupContent() {
             });
           }}
         />
-      </PageShell>
+      </BusinessPage>
   );
 }
 
 export default function DedupPage() {
   return (
-    <PermissionGuard module="curation">
+    <BusinessPermissionGuard module="curation">
       <DedupContent />
-    </PermissionGuard>
+    </BusinessPermissionGuard>
   );
 }

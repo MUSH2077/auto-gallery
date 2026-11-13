@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from sqlalchemy import select, text, update
 
 
@@ -37,6 +38,44 @@ async def _restore_admins(db, admin_ids):
             update(User).where(User.id.in_(admin_ids)).values(is_admin=True)
         )
         await db.commit()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_failed_admin_update_rolls_back_and_releases_the_invariant_lock(monkeypatch):
+    from app.database import async_session, engine
+    from app.models.user import User
+    from app.services.users import UserService
+
+    suspended = []
+    try:
+        async with async_session() as db:
+            await _clear_test_users(db)
+            suspended = await _suspend_other_active_admins(db)
+            service = UserService(db)
+            first = await service.create("svc_test_rollback_a", "hunter22", is_admin=True)
+            second = await service.create("svc_test_rollback_b", "hunter22", is_admin=True)
+            first_id, second_id = first.id, second.id
+            async def failed_commit():
+                await db.flush()
+                raise RuntimeError("injected commit failure")
+            with monkeypatch.context() as patch:
+                patch.setattr(db, "commit", failed_commit)
+                with pytest.raises(RuntimeError, match="commit failure"):
+                    await service.update(first_id, is_admin=False)
+                await db.rollback()
+            assert (await db.get(User, first_id, populate_existing=True)).is_admin
+        async with async_session() as db:
+            updated = await asyncio.wait_for(UserService(db).update(second_id, is_admin=False), timeout=5)
+            assert not updated.is_admin
+            with pytest.raises(ValueError, match="last admin"):
+                await UserService(db).update(first_id, is_admin=False)
+            await db.rollback()
+    finally:
+        async with async_session() as db:
+            await _clear_test_users(db)
+            await _restore_admins(db, suspended)
+        await engine.dispose()
 
 
 @pytest.mark.integration

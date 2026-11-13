@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.download_job import DownloadJob
 from app.models.task_run import TaskRun
-from app.models.task_state import transition_download_job
 from app.services.backpressure import (
     DownloadAdmissionError,
     enqueue_download_rq,
@@ -107,6 +106,23 @@ def deterministic_download_rq_job_id(job_id: UUID | str, attempt: int) -> str:
     # RQ 2.x only accepts letters, numbers, underscores and dashes.  Colons
     # are also interpreted as execution-id separators by Job.fetch().
     return f"download-{job_id}-attempt-{max(1, int(attempt))}"
+
+
+async def enqueue_download_retry(download_job_id, *, delay_seconds, action="auto_retry", execution=None, job_timeout=7200):
+    """Commit a new attempt's intent, then use the existing recoverable publisher."""
+    from app.database import async_session
+    from app.services.download_lifecycle import lock_download
+    async with async_session() as db:
+        job = await lock_download(db, download_job_id, execution=execution, statuses={"enqueued"})
+        if job is None:
+            return "skipped"
+        prepared = await prepare_download_dispatch(db, job, queue_name="downloads", job_timeout=job_timeout,
+                                                   delay_seconds=delay_seconds, action=action)
+        await db.commit()
+        outcome = await recover_download_dispatch_candidate(db, prepared.task, job)
+        if outcome in {"error", "invalid"}:
+            raise RuntimeError(f"download retry dispatch recovery returned {outcome} for {download_job_id}")
+        return outcome
 
 
 async def prepare_download_dispatch(
@@ -251,8 +267,6 @@ async def _persist_dispatch_failure(
     exc: BaseException,
 ) -> None:
     message = f"Download enqueue failed: {exc}"
-    transition_download_job(job, "failed", message)
-    apply_download_progress(job, "failed", message, publish=False)
     _set_dispatch_state(prepared.task, DISPATCH_FAILED, error=message)
     append_manifest_event(
         job,
@@ -262,14 +276,9 @@ async def _persist_dispatch_failure(
         rq_job_id=prepared.rq_job_id,
         error=str(exc),
     )
-    await TaskService(db).update_task(
-        prepared.task,
-        status="failed",
-        progress=job.progress_data,
-        error=message,
-        meta=prepared.task.meta,
-        rq_job_id=prepared.rq_job_id,
-    )
+    from app.services.download_lifecycle import apply_download_state
+    await apply_download_state(db, job, "failed", error=message, task=prepared.task,
+                               progress={"stage": "failed", "message": message})
     await request_search_projection(
         db,
         subscription_ids=(
@@ -602,8 +611,6 @@ async def _persist_terminal_rq_record(
         f"Download queue job {rq_job_id} is already terminal "
         f"(status={rq_status}) while the download remained enqueued"
     )
-    transition_download_job(job, "failed", message)
-    apply_download_progress(job, "failed", message, publish=False)
     _set_dispatch_state(task, DISPATCH_FAILED, error=message)
     task_meta = dict(task.meta or {})
     dispatch = dict(task_meta.get(DISPATCH_META_KEY) or {})
@@ -620,15 +627,9 @@ async def _persist_terminal_rq_record(
         rq_job_id=rq_job_id,
         rq_status=rq_status,
     )
-    await TaskService(db).update_task(
-        task,
-        status="failed",
-        progress=job.progress_data,
-        result=task_result,
-        error=message,
-        meta=task.meta,
-        rq_job_id=rq_job_id,
-    )
+    from app.services.download_lifecycle import apply_download_state
+    await apply_download_state(db, job, "failed", error=message, task=task, result=task_result,
+                               progress={"stage": "failed", "message": message})
     await request_search_projection(
         db,
         subscription_ids=(
@@ -690,8 +691,6 @@ async def _persist_dispatch_recovery_error(
         "Download dispatch recovery failed before publication could be "
         f"confirmed ({type(diagnostic_exc).__name__}: {diagnostic_exc})"
     )[:5000]
-    transition_download_job(job, "failed", message)
-    apply_download_progress(job, "failed", message, publish=False)
     _set_dispatch_state(task, DISPATCH_FAILED, error=message)
     task_result = dict(task.result_data or {})
     task_result["download_dispatch_failure"] = {
@@ -701,16 +700,9 @@ async def _persist_dispatch_recovery_error(
     }
     if isinstance(exc, DownloadAdmissionError):
         task_result["download_dispatch_failure"]["admission_code"] = exc.code
-    await TaskService(db).update_task(
-        task,
-        status="failed",
-        progress=job.progress_data,
-        result=task_result,
-        error=message,
-        meta=task.meta,
-        rq_job_id=rq_job_id,
-        reason_code="dispatch_recovery_error",
-    )
+    from app.services.download_lifecycle import apply_download_state
+    await apply_download_state(db, job, "failed", error=message, task=task, result=task_result,
+                               reason_code="dispatch_recovery_error", progress={"stage": "failed", "message": message})
     append_manifest_event(
         job,
         "dispatch_recovery_failed",
@@ -839,7 +831,7 @@ async def _recover_download_dispatch_candidate(
                 )
                 return "terminal" if persisted else "skipped"
         if existing is None:
-            from app.jobs.admin_operations import _await_admin_file_finalizer
+            from app.services.admin_operation_handlers import _await_admin_file_finalizer
             await _await_admin_file_finalizer(asyncio.to_thread(
                 enqueue_download_rq,
                 payload["queue_name"],

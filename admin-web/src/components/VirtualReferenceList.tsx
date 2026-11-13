@@ -14,6 +14,7 @@ import {
 } from "react";
 import {
   useQueries,
+  useQueryClient,
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -22,6 +23,7 @@ import {
   REFERENCE_BATCH_SIZE,
   REFERENCE_OVERSCAN,
   REFERENCE_PREFETCH_ROWS,
+  REFERENCE_CACHED_PAGES,
   referenceBatchOffset,
 } from "@/lib/reference-list-state";
 
@@ -35,6 +37,7 @@ export interface VirtualReferenceListState<TItem> {
   total: number;
   loadedItems: TItem[];
   loadedOffsets: number[];
+  requestedOffsets: number[];
   loadedPages: Array<{ offset: number; items: TItem[] }>;
   visibleOffsets: number[];
 }
@@ -78,7 +81,7 @@ function alignedInitialOffsets(
 ): number[] {
   const offsets = new Set<number>([
     referenceBatchOffset(initialIndex),
-    ...initialOffsets.map(referenceBatchOffset),
+    ...initialOffsets.slice(-(REFERENCE_CACHED_PAGES - 1)).map(referenceBatchOffset),
   ]);
   return [...offsets].sort((left, right) => left - right);
 }
@@ -106,6 +109,7 @@ function VirtualReferenceListInner<
   ref: React.ForwardedRef<VirtualReferenceListHandle>,
 ) {
   const listRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
   const initialScrollDoneRef = useRef(false);
   const stateCallbackRef = useRef(onStateChange);
   const metaCallbackRef = useRef(onMetaChange);
@@ -117,6 +121,9 @@ function VirtualReferenceListInner<
     alignedInitialOffsets(initialIndex, initialOffsets),
   );
   const [pendingScrollIndex, setPendingScrollIndex] = useState<number | null>(null);
+  const [activeOffsets, setActiveOffsets] = useState<number[]>(() =>
+    alignedInitialOffsets(initialIndex, initialOffsets).filter(offset => Math.abs(offset - referenceBatchOffset(initialIndex)) <= REFERENCE_BATCH_SIZE),
+  );
   const [scrollMargin, setScrollMargin] = useState(0);
 
   const pageQueries = useQueries({
@@ -126,6 +133,9 @@ function VirtualReferenceListInner<
         loadPage(offset, REFERENCE_BATCH_SIZE, signal),
       staleTime: 15_000,
       retry: false,
+      gcTime: 0,
+      enabled: activeOffsets.includes(offset)
+        && queryClient.getQueryState([...queryKey, "offset", offset, REFERENCE_BATCH_SIZE])?.status !== "error",
     })),
   }) as UseQueryResult<VirtualReferencePage<TItem, TMeta>, Error>[];
 
@@ -147,7 +157,8 @@ function VirtualReferenceListInner<
     }),
     [queryByOffset, requestedOffsets],
   );
-  const total = successfulPages[0]?.data.total ?? 0;
+  const total = activeOffsets.map(offset => queryByOffset.get(offset)?.data).find(Boolean)?.total
+    ?? successfulPages[0]?.data.total ?? 0;
 
   const itemAt = (index: number): TItem | undefined => {
     const offset = referenceBatchOffset(index);
@@ -194,9 +205,15 @@ function VirtualReferenceListInner<
     if (!total || virtualItems.length === 0) return;
     const first = virtualItems[0].index;
     const last = virtualItems[virtualItems.length - 1].index;
-    const desired = new Set(requestedOffsets);
+    const desired = new Set<number>();
     const firstOffset = referenceBatchOffset(first);
     const lastOffset = referenceBatchOffset(last);
+    // Complete nearby saved batches without retaining distant observers.
+    for (const offset of alignedInitialOffsets(initialIndex, initialOffsets)) {
+      const query = queryByOffset.get(offset);
+      if (Math.abs(offset - firstOffset) <= REFERENCE_BATCH_SIZE && !query?.data && !query?.isError) desired.add(offset);
+    }
+    if (pendingScrollIndex !== null) desired.add(referenceBatchOffset(pendingScrollIndex));
     for (
       let offset = firstOffset;
       offset <= lastOffset;
@@ -217,10 +234,13 @@ function VirtualReferenceListInner<
     ) {
       desired.add(lastOffset + REFERENCE_BATCH_SIZE);
     }
-    if (desired.size !== requestedOffsets.length) {
-      setRequestedOffsets([...desired].sort((left, right) => left - right));
-    }
-  }, [requestedOffsets, total, virtualItems]);
+    const nextActive = [...desired].sort((left, right) => left - right);
+    setActiveOffsets(current => current.join(",") === nextActive.join(",") ? current : nextActive);
+    setRequestedOffsets(current => {
+      const next = [...current.filter(offset => !desired.has(offset)), ...nextActive].slice(-REFERENCE_CACHED_PAGES);
+      return current.join(",") === next.join(",") ? current : next;
+    });
+  }, [initialIndex, initialOffsets, pendingScrollIndex, queryByOffset, total, virtualItems]);
 
   const loadedItems = useMemo(() => {
     const byId = new Map<string, TItem>();
@@ -245,12 +265,13 @@ function VirtualReferenceListInner<
     [virtualItems],
   );
   const callbackState = useMemo(
-    () => ({ total, loadedItems, loadedOffsets, loadedPages, visibleOffsets }),
-    [loadedItems, loadedOffsets, loadedPages, total, visibleOffsets],
+    () => ({ total, loadedItems, loadedOffsets, requestedOffsets, loadedPages, visibleOffsets }),
+    [loadedItems, loadedOffsets, requestedOffsets, loadedPages, total, visibleOffsets],
   );
   const stateSignature = [
     total,
     loadedOffsets.join(","),
+    requestedOffsets.join(","),
     loadedItems.map((item) => item.id).join(","),
     visibleOffsets.join(","),
   ].join("|");
@@ -266,9 +287,10 @@ function VirtualReferenceListInner<
     const index = Math.min(total - 1, Math.max(0, Math.floor(rawIndex)));
     const offset = referenceBatchOffset(index);
     setPendingScrollIndex(index);
+    setActiveOffsets(current => current.includes(offset) ? current : [...current, offset]);
     setRequestedOffsets((current) => current.includes(offset)
       ? current
-      : [...current, offset].sort((left, right) => left - right));
+      : [...current, offset].slice(-REFERENCE_CACHED_PAGES));
     virtualizer.scrollToIndex(index, { align: "start", behavior: "auto" });
   };
 

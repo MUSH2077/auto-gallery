@@ -1,7 +1,7 @@
 """Bounded, durable delivery of database state into search projections.
 
 This module owns only the transactional queue mechanics.  Document assembly and
-Meilisearch I/O stay in :mod:`app.services.search`, which lets the queue be
+Index delivery stays in :mod:`app.services.search_delivery`, which lets the queue be
 claimed without importing the comparatively heavy search SDK in every process.
 """
 
@@ -14,8 +14,8 @@ import logging
 from typing import Iterable
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, event, func, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import and_, any_, bindparam, delete, event, func, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -231,18 +231,28 @@ async def request_membership_projection_where(db: AsyncSession, *conditions, del
 async def _fanout_memberships(db, *, subscription_ids, creator_ids, repository_ids, deleting=False):
     from app.models import Subscription, SubscriptionSource, UserSubscription
 
-    count = 0
+    conditions = []
     for kind, values in (("subscription", subscription_ids), ("creator", creator_ids), ("repository", repository_ids)):
-        for start in range(0, len(values), OUTBOX_SQL_BATCH_SIZE):
-            ids = [UUID(str(value)) for value in values[start:start + OUTBOX_SQL_BATCH_SIZE]]
-            if kind == "subscription":
-                condition = UserSubscription.subscription_id.in_(ids)
-            elif kind == "creator":
-                condition = UserSubscription.subscription_id.in_(select(Subscription.id).where(Subscription.creator_id.in_(ids)))
-            else:
-                condition = UserSubscription.subscription_id.in_(select(SubscriptionSource.subscription_id).where(SubscriptionSource.id.in_(ids)))
-            count += await request_membership_projection_where(db, condition, deleting=deleting)
-    return count
+        ids = tuple(dict.fromkeys(UUID(str(value)) for value in values))
+        if not ids:
+            continue
+        # One typed array per scope avoids expanding large inputs into bind
+        # parameters. The result and outbox writes still use keyset batches.
+        parameter = bindparam(None, list(ids), type_=ARRAY(PG_UUID(as_uuid=True)))
+        if kind == "subscription":
+            condition = UserSubscription.subscription_id == any_(parameter)
+        elif kind == "creator":
+            condition = UserSubscription.subscription_id.in_(
+                select(Subscription.id).where(Subscription.creator_id == any_(parameter))
+            )
+        else:
+            condition = UserSubscription.subscription_id.in_(
+                select(SubscriptionSource.subscription_id).where(SubscriptionSource.id == any_(parameter))
+            )
+        conditions.append(condition)
+    if not conditions:
+        return 0
+    return await request_membership_projection_where(db, or_(*conditions), deleting=deleting)
 
 
 async def request_search_projection(
@@ -663,29 +673,23 @@ async def drain_search_projection_outbox_batches(
 ) -> dict[str, int | str]:
     """Drain bounded batches; this is the async seam for an RQ operation."""
 
-    # Delayed import avoids a module cycle: search owns document projection,
-    # while this module owns the database queue.
-    from app.services.search import SearchService
+    from app.services.search_delivery import run_delivery_slice
 
     totals = {"claimed": 0, "upserted": 0, "deleted": 0, "batches": 0}
     terminal_status = "idle"
-    async with async_session() as db:
-        service = SearchService(db)
-        for _ in range(max(1, min(int(max_batches), 100))):
-            result = await service.drain_search_projection_outbox(
-                limit=max(1, min(int(batch_size), OUTBOX_SQL_BATCH_SIZE))
-            )
-            terminal_status = str(result["status"])
-            if terminal_status not in {"ok", "partial"}:
-                break
-            totals["batches"] += 1
-            for key in ("claimed", "upserted", "deleted"):
-                totals[key] += int(result[key])
-            if terminal_status == "partial":
-                # The remainder was released without penalty.  Yield the
-                # worker resource permit; the coordinator will wake a fresh
-                # <=4 MiB slice instead of monopolizing it in this RQ job.
-                break
+    for _ in range(max(1, min(int(max_batches), 100))):
+        result = await run_delivery_slice(
+            limit=max(1, min(int(batch_size), OUTBOX_SQL_BATCH_SIZE))
+        )
+        terminal_status = str(result["status"])
+        if terminal_status not in {"ok", "partial"}:
+            break
+        totals["batches"] += 1
+        for key in ("claimed", "upserted", "deleted"):
+            totals[key] += int(result[key])
+        if terminal_status == "partial":
+            # Yield the permit before coordinating another bounded slice.
+            break
     return {"status": terminal_status, **totals}
 
 

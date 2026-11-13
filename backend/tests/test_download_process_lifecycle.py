@@ -1,5 +1,7 @@
 import signal
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -22,6 +24,62 @@ class _FakeProcess:
             raise subprocess.TimeoutExpired("gallery-dl", timeout)
         self.returncode = -signal.SIGKILL
         return self.returncode
+
+
+def test_wait_gallerydl_process_reaps_short_lived_child_without_poll_interval_delay():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(0.05)"],
+        start_new_session=True,
+    )
+    started = time.monotonic()
+    try:
+        assert download._wait_gallerydl_process(proc, timeout=5.0) is True
+        assert time.monotonic() - started < 1.0
+        assert proc.poll() == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=1.0)
+
+
+def test_wait_gallerydl_process_reports_timeout_while_child_is_alive_then_cleans_up():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(2)"],
+        start_new_session=True,
+    )
+    try:
+        assert download._wait_gallerydl_process(proc, timeout=0.2) is False
+        assert proc.poll() is None
+    finally:
+        download._stop_gallerydl_process(
+            proc,
+            initial_signal=signal.SIGTERM,
+            graceful_timeout=1.0,
+            kill_timeout=1.0,
+        )
+        assert proc.poll() is not None
+
+
+def test_wait_gallerydl_process_uses_bounded_wait_and_returns_on_exit():
+    calls = []
+
+    class _CompletedProcess:
+        def wait(self, timeout):
+            calls.append(timeout)
+            return 0
+
+    proc = _CompletedProcess()
+
+    assert download._wait_gallerydl_process(proc, timeout=5.0) is True
+    assert calls == [5.0]
+
+
+def test_wait_gallerydl_process_reports_poll_timeout():
+    class _RunningProcess:
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("gallery-dl", timeout)
+
+    assert download._wait_gallerydl_process(_RunningProcess(), timeout=5.0) is False
 
 
 def test_stop_gallerydl_escalates_and_reaps(monkeypatch):

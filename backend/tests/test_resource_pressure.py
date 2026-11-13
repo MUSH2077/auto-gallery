@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 
 from app.services.resource_pressure import (
+    PRESSURE_BASELINE_KEY,
     PRESSURE_LATCH_KEY,
     PRESSURE_SNAPSHOT_KEY,
     PressureBaselineWindow,
@@ -541,6 +542,24 @@ def test_profile_reservation_keeps_absolute_memory_floor():
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is True
     assert snapshot["budget"]["profiles"]["video_derive"]["allowed"] is False
     assert snapshot["budget"]["profiles"]["video_derive"]["reason"] == "profile_memory_reserve"
+
+
+@pytest.mark.parametrize("available", [int(1.45 * GIB), 4 * GIB])
+def test_work_heat_preserves_maintenance_memory_floor(available):
+    from app.services.resource_pressure import workload_profile_name
+
+    snapshot = ResourcePressureStateMachine(PressureThresholds()).update(
+        _sample(available=available), now=0
+    )
+    profiles = snapshot["budget"]["profiles"]
+    heat, maintenance = profiles["work_heat"], profiles["maintenance"]
+    assert workload_profile_name("work_heat") == workload_profile_name("work-heat") == "work_heat"
+    assert heat["memory_reservation_bytes"] == maintenance["memory_reservation_bytes"] == 256 * 1024 * 1024
+    assert heat["allowed"] is maintenance["allowed"]
+    assert heat["allowed"] is (available == 4 * GIB)
+    assert heat["reason"] == maintenance["reason"]
+    assert heat["token_scope"] == "background"
+    assert heat["slice_seconds"] is None
 
 
 def test_exact_profiles_and_aliases_are_exposed():
@@ -1245,6 +1264,74 @@ def test_external_worker_oom_kill_closes_profiles_and_persists_latch():
     assert snapshot["budget"]["effective_throughput_scale"] == 0.0
     assert snapshot["budget"]["profiles"]["download_network"]["allowed"] is False
     assert redis.get(PRESSURE_LATCH_KEY) is not None
+
+
+
+class _BaselineFenceRedis(_FakeRedis):
+    def eval(self, script, numkeys, *values):
+        assert script
+        assert numkeys == 2
+        owner_key, baseline_key = values[:2]
+        token, payload, ttl = values[2:]
+        if self.get(owner_key) != token:
+            return 0
+        self.set(baseline_key, payload, ex=ttl)
+        return 1
+
+
+def _dirty_baseline_for_persistence():
+    baseline = PressureBaselineWindow(clock=lambda: 600.0)
+    baseline.hydrate(None)
+    baseline._samples.append((600.0, 1.0, 2.0))
+    baseline._dirty = True
+    baseline._last_persisted_at = 0.0
+    return baseline
+
+
+def test_baseline_persist_rejects_old_owner_after_guard_passed():
+    redis = _BaselineFenceRedis()
+    redis.set("resource:owner", "new-owner")
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(
+        redis_client=redis,
+        ownership_key="resource:owner",
+        ownership_token="old-owner",
+    )
+
+    assert redis.get(PRESSURE_BASELINE_KEY) is None
+    assert monitor.baseline._dirty is True
+
+
+def test_baseline_persist_accepts_current_owner_and_marks_persisted():
+    redis = _BaselineFenceRedis()
+    redis.set("resource:owner", "new-owner")
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(
+        redis_client=redis,
+        ownership_key="resource:owner",
+        ownership_token="new-owner",
+    )
+
+    assert json.loads(redis.get(PRESSURE_BASELINE_KEY))["samples"] == [[600.0, 1.0, 2.0]]
+    assert monitor.baseline._dirty is False
+
+
+def test_baseline_persist_without_ownership_keeps_api1_path():
+    redis = _FakeRedis()
+    monitor = ResourcePressureMonitor(
+        baseline=_dirty_baseline_for_persistence(),
+    )
+
+    monitor.persist_baseline_if_due(redis_client=redis)
+
+    assert json.loads(redis.get(PRESSURE_BASELINE_KEY))["samples"] == [[600.0, 1.0, 2.0]]
+    assert monitor.baseline._dirty is False
 
 
 def test_worker_oom_event_identity_depends_only_on_cgroup_and_counter():
@@ -2508,8 +2595,9 @@ def test_pause_latch_overrides_an_older_nonpaused_snapshot(monkeypatch):
     assert snapshot["reasons"] == ["memory_available_critical"]
 
 
+@pytest.mark.parametrize("explicit_limit", [None, 3])
 @pytest.mark.asyncio
-async def test_health_resource_shape_is_additive(monkeypatch):
+async def test_health_resource_shape_is_additive(monkeypatch, explicit_limit):
     import app.main as main
     from app.services import device_profile
     from app.services import resource_pressure as pressure_module
@@ -2522,6 +2610,8 @@ async def test_health_resource_shape_is_additive(monkeypatch):
 
     async def fake_defaults(_session):
         return {"download_concurrency": 4}
+    monkeypatch.setattr(main.settings, "download_concurrency_cap", 5)
+    monkeypatch.setattr(main.settings, "download_device_concurrency_limit", explicit_limit)
 
     monkeypatch.setattr(pressure_module, "get_resource_pressure_snapshot", fake_pressure)
     monkeypatch.setattr(
@@ -2591,11 +2681,14 @@ async def test_health_resource_shape_is_additive(monkeypatch):
     }
     assert payload["download_concurrency"] == {
         "configured": 4,
-        "cap": 1,
+        "cap": explicit_limit or 1,
         "device_profile": "standard",
+        "automatic_device_limit": 1,
+        "device_limit": explicit_limit or 1,
+        "device_limit_source": "explicit" if explicit_limit is not None else "automatic",
         "effective": 1,
-        "desired_effective": 1,
-        "restart_required": False,
+        "desired_effective": explicit_limit or 1,
+        "restart_required": explicit_limit is not None,
     }
 
 

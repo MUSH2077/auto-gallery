@@ -94,7 +94,7 @@ async def test_reconcile_downloads_to_db_registers_and_enqueues_idempotently(tmp
         enqueued.append((download_job_id, set(new_json_paths or [])))
         return "fake-import-job"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -231,7 +231,7 @@ async def test_disk_import_repository_scope_uses_exact_creator_directory_and_pro
         enqueued.append(set(new_json_paths or []))
         return f"import-{len(enqueued)}"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
     progress_reports: list[dict] = []
 
     async def record_progress(progress: dict):
@@ -323,7 +323,7 @@ async def test_repository_drain_resolves_legacy_username_directory_from_pending_
         enqueued.append(set(new_json_paths or []))
         return "legacy-scoped-import"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -420,7 +420,7 @@ async def test_ordinary_repository_drain_never_walks_sibling_directories(tmp_pat
         enqueued.append(set(new_json_paths or []))
         return "scoped-ledger-import"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -558,7 +558,7 @@ async def test_ordinary_disk_drain_keyset_feeds_25_work_batches_with_backpressur
         del lock_task
         await session.execute(text("SELECT 1"))
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
     monkeypatch.setattr(
         disk_import_service,
         "_wait_for_batch_capacity",
@@ -687,9 +687,9 @@ async def test_import_publication_assigns_only_its_bounded_metadata_feed(tmp_pat
     async def fake_publish(*_args, **_kwargs):
         return "published"
 
-    monkeypatch.setattr("app.jobs.download.get_redis", lambda: FakeRedis())
-    monkeypatch.setattr("app.jobs.download.publish_prepared_import", fake_publish)
-    monkeypatch.setattr("app.jobs.download.publish_progress", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.services.import_intent.get_redis", lambda: FakeRedis())
+    monkeypatch.setattr("app.services.import_intent.publish_prepared_import", fake_publish)
+    monkeypatch.setattr("app.services.import_intent.publish_progress", lambda *_args, **_kwargs: None)
 
     try:
         async with async_session() as db:
@@ -846,7 +846,7 @@ async def test_disk_import_records_enqueue_failure_and_leaves_ledger_resumable(t
     async def failing_enqueue(*_args, **_kwargs):
         raise RuntimeError("queue unavailable")
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", failing_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", failing_enqueue)
 
     try:
         async with async_session() as db:
@@ -1103,7 +1103,7 @@ async def test_reconcile_downloads_to_db_provisions_metadata_creator_without_pla
     async def fake_enqueue(download_job_id: str, import_error: str | None = None, new_json_paths=None):
         return "fallback-import-job"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:
@@ -1189,7 +1189,7 @@ async def test_reconcile_downloads_to_db_applies_danbooru_enrichment(tmp_path, m
     async def fake_enqueue(download_job_id: str, import_error: str | None = None, new_json_paths=None):
         return "enriched-import-job"
 
-    monkeypatch.setattr("app.jobs.download._enqueue_import", fake_enqueue)
+    monkeypatch.setattr("app.services.import_intent.enqueue_import", fake_enqueue)
 
     try:
         async with async_session() as db:

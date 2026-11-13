@@ -565,10 +565,10 @@ async def _seed_api_work_state(db, *, source="pixiv", is_nsfw=False):
     return work, source_row
 
 
-def _api_headers(username):
-    from app.auth import create_access_token
+async def _api_headers(username):
+    from tests.conftest import access_token_for_user
 
-    return {"Authorization": f"Bearer {create_access_token(username, must_change_password=False)}"}
+    return {"Authorization": f"Bearer {await access_token_for_user(username)}"}
 
 
 @pytest.mark.integration
@@ -597,7 +597,7 @@ async def test_remote_work_state_api_returns_live_pixiv_state_without_metadata_f
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(user.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(user.username)
             )
             assert response.status_code == 200, response.text
             assert response.headers["cache-control"] == "private, no-store"
@@ -613,7 +613,7 @@ async def test_remote_work_state_api_returns_live_pixiv_state_without_metadata_f
             assert response.json()["total_bookmarks"] != work_source.raw_metadata["total_bookmarks"]
 
             second = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(user.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(user.username)
             )
             assert second.status_code == 200, second.text
             assert adapter.calls == 2
@@ -663,7 +663,7 @@ async def test_remote_work_state_api_sanitizes_provider_failures(
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(user.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(user.username)
             )
         assert response.status_code == expected_status, response.text
         assert response.json()["detail"]["code"] == expected_code
@@ -763,7 +763,7 @@ async def test_remote_work_state_api_maps_pre_provider_vault_failures_to_503(
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 f"/api/v1/works/{work.id}/remote-state",
-                headers=_api_headers(user.username),
+                headers=await _api_headers(user.username),
             )
 
         assert response.status_code == 503, response.text
@@ -841,13 +841,13 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             required_response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(required.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(required.username)
             )
             assert required_response.status_code == 409
             assert required_response.json()["detail"]["code"] == "remote_account_required"
 
             unhealthy_response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(unhealthy.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(unhealthy.username)
             )
             assert unhealthy_response.status_code == 409
             assert unhealthy_response.json()["detail"]["code"] == "remote_account_reauthentication_required"
@@ -858,7 +858,7 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
                 )
             )
             reauth_response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(reauth.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(reauth.username)
             )
             assert reauth_response.status_code == 409
             assert reauth_response.json()["detail"]["code"] == "remote_account_reauthentication_required"
@@ -872,7 +872,7 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
                 )
             )
             stale_response = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(stale.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(stale.username)
             )
             assert stale_response.status_code == 409
             assert stale_response.json()["detail"]["code"] == "remote_account_stale"
@@ -883,7 +883,7 @@ async def test_remote_work_state_api_maps_account_and_rollout_failures(monkeypat
 
             settings.remote_discovery_private_members_enabled = False
             unavailable = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(stale.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(stale.username)
             )
             assert unavailable.status_code == 503
             assert unavailable.json()["detail"]["code"] == "remote_discovery_unavailable"
@@ -927,13 +927,13 @@ async def test_remote_work_state_api_rejects_missing_and_non_pixiv_works_before_
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             unsupported = await client.get(
-                f"/api/v1/works/{work.id}/remote-state", headers=_api_headers(user.username)
+                f"/api/v1/works/{work.id}/remote-state", headers=await _api_headers(user.username)
             )
             assert unsupported.status_code == 409
             assert unsupported.json()["detail"]["code"] == "remote_work_state_unsupported"
 
             missing = await client.get(
-                f"/api/v1/works/{uuid4()}/remote-state", headers=_api_headers(user.username)
+                f"/api/v1/works/{uuid4()}/remote-state", headers=await _api_headers(user.username)
             )
             assert missing.status_code == 404
             assert adapter.calls == 0

@@ -125,7 +125,8 @@ test("filters and expansion are local while revert cancel is inert and partial c
   await expect(page.getByText("+1 more changes")).toHaveCount(0);
   await expect(page.getByText(/"before": "visible"/).first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Trash", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filtered by", exact: true }).click();
+  await page.getByRole("option", { name: "Trash", exact: true }).click();
   await expect(page).toHaveURL(/trigger=work_trash/);
   await page.getByRole("button", { name: "Hide baseline" }).click();
   await expect(page).toHaveURL(/include_baseline=false/);
@@ -136,7 +137,7 @@ test("filters and expansion are local while revert cancel is inert and partial c
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   expect(revertPosts).toBe(0);
   await revertButton.click();
-  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("5");
   await expect(page.getByRole("status")).toContainText("1");
   expect(revertPosts).toBe(1);
@@ -195,7 +196,7 @@ test("backfill tracks accepted work to completion and purge applies only the fro
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   expect(purgeBodies).toEqual([]);
   await purgeButton.click();
-  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("2 works");
   expect(purgeBodies).toEqual([{ work_ids: ["purge-1", "purge-2"], message: "Purge current preview batch" }]);
 });

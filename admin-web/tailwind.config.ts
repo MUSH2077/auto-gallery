@@ -3,7 +3,7 @@ import type { Config } from "tailwindcss";
 // Design tokens for the themeable GitHub-grade system. Colors are backed by the
 // --ag-* CSS vars (RGB triplets in globals.css) via rgb(... / <alpha-value>) so
 // opacity modifiers work (e.g. ring-accent/40) and swapping the palette
-// (data-theme on <html>) reskins everything. See .claude/plans/frontend-style-optimization.md.
+// (data-theme on <html>) reskins everything.
 const t = (v: string) => `rgb(var(${v}) / <alpha-value>)`;
 
 const config: Config = {
@@ -51,7 +51,8 @@ const config: Config = {
       fontFamily: {
         // GitHub's system stack — part of the Primer alignment.
         sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Noto Sans", "Helvetica", "Arial", "sans-serif", "Apple Color Emoji", "Segoe UI Emoji"],
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        // Legacy technical-text utilities use the approved functional font.
+        mono: ["var(--font-ui)"],
       },
       fontSize: {
         "fluid-lg": ["clamp(1.05rem, 0.98rem + 0.4vw, 1.25rem)", { lineHeight: "1.4" }],

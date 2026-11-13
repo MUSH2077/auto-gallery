@@ -8,6 +8,18 @@ practical pre-1.0 semantic versioning.
 
 ### Added
 
+- Configurable bounded API workers with per-container connection/search budgets,
+  singleton maintenance ownership and shared health/resource state; the default
+  remains one API process.
+- Configurable API blocking-thread limits through `API_THREAD_POOL_SIZE`.
+  Each independent asyncio and AnyIO pool has a default container budget of
+  16 slots, divided across API processes.
+- Configurable bounded import consumers with queue-specific supervisor counts,
+  while retaining batch resource admission and durable execution ownership.
+- Bounded parallel downloads with an optional device-specific limit, shared
+  archive protection and cancellation-safe resource admission.
+- Configurable bounded image workers share memory reservations and retain
+  exclusive resource protection for other background workloads.
 - Multi-user administration with module permissions, preferences, and manual
   upload quotas.
 - Manual media upload with validated file types, metadata import, and task
@@ -24,12 +36,43 @@ practical pre-1.0 semantic versioning.
 
 ### Changed
 
+- Private download and upload jobs skip unchanged shared subscription/member
+  search projections for intermediate state changes; public transitions and
+  terminal receipts retain their existing updates.
+- Manual uploads reuse the account returned by atomic quota accounting and avoid
+  redundant creator/work projection fanout for timestamp-only alias observations,
+  while retaining concurrent alias changes and source recovery.
+- Media serving resolves representatives and storage state in one bounded query
+  while retaining authentication, conditional caching and purge protections.
+- Work-list and single-index search paths reuse bounded query/client state while
+  retaining SQL deduplication, timeout and cancellation protections.
+- Fast search writes can complete within a bounded early-confirmation window,
+  while slow tasks retain delayed polling and durable recovery.
+- Personal uploads reuse complete, consistent identity records to reduce
+  repeated maintenance queries, while retaining alias observation updates,
+  incomplete-identity recovery and atomic quota accounting.
 - X/Twitter directory and metadata import now normalize physical `twitter`
   extractor data to the `x` domain identity.
 - Subscription and other dynamic collection views share consistent list,
   action, hierarchy, and entrance behavior.
 - Documentation now matches the current Docker Compose services, frontend
   structure, manual upload support, test commands, and automatic migrations.
+
+### Fixed
+
+- Refresh certifi, Pillow, PyJWT and urllib3 in both Python dependency locks
+  to their patched releases; retain all other locked package versions.
+
+- Upgrade Next.js to 16.4.6 and refresh vulnerable documentation/parser
+  dependencies; remove the obsolete sharp override so patched native image
+  dependencies can resolve.
+
+- Bulk imports wake media processing, metadata curation and search indexing
+  after the outer transaction commits, while preserving rollback and recovery
+  when notification delivery fails.
+- Resource-deferred media and asset-dedup tasks are reconsidered after resources
+  recover, including idle-worker notification handling, bounded recovery checks
+  and reconnection, while retaining admission protection and timer recovery.
 
 ### Security
 

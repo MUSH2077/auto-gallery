@@ -275,7 +275,7 @@ async def cleanup_metadata_jsons(download_root=None):
     if current_admin_operation_attempt() is None:
         raise RuntimeError('Metadata cleanup requires a current registered operation; submit a new cleanup task')
     from app.config import settings
-    from app.jobs.admin_operations import _await_admin_file_finalizer
+    from app.services.admin_operation_handlers import _await_admin_file_finalizer
     result = {'removed': 0, 'scanned': 0, 'skipped': 0, 'failed': 0, 'skipped_by_reason': {},
               'failed_by_reason': {}, 'errors': [], 'errors_truncated': 0, 'scope': 'managed_download_metadata'}
     from uuid import UUID

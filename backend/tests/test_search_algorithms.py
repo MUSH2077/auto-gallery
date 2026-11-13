@@ -70,18 +70,6 @@ def test_nullable_title_cursor_round_trips_and_compiles_seek_condition():
     assert "works.id >" in sql
 
 
-def test_work_list_media_hydration_is_one_bounded_aggregate_query():
-    from app.services.search import SearchService
-
-    source = inspect.getsource(SearchService._search_works_db)
-    # Page + source + combined media query. Exact count lives in the cached
-    # helper, for four SQL round trips on a cold count and three when warm.
-    assert source.count("self.db.execute") == 3
-    assert "preview_position <= 10" in source
-    assert "array_agg" in source
-    assert "MATERIALIZED" in source
-
-
 def test_projection_audit_checks_every_work_hash_in_bounded_batches():
     from app.services.search import SearchService
 
@@ -155,18 +143,18 @@ def test_deferred_projection_release_has_no_retry_penalty():
     assert "attempts=" not in source
 
 
-def test_meili_client_socket_timeout_and_settings_hash(monkeypatch):
+def test_pg_client_deadline_and_settings_cache(monkeypatch):
     import app.services.search as search
 
     constructed = []
 
     class Constructor:
-        def __init__(self, url, key, *, timeout):
-            constructed.append((url, key, timeout))
+        def __init__(self, *, timeout_seconds):
+            constructed.append(timeout_seconds)
 
-    monkeypatch.setattr(search, "MeiliClient", Constructor)
+    monkeypatch.setattr(search, "PGClient", Constructor)
     search._client(timeout_seconds=2.2)
-    assert constructed[-1][2] == 3
+    assert constructed[-1] == 2.2
 
     updates = []
 
@@ -202,8 +190,7 @@ def test_meili_search_is_bounded_batched_and_circuit_broken():
     source = inspect.getsource(search.SearchService._search_meili)
     assert "_meili_search_semaphore" in source
     assert "multi_search" in source
-    assert "SearchParams" in source
-    assert search.MEILI_SEARCH_CONCURRENCY == 4
+    assert search.meili_search_circuit_status()["concurrency_limit"] == search.settings.meili_search_concurrency
 
     search._meili_breaker_success()
     try:
@@ -214,6 +201,20 @@ def test_meili_search_is_bounded_batched_and_circuit_broken():
             search._meili_breaker_before_request()
     finally:
         search._meili_breaker_success()
+
+
+@pytest.mark.asyncio
+async def test_meili_search_concurrency_setting_controls_event_loop_gate(monkeypatch):
+    import app.services.search as search
+
+    search._meili_search_semaphores.clear()
+    monkeypatch.setattr(search.settings, "meili_search_concurrency", 2)
+    try:
+        semaphore = search._meili_search_semaphore()
+        assert semaphore._value == 2
+        assert search.meili_search_circuit_status()["concurrency_limit"] == 2
+    finally:
+        search._meili_search_semaphores.clear()
 
 
 @pytest.mark.asyncio
@@ -572,7 +573,7 @@ async def test_cursor_pages_never_consult_or_race_the_index(monkeypatch):
 
     monkeypatch.setattr(service, "_search_works_db", database)
     monkeypatch.setattr(search_module, "search_index_consistency", forbidden_gate)
-    result, execution = await service._hedged_structured_works_search(
+    result, execution = await service._structured_works_search(
         parse_search_query("sort:created-desc", "works"),
         {},
         0,
@@ -586,79 +587,30 @@ async def test_cursor_pages_never_consult_or_race_the_index(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_equivalent_first_page_can_choose_validated_meili_and_cancel_database(
-    monkeypatch,
-):
-    import app.services.search as search_module
-    from app.services.search import SearchService
+async def test_structured_pg_page_executes_once_without_a_second_index_query(monkeypatch):
+    from unittest.mock import AsyncMock
+    import app.services.search as module
     from app.services.search_language import parse_search_query
-
-    service = SearchService(object())
-    database_cancelled = asyncio.Event()
-
-    async def database(*_args, **_kwargs):
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            database_cancelled.set()
-            raise
-
-    async def meili(*_args, **_kwargs):
-        return {"works": {"items": ["meili"], "total": 1}}
-
-    async def gate(_index):
-        return _ready_search_gate()
-
-    monkeypatch.setattr(service, "_search_works_db", database)
-    monkeypatch.setattr(service, "_search_meili", meili)
-    monkeypatch.setattr(search_module, "search_index_consistency", gate)
-    result, execution = await service._hedged_structured_works_search(
-        parse_search_query("sort:created-desc", "works"),
-        {},
-        0,
-        20,
-        force_sfw=False,
-        cursor=None,
-    )
-    assert result["items"] == ["meili"]
-    assert execution["winner"] == "meilisearch"
-    assert execution["hedged"] is True
-    assert database_cancelled.is_set()
+    service=module.SearchService(object())
+    database=AsyncMock(return_value={"items":["database"],"total":1})
+    indexed=AsyncMock(side_effect=AssertionError("structured PG reads must not race a second query"))
+    monkeypatch.setattr(service,"_search_works_db",database)
+    monkeypatch.setattr(service,"_search_meili",indexed)
+    result,execution=await service._structured_works_search(parse_search_query("sort:created-desc","works"),{},0,20,force_sfw=False,cursor=None)
+    assert result["items"]==["database"]
+    assert execution["winner"]=="postgresql" and execution["hedged"] is False
+    database.assert_awaited_once();indexed.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_index_change_during_race_rejects_meili_result(monkeypatch):
-    import app.services.search as search_module
-    from app.services.search import SearchService
+async def test_structured_pg_read_does_not_require_an_index_checkpoint(monkeypatch):
+    from unittest.mock import AsyncMock
+    import app.services.search as module
     from app.services.search_language import parse_search_query
-
-    service = SearchService(object())
-    gate_calls = 0
-
-    async def database(*_args, **_kwargs):
-        await asyncio.sleep(0.1)
-        return {"items": ["database"], "total": 1}
-
-    async def meili(*_args, **_kwargs):
-        return {"works": {"items": ["meili"], "total": 1}}
-
-    async def gate(_index):
-        nonlocal gate_calls
-        gate_calls += 1
-        return _ready_search_gate(generation=4 if gate_calls == 1 else 5)
-
-    monkeypatch.setattr(service, "_search_works_db", database)
-    monkeypatch.setattr(service, "_search_meili", meili)
-    monkeypatch.setattr(search_module, "search_index_consistency", gate)
-    result, execution = await service._hedged_structured_works_search(
-        parse_search_query("sort:created-desc", "works"),
-        {},
-        0,
-        20,
-        force_sfw=False,
-        cursor=None,
-    )
-    assert result["items"] == ["database"]
-    assert execution["winner"] == "postgresql"
-    assert execution["index_status"] == "changed_during_race"
-    assert gate_calls == 2
+    service=module.SearchService(object())
+    gate=AsyncMock(side_effect=AssertionError("authoritative SQL does not need an index generation race"))
+    monkeypatch.setattr(module,"search_index_consistency",gate)
+    monkeypatch.setattr(service,"_search_works_db",AsyncMock(return_value={"items":[],"total":0}))
+    result,execution=await service._structured_works_search(parse_search_query("sort:created-desc","works"),{},0,20,force_sfw=False,cursor=None)
+    assert result["total"]==0 and execution["consistency"]=="authoritative"
+    gate.assert_not_awaited()

@@ -1,5 +1,5 @@
 // Runtime gates for the motion system. prefers-reduced-motion is the highest
-// priority (see docs/frontend-motion-audit.md §4.5): when it is set, JS-driven
+// priority: when it is set, JS-driven
 // animations must not start at all — the globals.css kill-switch is only the
 // fallback for plain CSS transitions.
 

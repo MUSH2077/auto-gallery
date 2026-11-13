@@ -57,10 +57,10 @@ async def _seed_user(db, username, *, is_admin=False, permissions=None):
     return user
 
 
-def _headers(username):
-    from app.auth import create_access_token
+async def _headers(username):
+    from tests.conftest import access_token_for_user
 
-    token = create_access_token(username, must_change_password=False)
+    token = await access_token_for_user(username)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -79,7 +79,7 @@ async def test_module_user_gets_own_module_and_403_on_others():
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             for own_module in MODULE_ENDPOINTS:
-                headers = _headers(f"{PREFIX}{own_module}")
+                headers = await _headers(f"{PREFIX}{own_module}")
                 for module, path in MODULE_ENDPOINTS.items():
                     r = await client.get(path, headers=headers)
                     expected = (
@@ -111,7 +111,7 @@ async def test_admin_gets_200_on_every_module():
             await _seed_user(db, f"{PREFIX}admin", is_admin=True, permissions=[])
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            headers = _headers(f"{PREFIX}admin")
+            headers = await _headers(f"{PREFIX}admin")
             for module, path in MODULE_ENDPOINTS.items():
                 r = await client.get(path, headers=headers)
                 assert r.status_code == 200, f"admin -> {path}: {r.status_code} {r.text}"
@@ -157,9 +157,9 @@ async def test_moved_endpoints_follow_current_curation_and_scheduler_boundaries(
             await _seed_user(db, f"{PREFIX}system_pin", permissions=["system"])
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            curation_headers = _headers(f"{PREFIX}curation_pin")
-            tasks_headers = _headers(f"{PREFIX}tasks_pin")
-            system_headers = _headers(f"{PREFIX}system_pin")
+            curation_headers = await _headers(f"{PREFIX}curation_pin")
+            tasks_headers = await _headers(f"{PREFIX}tasks_pin")
+            system_headers = await _headers(f"{PREFIX}system_pin")
 
             r = await client.get("/api/v1/admin/dedup/duplicates", headers=curation_headers)
             assert r.status_code == 200, f"curation -> dedup/duplicates: {r.status_code} {r.text}"
@@ -206,8 +206,8 @@ async def test_library_permission_blocked_from_curation_write_routes():
             await _seed_user(db, f"{PREFIX}curation_write", permissions=["curation"])
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            library_headers = _headers(f"{PREFIX}library_write")
-            curation_headers = _headers(f"{PREFIX}curation_write")
+            library_headers = await _headers(f"{PREFIX}library_write")
+            curation_headers = await _headers(f"{PREFIX}curation_write")
             random_id = uuid4()
 
             # This assertion verifies the library permission boundary, not

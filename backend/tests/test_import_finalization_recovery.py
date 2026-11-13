@@ -160,8 +160,8 @@ async def test_retry_after_committed_import_finalization_preserves_outcome_witho
     from app.jobs import import_runner
     from app.models import DownloadJob, ImportJob, Work, Asset, StorageArtifact, TaskRun, RepositorySyncReceipt
     parent_id, child_id, metadata = await _import_fixture(db, tmp_path, monkeypatch)
-    from app.jobs import import_execution
-    original_finalize = import_execution.finalize_download_job
+    from app.services import download_finalization
+    original_finalize = download_finalization.finalize_download_job
     injected = False
     async def fail_once(*args, **kwargs):
         nonlocal injected
@@ -169,7 +169,7 @@ async def test_retry_after_committed_import_finalization_preserves_outcome_witho
             injected = True
             raise RuntimeError("Injected terminal transaction abort after durable artifact checkpoint")
         return await original_finalize(*args, **kwargs)
-    monkeypatch.setattr("app.jobs.import_execution.finalize_download_job", fail_once)
+    monkeypatch.setattr("app.services.download_finalization.finalize_download_job", fail_once)
     await import_runner.run_import_job(str(child_id))
     await db.rollback()
     child = await db.get(ImportJob, child_id, populate_existing=True)
@@ -456,7 +456,7 @@ async def test_queued_legacy_child_cannot_claim_another_imports_new_content(db, 
     async def abort_terminal(*args, **kwargs):
         assert kwargs["status"] == "complete"
         raise RuntimeError("terminal abort after actual existing-content path")
-    monkeypatch.setattr("app.jobs.import_execution.finalize_download_job", abort_terminal)
+    monkeypatch.setattr("app.services.download_finalization.finalize_download_job", abort_terminal)
     await import_runner.run_import_job(str(child_id))
     await db.rollback()
     task = (await db.execute(select(TaskRun).where(TaskRun.subject_id == child_id))).scalar_one()

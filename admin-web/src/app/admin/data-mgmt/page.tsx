@@ -1,8 +1,9 @@
 "use client";
 import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys, type AdminOperationAccepted, type ClearEntity, type ImportFromDiskRequest } from "@/lib/api";
-import { PageHeader, ConfirmDialog, Modal, PageShell, PermissionGuard } from "@/components";
+import { api, queryKeys, type AdminOperationAccepted, type ClearEntity, type ImportFromDiskRequest, type IntegrityResult, type IntegrityIssue } from "@/lib/api";
+
+import { BusinessPage, BusinessModal, BusinessConfirm, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import ChartFrame from "@/components/charts/ChartFrame";
 import StorageColonnade, { type StorageColonnadeGroup } from "@/components/charts/StorageColonnade";
 import TickDonut from "@/components/charts/TickDonut";
@@ -17,14 +18,9 @@ import { adminRoutes } from "@/lib/adminRoutes";
 import { AdminOperationStatus } from "@/components/AdminOperationStatus";
 import { useAdminOperation } from "@/lib/useAdminOperation";
 import { pollInterval } from "@/lib/polling";
+import { refreshOperationResources } from "@/lib/operationRefresh";
 
 type Severity = "error" | "warning" | "info";
-type IntegrityResult = {
-  issues: { type: string; severity: string; count: number; description: string; items: any[] }[];
-  db_stats: Record<string, number>;
-  checked_at: string;
-  message?: string;
-};
 type BackupResult = {
   status: string;
   filename: string;
@@ -83,42 +79,31 @@ function DataManagementContent() {
   const [resetLedger, setResetLedger] = useState(false);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ClearEntity | null>(null);
-  const [integrityItems, setIntegrityItems] = useState<{ type: string; description: string; count: number; items: any[] } | null>(null);
+  const [integrityItems, setIntegrityItems] = useState<IntegrityIssue | null>(null);
 
   // ── Data queries ──
   const systemInfo = useQuery({
-    queryKey: ["system-info"],
+    queryKey: queryKeys.system.systemInfo,
     queryFn: () => api.getSystemInfo(),
     refetchInterval: () => pollInterval(false),
     refetchIntervalInBackground: false,
     placeholderData: (previousData) => previousData,
   });
   const storageBreakdown = useQuery({
-    queryKey: ["storage-breakdown"],
+    queryKey: queryKeys.system.storageBreakdown,
     queryFn: () => api.getStorageBreakdown(),
     placeholderData: (previousData) => previousData,
   });
-  const backups = useQuery({ queryKey: ["backups"], queryFn: () => api.listBackups() });
+  const backups = useQuery({ queryKey: queryKeys.backups.all, queryFn: () => api.listBackups() });
   const refreshBackups = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["backups"] });
+    refreshOperationResources(qc, "admin-backup-create");
   }, [qc]);
   const refreshDataViews = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
-    void qc.invalidateQueries({ queryKey: ["system-info"] });
-    void qc.invalidateQueries({ queryKey: ["storage-breakdown"] });
+    refreshOperationResources(qc, "admin-cleanup-metadata-jsons");
   }, [qc]);
   const refreshClearedDataViews = useCallback(() => {
-    refreshDataViews();
-    void qc.invalidateQueries({ queryKey: queryKeys.creators.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.sources });
-    void qc.invalidateQueries({ queryKey: queryKeys.works.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.tags.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.downloadJobs.all });
-    void qc.invalidateQueries({ queryKey: queryKeys.importJobs.all });
-    void qc.invalidateQueries({ queryKey: ["search"] });
-    void qc.invalidateQueries({ queryKey: ["reference-name-anchors"] });
-  }, [qc, refreshDataViews]);
+    refreshOperationResources(qc, "admin-clear", { entity: "all" });
+  }, [qc]);
   const announceAccepted = useCallback((
     accepted: AdminOperationAccepted,
     title: string,
@@ -317,8 +302,8 @@ function DataManagementContent() {
   const integrityItemEntrance = useStaggeredEntrance(integrityItemKeys);
 
   return (
-    <PageShell>
-      <PageHeader title={t("datamgmt.title")} description={t("datamgmt.desc")} />
+    <BusinessPage title={t("datamgmt.title")} description={t("datamgmt.desc")} className="gallery-governance-page">
+
 
       <section
         data-page-primary-content
@@ -327,7 +312,6 @@ function DataManagementContent() {
       >
         <div className="bg-surface px-4 py-3">
           <h2 id="data-ledger-title" className="text-sm font-semibold text-fg">{t("charts.metric_ledger_title")}</h2>
-          <p className="mt-1 text-xs text-muted">{t("charts.metric_ledger_desc")}</p>
         </div>
         {overviewError ? (
           <div role="alert" className="m-4 rounded-md border border-danger/30 bg-danger-subtle p-4 text-sm text-danger">
@@ -397,7 +381,7 @@ function DataManagementContent() {
           {overviewLoading ? (
             <div aria-label={t("datamgmt.data_center_loading")} className="h-48 animate-pulse rounded-md bg-subtle" />
           ) : sourceStorageData.length ? (
-            <TickDonut
+            <TickDonut themeScope=".gallery-governance-page"
               data={sourceStorageData}
               otherLabel={t("charts.other_sources")}
               formatValue={formatSize}
@@ -421,7 +405,7 @@ function DataManagementContent() {
           {overviewLoading ? (
             <div aria-label={t("datamgmt.data_center_loading")} className="h-48 animate-pulse rounded-md bg-subtle" />
           ) : storageGroups.length ? (
-            <StorageColonnade
+            <StorageColonnade themeScope=".gallery-governance-page"
               groups={storageGroups}
               formatValue={formatSize}
               worksLabel={t("datamgmt.storage_works_label")}
@@ -543,7 +527,7 @@ function DataManagementContent() {
 
         {/* Integrity items modal */}
         {integrityItems && (
-          <Modal
+          <BusinessModal
             open
             onClose={() => setIntegrityItems(null)}
             title={t("datamgmt.integrity_items_modal_title")
@@ -572,7 +556,7 @@ function DataManagementContent() {
                   );
                 })}
               </div>
-          </Modal>
+          </BusinessModal>
         )}
       </div>
 
@@ -752,7 +736,7 @@ function DataManagementContent() {
       </div>
 
       {/* Global confirm dialog */}
-      <ConfirmDialog
+      <BusinessConfirm
         open={confirmRebuild}
         title={t("datamgmt.cleanup_reindex_confirm_title")}
         message={t("datamgmt.cleanup_reindex_confirm_msg")}
@@ -765,7 +749,7 @@ function DataManagementContent() {
         error={rebuildLibrary.startError?.message}
       />
       {confirmAction && (
-        <ConfirmDialog
+        <BusinessConfirm
           open
           title={t("datamgmt.confirm_title").replace("{action}", dangerActions.find((a) => a.key === confirmAction)?.title || confirmAction)}
           message={`${t("datamgmt.confirm_msg").replace("{action}", confirmAction)}${clearPreview.data ? ` ${Object.entries(clearPreview.data.counts).map(([name, count]) => `${name}: ${count}`).join(" · ")}` : ""}`}
@@ -789,14 +773,14 @@ function DataManagementContent() {
           confirmDisabled={clearPreview.isLoading || clearPreview.isError || !clearPreview.data}
         />
       )}
-    </PageShell>
+    </BusinessPage>
   );
 }
 
 export default function DataManagementPage() {
   return (
-    <PermissionGuard module="system">
+    <BusinessPermissionGuard module="system">
       <DataManagementContent />
-    </PermissionGuard>
+    </BusinessPermissionGuard>
   );
 }

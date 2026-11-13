@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from app.database import async_session
 from app.models import Creator, CreatorAlias, Subscription, SubscriptionSource, User, UserSubscription, UserSubscriptionSource
@@ -21,7 +21,7 @@ from app.models.search_rebuild import SearchRebuild
 from app.services.search import SearchService, MEMBERSHIPS_INDEX, SUBSCRIPTIONS_INDEX, INDEX_SETTINGS, SearchBackendUnavailable
 from app.services.search_projection_outbox import request_search_projection, request_membership_projection_where
 from app.services.subscription_membership import SubscriptionMembershipService
-from tests.test_search_delivery import delivery, ready_receipt  # noqa: F401
+from tests.test_search_delivery import controlled_search_store, delivery, ready_receipt  # noqa: F401
 
 
 @pytest.fixture
@@ -171,9 +171,8 @@ async def test_real_membership_unicode_privacy_paging_rename_and_bootstrap_resta
     await _deliver_version(delivery, rows.memberships[0], version)
     assert (await _search(rows.users[0], "雪山收藏"))["total"] == 0
     assert (await _search(rows.users[1], "MoonlightJournal"))["total"] == 1
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{settings.meili_url}/indexes/{MEMBERSHIPS_INDEX}/documents/{rows.memberships[0]}", headers={"Authorization": f"Bearer {settings.meili_master_key}"})
-        assert response.status_code == 404
+    async with async_session() as db:
+        assert not await db.scalar(text("SELECT count(*) FROM search_pg_documents d JOIN search_pg_indexes i USING(storage_id) WHERE i.uid=:uid AND d.entity_id=:id"), {"uid": MEMBERSHIPS_INDEX, "id":str(rows.memberships[0])})
 
     async with async_session() as db:
         service = SubscriptionMembershipService(db, rows.users[0])
@@ -232,9 +231,10 @@ async def test_membership_projection_rollback_fanout_and_hashes(member_rows, mon
 @pytest.mark.asyncio
 async def test_subscription_meili_failure_preserves_structured_browse(member_rows, monkeypatch):
     import app.services.search as search
-    def unavailable(**kwargs):
-        raise RuntimeError("isolated Meili unavailable")
-    monkeypatch.setattr(search, "_client", unavailable)
+    from app.services import postgres_search_query
+    async def unavailable(*args, **kwargs):
+        raise SearchBackendUnavailable("isolated PostgreSQL index unavailable")
+    monkeypatch.setattr(postgres_search_query, "multi_search", unavailable)
     with pytest.raises(SearchBackendUnavailable):
         await _search(member_rows.users[0], "StardustNotebook")
     result = await _search(member_rows.users[0], "sort:name-asc")
@@ -250,20 +250,19 @@ async def test_actor_filter_precedes_exact_count_and_page_and_permissions(member
     calls = []
     async with async_session() as db:
         doc = (await SearchService(db)._build_membership_documents([member_rows.memberships[0]]))[0]
-    class Client:
-        def multi_search(self, params):
-            calls.extend(params)
-            return [SimpleNamespace(hits=[dict(doc)]), SimpleNamespace(total_hits=1)]
-    monkeypatch.setattr(search, "_client", lambda **kwargs: Client())
+    from app.services import postgres_search_query
+    async def native_query(db, prepared, query):
+        calls.extend(prepared)
+        return [SimpleNamespace(hits=[dict(doc)], estimated_total_hits=1, total_hits=1)]
+    monkeypatch.setattr(postgres_search_query, "multi_search", native_query)
     result = await _search(member_rows.users[0], "StardustNotebook", 17, 9)
     assert result["total"] == 1
-    assert len(calls) == 2
-    for params in calls:
-        assert params.index_uid == MEMBERSHIPS_INDEX
-        assert params.filter == f"user_id = {member_rows.users[0]}"
-        assert params.matching_strategy == "all"
-    assert calls[0].offset == 17 and calls[0].limit == 9
-    assert calls[1].page == 1 and calls[1].hits_per_page == 1
+    assert len(calls) == 1
+    target, uid, options = calls[0]
+    assert uid == MEMBERSHIPS_INDEX
+    assert options["filter"] == f"user_id = {member_rows.users[0]}"
+    assert options["matching_strategy"] == "all"
+    assert options["offset"] == 17 and options["limit"] == 9
     assert result["subscriptions"][0]["id"] == str(member_rows.subscriptions[0])
     calls.clear()
     async with async_session() as db:
@@ -279,7 +278,7 @@ async def test_bootstrap_failed_attempt_has_persisted_backoff(delivery):
     from app.services.search_delivery import now
     async with async_session() as db:
         assert (await db.execute(select(search_rebuild.membership_bootstrap_due_condition()))).scalar_one()
-        build = SearchRebuild(owner=search_rebuild.MEMBERSHIP_BOOTSTRAP_OWNER, state="failed", phase="complete", progress={"indexes": [MEMBERSHIPS_INDEX]})
+        build = SearchRebuild(backend="postgresql", owner=search_rebuild.MEMBERSHIP_BOOTSTRAP_OWNER, state="failed", phase="complete", progress={"indexes": [MEMBERSHIPS_INDEX]})
         db.add(build)
         await db.flush()
         assert not (await db.execute(select(search_rebuild.membership_bootstrap_due_condition()))).scalar_one()

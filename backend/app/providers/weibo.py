@@ -2,6 +2,7 @@ import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
+from app.services.cookie_paths import resolve_cookie_path
 
 
 class WeiboProvider(BaseProvider):
@@ -130,7 +131,7 @@ class WeiboProvider(BaseProvider):
                 }
             }
         }
-        cookies_path = "/gallerydl-config/cookies/weibo.txt"
+        cookies_path = str(resolve_cookie_path("cookies/weibo.txt"))
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             config["extractor"]["weibo"]["cookies"] = cookies_path
         return config

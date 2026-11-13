@@ -23,25 +23,37 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update, or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.creator import Creator
+from app.models.creator_alias import CreatorAlias
 from app.models.download_job import DownloadJob
 from app.models.source_creator import SourceCreator
+from app.models.subscription import Subscription
+from app.models.subscription_source import SubscriptionSource
 from app.models.user import User
 from app.services.artifact_ledger import ArtifactLedger, artifact_row
-from app.services.disk_identity import MetadataIdentity, provision_identity_for_disk_import
+from app.services.disk_identity import MetadataIdentity, ProvisionedIdentity, provision_identity_for_disk_import
+from app.services.heavy_io import storage_write_barrier
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"}
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB per file
+MAX_UPLOAD_FILES = 20
+MAX_BATCH_SIZE_BYTES = 1024 * 1024 * 1024
+MAX_REQUEST_SIZE_BYTES = MAX_BATCH_SIZE_BYTES + 2 * 1024 * 1024
 
 
 class QuotaExceededError(Exception):
-    """Raised when an upload would push the user past upload_quota_bytes."""
+    """Raised when a file, batch or account capacity budget is exceeded."""
+
+    def __init__(self, message: str, *, code: str = "upload_limit_exceeded"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(slots=True)
@@ -64,6 +76,12 @@ class UploadResult:
     import_job_id: str | None
     used_bytes: int
     quota_bytes: int | None
+
+
+@dataclass(slots=True)
+class _UploadIdentity:
+    provisioned: ProvisionedIdentity
+    projection_required: bool
 
 
 def _sniff_magic(header: bytes, ext: str) -> bool:
@@ -97,6 +115,12 @@ def _assert_contained(path: Path, root: Path) -> None:
 
 class ManualUploadService:
     async def save_upload(
+        self, db: AsyncSession, user: User, files: list[UploadFileInput], meta: dict,
+    ) -> UploadResult:
+        async with storage_write_barrier():
+            return await self._save_upload(db, user, files, meta)
+
+    async def _save_upload(
         self,
         db: AsyncSession,
         user: User,
@@ -105,6 +129,8 @@ class ManualUploadService:
     ) -> UploadResult:
         if not files:
             raise ValueError("At least one file is required")
+        if len(files) > MAX_UPLOAD_FILES:
+            raise ValueError(f"At most {MAX_UPLOAD_FILES} files are allowed per upload")
 
         creator_id = meta.get("creator_id")
         title = meta.get("title")
@@ -131,43 +157,43 @@ class ManualUploadService:
                 raise ValueError(f"{f.original_name} failed content validation (extension/content mismatch)")
             validated.append((f, ext, size))
             total_size += size
+            if total_size > MAX_BATCH_SIZE_BYTES:
+                raise QuotaExceededError("Upload exceeds the 1GiB batch limit", code="upload_batch_too_large")
 
-        # ---- Quota check (before any writes) ----
-        if user.upload_quota_bytes is not None and user.upload_used_bytes + total_size > user.upload_quota_bytes:
-            raise QuotaExceededError(
-                f"Upload of {total_size} bytes would exceed quota "
-                f"({user.upload_used_bytes}/{user.upload_quota_bytes} bytes used)"
-            )
-
-        # ---- Creator identity resolution ----
-        source_creator_id, source_url, display_name, target_creator_id = await self._resolve_identity(
-            db, user, creator_id
-        )
-
-        # ---- Storage: DOWNLOAD_ROOT/manual/user_{username}/{work_uuid}/ ----
-        work_uuid = str(uuid.uuid4())
-        root = Path(settings.download_root).resolve()
-        work_dir = root / "manual" / f"user_{user.username}" / work_uuid
-        _assert_contained(work_dir, root)
-        work_dir.mkdir(parents=True, exist_ok=True)
-
-        file_records = []
-        saved_paths: list[Path] = []
-        for f, ext, size in validated:
-            dest_name = f"{uuid.uuid4().hex}{ext}"
-            dest_path = work_dir / dest_name
-            _assert_contained(dest_path, root)
-            os.replace(f.temp_path, dest_path)
-            saved_paths.append(dest_path)
-            file_records.append({"name": dest_name, "original_name": f.original_name, "size": size})
-
-        # ---- Post-move pipeline: metadata write, identity provisioning,
-        # ledger insert, commit. Files are already on disk under work_dir at
-        # this point (moved above via os.replace) -- if anything below raises,
-        # nothing has committed yet, but the files would otherwise be
-        # orphaned on disk with no DB row pointing to them. Best-effort clean
-        # them up before re-raising. ----
+        # Reserve bytes atomically after network reception, in the save transaction.
+        work_dir = None
         try:
+            charged = (await db.execute(update(User).where(
+                User.id == user.id,
+                or_(User.upload_quota_bytes.is_(None),
+                    User.upload_used_bytes + total_size <= User.upload_quota_bytes),
+            ).values(upload_used_bytes=User.upload_used_bytes + total_size)
+                .returning(User)
+                .execution_options(synchronize_session=False, populate_existing=True))).scalar_one_or_none()
+            if charged is None:
+                raise QuotaExceededError("Upload would exceed the current upload quota", code="upload_quota_exceeded")
+            # RETURNING refreshes a session-resident account and supplies the
+            # current account for detached authentication objects in one round trip.
+            user = charged
+            used_bytes, quota_bytes = user.upload_used_bytes, user.upload_quota_bytes
+            source_creator_id, source_url, display_name, target_creator_id = await self._resolve_identity(
+                db, user, creator_id
+            )
+            work_uuid = str(uuid.uuid4())
+            root = Path(settings.download_root).resolve()
+            work_dir = root / "manual" / f"user_{user.username}" / work_uuid
+            _assert_contained(work_dir, root)
+            work_dir.mkdir(parents=True, exist_ok=True)
+            file_records = []
+            saved_paths: list[Path] = []
+            for f, ext, size in validated:
+                dest_name = f"{uuid.uuid4().hex}{ext}"
+                dest_path = work_dir / dest_name
+                _assert_contained(dest_path, root)
+                os.replace(f.temp_path, dest_path)
+                saved_paths.append(dest_path)
+                file_records.append({"name": dest_name, "original_name": f.original_name, "size": size})
+
             tag_list = [t.strip() for t in tags_raw.split(",") if t.strip()]
             metadata = {
                 "category": "manual",
@@ -199,7 +225,9 @@ class ManualUploadService:
                 raw_metadata={},
                 creator_dir=f"user_{user.username}",
             )
-            provisioned = await provision_identity_for_disk_import(db, identity, prefer_danbooru=False)
+            resolved = await self._provision_identity(db, identity, reuse_personal=target_creator_id is None)
+            provisioned = resolved.provisioned
+            projection_required = resolved.projection_required or not provisioned.subscription_source.is_enabled
             # Manual uploads are user-intentional. Unlike gallery-dl-discovered
             # subscription sources, which default to is_enabled=False pending
             # admin review (CLAUDE.md: "Only Pixiv defaults to is_enabled=True on
@@ -237,27 +265,116 @@ class ManualUploadService:
                     rows.append(ar)
             await ArtifactLedger(db).upsert_many(rows)
 
-            db_user = await db.get(User, user.id)
-            db_user.upload_used_bytes = (db_user.upload_used_bytes or 0) + total_size
-
-            from app.services.creator import CreatorService
-            await CreatorService(db)._request_creator_projection(
-                provisioned.creator.id,
-            )
+            if projection_required:
+                from app.services.creator import CreatorService
+                await CreatorService(db)._request_creator_projection(
+                    provisioned.creator.id,
+                )
             await db.commit()
-        except Exception:
-            shutil.rmtree(work_dir, ignore_errors=True)
+        except BaseException:
+            try:
+                await db.rollback()
+            finally:
+                if work_dir is not None:
+                    shutil.rmtree(work_dir, ignore_errors=True)
             raise
 
-        from app.jobs.download import _enqueue_import
-        import_job_id = await _enqueue_import(str(job.id), new_json_paths={str(json_path)})
+        from app.services.import_intent import enqueue_import
+        import_job_id = await enqueue_import(str(job.id), new_json_paths={str(json_path)})
 
         return UploadResult(
             work_id=work_uuid,
             download_job_id=str(job.id),
             import_job_id=import_job_id,
-            used_bytes=db_user.upload_used_bytes,
-            quota_bytes=db_user.upload_quota_bytes,
+            used_bytes=used_bytes,
+            quota_bytes=quota_bytes,
+        )
+
+    async def _provision_identity(
+        self, db: AsyncSession, identity: MetadataIdentity, *, reuse_personal: bool,
+    ) -> _UploadIdentity:
+        """Reuse a complete personal space; recover incomplete/curated identities normally.
+
+        The caller still owns the atomic user quota lock. This replaces repeated
+        general disk-recovery queries, rather than weakening upload accounting.
+        """
+        if reuse_personal:
+            row = (await db.execute(
+                select(Creator, Subscription, SubscriptionSource, SourceCreator)
+                .select_from(Creator)
+                .join(SourceCreator, SourceCreator.creator_id == Creator.id)
+                .join(Subscription, Subscription.creator_id == Creator.id)
+                .join(SubscriptionSource, SubscriptionSource.subscription_id == Subscription.id)
+                .where(
+                    SourceCreator.source == "manual",
+                    SourceCreator.source_creator_id == identity.source_creator_id,
+                    SubscriptionSource.source == "manual",
+                    SubscriptionSource.source_creator_id == identity.source_creator_id,
+                    SubscriptionSource.source_url == identity.source_url,
+                ).limit(1)
+            )).one_or_none()
+            if row is not None:
+                creator, subscription, repository, source_creator = row
+                raw_metadata = source_creator.raw_metadata if isinstance(source_creator.raw_metadata, dict) else {}
+                marker = raw_metadata.get("_disk_import")
+                if (creator.name and creator.display_name and source_creator.display_name
+                        and source_creator.source_url == identity.source_url
+                        and marker == {"needs_enrichment": True, "enrichment_status": "metadata_only"}):
+                    from app.services.creator_aliases import collect_creator_alias_observations, normalize_creator_alias
+
+                    observations = collect_creator_alias_observations(
+                        creator, source_creators=(source_creator,), subscription_sources=(repository,),
+                    )
+                    expected = {
+                        (o.source, o.kind, normalize_creator_alias(o.value, kind=o.kind)):
+                        (o.value.strip(), o.source_ref, o.is_current) for o in observations
+                    }
+                    aliases = list((await db.execute(
+                        select(CreatorAlias).where(CreatorAlias.creator_id == creator.id)
+                    )).scalars())
+                    existing = {
+                        (a.source, a.kind, a.normalized_value): (a.value, a.source_ref, a.is_current)
+                        for a in aliases
+                    }
+                    if existing == expected:
+                        # A concurrent edit must remain authoritative. Refresh
+                        # observation times without overwriting semantic fields;
+                        # RETURNING detects changed or replaced rows before we
+                        # decide whether reference documents need a refresh.
+                        observed = {
+                            (a.source, a.kind, a.normalized_value):
+                            (a.id, a.value, a.source_ref, a.is_current) for a in aliases
+                        }
+                        from sqlalchemy import func
+                        statement = pg_insert(CreatorAlias).values([
+                            {"creator_id": creator.id, "source": key[0], "kind": key[1],
+                             "normalized_value": key[2], "value": value[0],
+                             "source_ref": value[1], "is_current": value[2]}
+                            for key, value in expected.items()
+                        ])
+                        returned = (await db.execute(statement.on_conflict_do_update(
+                            constraint="uq_creator_aliases_identity",
+                            set_={"last_seen_at": func.now(), "updated_at": func.now()},
+                        ).returning(
+                            CreatorAlias.id, CreatorAlias.source, CreatorAlias.kind,
+                            CreatorAlias.normalized_value, CreatorAlias.value,
+                            CreatorAlias.source_ref, CreatorAlias.is_current,
+                        ))).all()
+                        actual = {
+                            (source, kind, normalized): (alias_id, value, source_ref, is_current)
+                            for alias_id, source, kind, normalized, value, source_ref, is_current in returned
+                        }
+                        return _UploadIdentity(
+                            provisioned=ProvisionedIdentity(
+                                creator=creator, subscription=subscription,
+                                subscription_source=repository, source_creator=source_creator,
+                                enrichment_status="metadata_only",
+                            ),
+                            projection_required=actual != observed,
+                        )
+        return _UploadIdentity(
+            provisioned=await provision_identity_for_disk_import(db, identity, prefer_danbooru=False),
+            projection_required=True,
         )
 
     async def _resolve_identity(

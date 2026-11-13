@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 from app.services.redis_client import get_redis
+from app.services.redis_budget import http_redis_call
 
 
 class RateLimiter:
@@ -35,16 +36,26 @@ class RateLimiter:
 
         Returns ``(allowed, remaining, retry_after_seconds)``.
         """
+        try:
+            return await http_redis_call(self._check, identifier)
+        except Exception:
+            return True, self._max, 0
+
+    def _check(self, identifier: str) -> tuple[bool, int, int]:
         r = get_redis()
         key = self._key(identifier)
 
         try:
-            current = r.incr(key)
-            if current == 1:
-                r.expire(key, self._window)
+            # A timed-out response must not leave an increment without expiry.
+            current, ttl = r.eval(
+                "local n = redis.call('incr', KEYS[1]); "
+                "if n == 1 then redis.call('expire', KEYS[1], ARGV[1]); end; "
+                "return {n, redis.call('ttl', KEYS[1])}",
+                1, key, self._window,
+            )
 
             remaining = max(0, self._max - current)
-            ttl = r.ttl(key) or self._window
+            ttl = ttl or self._window
             retry_after = max(0, ttl)
             return current <= self._max, remaining, retry_after
         except Exception:

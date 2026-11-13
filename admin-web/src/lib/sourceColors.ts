@@ -40,13 +40,13 @@ export const SOURCE_BADGE_COLORS: Record<string, string> = {
   weibo: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
   bilibili: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
   local: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  manual: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  manual: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
 
   // Fallback
   pixiv_sketch: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   pixiv_stacc: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   bluesky: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400",
-  misskey: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  misskey: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   mastodon: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400",
   youtube: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   deviantart: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
@@ -68,7 +68,7 @@ export const SOURCE_BADGE_COLORS: Record<string, string> = {
   threads: "bg-gray-800 text-white dark:bg-gray-700 dark:text-white",
   reddit: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
   linktree: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  carrd: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  carrd: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   aboutme: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
   website: "bg-gray-100 text-gray-600 dark:bg-gray-900/30 dark:text-gray-400",
 };

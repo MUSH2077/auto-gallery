@@ -208,6 +208,7 @@ TASK_STATUSES = frozenset({
     "stale",
     "paused",
     "cancelled",
+    "recovering",
 })
 
 TASK_KINDS = frozenset({"download", "import", "admin"})

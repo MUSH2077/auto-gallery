@@ -121,7 +121,8 @@ async function installMediaRoutes(
       body: GENERATED_VIDEO,
     });
   });
-  await context.route("**/media/**", async (route) => {
+  await context.route(url => url.pathname.startsWith("/media/"), async (route) => {
+    if (new URL(route.request().url()).pathname.startsWith("/media/stream/")) return route.fallback();
     await route.fulfill({ body: PIXEL, contentType: "image/png" });
   });
   await context.route("**/api/v1/**", async (route: Route) => {
@@ -260,6 +261,80 @@ async function installMediaRoutes(
   });
 }
 
+
+for (const order of ["assets-first", "work-first", "cached-assets"] as const) {
+  test("detail wheel paging survives " + order + " loading and reopening", async ({ context, page }) => {
+    const calls: string[] = [];
+    await installMediaRoutes(context, calls);
+    const images = [
+      IMAGE_ASSET,
+      { ...IMAGE_ASSET, id: "asset-image-two", file_name: "second-still.webp" },
+      { ...IMAGE_ASSET, id: "asset-image-three", file_name: "third-still.webp" },
+    ];
+    let releaseWork!: () => void;
+    let releaseAssets!: () => void;
+    const workReady = new Promise<void>(resolve => { releaseWork = resolve; });
+    const assetsReady = new Promise<void>(resolve => { releaseAssets = resolve; });
+    await context.route("**/api/v1/works/video-work", async route => {
+      await workReady;
+      await route.fulfill({ json: { ...WORK, asset_count: images.length } });
+    });
+    await context.route("**/api/v1/works/video-work/assets", async route => {
+      await assetsReady;
+      await route.fulfill({ json: images });
+    });
+    const assetsResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/v1/works/video-work/assets");
+    const detail = page.getByRole("dialog");
+    try {
+      if (order === "cached-assets") {
+        releaseAssets();
+        await page.goto("/admin/works");
+        const card = page.locator('[data-work-id="video-work"]');
+        await card.hover();
+        await expect(page.locator(".popover").filter({ hasText: WORK.title })).toBeVisible();
+        await assetsResponse;
+        await card.locator("h2 a").click();
+        await expect(detail.getByRole("status")).toBeVisible();
+        await page.evaluate(() => new Promise<void>(resolve =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        releaseWork();
+      } else {
+        await page.goto("/admin/works/video-work");
+        await expect(detail).toBeVisible();
+        if (order === "assets-first") {
+          releaseAssets();
+          await assetsResponse;
+          await page.evaluate(() => new Promise<void>(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          releaseWork();
+        } else {
+          releaseWork();
+          await expect(detail.locator(".detail-media-viewer")).toBeVisible();
+          releaseAssets();
+        }
+      }
+
+      const viewer = detail.locator(".detail-media-viewer");
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+      await viewer.dispatchEvent("wheel", { deltaY: 150 });
+      await expect(viewer.locator(".asset-navigation")).toContainText("2 / 3");
+      await viewer.getByRole("button", { name: "Previous image", exact: true }).click();
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+
+      await page.keyboard.press("Escape");
+      await expect(detail).toHaveCount(0);
+      await page.locator('[data-work-id="video-work"] h2 a').click();
+      await expect(viewer.locator(".asset-navigation")).toContainText("1 / 3");
+      await viewer.dispatchEvent("wheel", { deltaY: 150 });
+      await expect(viewer.locator(".asset-navigation")).toContainText("2 / 3");
+    } finally {
+      releaseWork();
+      releaseAssets();
+    }
+  });
+}
+
 test("video remains poster-only until click and switching assets unloads playback", async ({ context, page }) => {
   const calls: string[] = [];
   const consoleErrors: string[] = [];
@@ -274,7 +349,7 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(page.locator("video")).toHaveCount(0);
   await expect.poll(() => calls.some((call) => call.includes("playback-ticket"))).toBe(false);
 
-  const videoCard = page.locator("article").filter({ hasText: WORK.title }).first();
+  const videoCard = page.locator(`[data-work-id="${WORK.id}"]`).first();
   await videoCard.hover();
   const preview = page.locator(".popover").filter({ hasText: WORK.title });
   await expect(preview).toBeVisible();
@@ -290,7 +365,7 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(preview.getByText("1 / 2", { exact: true })).toBeVisible();
 
   await page.goto("/admin/works/video-work");
-  await expect(page.getByRole("heading", { level: 1, name: "Synthetic motion study" })).toBeVisible();
+  await expect(page.getByRole("dialog").filter({ hasText: "Synthetic motion study" })).toBeVisible();
   const video = page.locator("video");
   await expect(video).toHaveCount(1);
   await expect(video).not.toHaveAttribute("src");
@@ -307,8 +382,12 @@ test("video remains poster-only until click and switching assets unloads playbac
   await expect(video).toHaveAttribute("controls", "");
   await page.screenshot({ path: "/tmp/auto-gallery-media-playing.png", fullPage: false });
 
+  const releasedVideo = await video.elementHandle();
+  await page.locator("details.detail-more-information > summary").click();
+  await page.locator("details.detail-more-information details.detail-extra-group > summary").filter({ hasText: "Pages (2)" }).click();
   await page.getByTitle("generated-still.webp").click();
   await expect(page.locator("video")).toHaveCount(0);
+  await expect.poll(() => releasedVideo!.evaluate(element => (element as HTMLVideoElement).paused && !element.getAttribute("src"))).toBe(true);
   expect(consoleErrors, calls.join("\n")).toEqual([]);
 });
 
@@ -334,7 +413,9 @@ test("slideshow retries the exact failed thumbnail and keeps a complete foregrou
   await installMediaRoutes(context, calls, { failFirstImageAsset: true });
   await page.goto("/admin/works");
 
-  await page.getByRole("button", { name: "Slideshow" }).click();
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("button", { name: "Display settings", exact: true }).click();
+  await page.getByRole("button", { name: "Slideshow", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Slideshow" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("slideshow-stage")).toBeVisible();
@@ -356,3 +437,31 @@ test("slideshow retries the exact failed thumbnail and keeps a complete foregrou
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
+
+
+for (const failure of ["ticket", "stream"] as const) {
+  test(`video retries a failed ${failure} request and resumes real playback`, async ({ context, page }) => {
+    const calls: string[] = [];
+    await installMediaRoutes(context, calls);
+    let allowRecovery = false;
+    const tickets: string[] = [];
+    page.on("request", request => { if (request.url().includes("playback-ticket")) tickets.push(request.url()); });
+    if (failure === "ticket") {
+      await context.route("**/api/v1/works/video-work/assets/asset-video/playback-ticket", route => allowRecovery ? route.fallback() : route.fulfill({ status: 503, json: { detail: "Temporary playback service failure" } }));
+    } else {
+      await context.route("**/media/stream/asset-video**", route => allowRecovery ? route.fallback() : route.fulfill({ status: 404, json: { detail: "Temporary media stream failure" } }));
+    }
+    await page.goto("/admin/works/video-work");
+    const video = page.locator("video");
+    await video.evaluate(element => { (element as HTMLVideoElement).loop = true; });
+    await page.getByRole("button", { name: "Play video" }).click();
+    const retry = page.getByRole("button", { name: "Retry", exact: true });
+    await expect(retry).toBeVisible();
+    allowRecovery = true;
+    await retry.click();
+    await expect.poll(() => tickets.length).toBeGreaterThan(1);
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState >= 2 && !(element as HTMLVideoElement).paused && (element as HTMLVideoElement).currentTime > 0)).toBe(true);
+    await video.evaluate(element => (element as HTMLVideoElement).pause());
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).paused)).toBe(true);
+  });
+}

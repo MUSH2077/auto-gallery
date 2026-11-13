@@ -5,12 +5,37 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, or_, String, cast
 from app.models import SubscriptionSource, Subscription, Creator
 from app.services.settings import get_scheduler_config
-from app.jobs.subscription_sync import schedule_decision_snapshot
+from app.services.subscription_schedule import schedule_decision_snapshot
 from app.services.subscription_calendar import effective_calendar_rule
 from app.services.auth_health import (
     actionable_binding_exists,
     credential_issue_binding_exists,
 )
+
+from app.providers import registry
+from app.services.search_projection_fields import _iso
+
+
+def provider_state(source: str, source_url: str | None) -> dict:
+    try:
+        provider = registry.get(source)
+    except KeyError:
+        return {
+            "provider_display_name": source,
+            "can_download": False,
+            "url_valid": False,
+            "skip_reason": "unknown_provider",
+        }
+    normalized_url = provider.normalize_url(source_url) if source_url else None
+    candidate_url = normalized_url or source_url
+    url_valid = bool(candidate_url and provider.validate_url(candidate_url))
+    return {
+        "provider_display_name": provider.display_name,
+        "can_download": bool(provider.capabilities.can_download),
+        "url_valid": url_valid,
+        "skip_reason": None,
+    }
+
 
 
 def decision_item(
@@ -26,14 +51,19 @@ def decision_item(
     tz_name,
     scheduler_enabled,
     overdue_cutoff,
+    source_policy=None,
+    subscription_policy=None,
 ):
-    from app.api.system import _provider_state, _iso
     from app.services.auth_health import classify_source_health
 
+    source = ss
+    subscription = sub
+    ss = source_policy if source_policy is not None else ss
+    sub = subscription_policy if subscription_policy is not None else sub
     suppressed = False
-    provider_state = _provider_state(ss.source, ss.source_url)
-    can_download = bool(provider_state["can_download"])
-    url_valid = bool(provider_state["url_valid"])
+    provider = provider_state(source.source, source.source_url)
+    can_download = bool(provider["can_download"])
+    url_valid = bool(provider["url_valid"])
     auth_health = classify_source_health(ss, sub)
     auth_healthy = ss.auth_healthy is not False
     decision = schedule_decision_snapshot(
@@ -73,7 +103,7 @@ def decision_item(
         reason = "source_disabled"
     elif not can_download:
         due = False
-        reason = provider_state["skip_reason"] or "provider_not_downloadable"
+        reason = provider["skip_reason"] or "provider_not_downloadable"
     elif not url_valid:
         due = False
         reason = "url_invalid"
@@ -106,17 +136,17 @@ def decision_item(
     )
 
     return {
-        "subscription_id": str(sub.id),
+        "subscription_id": str(subscription.id),
         "subscription_name": sub.name,
         "subscription_active": sub.is_active,
         "subscription_sync_enabled": sub.sync_enabled,
         "creator_id": str(creator.id),
         "creator_name": creator.display_name or creator.name,
-        "source_id": str(ss.id),
-        "source": ss.source,
-        "source_display_name": provider_state["provider_display_name"],
-        "source_url": ss.source_url,
-        "source_creator_id": ss.source_creator_id,
+        "source_id": str(source.id),
+        "source": source.source,
+        "source_display_name": provider["provider_display_name"],
+        "source_url": source.source_url,
+        "source_creator_id": source.source_creator_id,
         "source_enabled": ss.is_enabled,
         "effective_mode": decision.get("mode") or sub.schedule_mode or config.get("schedule_mode", "interval"),
         "timezone": tz_name,

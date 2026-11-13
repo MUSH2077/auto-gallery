@@ -1,18 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, useId } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CreatorLink as CreatorLinkType, CreatorRepository, queryKeys, SchedulerDecisionItem, WorkListItem } from "@/lib/api";
-import HierarchyDeletionDialog from "@/components/HierarchyDeletionDialog";
-import Modal from "@/components/Modal";
+import HierarchyDeletion from "@/features/gallery-ui/HierarchyDeletion";
 import MotionNumber from "@/components/MotionNumber";
-import PageShell from "@/components/PageShell";
 import RepositoryCard from "@/components/RepositoryCard";
 import SourceBadge from "@/components/SourceBadge";
 import StatusBadge from "@/components/StatusBadge";
 import { SmartSearchInput } from "@/components/SmartSearchInput";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
 import type { SlideItem } from "@/components/SlideshowPlayer";
 import ActivityDotMatrix, { type ActivityDay, type ActivityTimeline } from "@/components/charts/ActivityDotMatrix";
@@ -24,8 +23,7 @@ import { niceUnit } from "@/components/charts/chartMath";
 import type { ChartDatum, ChartSeriesPoint } from "@/components/charts/types";
 import { useSlideshow } from "@/lib/useSlideshow";
 import { pollInterval } from "@/lib/polling";
-import { motionConfig } from "@/lib/motion";
-import { Breadcrumb } from "@/components/Breadcrumb";
+import { BusinessModal, BusinessPage } from "@/features/gallery-ui/BusinessPage";
 import { useToast } from "@/components/Toast";
 import { useT } from "@/lib/i18n";
 import { useI18nFormat } from "@/lib/i18n-format";
@@ -35,6 +33,7 @@ import { usePermissions } from "@/lib/usePermissions";
 import { useNotifications } from "@/components/NotificationCenter";
 import { hasActionableAuthFailure } from "@/lib/auth-health";
 import CreatorReferences from "./CreatorReferences";
+import { useCreatorFavorite } from "@/features/creators/useCreatorFavorite";
 
 type TabKey = "overview" | "repositories" | "works" | "links";
 
@@ -51,7 +50,7 @@ function WorkPreviewCard({ work }: { work: WorkListItem }) {
   const fmt = useI18nFormat();
   const assetId = work.preview_asset_ids?.[0] || work.thumbnail_asset_id;
   return (
-    <Link href={`/admin/works/${work.id}`} className="media-motion-card group overflow-hidden rounded-md border border-border bg-white hover:border-accent/50 dark:border-border dark:bg-surface dark:hover:border-accent/50">
+    <Link href={`/admin/works/${work.id}`} className="gallery-creator-work-card group overflow-hidden">
       <div className="media-motion-visual aspect-[4/3] overflow-hidden bg-subtle">
         {assetId ? (
           <WorkMediaThumbnail assetId={assetId} hasVideo={work.has_video} alt={work.title || t("creator_detail.untitled")} className="h-full w-full object-cover" />
@@ -123,7 +122,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
+      <div className="gallery-section-rule p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold">{t("creator_detail.works_title")}</h2>
@@ -197,6 +196,7 @@ function CreatorWorksExplorer({ creatorId, selectedTag, onTagChange }: {
 }
 
 export default function CreatorDetailPage() {
+  const editFormId = useId();
   const t = useT();
   const fmt = useI18nFormat();
   const toast = useToast();
@@ -217,13 +217,9 @@ export default function CreatorDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDisplay, setEditDisplay] = useState("");
   const [editDesc, setEditDesc] = useState("");
-  const [narrativeMotionEnabled, setNarrativeMotionEnabled] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteFiles, setDeleteFiles] = useState(false);
 
-  useEffect(() => {
-    setNarrativeMotionEnabled(motionConfig.shouldAnimate());
-  }, []);
 
   const creator = useQuery({ queryKey: queryKeys.creators.detail(id), queryFn: () => api.getCreator(id) });
   const links = useQuery({ queryKey: queryKeys.creators.links(id), queryFn: () => api.listCreatorLinks(id) });
@@ -294,22 +290,37 @@ export default function CreatorDetailPage() {
 
   const openEdit = () => {
     if (!creator.data) return;
-    setEditName(creator.data.name);
-    setEditDisplay(creator.data.display_name || "");
-    setEditDesc(creator.data.description || "");
+    const draft = qc.getQueryData<{ name: string; display_name: string; description: string }>(["creator-edit-draft", id]);
+    setEditName(draft?.name ?? creator.data.name);
+    setEditDisplay(draft?.display_name ?? creator.data.display_name ?? "");
+    setEditDesc(draft?.description ?? creator.data.description ?? "");
     setEditing(true);
   };
 
+  const savingEdit = useIsMutating({ mutationKey: ["creator-edit", id], exact: true }) > 0;
   const update = useMutation({
-    mutationFn: () => api.updateCreator(id, { name: editName, display_name: editDisplay || undefined, description: editDesc || undefined }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }); setEditing(false); toast.success(t("common.saved")); },
-    onError: (e: Error) => toast.error(e.message),
+    mutationKey: ["creator-edit", id],
+    mutationFn: (draft: { name: string; display_name: string; description: string }) => api.updateCreator(id, { name: draft.name, display_name: draft.display_name || undefined, description: draft.description || undefined }),
+    onMutate: (draft) => {
+      void qc.cancelQueries({ queryKey: queryKeys.creators.detail(id), exact: true }, { revert: false });
+      const previous = qc.getQueryData<typeof creator.data>(queryKeys.creators.detail(id));
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...draft } : current);
+      return { previous };
+    },
+    onSuccess: (saved) => {
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current ? { ...current, ...saved } : current);
+      qc.removeQueries({ queryKey: ["creator-edit-draft", id] });
+      void qc.invalidateQueries({ queryKey: queryKeys.creators.all, predicate: ({ queryKey }) => queryKey[1] !== id });
+      toast.success(t("common.saved"));
+    },
+    onError: (error: Error, _draft, context) => {
+      qc.setQueryData<typeof creator.data>(queryKeys.creators.detail(id), current => current && context?.previous ? { ...current, name: context.previous.name, display_name: context.previous.display_name, description: context.previous.description } : current);
+      setEditing(true);
+      toast.error(error.message);
+    },
   });
 
-  const toggleFavorite = useMutation({
-    mutationFn: () => api.toggleCreatorFavorite(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.creators.detail(id) }),
-  });
+  const toggleFavorite = useCreatorFavorite(id, creator.data?.is_favorite);
 
   const curateCreator = useMutation({
     mutationFn: (action: "archive" | "restore") => api.curateCreator(id, action),
@@ -459,77 +470,51 @@ export default function CreatorDetailPage() {
   ], [t, overview.data?.summary.repository_count, legalRepos.length, st?.total_works, links.data?.length]);
 
   if (creator.isLoading) {
-    return <PageShell><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></PageShell>;
+    return <BusinessPage><div className="space-y-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-28 animate-pulse rounded-md bg-subtle dark:bg-subtle" />)}</div></BusinessPage>;
   }
   if (creator.error) {
-    return <PageShell><div className="card p-5 text-danger">{(creator.error as Error).message}</div></PageShell>;
+    return <BusinessPage><div className="card p-5 text-danger">{(creator.error as Error).message}</div></BusinessPage>;
   }
   if (!c) return null;
 
   return (
-    <PageShell>
-      <Breadcrumb items={[
-        { label: t("creators.title"), href: "/admin/creators" },
-        { label: c.display_name || c.name },
-      ]} />
-      <div className="mb-6 flex flex-col gap-4 border-b border-border pb-5 dark:border-border md:flex-row md:items-end md:justify-between">
-        <div
-          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex min-w-0 items-center gap-4`}
-          style={{ "--chart-delay": "0ms" } as CSSProperties}
-        >
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent-subtle text-2xl font-semibold text-accent">
-            {initials(c.display_name || c.name)}
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-semibold tracking-normal text-fg">{c.display_name || c.name}</h1>
-              {c.is_favorite && <span className="rounded-full border border-warning/30 bg-warning-subtle px-2 py-0.5 text-xs text-warning dark:bg-warning-subtle dark:text-warning">{t("creator_detail.favorite")}</span>}
-              {creatorVisibility !== "visible" && <span className="rounded-full border border-danger/25 bg-danger-subtle px-2 py-0.5 text-xs text-danger dark:bg-danger-subtle">{creatorVisibility}</span>}
-            </div>
-            {c.display_name && c.display_name !== c.name && <p className="mt-0.5 font-mono text-sm text-muted">{c.name}</p>}
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted">
-              <StatusBadge status={c.is_active ? "up" : "down"} />
-              {c.danbooru_artist_id && (
-                <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer"
-                  className="font-mono text-accent hover:underline dark:text-accent">
-                  danbooru #{c.danbooru_artist_id}
-                </a>
-              )}
-              <span>{t("creator_detail.repositories_count", { count: overview.data?.summary.repository_count ?? 0 })}</span>
-              {overview.data?.summary.running_job_count ? <span className="text-accent">{t("creator_detail.running_count", { count: overview.data.summary.running_job_count })}</span> : null}
-            </div>
-          </div>
-        </div>
-        <div
-          className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} flex flex-wrap gap-2`}
-          style={{ "--chart-delay": "90ms" } as CSSProperties}
-        >
-          {canCurate && (
-            <button onClick={() => toggleFavorite.mutate()} className="btn-ghost">
-              {c.is_favorite ? t("creator_detail.unstar") : t("creator_detail.star")}
-            </button>
-          )}
+    <BusinessPage
+      title={c.display_name || c.name}
+      className="gallery-creators-page gallery-creator-detail"
+      actions={(
+        <>
+          {canCurate && <button onClick={toggleFavorite.toggle} aria-pressed={toggleFavorite.isFavorite} className="btn-ghost">{toggleFavorite.isFavorite ? t("creator_detail.unstar") : t("creator_detail.star")}</button>}
           {(isAdmin || creatorVisibility === "visible") && has("curation") ? (
-            <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>
-              {isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}
-            </button>
+            <button onClick={() => { setDeleteFiles(false); setShowDelete(true); }} className={isAdmin ? "btn-danger" : "btn-ghost"}>{isAdmin ? t("deletion.permanent_title") : t("creator_detail.archive")}</button>
           ) : (
             has("curation") ? <button onClick={() => curateCreator.mutate("restore")} disabled={curateCreator.isPending} className="btn-ghost">{t("creator_detail.restore")}</button> : null
           )}
-          {canManageSubscriptions && (
-            <Link href={subscriptionHref} className="btn-ghost">
-              {t("creator_detail.subscription")}
-            </Link>
-          )}
-          {canCurate && <button onClick={openEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>}
+          {canManageSubscriptions && <Link href={subscriptionHref} className="btn-ghost">{t("creator_detail.subscription")}</Link>}
+          {canCurate && <button onClick={openEdit} disabled={savingEdit} className="btn-primary">{t("creator_detail.edit_profile")}</button>}
+          {savingEdit && <span role="status">{t("tags.saving")}</span>}
+        </>
+      )}
+    >
+      <div className="gallery-creator-identity">
+        <div className="gallery-creator-initials">{initials(c.display_name || c.name)}</div>
+        <div className="min-w-0">
+          {toggleFavorite.isFavorite && <span className="gallery-creator-favorite">{t("creator_detail.favorite")}</span>}
+          {c.display_name && c.display_name !== c.name && <p className="font-mono text-sm text-muted">{c.name}</p>}
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted">
+            <StatusBadge status={c.is_active ? "up" : "down"} />
+            {c.danbooru_artist_id && <a href={`https://danbooru.donmai.us/artists/${c.danbooru_artist_id}`} target="_blank" rel="noopener noreferrer" className="font-mono text-accent hover:underline">danbooru #{c.danbooru_artist_id}</a>}
+            <span>{t("creator_detail.repositories_count", { count: overview.data?.summary.repository_count ?? 0 })}</span>
+            {overview.data?.summary.running_job_count ? <span className="text-accent">{t("creator_detail.running_count", { count: overview.data.summary.running_job_count })}</span> : null}
+            {creatorVisibility !== "visible" && <span className="gallery-creator-visibility">{creatorVisibility}</span>}
+          </div>
         </div>
       </div>
+
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
           <section
-            className={`${narrativeMotionEnabled ? "creator-narrative-item" : ""} card p-4`}
-            style={{ "--chart-delay": "140ms" } as CSSProperties}
+            className="card p-4"
           >
             <h2 className="mb-2 text-sm font-semibold">{t("creator_detail.profile")}</h2>
             {c.description ? (
@@ -589,7 +574,7 @@ export default function CreatorDetailPage() {
           <CreatorReferences
             creatorId={id}
             currentDisplay={c.display_name}
-            onSelectAlias={canCurate
+            onSelectAlias={canCurate && !savingEdit
               ? (alias) => { setEditName(c.name); setEditDisplay(alias); setEditDesc(c.description || ""); setEditing(true); }
               : undefined}
           />
@@ -745,7 +730,7 @@ export default function CreatorDetailPage() {
 
           {activeTab === "repositories" && (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+              <div className="gallery-section-rule flex flex-wrap items-center justify-between gap-3 p-3">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.repositories_title")}</h2>
                   <p className="text-sm text-muted">{t("creator_detail.repositories_desc")}</p>
@@ -764,7 +749,7 @@ export default function CreatorDetailPage() {
                 ].map(([label, value, sub]) => (
                   <div key={label} className="card p-3">
                     <div className="truncate text-sm font-semibold text-fg">{value}</div>
-                    <div className="mt-1 text-[11px] font-medium uppercase text-muted">{label}</div>
+                    <div className="mt-1 text-sm font-medium text-muted">{label}</div>
                     <div className="mt-0.5 text-xs text-placeholder dark:text-muted">{sub}</div>
                   </div>
                 ))}
@@ -786,7 +771,7 @@ export default function CreatorDetailPage() {
 
           {activeTab === "links" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between rounded-md border border-border bg-white p-3 dark:border-border dark:bg-surface">
+              <div className="gallery-section-rule flex items-center justify-between p-3">
                 <div>
                   <h2 className="text-base font-semibold">{t("creator_detail.external_links")}</h2>
                   <p className="text-sm text-muted">{t("creator_detail.links_desc")}</p>
@@ -796,7 +781,7 @@ export default function CreatorDetailPage() {
                 )}
               </div>
               {links.data?.length ? links.data.map((l: CreatorLinkType) => (
-                <div key={l.id} className="rounded-md border border-border bg-white p-4 dark:border-border dark:bg-surface">
+                <div key={l.id} className="gallery-section-rule p-4">
                   <div className="flex items-center gap-2">
                     <SourceBadge source={l.link_type} />
                     <a href={l.url} target="_blank" rel="noopener noreferrer" className="truncate text-sm font-medium text-accent hover:underline dark:text-accent">{l.url}</a>
@@ -809,21 +794,21 @@ export default function CreatorDetailPage() {
         </section>
       </div>
 
-      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title={t("creator_detail.add_link_modal")}>
+      <BusinessModal open={showAddLink} onClose={() => setShowAddLink(false)} title={t("creator_detail.add_link_modal")}>
         <AddLinkForm creatorId={id} onClose={() => setShowAddLink(false)} />
-      </Modal>
-      <Modal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
+      </BusinessModal>
+      <BusinessModal open={editing} onClose={() => setEditing(false)} title={t("creator_detail.edit_title")}>
         <div className="space-y-4">
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="input w-full" /></div>
-          <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
+          <div><label htmlFor={`${editFormId}-name`} className="mb-1 block text-sm font-medium">{t("creator_detail.name_field")}</label><input id={`${editFormId}-name`} value={editName} onChange={(e) => setEditName(e.target.value)} className="input w-full" /></div>
+          <div><label htmlFor={`${editFormId}-display_name`} className="mb-1 block text-sm font-medium">{t("creator_detail.display_name_field")}</label><input id={`${editFormId}-display_name`} value={editDisplay} onChange={(e) => setEditDisplay(e.target.value)} className="input w-full" /></div>
+          <div><label htmlFor={`${editFormId}-description`} className="mb-1 block text-sm font-medium">{t("creator_detail.description_field")}</label><textarea id={`${editFormId}-description`} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="textarea w-full" rows={4} /></div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setEditing(false)} className="btn-ghost">{t("creator_detail.cancel")}</button>
-            <button onClick={() => update.mutate()} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
+            <button onClick={() => { if (qc.isMutating({ mutationKey: ["creator-edit", id], exact: true })) return; const draft = { name: editName, display_name: editDisplay, description: editDesc }; qc.setQueryData(["creator-edit-draft", id], draft); setEditing(false); update.mutate(draft); }} disabled={update.isPending} className="btn-primary">{t("creator_detail.save")}</button>
           </div>
         </div>
-      </Modal>
-      <HierarchyDeletionDialog
+      </BusinessModal>
+      <HierarchyDeletion
         open={showDelete}
         title={isAdmin ? t("deletion.permanent_title") : t("deletion.soft_title")}
         confirmationPhrase={c.display_name || c.name}
@@ -836,11 +821,12 @@ export default function CreatorDetailPage() {
         isPending={deleteCreator.isPending}
         error={(deleteCreator.error as Error)?.message || (deletionPreview.error as Error)?.message}
       />
-    </PageShell>
+    </BusinessPage>
   );
 }
 
 function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () => void }) {
+  const linkFormId = useId();
   const t = useT();
   const [url, setUrl] = useState("");
   const [linkType, setLinkType] = useState("website");
@@ -853,11 +839,16 @@ function AddLinkForm({ creatorId, onClose }: { creatorId: string; onClose: () =>
   });
   return (
     <div className="space-y-4">
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
-      <div><label className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
-        <select value={linkType} onChange={(e) => setLinkType(e.target.value)} className="select w-full">
-          {["website", "pixiv", "x", "iwara", "danbooru", "other"].map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
+      <div><label htmlFor={`${linkFormId}-url`} className="mb-1 block text-sm font-medium">{t("creator_detail.url_label")}</label><input id={`${linkFormId}-url`} value={url} onChange={(e) => setUrl(e.target.value)} className="input w-full" placeholder={t("creator_detail.url_placeholder")} /></div>
+      <div><label htmlFor={`${linkFormId}-type`} className="mb-1 block text-sm font-medium">{t("creator_detail.type_label")}</label>
+        <ToolbarSelect label={t("creator_detail.type_label")} value={linkType} onValueChange={setLinkType} options={[
+            { value: "website", label: "website" },
+            { value: "pixiv", label: "pixiv" },
+            { value: "x", label: "x" },
+            { value: "iwara", label: "iwara" },
+            { value: "danbooru", label: "danbooru" },
+            { value: "other", label: "other" },
+          ]} />
       </div>
       <div className="flex justify-end gap-3 pt-2">
         <button onClick={onClose} className="btn-ghost">{t("common.cancel")}</button>

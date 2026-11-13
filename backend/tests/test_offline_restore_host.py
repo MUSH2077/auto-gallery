@@ -44,6 +44,11 @@ with log.open("a", encoding="utf-8") as output:
 if os.environ.get("FAKE_COMPOSE_SLEEP") and "stop" in args:
     time.sleep(float(os.environ["FAKE_COMPOSE_SLEEP"]))
 joined = " ".join(args)
+if args == ["config", "--format", "json"]:
+    print(json.dumps({"services": {"backend": {"environment": {
+        "SEARCH_BACKEND": os.environ.get("FAKE_SEARCH_BACKEND", "meilisearch")
+    }}}}))
+    sys.exit(0)
 database_state = os.environ.get("FAKE_DATABASE_STATE")
 mutate_on = os.environ.get("FAKE_MUTATE_PATH_ON")
 if mutate_on and mutate_on in joined:
@@ -62,6 +67,8 @@ state = state_path.read_text() if state_path and state_path.exists() else "initi
 failure = os.environ.get("FAKE_COMPOSE_FAIL_CONTAINS")
 if failure and failure in joined:
     sys.exit(1)
+if "ps" in args and os.environ.get("FAKE_ACTIVE_WRITER"):
+    print("fixture-active-writer")
 if "--set=offline_restore_phase=database-identities" in args and state_path:
     count_path = state_path.with_suffix(".identity-count")
     count = int(count_path.read_text()) + 1 if count_path.exists() else 1
@@ -234,6 +241,52 @@ def _commands(fixture) -> list[list[str]]:
     return [json.loads(line) for line in fixture["log"].read_text().splitlines()]
 
 
+@pytest.mark.parametrize("failure", ["command", "status", "active"])
+def test_rollback_waits_for_stopped_writers_and_can_retry(tmp_path, failure):
+    fixture = _fixture(tmp_path)
+    assert _run(fixture).returncode == 0
+    fixture["log"].write_text("")
+    if failure == "active":
+        fixture["env"]["FAKE_ACTIVE_WRITER"] = "1"
+    else:
+        fixture["env"]["FAKE_COMPOSE_FAIL_CONTAINS"] = "stop -t 120" if failure == "command" else "ps --all"
+    result = _run_rollback(fixture)
+    assert result.returncode == 1
+    assert (fixture["live_app"] / "value.txt").read_text() == "new-app"
+    commands = _commands(fixture)
+    assert not any("up" in command or "cp" in command or "exec" in command for command in commands)
+    journal = json.loads((_rollback_path(fixture).parent / "journal.json").read_text())
+    assert journal["rollback_components"]["stop_writers"]["status"] == "failed"
+    assert journal["rollback_components"]["files"]["status"] == "blocked"
+    fixture["env"].pop("FAKE_ACTIVE_WRITER", None)
+    fixture["env"].pop("FAKE_COMPOSE_FAIL_CONTAINS", None)
+    retried = _run_rollback(fixture)
+    assert retried.returncode == 0, retried.stderr
+    assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
+
+
+def test_offline_writer_timeout_blocks_compensation_and_preserves_diagnostic(tmp_path, monkeypatch):
+    import importlib.util
+    fixture = _fixture(tmp_path)
+    assert _run(fixture).returncode == 0
+    spec = importlib.util.spec_from_file_location("offline_restore_host_timeout", fixture["script"])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for key, value in fixture["env"].items():
+        monkeypatch.setenv(key, value)
+    runner = module.load_rollback_runner(_rollback_path(fixture).parent)
+    commands = []
+    def compose(*args, **kwargs):
+        commands.append(args)
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+    monkeypatch.setattr(runner, "compose", compose)
+    outcomes = runner.rollback()
+    assert len(commands) == 1 and commands[0][0] == "stop"
+    assert "TimeoutExpired" in outcomes["stop_writers"]["error"]
+    assert all(outcomes[name]["status"] == "blocked" for name in ("files", "database", "redis", "foreground"))
+    assert (fixture["live_app"] / "value.txt").read_text() == "new-app"
+
+
 def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path):
     """Skipping a real host phase or writing a mutable/in-tree receipt breaks this."""
     fixture = _fixture(tmp_path)
@@ -279,6 +332,21 @@ def test_success_runs_every_offline_phase_and_writes_immutable_receipt(tmp_path)
     assert rolled_back.returncode == 0, rolled_back.stderr
     assert (fixture["live_app"] / "value.txt").read_text() == "old-app"
     assert (fixture["live_gallery"] / "value.txt").read_text() == "old-gallery"
+
+
+@pytest.mark.parametrize("backend,legacy_service", [("postgresql", False), ("meilisearch", True)])
+def test_restore_and_compensation_start_only_the_selected_search_service(tmp_path, backend, legacy_service):
+    fixture = _fixture(tmp_path)
+    fixture["env"]["FAKE_SEARCH_BACKEND"] = backend
+    result = _run(fixture)
+    assert result.returncode == 0, result.stderr
+    starts = [command for command in _commands(fixture) if "up" in command and "backend" in command]
+    assert starts and all(("meilisearch" in command) == legacy_service for command in starts)
+    fixture["log"].write_text("")
+    result = _run_rollback(fixture)
+    assert result.returncode == 0, result.stderr
+    starts = [command for command in _commands(fixture) if "up" in command and "backend" in command]
+    assert starts and all(("meilisearch" in command) == legacy_service for command in starts)
 
 
 def test_host_rejects_ready_request_from_non_current_task_attempt(tmp_path):
@@ -1638,13 +1706,13 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
             "--env", f"POSTGRES_USER={pg_user}",
             "--env", f"POSTGRES_PASSWORD={pg_password}",
             "--env", f"POSTGRES_DB={live_database}",
-            "postgres:16-alpine",
+            "postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
         ],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["docker", "run", "--detach", "--name", redis_container, "redis:7-alpine"],
+        ["docker", "run", "--detach", "--name", redis_container, "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"],
         check=True,
         capture_output=True,
     )

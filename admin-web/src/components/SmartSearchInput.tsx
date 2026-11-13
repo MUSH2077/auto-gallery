@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type AriaAttributes,
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
@@ -127,7 +128,7 @@ export function useSearchBatchComposer(options: SearchComposerOptions) {
   return useSearchComposition<SearchComposeRequest[]>(options);
 }
 
-export interface SmartSearchInputProps {
+export interface SmartSearchInputProps extends Pick<AriaAttributes, "aria-controls" | "aria-expanded" | "aria-activedescendant"> {
   value: string;
   onChange: (value: string) => void;
   scope?: SearchScope;
@@ -144,6 +145,8 @@ export interface SmartSearchInputProps {
   onClear?: () => void;
   onSubmit?: (canonicalQuery: string) => void;
   keyboardNavigation?: boolean;
+  showSuggestions?: boolean;
+  parseWhenUnfocused?: boolean;
 }
 
 export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputProps>(function SmartSearchInput({
@@ -163,6 +166,11 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
   onClear,
   onSubmit,
   keyboardNavigation = true,
+  showSuggestions = true,
+  parseWhenUnfocused = false,
+  "aria-controls": ariaControls,
+  "aria-expanded": ariaExpanded,
+  "aria-activedescendant": ariaActiveDescendant,
 }, forwardedRef) {
   const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -181,7 +189,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
       scope,
       limit: 10,
     }),
-    enabled: focused,
+    enabled: focused || (parseWhenUnfocused && Boolean(deferredValue.trim())),
     staleTime: 15_000,
     placeholderData: (previous) => previous,
   });
@@ -249,7 +257,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
     ? diagnosticMessage(t, diagnostic)
     : result?.canonical_query && result.canonical_query !== value
       ? t("search.syntax_normalized", { query: result.canonical_query })
-      : suggestions.length
+      : showSuggestions && suggestions.length
         ? t("search.suggestion_count", { count: suggestions.length })
         : "";
 
@@ -280,9 +288,9 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
           disabled={disabled}
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={open && suggestions.length > 0}
-          aria-controls={listId}
-          aria-activedescendant={open && suggestions[activeIndex] ? `${listId}-${activeIndex}` : undefined}
+          aria-expanded={ariaExpanded ?? (showSuggestions && open && suggestions.length > 0)}
+          aria-controls={ariaControls ?? (showSuggestions ? listId : undefined)}
+          aria-activedescendant={ariaActiveDescendant ?? (showSuggestions && open && suggestions[activeIndex] ? `${listId}-${activeIndex}` : undefined)}
           aria-describedby={statusId}
           aria-invalid={!!diagnostic}
           aria-label={ariaLabel || placeholder || t("search.placeholder")}
@@ -333,7 +341,7 @@ export const SmartSearchInput = forwardRef<HTMLInputElement, SmartSearchInputPro
         </div>
       )}
 
-      {open && focused && suggestions.length > 0 && (
+      {showSuggestions && open && focused && suggestions.length > 0 && (
         <div
           id={listId}
           role="listbox"

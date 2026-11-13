@@ -1,14 +1,14 @@
 # Deployment Profile · 部署配置
 
 The base `docker-compose.yaml` is a portable project-local profile. PostgreSQL,
-Redis, Meilisearch, and the one-shot migration service retain hard memory, CPU,
+Redis and the one-shot migration service retain hard memory, CPU,
 PID, and no-swap fuses. Application services retain PID/OOM/log protections but
 have no hard memory, swap, or CPU quotas; adaptive host-reserve governance,
 bounded queue concurrency, and per-process budgets keep background work
 cooperative.
 
-基础 `docker-compose.yaml` 是可移植的项目级配置。PostgreSQL、Redis、
-Meilisearch 和一次性迁移服务保留内存、CPU、PID 及禁用 Swap 的硬保险丝。
+基础 `docker-compose.yaml` 是可移植的项目级配置。PostgreSQL、Redis
+和一次性迁移服务保留内存、CPU、PID 及禁用 Swap 的硬保险丝。
 应用服务保留 PID/OOM/日志保护，但没有硬内存、Swap 或 CPU 配额；自适应宿主机
 储备、受限队列并发与进程内部预算使后台工作保持协作。
 
@@ -17,9 +17,95 @@ Ordinary local deployment builds a source-digest candidate. Formal releases use
 Host pressure is recorded, not used as a device-specific deployment veto.
 
 Database migrations run in the one-shot `migrate` service. Backend and workers
-wait for it to complete, while Meilisearch is deliberately not a backend startup
-dependency: an unavailable search index must degrade search, not take down the
-whole application.
+wait for it to complete. PostgreSQL is the only active search backend. An unavailable
+search projection degrades search without replacing the database/Redis readiness policy.
+
+## PostgreSQL search · PostgreSQL 搜索
+
+`SEARCH_BACKEND=postgresql` is the only supported normal runtime. The legacy
+`meilisearch` service is behind the `legacy-search` profile; normal deployment and
+CI do not start it. Its directory and pinned image are retained for old-version
+rollback only. Changing a Compose profile does not stop an already running container:
+`deploy.sh` explicitly stops the old service after the cutover check.
+
+For an existing deployment, pause mutations and scheduled producers, let old
+search receipts/rebuilds and engine tasks finish, and take the normal rollback
+backup before stopping application writers. Do not delete a delivery marker to
+force migration. The migration account must be allowed to install the required PostgreSQL extensions.
+Run `alembic upgrade head` using the new image, then
+`python -m app.services.search_migration --rebuild-if-needed` in the migration
+container with the same database, Redis and application-config mounts. The command
+rejects unfinished records owned by the former backend, creates a bounded rebuild
+when native indexes are missing, and resumes an existing native rebuild. `deploy.sh`
+performs these steps. New workers build from PostgreSQL domain rows; old engine
+files are not imported. Confirm rebuild completion, expected counts, private
+visibility, filters and sorting before reopening writes. `--rebuild` requests an
+explicit full rebuild later; it is not required on every deployment.
+
+Rollback uses the previous image and its saved Compose configuration/data. If no
+new writes were accepted, restore the saved rollback point. If mutations have
+resumed, first pause and drain them, preserve the current backup, and use the old
+version's rebuild workflow before reopening access. Schema downgrade removes only
+the new search tables and backend-owner columns, and retains the shared PostgreSQL
+extensions. Do not run a downgrade with native workers active.
+
+正常运行只支持 `SEARCH_BACKEND=postgresql`。Meilisearch 只留在 `legacy-search`
+配置中供旧版本回退，默认部署与 CI 不启动它；保留旧目录不代表继续常驻旧引擎。
+已有部署先暂停写入和定时生产者，等待旧搜索回执、重建及引擎任务完成，保存回退备份，
+再停止应用写入者。用新镜像执行 `alembic upgrade head`，然后在具有相同数据库、Redis
+和应用配置挂载的迁移容器内执行 `python -m app.services.search_migration --rebuild-if-needed`。
+`deploy.sh` 已包含这些步骤，并明确停止旧搜索容器。未完成的旧后端回执或持久标记会阻止切换，
+应由旧版本正常收尾，不能删标记强行放行。缺少原生索引时从业务表发起有界重建，已有原生重建则继续；
+不复制旧引擎文件。确认重建完成、数量、私人可见性、筛选及排序后再恢复写入。
+
+回退必须使用旧镜像和保存的 Compose 配置及数据；若已接受新写入，先暂停并排空、另存当前备份，
+再按旧版本流程重建并验证搜索后开放访问。降级仅删除新搜索表和后端归属列，保留共用扩展；
+原生消费者仍运行时不得降级。下节仅适用于仍运行旧版本的引擎升级。
+
+## Meilisearch upgrades · 搜索服务升级
+
+The inactive legacy Compose profile pins Meilisearch **1.54.3** by image digest.
+This version includes upstream indexing-memory fixes. `MEILI_MAX_INDEXING_MEMORY`
+(default `320Mb`) bounds indexing work, not total process RSS; the container's
+memory, CPU, PID and no-swap limits apply separately.
+
+When upgrading an existing 1.12 deployment:
+
+1. Pause application mutations and let projection receipts and Meilisearch tasks
+   finish. Stop the application writers before exporting with the old engine.
+   Submit `POST /dumps`, poll `GET /tasks/{taskUid}` until `succeeded`, and retain
+   the resulting `/meili_data/dumps/{dumpUid}.dump` securely.
+2. Stop Meilisearch and retain its original data directory and old pinned image.
+   Use an empty directory for the new version; copy only the dump into it.
+3. Start 1.54.3 with `--import-dump /meili_data/dumps/{dumpUid}.dump`, using the
+   same master-key configuration. After import, restart with the normal command
+   and check application search, filters, private visibility and indexing.
+   PostgreSQL-backed application projections can also rebuild a fresh index
+   through the administrative search-rebuild operation.
+4. To roll back, stop the new engine and restore **both** the old image and its
+   retained original directory. Do not open a directory written by 1.54.3 with
+   1.12. Keep application writes paused until validation is accepted or rolled
+   back. If new mutations were already accepted, pause and drain again, then
+   rebuild search from PostgreSQL on the restored engine before reopening writes.
+   Remove the old directory only after the new deployment is accepted.
+
+See the [official upgrade guide](https://www.meilisearch.com/docs/resources/migration/updating)
+for other upgrade paths. Index migration is separate from PostgreSQL migrations.
+
+旧版本回退配置按镜像摘要固定为 **Meilisearch 1.54.3**，采用上游索引内存修复。
+`MEILI_MAX_INDEXING_MEMORY`（默认 `320Mb`）限制索引工作，不能当作整个进程的
+内存上限；容器的内存、CPU、PID 和禁用 Swap 限制单独生效。
+
+已有 1.12 部署升级时，先暂停业务写入，等待投递回执和引擎任务完成，再停止应用写入者；
+由旧引擎发起 `POST /dumps`，通过 `GET /tasks/{taskUid}` 等待成功，妥善保存生成的
+`/meili_data/dumps/{dumpUid}.dump`。停止旧引擎并保留原数据目录和旧镜像，为新版本
+准备空目录，只放入 dump，以相同主密钥配置使用 `--import-dump` 启动；导入完成后
+恢复普通启动命令，再验证搜索、筛选、私人可见性和索引更新。也可以通过管理端搜索重建
+操作，从 PostgreSQL 投影建立全新索引。回退时需同时恢复旧镜像与旧原始目录，不能让
+1.12 读取 1.54.3 写过的目录。验证接受或回退前保持暂停业务写入；若新环境已经接受
+过业务变更，回退前需再次暂停并排空任务，恢复旧引擎后从 PostgreSQL 重建索引，
+验证后再恢复写入。确认新环境可用后再清理旧目录。搜索索引迁移独立于
+PostgreSQL 数据库迁移，其他升级路径参见上述官方文档。
 
 ## Browser sessions · 浏览器会话
 
@@ -59,13 +145,183 @@ to a trusted network or use the HTTPS reverse proxy.
 | Admin web | unbounded | unbounded | 64 | 100 |
 
 `migrate` exits after applying migrations. Every service uses `json-file`
-rotation (`10m`, 3 files). Download concurrency has a
-deployment ceiling of one; raising the UI setting alone cannot exceed it.
+rotation (`10m`, 3 files). Download concurrency defaults to a deployment
+ceiling of one; raising the UI setting alone cannot exceed the configured
+limits. See [download worker concurrency](#download-worker-concurrency--下载并发).
 
 Redis remains `192mb/noeviction` inside its protected 256M container because it
 stores RQ queues as well as cache data. Its container health check performs a
 short-lived `SET EX` and `DEL`, so a server that answers `PING` but rejects
 writes is not considered healthy.
+
+## API worker concurrency · API 并发
+
+The backend uses `backend/api_entrypoint.py` and defaults to one native Uvicorn
+worker. Set `API_WORKER_CONCURRENCY` from 1 through 4; invalid values fail
+startup. Before importing the application, the launcher divides the total API budgets for this backend container
+by floor: database 8 steady plus 4 overflow connections become
+`1 = 8 + 4`, `2 = 4 + 2`, or `4 = 2 + 1` per process. Total
+`MEILI_SEARCH_CONCURRENCY=4` is divided per process with at least one slot.
+Direct multi-process Uvicorn bypasses these budgets and is not a supported
+formal deployment path.
+
+`API_THREAD_POOL_SIZE` defaults to a total of 16 blocking-thread slots and is divided by floor (1 = 16, 2 = 8, 4 = 4). The per-process cap applies separately to the asyncio executor and the AnyIO thread limiter; they are independent pools, so 16 is not their combined thread limit. API1 still applies the 16-slot cap.
+
+Every API process serves foreground HTTP and WebSocket traffic. A single Redis
+lease owner runs the maintenance group, with fenced resource-snapshot writes and
+shared health/resource snapshots for the other processes. Foreground latency
+samples are aggregated at low frequency; the ordinary request path does not
+perform Redis I/O for this aggregation. Device CPU, memory and connection
+budgets remain operator-selected; the default does not silently increase. Increasing API worker count does not increase the container CPU quota; select both together and measure before raising the worker count.
+
+## API worker 并发说明
+
+backend 使用 `backend/api_entrypoint.py`，默认启动一个 Uvicorn 原生 worker。
+`API_WORKER_CONCURRENCY` 可设为 1～4，非法值会在启动时失败。应用导入前，launcher
+按进程数向下分配单个 backend 容器的 API 总预算：数据库稳定连接 8 加溢出连接 4，每进程为
+`1 = 8 + 4`、`2 = 4 + 2` 或 `4 = 2 + 1`；总
+`MEILI_SEARCH_CONCURRENCY=4` 按进程分配且每进程至少 1。直接使用多进程 Uvicorn
+会绕过这些预算，不属于正式部署方式。
+
+`API_THREAD_POOL_SIZE` 默认为 backend 容器总计 16 个阻塞线程名额，按进程数向下分配为 1 = 16、2 = 8、4 = 4。该上限分别应用于 asyncio 默认线程池和 AnyIO 线程 limiter；两者是独立线程池，16 不是两者合计的线程上限。API1 仍应用 16 个线程名额。
+
+每个 API 进程都处理前台 HTTP 和 WebSocket；Redis 租约只让一个进程运行维护任务组，
+所有权变化受写入栅栏保护，其他进程读取共享健康／资源快照。前台延迟指标低频汇总，
+普通请求路径不执行这部分 Redis I/O。CPU、内存和连接预算由部署者按设备选择，默认值不会静默扩容。
+增加 API 进程数不会自动增加容器的 CPU 额度；CPU 额度和进程数需要一起选择并测量。
+
+## Download worker concurrency · 下载并发
+
+The download setting selects 1–5 consumers and takes effect after restarting
+`worker-download`. Its effective count is the minimum of the persisted setting,
+`DOWNLOAD_CONCURRENCY_CAP` (default 1), and the device download limit. Automatic
+compact/standard/performance limits remain 1/1/2. An optional
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT` from 1–5 overrides only that device download
+limit; leave it empty to retain automatic sizing. Queue and scheduler budgets
+continue using the device profile.
+
+The supervisor passes its effective count to child processes. Actual downloads
+share that bounded slot pool: each slot reserves memory atomically with the
+other resource profiles, and fixed POSIX locks retain the limit after Redis
+coordination-key loss or a configuration decrease. Parallel downloads reserve
+at least 256 MiB each; the single-slot path retains the existing profile reserve.
+Low available memory can admit fewer downloads than configured. A consumer
+count does not promise the same number of active gallery-dl processes.
+
+Jobs from the same platform retain one archive lock because they share
+`archive-{source}.sqlite3`. Archive identity lookup failures defer execution.
+Cancellation, timeout and failure must stop the gallery-dl process group before
+releasing the archive and execution slot. Downloads can coexist with media,
+imports and remote indexing when their aggregate memory budget permits;
+maintenance remains exclusive.
+
+For an upgrade from the old single-token implementation, drain and stop old
+download processes before starting the new version. Apply consistent limits and
+code to the API and all Python worker roles; recreate them after changing
+deployment limits. Changing the page setting still requires a download-worker
+restart. The health response retains configured, effective and restart-required
+values and identifies the automatic or explicit device limit.
+
+Each consumer has its own database pool. Budget download connections as
+`effective consumers × (WORKER_DB_POOL_SIZE + WORKER_DB_MAX_OVERFLOW)`, then add
+API and other worker pools. Nested handoff sessions require at least two
+connections per download consumer. Keep CPU, memory and PID limits appropriate
+for the total consumer count, and select a count using the target device's
+measured workload.
+
+页面下载并发设置选择 1～5 个消费者，重启下载 worker 后生效。实际消费者数取
+页面设置、`DOWNLOAD_CONCURRENCY_CAP`（默认 1）和设备下载上限的最小值。
+自动 compact／standard／performance 档位仍为 1／1／2；可选的
+`DOWNLOAD_DEVICE_CONCURRENCY_LIMIT`（1～5）仅覆盖设备的下载上限，留空继续
+自动判断，不改变该档位的队列与调度预算。
+
+下载进程使用有上限的执行名额，与其他任务原子核对总内存预留。固定文件锁在
+Redis 协调键丢失、缩小配置时仍限制执行数；并行下载每个任务至少预留 256 MiB，
+单名额沿用原 profile 预留。内存不足可以降低实际并行数，消费者数量不等于
+gallery-dl 正在运行的数量。同平台任务共用归档，继续互斥；归档身份查询失败
+时延后执行。取消、超时和失败先停止下载进程组，再释放归档锁与执行名额。
+
+升级前先排空并停止旧下载进程，新代码和部署上限在 API 与全部 Python worker
+中保持一致，修改部署配置后重新创建这些容器；页面设置仍按重启规则生效。
+按上述公式核对总数据库连接，每个下载消费者至少提供两个连接用于嵌套交接会话，
+同时核对 CPU、内存与 PID 配额，按目标设备实测选择并发数量。
+
+## Import worker concurrency · 导入并发
+
+Set `IMPORT_WORKER_CONCURRENCY` to an integer from 1 through 4; the default is 1.
+Recreate `worker-import` after changing it. An explicit concurrency argument to
+`worker_entrypoint.py imports N` takes precedence over the environment setting.
+This parameter selects import consumers only; it does not configure download,
+image or API workers, and it does not automatically size itself from the host.
+Invalid values are startup errors rather than an unbounded process count.
+
+The base Compose service also runs one independent `maintenance` consumer.
+For example, two import consumers plus maintenance produce three supervised
+processes. Queue-specific supervisor counts distinguish live import consumers
+from maintenance and preserve the existing aggregate health fields.
+
+Concurrent import jobs still acquire the shared ingest resource reservation and
+POSIX locks for each bounded claim or database slice. An increased consumer count
+does not promise concurrent database commits. Execution tokens and artifact
+identity leases retain duplicate-delivery protection, and media and search
+outboxes are published only after the owning transaction commits. Job completion
+and media/search readiness are separate measurement boundaries.
+
+Each import and maintenance consumer has its own database pool. Budget the base
+service as `(IMPORT_WORKER_CONCURRENCY + 1) × (WORKER_DB_POOL_SIZE +
+WORKER_DB_MAX_OVERFLOW)`, then include the API, other worker roles and temporary
+control connections. Keep the aggregate below the configured PostgreSQL limit.
+Select a value using measured time and memory on the target device, including its
+container CPU quota. Preserve resource-pressure and maintenance protection when
+increasing the count.
+
+`IMPORT_WORKER_CONCURRENCY` 的范围是 1～4，默认 1；修改后重新创建
+`worker-import`。直接运行 `worker_entrypoint.py imports N` 时，明确传入的
+数量优先于环境变量。该参数只控制导入消费者，不改变下载、图片处理或 API
+进程，也不按宿主机配置自动扩容；非法值会导致启动报错。
+
+基础配置另有一个独立维护消费者，所以“导入 2”对应三个受监督进程。
+按队列统计区分导入与维护的目标数和存活数。导入任务可同时推进，但每次领取
+和数据库批次仍共享入库资源名额与文件锁；消费者数不等于同时提交的事务数。
+执行令牌、作品身份租约及事务提交后发布保留原有重复投递和恢复保护。
+导入完成与图片、搜索全部就绪需要分别计时。
+
+按上述公式计入维护消费者的连接池，再加上 API、其他 worker 和临时控制连接，
+总量应低于 PostgreSQL 上限。结合目标设备及容器 CPU 配额，测量时间与内存后
+选择数量，并保留资源压力和维护保护。
+
+## Image worker concurrency · 图片处理并行数
+
+Set `MEDIA_WORKER_CONCURRENCY` in `.env` to an integer from 1 through 8; its
+default is 1. Compose uses it for operations consumers, and the application uses
+it for a shared ordinary/large-image execution pool. Apply the same value to the
+API, Python workers and scheduler, then recreate those application containers.
+Upload, download and import consumer counts are configured separately.
+
+With more than one slot, each image reserves at least 768 MiB. The configured
+count is a ceiling: resource pressure can admit fewer tasks, and video,
+indexing, deduplication and maintenance retain their exclusive protection.
+Choose the count using the device's time and peak-memory measurements.
+
+Each operations consumer has its own database pool. Its combined connection
+ceiling is `MEDIA_WORKER_CONCURRENCY × (WORKER_DB_POOL_SIZE +
+WORKER_DB_MAX_OVERFLOW)`; include API and other worker pools in the database's
+total budget. Worker library threads default to 1 through `VIPS_CONCURRENCY`,
+`OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `MKL_NUM_THREADS`, avoiding nested
+thread pools competing with process concurrency.
+
+在 `.env` 中将 `MEDIA_WORKER_CONCURRENCY` 设为 1～8 的整数，默认 1。
+它同时控制 operations 消费者数量和普通图／超大图共用的执行池；API、Python
+worker 和 scheduler 使用相同值，修改后重新创建这些应用容器。上传、下载、
+导入消费者数量分别配置。
+
+并行模式每张图片至少预留 768 MiB，配置值只是上限；内存压力可以降低实际
+执行数量，其他受保护任务的互斥规则继续生效。按设备上的耗时与峰值内存选择
+数量。
+
+每个 operations 消费者都有独立数据库连接池，总连接上限按上述公式估算，
+再加上 API 和其他 worker 的预算。内部库线程默认设为 1；提高进程数时同时
+核对数据库连接、内存与库线程预算。
 
 ## Adaptive algorithm governance · 自适应算法治理
 

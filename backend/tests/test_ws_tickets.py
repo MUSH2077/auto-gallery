@@ -1,4 +1,5 @@
 from app.services import ws_tickets
+from types import SimpleNamespace
 
 
 class _FakeRedis:
@@ -20,11 +21,11 @@ def test_ws_ticket_is_short_lived_and_consumed_once(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
 
-    ticket, ttl = ws_tickets.issue_ws_ticket("admin")
+    ticket, ttl = ws_tickets.issue_ws_ticket(SimpleNamespace(id=7, credential_version=3, username="admin"))
 
     assert ttl == 30
     assert redis.ttls[f"ws:ticket:{ticket}"] == 30
-    assert ws_tickets.consume_ws_ticket(ticket) == "admin"
+    assert ws_tickets.consume_ws_ticket(ticket) == ws_tickets.BearerTicket(7, 3)
     assert ws_tickets.consume_ws_ticket(ticket) is None
 
 
@@ -39,18 +40,18 @@ def test_ws_ticket_rejects_missing_or_unknown_ticket(monkeypatch):
 def test_browser_ticket_carries_session_and_is_consumed_once(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
-    ticket, ttl = ws_tickets.issue_ws_ticket("alice", "opaque-session")
+    ticket, ttl = ws_tickets.issue_ws_ticket(SimpleNamespace(username="alice"), "opaque-session")
     assert ttl == 30
     assert ws_tickets.consume_ws_ticket(ticket) == ws_tickets.BrowserTicket("alice", "opaque-session")
     assert ws_tickets.consume_ws_ticket(ticket) is None
 
 
-def test_json_looking_legacy_username_remains_a_username(monkeypatch):
+def test_username_only_tickets_require_a_new_ticket(monkeypatch):
     redis = _FakeRedis()
     monkeypatch.setattr(ws_tickets, "get_redis", lambda: redis)
     username = '{"username": "alice", "session_token": "not-a-browser-ticket"}'
-    ticket, _ = ws_tickets.issue_ws_ticket(username)
-    assert ws_tickets.consume_ws_ticket(ticket) == username
+    redis.setex("ws:ticket:legacy", 30, username.encode())
+    assert ws_tickets.consume_ws_ticket("legacy") is None
 
 
 def test_malformed_browser_ticket_is_rejected(monkeypatch):

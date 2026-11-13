@@ -1,10 +1,40 @@
 """Shared image-type detection and metadata helpers used by import flows."""
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL import Image
+
+# libvips reads its concurrency environment during initialization.  Set this
+# before the lazy ``import pyvips`` below so a single large image cannot fan out
+# across all NAS cores and multiply its working set.
+os.environ.setdefault("VIPS_CONCURRENCY", "1")
+try:
+    VIPS_CACHE_MAX_MEMORY = min(
+        64,
+        max(
+            1,
+            int(os.environ.get("VIPS_CACHE_MAX_MEM_MB", "64")),
+        ),
+    ) * 1024 * 1024
+except ValueError:
+    VIPS_CACHE_MAX_MEMORY = 64 * 1024 * 1024
+
+
+def configure_pyvips(pyvips) -> None:
+    """Apply the process-wide libvips cache ceiling idempotently."""
+
+    pyvips.cache_set_max_mem(VIPS_CACHE_MAX_MEMORY)
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 
 _MIME_MAP = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
     ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".avif": "image/avif",
     ".mp4": "video/mp4", ".webm": "video/webm", ".zip": "application/zip",
 }
 
@@ -30,5 +60,15 @@ def get_image_dims(path: str) -> tuple[int, int] | None:
 
 
 def can_compute_phash(path: str) -> bool:
-    """Return True if perceptual hash can be computed for this file."""
-    return path.lower().endswith((".jpg", ".jpeg", ".png"))
+    """Return suffix eligibility; AVIF frame policy is checked during decoding."""
+    return path.lower().endswith((".jpg", ".jpeg", ".png", ".avif"))
+
+
+def open_pillow_image(path: str | Path) -> "Image.Image":
+    """Open an image with one AVIF decoder thread per processing task."""
+    from PIL import AvifImagePlugin, Image
+
+    # Pillow otherwise uses CPU affinity, which ignores Docker CPU quotas and
+    # can create many decoder threads even in a one-CPU worker container.
+    AvifImagePlugin.DEFAULT_MAX_THREADS = 1
+    return Image.open(path)

@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, CircleOff, Copy, RefreshCw, ShieldCheck } from "lucide-react";
 
-import { ErrorState, PageHeader, PageShell, PermissionGuard } from "@/components";
+import { ErrorState } from "@/components";
+import { SettingsPageHeader as PageHeader, SettingsPageShell as PageShell } from "@/app/admin/settings/GallerySettingsFrame";
+import { BusinessPermissionGuard as PermissionGuard } from "@/features/gallery-ui/BusinessPage";
 import { useToast } from "@/components/Toast";
 import { api, queryKeys, type GitllerySettings } from "@/lib/api";
 import { useT } from "@/lib/i18n";

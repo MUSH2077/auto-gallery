@@ -1,27 +1,29 @@
 "use client";
+
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { Breadcrumb } from "@/components/Breadcrumb";
-import ConfirmDialog from "@/components/ConfirmDialog";
-import EmptyState from "@/components/EmptyState";
-import ErrorState from "@/components/ErrorState";
-import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
-import Modal from "@/components/Modal";
-import PageShell from "@/components/PageShell";
-import type { SlideItem } from "@/components/SlideshowPlayer";
-import { useSlideshow } from "@/lib/useSlideshow";
+import { useToast } from "@/components/Toast";
 import { usePermissions } from "@/lib/usePermissions";
 import { useI18nFormat } from "@/lib/i18n-format";
 import { quoteSearchValue } from "@/lib/search-query";
+import ErrorState from "@/components/ErrorState";
+import { WorkMediaThumbnail } from "@/components/MediaAssetRenderer";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
+import type { SlideItem } from "@/components/SlideshowPlayer";
+import { useSlideshow } from "@/lib/useSlideshow";
+import { BusinessPage, BusinessModal, BusinessConfirm, BusinessPermissionGuard } from "@/features/gallery-ui/BusinessPage";
+
 
 const CATEGORIES = ["general", "artist", "series", "character", "meta"];
+const LIMIT = 24;
 
-export default function TagDetailPage() {
+function TagDetailContent() {
   const t = useT();
+  const toast = useToast();
   const fmt = useI18nFormat();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -34,186 +36,76 @@ export default function TagDetailPage() {
   const [showDelete, setShowDelete] = useState(false);
   const [formName, setFormName] = useState("");
   const [formCategory, setFormCategory] = useState("general");
-  const limit = 24;
 
-  const tag = useQuery({
-    queryKey: ["tag-detail", id],
-    queryFn: () => api.getTagDetail(id),
-  });
-
+  const tag = useQuery({ queryKey: ["tag-detail", id], queryFn: () => api.getTagDetail(id) });
   const works = useQuery({
-    queryKey: ["tag-works", id, page],
+    queryKey: ["tag-works", id, page, tag.data?.normalized_name],
     queryFn: async () => {
-      const result = await api.search(
-        `type:work tag:${quoteSearchValue(tag.data?.normalized_name || "")}`,
-        page * limit,
-        limit,
-        "works",
-      );
+      const result = await api.search("type:work tag:" + quoteSearchValue(tag.data?.normalized_name || ""), page * LIMIT, LIMIT, "works");
       return result.groups.works || { total: 0, items: [] };
     },
     enabled: !!tag.data?.normalized_name,
   });
-
+  const savingEdit = useIsMutating({ mutationKey: ["tag-edit", id], exact: true }) > 0;
   const updateTag = useMutation({
-    mutationFn: () => api.updateTag(id, {
-      normalized_name: formName.trim().toLowerCase(),
-      category: formCategory || undefined,
-    }),
-    onSuccess: async () => {
-      setShowEdit(false);
-      await queryClient.invalidateQueries({ queryKey: ["tag-detail", id] });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
+    mutationKey: ["tag-edit", id],
+    mutationFn: (draft: { normalized_name: string; category: string }) => api.updateTag(id, { normalized_name: draft.normalized_name, category: draft.category || undefined }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<typeof tag.data>(["tag-detail", id], current => current ? { ...current, ...saved } : current);
+      queryClient.removeQueries({ queryKey: ["tag-edit-draft", id] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.works.all, predicate: ({ queryKey }) => queryKey[1] === "compound-search" || queryKey.at(-1) === "tags" });
     },
+    onError: (error: Error) => { setShowEdit(true); toast.error(error.message); },
   });
-
   const deleteTag = useMutation({
     mutationFn: () => api.deleteTag(id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all });
-      router.push("/admin/tags");
-    },
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.tags.all }); router.push("/admin/tags"); },
   });
-
   const slideshow = useSlideshow();
-  const slideItems: SlideItem[] = (works.data?.items || [])
-    .filter((w) => !!w.thumbnail_asset_id)
-    .map((w) => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
+  const slideItems: SlideItem[] = (works.data?.items || []).filter(w => !!w.thumbnail_asset_id).map(w => ({ assetId: w.thumbnail_asset_id as string, workId: w.id, title: w.title, creatorName: w.creator_name }));
 
-  if (tag.isLoading) return <PageShell><div className="animate-pulse space-y-4"><div className="h-8 w-1/3 rounded bg-subtle" /><div className="h-64 rounded bg-subtle" /></div></PageShell>;
-  if (tag.error) return <PageShell><ErrorState message={(tag.error as Error).message} onRetry={() => tag.refetch()} /></PageShell>;
+  if (tag.isLoading) return <div className="gallery-tags"><BusinessPage title={t("tags.title")}><div className="tag-loading" role="status">{t("common.loading")}</div></BusinessPage></div>;
+  if (tag.error) return <div className="gallery-tags"><BusinessPage title={t("tags.title")}><div className="tag-error"><ErrorState message={(tag.error as Error).message} onRetry={() => void tag.refetch()} /></div></BusinessPage></div>;
   if (!tag.data) return null;
   const td = tag.data;
 
   return (
-    <PageShell>
-      <Breadcrumb items={[
-        { label: t("tags.title"), href: "/admin/tags" },
-        { label: td.normalized_name },
-      ]} />
+    <div className="gallery-tags">
+      <BusinessPage title={"#" + (updateTag.isPending ? updateTag.variables.normalized_name : td.normalized_name)} actions={canCurate ? <div className="tags-heading-actions"><button type="button" className="tags-button" disabled={savingEdit} onClick={() => { const draft = queryClient.getQueryData<{ normalized_name: string; category: string }>(["tag-edit-draft", id]); setFormName(draft?.normalized_name ?? td.normalized_name); setFormCategory(draft?.category ?? td.category ?? "general"); setShowEdit(true); }}>{t("common.edit")}</button><button type="button" className="tags-button danger" onClick={() => setShowDelete(true)}>{t("common.delete")}</button></div> : undefined}>
+        {savingEdit && <span role="status">{t("tags.saving")}</span>}
+        <Link className="tag-detail-back" href="/admin/tags">← {t("tags.title")}</Link>
+        <div className="tag-detail-layout">
+          <aside className="tag-detail-aside">
 
-      <div className="grid min-w-0 grid-cols-1 gap-6 md:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
-        <aside className="min-w-0 space-y-4">
-          <div className="card p-4">
-            <h1 className="max-w-full break-words text-2xl font-bold text-fg [overflow-wrap:anywhere] dark:text-white">#{td.normalized_name}</h1>
-            {td.category && <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-accent-subtle text-accent">{td.category}</span>}
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.work_count")}</dt><dd className="font-semibold">{td.usage_count}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">{t("tag_detail.created")}</dt><dd className="text-xs">{fmt.date(td.created_at)}</dd></div>
-            </dl>
-            {canCurate && (
-              <div className="mt-4 flex gap-2 border-t border-border pt-4">
-                <button
-                  type="button"
-                  className="btn-ghost flex-1 text-sm"
-                  onClick={() => {
-                    setFormName(td.normalized_name);
-                    setFormCategory(td.category || "general");
-                    setShowEdit(true);
-                  }}
-                >
-                  {t("common.edit")}
-                </button>
-                <button type="button" className="btn-danger flex-1 text-sm" onClick={() => setShowDelete(true)}>
-                  {t("common.delete")}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {td.top_creators && td.top_creators.length > 0 && (
-            <div className="card p-4">
-              <h2 className="text-sm font-semibold mb-3">{t("tag_detail.top_creators")}</h2>
-              <div className="space-y-2">
-                {td.top_creators.map((c: any) => (
-                  <Link key={c.creator_id} href={`/admin/creators/${c.creator_id}`}
-                    className="flex items-center justify-between rounded-md px-2 py-1.5 hover:bg-subtle dark:hover:bg-subtle transition-colors">
-                    <span className="text-sm text-accent hover:underline truncate">{c.creator_name}</span>
-                    <span className="text-xs text-muted ml-2 shrink-0">{c.work_count}</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-        </aside>
-
-        <section className="min-w-0">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-semibold">{t("tag_detail.works_with_tag", { count: works.data?.total || 0 })}</h2>
-            {slideItems.length > 0 && (
-              <button type="button" onClick={() => slideshow.open(slideItems)} className="btn-ghost">
-                {t("slideshow.open")}
-              </button>
-            )}
-          </div>
-          {works.isLoading && <div className="grid grid-cols-2 md:grid-cols-3 gap-4">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-48 animate-pulse rounded-md bg-subtle" />)}</div>}
-          {works.data && works.data.items.length === 0 && <EmptyState title={t("tag_detail.no_works")} />}
-          {works.data && works.data.items.length > 0 && (
-            <>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {works.data.items.map((w: any) => (
-                  <Link key={w.id} href={`/admin/works/${w.id}`} className="media-motion-card group overflow-hidden rounded-md border border-border bg-white hover:border-accent/30 dark:border-border dark:bg-subtle">
-                    <div className="media-motion-visual aspect-[4/3] overflow-hidden bg-subtle">
-                      {w.thumbnail_asset_id ? (
-                        <WorkMediaThumbnail assetId={w.thumbnail_asset_id} hasVideo={w.has_video} alt={w.title || ""} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-xs text-muted">{t("works.na")}</div>
-                      )}
-                    </div>
-                    <div className="p-3">
-                      <div className="truncate text-sm font-medium group-hover:text-accent dark:group-hover:text-accent">{w.title || t("works.untitled")}</div>
-                      {w.creator_name && <div className="text-xs text-muted mt-1">{w.creator_name}</div>}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-              {(works.data?.total || 0) > limit && (
-                <div className="flex gap-2 justify-center mt-4">
-                  <button disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))} className="px-3 py-1 text-sm border rounded disabled:opacity-30">{t("works.prev")}</button>
-                  <span className="px-3 py-1 text-sm text-muted">{t("works.page", { page: page + 1 })}</span>
-                  <button onClick={() => setPage(p => p + 1)} disabled={(page + 1) * limit >= (works.data?.total || 0)} className="px-3 py-1 text-sm border rounded disabled:opacity-30">{t("works.next")}</button>
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      <Modal open={showEdit} onClose={() => setShowEdit(false)} title={t("tags.edit_title")}>
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1 block text-sm font-medium">{t("tags.name_label")}</label>
-            <input value={formName} onChange={(event) => setFormName(event.target.value)} className="input w-full" />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium">{t("tags.category_label")}</label>
-            <select value={formCategory} onChange={(event) => setFormCategory(event.target.value)} className="select w-full">
-              {CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-            </select>
-          </div>
-          {updateTag.error && <p className="text-sm text-danger">{(updateTag.error as Error).message}</p>}
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn-ghost" onClick={() => setShowEdit(false)}>{t("tags.cancel")}</button>
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={!formName.trim() || updateTag.isPending}
-              onClick={() => updateTag.mutate()}
-            >
-              {updateTag.isPending ? t("tags.saving") : t("tags.save")}
-            </button>
-          </div>
+            {td.category ? <span className="tag-detail-category">{td.category}</span> : null}
+            <dl className="tag-facts"><div><dt>{t("tag_detail.work_count")}</dt><dd>{td.usage_count}</dd></div><div><dt>{t("tag_detail.created")}</dt><dd>{fmt.date(td.created_at)}</dd></div></dl>
+            {td.top_creators?.length ? <section className="tag-creators"><h2>{t("tag_detail.top_creators")}</h2><div className="tag-creators-list">{td.top_creators.map((creator) => <Link key={creator.creator_id} className="tag-creator" href={"/admin/creators/" + encodeURIComponent(creator.creator_id)}><span className="tag-link">{creator.creator_name}</span><span className="tag-creator-count">{creator.work_count}</span></Link>)}</div></section> : null}
+          </aside>
+          <section className="tag-works">
+            <div className="tag-works-head"><h2>{t("tag_detail.works_with_tag", { count: works.data?.total || 0 })}</h2>{slideItems.length ? <button type="button" className="tags-button" onClick={() => slideshow.open(slideItems)}>{t("slideshow.open")}</button> : null}</div>
+            {works.isLoading ? <div className="tag-loading" role="status">{t("common.loading")}</div> : null}
+            {works.error ? <div className="tag-error"><ErrorState message={(works.error as Error).message} onRetry={() => void works.refetch()} /></div> : null}
+            {works.data && !works.data.items.length ? <div className="tags-empty"><h2>{t("tag_detail.no_works")}</h2></div> : null}
+            {works.data && works.data.items.length ? <>
+              <div className="tag-work-grid">{works.data.items.map((work) => <Link key={work.id} className="tag-work" href={"/admin/works/" + encodeURIComponent(work.id)}><div className="tag-work-media">{work.thumbnail_asset_id ? <WorkMediaThumbnail assetId={work.thumbnail_asset_id} hasVideo={work.has_video} alt={work.title || ""} className="h-full w-full object-cover" /> : null}</div><div className="tag-work-title">{work.title || t("works.untitled")}</div>{work.creator_name ? <div className="tag-work-creator">{work.creator_name}</div> : null}</Link>)}</div>
+              {works.data.total > LIMIT ? <div className="tag-work-pagination"><button type="button" className="tags-button" disabled={page === 0} onClick={() => setPage(current => Math.max(0, current - 1))}>{t("common.prev")}</button><span className="tags-button">{t("works.page", { page: page + 1 })}</span><button type="button" className="tags-button" disabled={(page + 1) * LIMIT >= works.data.total} onClick={() => setPage(current => current + 1)}>{t("common.next")}</button></div> : null}
+            </> : null}
+          </section>
         </div>
-      </Modal>
-      <ConfirmDialog
-        open={showDelete}
-        title={t("tags.delete_title")}
-        message={t("tags.delete_msg")}
-        onConfirm={() => deleteTag.mutate()}
-        onCancel={() => setShowDelete(false)}
-        isPending={deleteTag.isPending}
-        error={(deleteTag.error as Error)?.message}
-      />
+      </BusinessPage>
+      <BusinessModal open={showEdit} onClose={() => setShowEdit(false)} title={t("tags.edit_title")}>
+        <form className="tags-form" onSubmit={event => { event.preventDefault(); if (formName.trim() && !queryClient.isMutating({ mutationKey: ["tag-edit", id], exact: true })) { const draft = { normalized_name: formName.trim().toLowerCase(), category: formCategory }; queryClient.setQueryData(["tag-edit-draft", id], draft); setShowEdit(false); updateTag.mutate(draft); } }}>
+          <div className="tags-form-field"><label htmlFor="tag-edit-name">{t("tags.name_label")}</label><input id="tag-edit-name" value={formName} onChange={event => setFormName(event.target.value)} /></div>
+          <div className="tags-form-field"><span>{t("tags.category_label")}</span><ToolbarSelect label={t("tags.category_label")} value={formCategory} onValueChange={setFormCategory} options={CATEGORIES.map(category => ({ value: category, label: category }))} /></div>
+          {updateTag.error ? <p className="tags-form-error" role="alert">{(updateTag.error as Error).message}</p> : null}
+          <div className="tags-form-actions"><button type="button" className="tags-button" onClick={() => setShowEdit(false)}>{t("tags.cancel")}</button><button type="submit" className="tags-button primary" disabled={!formName.trim() || updateTag.isPending}>{updateTag.isPending ? t("tags.saving") : t("tags.save")}</button></div>
+        </form>
+      </BusinessModal>
+      <BusinessConfirm open={showDelete} title={t("tags.delete_title")} message={t("tags.delete_msg")} onConfirm={() => deleteTag.mutate()} onCancel={() => setShowDelete(false)} isPending={deleteTag.isPending} error={(deleteTag.error as Error | null)?.message} />
       {slideshow.node}
-    </PageShell>
+    </div>
   );
 }
+
+export default function TagDetailPage() { return <BusinessPermissionGuard module="library"><TagDetailContent /></BusinessPermissionGuard>; }

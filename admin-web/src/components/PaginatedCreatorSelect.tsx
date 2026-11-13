@@ -4,6 +4,7 @@ import { useMemo, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 
 const PAGE_SIZE = 50;
 const QUERY_KEY = ["creators", "paginated-native-selector", PAGE_SIZE] as const;
@@ -17,6 +18,7 @@ export default function PaginatedCreatorSelect({
   placeholder,
   disabled = false,
   selectClassName = "select w-full",
+  presentation = "native",
 }: {
   id: string;
   label?: string;
@@ -26,6 +28,7 @@ export default function PaginatedCreatorSelect({
   placeholder: string;
   disabled?: boolean;
   selectClassName?: string;
+  presentation?: "native" | "gallery";
 }) {
   const t = useT();
   const nextPageLock = useRef(false);
@@ -58,9 +61,9 @@ export default function PaginatedCreatorSelect({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 business-creator-select">
       {label && <label htmlFor={id} className="block text-sm font-medium">{label}</label>}
-      <select
+      {presentation === "gallery" ? <ToolbarSelect id={id} label={ariaLabel || label || placeholder} value={value} onValueChange={onChange} disabled={disabled || initialLoading || initialError} options={[{value:"",label:placeholder},...options.map(creator=>({value:creator.id,label:creator.display_name || creator.name}))]}/> : <select
         id={id}
         aria-label={ariaLabel}
         value={value}
@@ -72,7 +75,7 @@ export default function PaginatedCreatorSelect({
         {options.map((creator) => (
           <option key={creator.id} value={creator.id}>{creator.display_name || creator.name}</option>
         ))}
-      </select>
+      </select>}
       {initialLoading && <p role="status" className="text-xs text-muted">{t("creator_picker.loading")}</p>}
       {initialError && (
         <div role="alert" className="flex items-center gap-2 text-xs text-danger">

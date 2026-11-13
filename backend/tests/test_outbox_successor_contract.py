@@ -31,6 +31,55 @@ def test_scheduled_wake_job_missing_from_registry_is_not_active(monkeypatch):
     assert outbox_coordinator._wake_job_is_active(object(), "orphaned-wake") is False
 
 
+def test_outbox_specs_have_explicit_resource_descriptors():
+    assert outbox_coordinator._RESOURCE_DESCRIPTORS == {
+        "import_projection": "import-projection",
+        "media": "media-derivatives",
+        "gitllery": "gitllery-projection",
+        "search": "search-projection",
+        "dedup": "asset-dedup-outbox",
+    }
+
+
+def test_outbox_wakeup_publishes_descriptor_metadata(monkeypatch):
+    published = []
+
+    class FakeRedis:
+        def get(self, _key):
+            return None
+
+        def mget(self, keys):
+            return [None for _key in keys]
+
+        def set(self, _key, _value, nx=False):
+            return True
+
+    monkeypatch.setattr(outbox_coordinator, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(outbox_coordinator, "_AtomicOutboxQueue", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        outbox_coordinator,
+        "checked_enqueue",
+        lambda queue, function, *args, **kwargs: published.append((function, args, kwargs)),
+    )
+    monkeypatch.setattr(outbox_coordinator.settings, "gitllery_projection_mode", "active")
+    monkeypatch.setattr(outbox_coordinator.settings, "media_worker_concurrency", 1)
+
+    def publish(_redis, queue, _key, function, args, options, **_kwargs):
+        published.append((function, args, options))
+        return True
+
+    monkeypatch.setattr(outbox_coordinator, "_publish_outbox_wake", publish)
+
+    result = outbox_coordinator.wake_pending_outboxes(
+        {"import_projection": 1, "media": 1, "gitllery": 1, "search": 1, "dedup": 1}
+    )
+
+    assert result == {"enqueued": 5, "deferred": 0}
+    assert {
+        call[2]["meta"]["resource_descriptor"] for call in published
+    } == set(outbox_coordinator._RESOURCE_DESCRIPTORS.values())
+
+
 def test_scheduled_wake_job_in_registry_remains_active(monkeypatch):
     job = SimpleNamespace(
         origin="operations",

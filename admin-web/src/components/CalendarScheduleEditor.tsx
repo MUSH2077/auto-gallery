@@ -3,6 +3,7 @@
 import { Plus, X } from "lucide-react";
 import type { CalendarScheduleRule } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { ToolbarSelect } from "@/features/gallery-ui/Controls";
 
 export function defaultCalendarRule(): CalendarScheduleRule {
   return { frequency: "daily", times: ["03:00:00"] };
@@ -73,8 +74,10 @@ function toggleNumber(values: number[], value: number): number[] {
 export default function CalendarScheduleEditor({
   value,
   onChange,
+  presentation="native",
 }: {
   value?: CalendarScheduleRule | null;
+  presentation?: "native" | "gallery";
   onChange: (rule: CalendarScheduleRule) => void;
 }) {
   const t = useT();
@@ -95,7 +98,7 @@ export default function CalendarScheduleEditor({
           <span className="font-medium">{t("subdefaults.frequency")}</span>
           <p className="mt-1 text-xs text-muted">{t("subdefaults.frequency.desc")}</p>
         </div>
-        <select
+        {presentation === "gallery" ? <ToolbarSelect label={t("subdefaults.frequency")} value={rule.frequency} onValueChange={value=>setFrequency(value as CalendarScheduleRule["frequency"])} options={(["daily","weekly","monthly"] as const).map(value=>({value,label:t("subdefaults."+value)}))}/> : <select
           value={rule.frequency}
           onChange={(event) => setFrequency(event.target.value as CalendarScheduleRule["frequency"])}
           className="select px-2 py-1"
@@ -104,7 +107,7 @@ export default function CalendarScheduleEditor({
           <option value="daily">{t("subdefaults.daily")}</option>
           <option value="weekly">{t("subdefaults.weekly")}</option>
           <option value="monthly">{t("subdefaults.monthly")}</option>
-        </select>
+        </select>}
       </div>
 
       {rule.frequency === "weekly" && (

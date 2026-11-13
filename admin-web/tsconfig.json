@@ -16,7 +16,6 @@
     "incremental": true,
     "plugins": [{"name": "next"}],
     "paths": {
-      "@/lib/i18n": ["./src/lib/i18n-runtime.tsx"],
       "@/*": ["./src/*"]
     }
   },

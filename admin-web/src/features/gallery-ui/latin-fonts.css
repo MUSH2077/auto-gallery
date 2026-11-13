@@ -1,0 +1,8 @@
+/* Fraunces source: Google Fonts / undercasetype. Full SOFT, WONK, opsz and wght axes. */
+@font-face {
+  font-family: 'Fraunces';
+  src: url('./assets/typography/fraunces/fraunces-variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}

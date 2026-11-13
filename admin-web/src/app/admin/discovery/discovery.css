@@ -1,0 +1,44 @@
+
+/* Remote discovery follows the centered gallery business surface. */
+.gallery-ui .gallery-discovery { max-width: 1216px; margin-inline: auto; color: var(--ink); }
+.gallery-ui .gallery-discovery .business-heading { margin-bottom: 34px; }
+.gallery-ui .gallery-discovery .business-heading h1 { max-width: 24ch; margin-inline: auto; }
+.gallery-ui .gallery-discovery .business-heading p { max-width: 54ch; margin-inline: auto; }
+.gallery-ui .gallery-discovery :is(.rounded-xl,.rounded-2xl,.rounded-lg,.rounded-md) { border-radius: 4px; }
+.gallery-ui .gallery-discovery :is(.bg-surface,.bg-white) { background: var(--surface); }
+.gallery-ui .gallery-discovery :is(.border-border,.border-white\/10,.border-white\/25) { border-color: var(--line); }
+.gallery-ui .gallery-discovery :is(.shadow-sm,.shadow-xl) { box-shadow: none; }
+.gallery-ui .gallery-discovery :is(.text-xs,.text-sm) { line-height: 1.45; }
+.gallery-ui .gallery-discovery :is(select,.select,.input,input:not([type=checkbox]):not([type=radio]),textarea) { min-height: 44px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-family: var(--font-ui); font-size: var(--type-control); font-weight: 600; }
+.gallery-ui .gallery-discovery :is(select,.select) { padding-inline: 12px 32px; }
+.gallery-ui .gallery-discovery :is(input:not([type=checkbox]):not([type=radio]),textarea) { padding: 9px 11px; }
+.gallery-ui .gallery-discovery :is(select,.select,input,textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gallery-ui .gallery-discovery :is(.bg-subtle,.bg-accent-subtle) { background: var(--subtle); }
+.gallery-ui .gallery-discovery :is(.text-muted,.text-white\/70,.text-white\/75) { color: var(--muted); }
+.gallery-ui .gallery-discovery .text-fg { color: var(--ink); }
+.gallery-ui .gallery-discovery :is(table,.divide-y) { border-color: var(--line); }
+.gallery-ui .gallery-discovery table { border-radius: 0; background: transparent; }
+.gallery-ui .gallery-discovery thead { background: var(--subtle); color: var(--muted); }
+.gallery-ui .gallery-discovery tbody tr { background: transparent; border-bottom: 1px solid var(--line); }
+.gallery-ui .gallery-discovery tbody tr:hover { background: var(--subtle); }
+.gallery-ui .gallery-discovery :is(.btn-primary,.button.primary) { border-radius: 4px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.gallery-ui .gallery-discovery :is(.btn-ghost,.button) { border-radius: 4px; font-weight: 600; }
+.gallery-ui .gallery-discovery :is(.btn-primary,.btn-ghost,.button) { min-height: 42px; }
+.gallery-ui .gallery-discovery :is(.status-badge,.badge) { font-size: var(--type-meta); font-weight: 600; }
+.gallery-ui .gallery-discovery-profile-media { position: relative; min-height: 96px; overflow: hidden; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--subtle); }
+.gallery-ui .gallery-discovery-profile-media > img { display: block; width: 100%; height: 96px; object-fit: cover; opacity: .46; }
+.gallery-ui .gallery-discovery-profile-identity { position: absolute; inset: 0; display: flex; align-items: center; gap: 14px; padding: 12px 18px; }
+.gallery-ui .gallery-discovery-profile-identity > img, .gallery-ui .gallery-discovery-profile-identity > .gallery-discovery-profile-avatar { display: grid; width: 68px; height: 68px; place-items: center; flex: 0 0 auto; border: 2px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--accent); object-fit: cover; }
+.gallery-ui .gallery-discovery .gallery-discovery-profile-stats > div { background: transparent; border:0; border-bottom:1px solid var(--line); border-radius:0; }
+.gallery-ui .gallery-discovery .business-section { border-top: 1px solid var(--line); padding-top: 20px; }
+.gallery-ui .gallery-discovery .business-section + .business-section { margin-top: 28px; }
+@media (max-width: 700px) {
+  .gallery-ui .gallery-discovery { padding-inline: 0; }
+  .gallery-ui .gallery-discovery .business-heading { margin-bottom: 24px; }
+  .gallery-ui .gallery-discovery :is(table,.overflow-x-auto) { max-width: 100%; }
+  .gallery-ui .gallery-discovery-profile-media { min-height: 76px; }
+  .gallery-ui .gallery-discovery-profile-media > img { height: 76px; }
+  .gallery-ui .gallery-discovery-profile-identity > img, .gallery-ui .gallery-discovery-profile-identity > .gallery-discovery-profile-avatar { width: 56px; height: 56px; }
+}
+
+.gallery-ui .gallery-discovery .text-on-accent {color:var(--on-accent);}

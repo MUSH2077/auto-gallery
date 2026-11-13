@@ -13,7 +13,7 @@ import { useState } from "react";
 import { useJobWebSocket } from "@/lib/useWebSocket";
 
 function isTheme(v: unknown): v is Theme {
-  return v === "light" || v === "dark" || v === "system";
+  return v === "light" || v === "dark";
 }
 
 function isLang(v: unknown): v is Lang {

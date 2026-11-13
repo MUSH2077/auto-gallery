@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import secrets
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import hash_password
+from app.auth import async_hash_password
 from app.models.user import User
 from app.permissions import PERMISSION_MODULES
 
@@ -58,7 +58,7 @@ class UserService:
 
         user = User(
             username=username,
-            password_hash=hash_password(password),
+            password_hash=await async_hash_password(password),
             display_name=display_name,
             is_admin=is_admin,
             permissions=permissions,
@@ -70,7 +70,10 @@ class UserService:
         return user
 
     async def update(self, user_id: int, **fields) -> User:
+        if "is_admin" in fields or "is_active" in fields:
+            await self._lock_admin_membership()
         user = await self.get(user_id)
+        await self.db.refresh(user)
 
         if "permissions" in fields:
             self._validate_permissions(fields["permissions"])
@@ -89,7 +92,9 @@ class UserService:
         return user
 
     async def delete(self, user_id: int) -> None:
+        await self._lock_admin_membership()
         user = await self.get(user_id)
+        await self.db.refresh(user)
         if user.is_admin and user.is_active:
             await self._ensure_not_last_admin(user.id)
         from app.models import UserSubscription
@@ -100,9 +105,19 @@ class UserService:
 
     async def reset_password(self, user_id: int) -> str:
         """Reset the user's password to a random value, returned once in plaintext."""
-        user = await self.get(user_id)
+        user = (
+            await self.db.execute(
+                select(User)
+                .where(User.id == user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            raise ValueError("user not found")
         plaintext = secrets.token_urlsafe(9)
-        user.password_hash = hash_password(plaintext)
+        user.password_hash = await async_hash_password(plaintext)
+        user.credential_version += 1
         user.must_change_password = True
         await self.db.commit()
         return plaintext
@@ -123,3 +138,10 @@ class UserService:
         remaining = result.scalar_one()
         if remaining == 0:
             raise ValueError("last admin")
+
+    async def _lock_admin_membership(self) -> None:
+        """Serialize removals before refreshing the target and counting peers."""
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:name, 0))"),
+            {"name": "auto-gallery:active-admin-membership"},
+        )

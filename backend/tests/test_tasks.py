@@ -94,6 +94,7 @@ def test_disk_import_completion_progress_keeps_durable_counters():
 def test_disk_import_entrypoint_validates_attempt_before_heavy_io(monkeypatch):
     """Admission may persist resource state, so authority must precede it."""
     from app.jobs import admin_operations
+    from app.services import admin_operation_handlers
     from app.services.redis_pubsub import PublisherFenceError
 
     entered_heavy_io = False
@@ -114,7 +115,7 @@ def test_disk_import_entrypoint_validates_attempt_before_heavy_io(monkeypatch):
         "initialize_attempt",
         reject_stale_attempt,
     )
-    monkeypatch.setattr(admin_operations, "run_heavy_io_operation", heavy_io_probe)
+    monkeypatch.setattr(admin_operation_handlers, "run_heavy_io_operation", heavy_io_probe)
 
     with pytest.raises(PublisherFenceError, match="no longer current"):
         admin_operations.run_disk_import_operation(
@@ -134,6 +135,7 @@ async def test_worker_startup_cannot_replace_rotated_operational_attempt(
     """A validated A resuming after B's handoff leaves all Redis state at B."""
     from app.database import async_session, engine
     from app.jobs import admin_operations
+    from app.services import admin_operation_handlers
     from app.models.task_run import TaskRun
     from app.services import operations
     from app.services.publisher_attempts import set_publisher_attempt
@@ -147,7 +149,7 @@ async def test_worker_startup_cannot_replace_rotated_operational_attempt(
     redis_client = get_redis()
     entered_a_admission = threading.Event()
     resume_a_admission = threading.Event()
-    original_acquire = admin_operations.acquire_operation_lock
+    original_acquire = admin_operation_handlers.acquire_operation_lock
     outcome: dict[str, object] = {}
 
     def pausing_acquire(*args, **kwargs):
@@ -159,9 +161,9 @@ async def test_worker_startup_cannot_replace_rotated_operational_attempt(
     async def should_not_run_heavy_io(*_args, **_kwargs):
         return {"stale_attempt_entered_heavy_io": True}
 
-    monkeypatch.setattr(admin_operations, "acquire_operation_lock", pausing_acquire)
+    monkeypatch.setattr(admin_operation_handlers, "acquire_operation_lock", pausing_acquire)
     monkeypatch.setattr(
-        admin_operations,
+        admin_operation_handlers,
         "run_heavy_io_operation",
         should_not_run_heavy_io,
     )
@@ -400,6 +402,7 @@ async def test_legacy_disk_worker_adopts_attempt_owned_operational_pointer(
     """A validated rolling delivery versions its UUID-only Redis owner."""
     from app.database import async_session, engine
     from app.jobs import admin_operations
+    from app.services import admin_operation_handlers
     from app.services.operations import current_operation_attempt
     from app.services.redis_client import get_redis
     from app.services.tasks import TaskService
@@ -421,7 +424,7 @@ async def test_legacy_disk_worker_adopts_attempt_owned_operational_pointer(
         return {"admitted": True}
 
     monkeypatch.setattr(
-        admin_operations,
+        admin_operation_handlers,
         "run_heavy_io_operation",
         admission_probe,
     )
@@ -525,9 +528,9 @@ async def test_disk_import_operation_publishes_real_task_heartbeats(monkeypatch)
         "app.services.disk_import.reconcile_downloads_to_db",
         slow_reconcile,
     )
-    monkeypatch.setattr(admin_operations, "set_operation_status", lambda *_a, **_k: None)
+    monkeypatch.setattr("app.services.admin_operation_handlers.set_operation_status", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        "app.services.storage_breakdown_cache.invalidate_storage_breakdown_cache",
         lambda: None,
     )
 
@@ -696,7 +699,7 @@ async def test_rotated_attempt_cannot_update_between_batch_resource_projection(
         lambda _self: None,
     )
     monkeypatch.setattr(
-        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        "app.services.storage_breakdown_cache.invalidate_storage_breakdown_cache",
         lambda: None,
     )
     monkeypatch.setattr("rq.Queue", _recording_disk_queue(records))
@@ -844,7 +847,7 @@ async def test_attempt_a_terminal_cache_and_finally_cannot_clobber_running_b(
         "app.services.disk_import.reconcile_downloads_to_db",
         interleaved_reconcile,
     )
-    monkeypatch.setattr(admin_operations, "set_operation_status", pausing_set_status)
+    monkeypatch.setattr("app.services.admin_operation_handlers.set_operation_status", pausing_set_status)
     monkeypatch.setattr(
         worker_control.HeartbeatPublisher,
         "start",
@@ -856,7 +859,7 @@ async def test_attempt_a_terminal_cache_and_finally_cannot_clobber_running_b(
         lambda _self: None,
     )
     monkeypatch.setattr(
-        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        "app.services.storage_breakdown_cache.invalidate_storage_breakdown_cache",
         lambda: None,
     )
     monkeypatch.setattr("rq.Queue", _recording_disk_queue(records))
@@ -1014,8 +1017,7 @@ async def test_attempt_a_post_progress_cache_write_is_ignored_after_b_rotation(
         progress_then_finish,
     )
     monkeypatch.setattr(
-        admin_operations,
-        "set_operation_status",
+        "app.services.admin_operation_handlers.set_operation_status",
         pausing_progress_status,
     )
     monkeypatch.setattr(
@@ -1029,7 +1031,7 @@ async def test_attempt_a_post_progress_cache_write_is_ignored_after_b_rotation(
         lambda _self: None,
     )
     monkeypatch.setattr(
-        "app.api.admin.settings.invalidate_storage_breakdown_cache",
+        "app.services.storage_breakdown_cache.invalidate_storage_breakdown_cache",
         lambda: None,
     )
     monkeypatch.setattr("rq.Queue", _recording_disk_queue(records))
@@ -1795,6 +1797,7 @@ async def test_real_initial_retry_and_recovery_rq_descriptions_are_deterministic
         assert initial_job.args == (str(task_id), 1)
         assert retry_job.args == (str(task_id), 2)
         assert recovery_job.description == f"import task={recovery_import_id}"
+        assert recovery_job.meta["resource_descriptor"] == "import-maintenance"
 
         monkeypatch.setattr(
             admin_operations,

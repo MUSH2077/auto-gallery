@@ -2,6 +2,7 @@ import os
 import re
 
 from app.providers.base import BaseProvider, ProviderCapabilities, ProviderSearchURL
+from app.services.cookie_paths import resolve_cookie_path
 
 
 class XProvider(BaseProvider):
@@ -62,7 +63,7 @@ class XProvider(BaseProvider):
                 "twitter": {}
             }
         }
-        cookies_path = "/gallerydl-config/cookies/twitter.txt"
+        cookies_path = str(resolve_cookie_path("cookies/twitter.txt"))
         if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 0:
             cfg["extractor"]["twitter"]["cookies"] = cookies_path
         return cfg
@@ -105,6 +106,18 @@ class XProvider(BaseProvider):
             "posted_at": raw_metadata.get("date") or raw_metadata.get("created_at"),
             "raw_metadata": raw_metadata,
         }
+
+    def parse_work_flags(self, raw_metadata: dict) -> dict[str, bool]:
+        flags = super().parse_work_flags(raw_metadata)
+        flags["is_nsfw"] = bool(
+            raw_metadata.get("possibly_sensitive")
+            or raw_metadata.get("sensitive")
+            or raw_metadata.get("sensitive_flags")
+        )
+        return flags
+
+    def get_creator_profile_url(self, source_creator_id: str) -> str:
+        return f"https://x.com/{source_creator_id}"
 
     def parse_assets(self, raw_metadata: dict, files: list[str]) -> list[dict]:
         # Twitter metadata has entities.media array for images/videos

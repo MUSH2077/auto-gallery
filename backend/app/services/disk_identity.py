@@ -57,21 +57,7 @@ def _slug(value: str, fallback: str) -> str:
 def _profile_url(source: str, source_creator_id: str, fallback: str | None = None) -> str:
     if fallback:
         return fallback
-    if source == "pixiv":
-        return f"https://www.pixiv.net/users/{source_creator_id}"
-    if source == "bilibili":
-        return f"https://space.bilibili.com/{source_creator_id}"
-    if source == "iwara":
-        return f"https://www.iwara.tv/profile/{source_creator_id}"
-    if source == "x":
-        return f"https://x.com/{source_creator_id}"
-    if source == "lofter":
-        return f"https://{source_creator_id}.lofter.com/"
-    if source == "pinterest":
-        return f"https://www.pinterest.com/{source_creator_id}/"
-    if source == "danbooru":
-        return f"https://danbooru.donmai.us/posts?tags={urllib.parse.quote(source_creator_id)}"
-    return f"recovery://{source}/{source_creator_id}"
+    return registry.get(source).get_creator_profile_url(source_creator_id)
 
 
 def extract_metadata_identity(source: str, raw_metadata: dict[str, Any], creator_dir: str) -> MetadataIdentity:

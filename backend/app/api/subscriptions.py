@@ -203,15 +203,7 @@ async def get_subscription_summaries(
         raise HTTPException(status_code=422, detail="ids contains an invalid UUID") from exc
     from app.services.subscription_summary import subscription_summaries
 
-    membership_service = SubscriptionMembershipService(db, user.id)
-    owned_ids = []
-    for subscription_id in subscription_ids:
-        try:
-            await membership_service.require_membership(subscription_id)
-            owned_ids.append(subscription_id)
-        except ValueError:
-            continue
-    return await subscription_summaries(db, owned_ids, user_id=user.id)
+    return await subscription_summaries(db, subscription_ids, user_id=user.id)
 
 
 @router.post("/{subscription_id}/sync-now")
