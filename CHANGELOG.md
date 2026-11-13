@@ -60,6 +60,10 @@ practical pre-1.0 semantic versioning.
 
 ### Fixed
 
+- Upgrade Next.js to 16.4.6 and refresh vulnerable documentation/parser
+  dependencies; remove the obsolete sharp override so patched native image
+  dependencies can resolve.
+
 - Bulk imports wake media processing, metadata curation and search indexing
   after the outer transaction commits, while preserving rollback and recovery
   when notification delivery fails.
