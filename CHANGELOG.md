@@ -60,6 +60,9 @@ practical pre-1.0 semantic versioning.
 
 ### Fixed
 
+- Refresh certifi, Pillow, PyJWT and urllib3 in both Python dependency locks
+  to their patched releases; retain all other locked package versions.
+
 - Upgrade Next.js to 16.4.6 and refresh vulnerable documentation/parser
   dependencies; remove the obsolete sharp override so patched native image
   dependencies can resolve.
