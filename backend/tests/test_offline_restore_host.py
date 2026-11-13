@@ -1706,13 +1706,13 @@ def test_real_disposable_postgres_redis_switch_and_snapshot_rollback(
             "--env", f"POSTGRES_USER={pg_user}",
             "--env", f"POSTGRES_PASSWORD={pg_password}",
             "--env", f"POSTGRES_DB={live_database}",
-            "postgres:16-alpine",
+            "postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
         ],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["docker", "run", "--detach", "--name", redis_container, "redis:7-alpine"],
+        ["docker", "run", "--detach", "--name", redis_container, "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"],
         check=True,
         capture_output=True,
     )
