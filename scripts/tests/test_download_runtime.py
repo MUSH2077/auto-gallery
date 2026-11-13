@@ -91,11 +91,11 @@ class LifecycleTests(unittest.TestCase):
         bridge.receive.assert_not_called()
 
     def test_native_wsl_recreation_preserves_original_config(self):
-        source=chr(92)*2+'wsl$'+chr(92)+'Ubuntu-22.04'+chr(92)+'home'+chr(92)+'user'+chr(92)+'data'
+        source=chr(92)*2+'wsl$'+chr(92)+'Ubuntu-22.04'+chr(92)+'srv'+chr(92)+'gallery'+chr(92)+'downloads'
         config={'services':{'worker-download':{'volumes':[{'type':'bind','source':source,'target':'/downloads'}]}}}
         result,changed=module.native_wsl_binds(config,'Ubuntu-22.04')
         self.assertTrue(changed)
-        self.assertEqual(result['services']['worker-download']['volumes'][0]['source'],'/home/user/data')
+        self.assertEqual(result['services']['worker-download']['volumes'][0]['source'],'/srv/gallery/downloads')
         self.assertEqual(config['services']['worker-download']['volumes'][0]['source'],source)
 
     def test_host_memory_measurement_includes_controller(self):
